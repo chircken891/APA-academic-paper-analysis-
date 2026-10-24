@@ -135,7 +135,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "c145c8e5178e934a0581805c0f6652bf7179a5adf853cef4b4639de1545fbbf2"
+      "sha256": "dcfd0cd55a2c1af983fcc848750e0eb50a3cc3e9a65101be28aa27878fb316f0"
     },
     {
       "path": "Schema/config/apa-config.schema.json",
@@ -595,7 +595,7 @@
     },
     {
       "path": "SETUP.md",
-      "sha256": "9f5f1c8e8f1d72436661fd6ef59e6d5843a12eb566da4c917b928be26bc75f82"
+      "sha256": "a62e157b5dc2b4a60af19d7ab67a4df8a6590152258bdb815959a3916c4a8415"
     },
     {
       "path": "Templates/apa-public/AGENTS.md",

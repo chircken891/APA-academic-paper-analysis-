@@ -23,11 +23,11 @@ npm run apa:setup -- page
 打开返回的 HTML，填写答案并预览操作。下载操作 JSON 后，将路径交给 Codex 并要求应用；也可复制页面同一 JSON 到对话。手动应用和回读：
 
 ```powershell
-node scripts/apa-setup.mjs apply --file .tmp/apa-setup/operation.json
+node scripts/apa-setup.mjs apply --file "$env:USERPROFILE\Downloads\apa-config-operation.json"
 node scripts/apa-setup.mjs inspect
 ```
 
-页面不直接写配置。`apply` 比较原配置指纹，只更新本库答案。遇 `APA_CONFIG_STALE` 应重新生成页面。可以保存未填完的配置，但不能开始新论文。
+示例假定文件在用户 Downloads 且未改名，请替换为实际下载路径；网页不会自动把文件放到工程内。页面不直接写配置。`apply` 比较原配置指纹，只更新本库答案。遇 `APA_CONFIG_STALE` 应重新生成页面。可以保存未填完的配置，但不能开始新论文；回读时需检查 `validation.complete`、依赖状态及 `ready`，正常退出不等于就绪。
 
 ## MinerU
 
@@ -39,18 +39,20 @@ node scripts/apa-setup.mjs inspect
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1 -InstallMineru
 ```
 
-也可用 `npm run setup:mineru`。安装会创建本库 `.runtime/mineru/` 并可能下载模型；保存配置不触发安装。文件存在不等于真实解析成功，后者须在获批运行中验证。
+专用入口 `npm.cmd run setup:mineru -- -BasePython "实际 Python 3.12 的 python.exe 完整路径"` 要求显式解释器路径；首次使用优先采用上面的 bootstrap 入口完成检测和安装。安装会创建本库 `.runtime/mineru/` 并可能下载模型；保存配置不触发安装。文件存在不等于真实解析成功，后者须在获批运行中验证。
 
 ## APA 配套写作技能
 
 可分别选择 `nature-writing`、`nature-polishing`、`nature-shared`、`humanizer`、`humanizer-zh`、`stss`。启用项填写实际 SKILL.md 文件路径；未启用项无需存在。Nature Writing/Polishing 需要 Shared。
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/install-apa-companion-skills.ps1 -BasePython <python.exe> -Skills "humanizer,humanizer-zh"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/install-apa-companion-skills.ps1 -BasePython "实际 python.exe 完整路径" -Skills "humanizer,humanizer-zh"
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1 -CompanionSkills "nature-writing,humanizer-zh"
 ```
 
 先给同一命令加 `-CheckOnly` 获取检测报告；直接技能检测模式允许省略 `-BasePython` 并报告缺项。审阅后才执行安装。选择 Nature 会补齐 Shared；不选择时不会默认安装全部。安装后回配置页选择路径。技能只指导既有 Writer 的表达，不增加独立润色角色或审核轮次。
+
+技能安装器还依赖 Codex 的 `skills/.system/skill-installer/scripts/install-skill-from-github.py`。请用直接技能安装命令的 `-CheckOnly` 检查其 `installer` 项；缺少时先让 Codex 检查该安装辅助工具，或用 `-InstallerPath` 指定已存在的正确文件，不要反复执行安装。首次阅读不需要这些额外技能，可先在配置中逐项选“不使用”。
 
 ## 可选全局集成
 
@@ -92,4 +94,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-wind
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1 -CheckOnly
 ```
 
-检查可同时带计划使用的 `-InstallMineru`、`-InstallGlobalIntegration` 或 `-CompanionSkills`，仍不安装。用户审阅报告并明确要求后才去掉 `-CheckOnly` 执行。基础依赖已经齐全时无需重复安装；配置页保存始终不安装。
+检查可同时带计划使用的 `-InstallMineru`、`-InstallGlobalIntegration` 或 `-CompanionSkills`，仍不安装。读取 `checks` 中的 `status/required`、`prerequisites_ready` 和 `targets`；`-CheckOnly` 返回0只表示报告生成成功，不保证没有缺项。用户审阅报告并明确要求后才去掉 `-CheckOnly` 执行。基础依赖已经齐全时无需重复安装；配置页保存始终不安装。PowerShell 中如 `npm` 被执行策略阻止，可使用 `npm.cmd`，无需为此修改全局执行策略。

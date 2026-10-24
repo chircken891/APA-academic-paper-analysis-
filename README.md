@@ -6,14 +6,108 @@ APA 在 Codex 中组织有证据依据的论文阅读，输出可直接使用的
 
 ## 安装与首次使用
 
-1. 将公开工程放在独立目录，用 Codex 打开该目录。它也是将来的 Obsidian 知识库。
-2. 先运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1 -CheckOnly` 查看安装前报告。报告列出已有环境、缺失项、目标目录及影响；明确选择安装后再运行相应命令。基础环境为 Node.js 24 和 npm 11；`npm run setup:windows` 默认只安装 npm 依赖，完成后用 `npm run setup:check` 检查。详细步骤见 [SETUP.md](SETUP.md)。
-3. 对 Codex 说“使用 apa-setup 配置当前知识库”。也可运行 `npm run apa:setup -- page`，打开返回的 HTML 分页向导。每页处理一类设置，可用上一步、下一步或导航切换，填写内容会保留。
-4. 填写模型、输出目录、已有 MinerU 路径、语言顺序、呈现方式和写作技能。下载操作 JSON 后，将文件路径交给 Codex，或复制同一 JSON 到对话，明确说“应用这份配置”。页面本身不写入知识库，也不安装依赖。
-5. 按需安装缺少的 MinerU 或已启用写作技能，再检查配置。必填项或所选依赖缺失时，新论文不会开始；关闭可选技能不需要安装它。
-6. 将论文放在 `Raw/` 或提供明确来源，对 Codex 说“用 APA 分析这篇论文”，确认这次运行的来源、预算与范围。阅读结果交付到配置的候选目录；正式入库另行批准具体清单。
+### 1. 获取工程，确认命令运行位置
 
-工程自带 `.agents/skills/academic-paper-analysis/` 和 `.agents/skills/apa-setup/`，通常无需全局安装。如当前会话尚未发现项目技能，在工程中新开会话，或明确要求读取对应的 `SKILL.md`。
+准备一个独立文件夹，在 Windows PowerShell 中操作。已有 Git 时可运行：
+
+```powershell
+git clone https://github.com/chircken891/APA.git
+cd APA
+```
+
+没有 Git 时，可在本仓库页面选择 **Code → Download ZIP**，解压后进入包含 `package.json` 和 `scripts` 的文件夹；不要在 ZIP 内直接运行。后面的命令都从这个工程根目录执行。用 Codex 打开同一个文件夹，并确认已登录、可以使用模型与本地工具。
+
+工程自带 `.agents/skills/academic-paper-analysis/` 和 `.agents/skills/apa-setup/`，首次使用不需要安装全局 APA。若会话未发现技能，在工程中新开会话，或直接告诉 Codex：“请读取 `.agents/skills/apa-setup/SKILL.md`，配置当前工程。”
+
+### 2. 先检测，再安装基础依赖
+
+即使还没有 Node.js，也可以先运行以下只读检测；它不会安装、下载或写入配置：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1 -CheckOnly
+```
+
+报告是 JSON，可直接交给 Codex 解释。重点看：
+
+| 报告字段 | 怎样判断和处理 |
+| --- | --- |
+| `checks` 中 `required: true` 且 `status: missing` | 本次安装缺少必要前置；先按该项说明解决 |
+| `prerequisites_ready` | `true` 表示安装前置已满足，不代表依赖已经装好 |
+| `targets` | 将操作哪些目录、哪些项目已存在，以及可能的影响 |
+| `next_commands` | 根据所选项目生成的后续命令；审阅后再决定执行，不会自动执行 |
+
+**检测命令正常退出不等于全部就绪。** 基础安装需要 Windows x64、Git、Node.js **24.x**、npm **11.x**。缺少这些软件时，根据报告从 [Git for Windows](https://git-scm.com/downloads/win) 和 [Node.js 官方下载页](https://nodejs.org/en/download) 获取对应版本，安装后重新打开 PowerShell 并回到工程目录，再检测一次。不要直接把“最新版”当作受支持版本。脚本不会替你安装 Git 或 Node.js。
+
+确认报告中的目标并决定安装后，再运行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1
+npm.cmd run setup:check
+```
+
+默认只恢复本工程的 npm 依赖，不安装 MinerU、全局集成或写作技能。`setup:check` 的基础通过标准是 `core_ready: true`；`parser`、`integration` 和 `obsidian` 的失败项须分别阅读，不能当作基础依赖失败，也不能当作已经完成论文运行。顶层 `ready` 还包含 Obsidian 检查，可能仍为 `false`。本说明使用 `npm.cmd`，避免 PowerShell 将 `npm` 解析为被执行策略阻止的 `npm.ps1`。
+
+### 3. 准备 PDF 解析环境
+
+新论文目前需要可用的 MinerU 环境。**已有环境**可以直接在下一步配置其目录；**需要新安装**时，先检测所选安装的完整前置：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1 -CheckOnly -InstallMineru
+```
+
+这次还要求 Python **3.12.x** 和工程所在磁盘至少 **20 GiB** 可用空间。Python 可从 [官方 Windows 下载页](https://www.python.org/downloads/windows/) 选择对应版本；不是页面上任意一个最新版。按报告处理缺项、重新检测并确认下载与磁盘影响后，再执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1 -InstallMineru
+```
+
+默认生成 `.runtime/mineru/`，包括 `venv/Scripts/python.exe` 和 `config.yaml`，并下载所需包和模型。多套 Python 并存或自动检测失败时，可在检测与安装两条命令中都加 `-BasePython "实际 Python 3.12 的 python.exe 完整路径"`。遇网络或下载错误，按报错处理后续接，保留已完成内容；安装成功仍不等于真实 PDF 解析验收。
+
+写作技能和全局集成均为可选。首次使用可以将六项额外写作技能明确设为“不使用”，以后再按 [SETUP](SETUP.md#apa-配套写作技能) 逐项检测和安装，无需为了生成配置页先装齐它们。
+
+### 4. 生成分页向导，填写本库设置
+
+在 Codex 中说“使用 apa-setup 配置当前知识库”，或手动运行：
+
+```powershell
+npm.cmd run apa:setup -- inspect
+npm.cmd run apa:setup -- page
+```
+
+首次 `inspect` 显示 `exists: false`、`ready: false` 是正常的：公开工程没有任何人的配置答案。`page` 返回 HTML 的完整路径；用浏览器打开 `.tmp/apa-setup/index.html`。向导共11页，可顺序切换或直接跳转，切页保留填写内容。先勾选“修改此项”才能填写；没有修改的项目保留原值。
+
+首次至少完成以下选择：
+
+- **模型**：填写六科学角色的共同选择，以及中文写作、英文写作、阅读编辑、独立核验四项选择。可以使用“跟随主会话”；指定模型时需核对当前 Codex 实际支持的名称与推理强度。单个科学角色的覆盖可不填，暂不使用阅读编辑时也仍需保存其模型选择。
+- **三个输出目录**：分别存执行记录、解析资料和阅读候选，必须在本库内。例如 `Eval/apa-v3/runs`、`Eval/apa-v3/parse`、`Eval/apa-v3/reading`；每次运行自动追加独立编号，不必提前创建每篇论文的子目录。
+- **MinerU 位置**：使用上一步安装结果时，运行目录填 `.runtime/mineru`；Python 和配置文件可留作未配置，由运行目录派生。已有环境则填写其实际位置。
+- **阅读设置**：选择首先写作的语言和是否使用阅读编辑；两种语言都会生成。
+- **六项写作指导**：每项都明确选“启用”或“不使用”。启用时填写实际 `SKILL.md` 文件路径；启用 Nature Writing/Polishing 还须启用 Nature Shared。
+
+这些示例不会自动写入配置。点击“预览全部已选修改”，确认中文的修改前后说明后，再进入下一步。
+
+### 5. 应用操作，回读确认
+
+下载的是**操作文件**，不是已经生效的配置。将下载文件的实际路径交给 Codex，并说“请应用这份配置并回读检查”；也可以复制完整 JSON 到对话并提出同一请求。不要把“导出配置备份”生成的文件当作操作文件直接应用。
+
+需要手动应用时，以下示例假定浏览器保存到了用户 Downloads，文件名仍是 `apa-config-operation.json`；请按实际下载位置或改名结果替换：
+
+```powershell
+node scripts/apa-setup.mjs apply --file "$env:USERPROFILE\Downloads\apa-config-operation.json"
+node scripts/apa-setup.mjs inspect
+```
+
+应用后的新论文配置门槛是：`validation.complete: true`、所选 `dependencies` 均为 `available`、顶层 `ready: true`。若不满足，按缺项修正路径或另行安排安装检测，不能跳过检查启动论文。`ready` 只证明答案完整和文件可找到，不证明真实模型或解析已运行。出现 `APA_CONFIG_STALE` 时重新生成页面，不要改 JSON 指纹；需要继续编辑时也应重新生成页面，避免读到旧快照。
+
+### 6. 开始第一篇论文，找到输出
+
+把自己的 PDF 放入 `Raw/`，在当前工程的 Codex 会话中提出明确任务，例如：
+
+> 用本库 APA 分析 `Raw/论文.pdf`，交付中英文 Obsidian 笔记。先检查配置和已有解析资料，再提出这次的来源范围、调用预算及截止时间，等我批准后执行；需要补充材料时先说明原因。
+
+把示例文件名换成实际文件名。首次任务由 Codex 按项目技能组织执行，`npm run apa` 是底层工具入口，不是输入一个 PDF 就自动完成阅读的命令。配置通过也不代替这次运行的授权。
+
+完成后，助手应给出**候选目录下中英文 Markdown 的实际路径**，以及本次完成情况和限制。以配置的候选目录为准；不要在空的 `Wiki/` 中寻找尚未正式发布的笔记。可在 Obsidian 中把此工程作为知识库打开，查看双语笔记、图表和知识链接。若中断，提供运行目录或检查点继续，不要重复重跑已完成内容。要进入正式 Wiki、默认检索和图谱，另行审阅并批准精确发布清单。
 
 ## 配置什么
 
