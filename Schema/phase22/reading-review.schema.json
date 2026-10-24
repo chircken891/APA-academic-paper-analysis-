@@ -1,0 +1,422 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "phase22/reading-review-1.0",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/semanticReview"
+    },
+    {
+      "$ref": "#/$defs/readerAssessment"
+    }
+  ],
+  "$defs": {
+    "text": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "language",
+        "section_id",
+        "from",
+        "to",
+        "sha256"
+      ],
+      "properties": {
+        "language": {
+          "enum": [
+            "en",
+            "zh-CN"
+          ]
+        },
+        "section_id": {
+          "$ref": "#/$defs/text"
+        },
+        "from": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "to": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "anchor": {
+          "$ref": "#/$defs/text"
+        },
+        "span_id": {
+          "$ref": "#/$defs/text"
+        }
+      }
+    },
+    "judgment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "language",
+        "verdict",
+        "reason",
+        "revision_owner",
+        "recheck_scope",
+        "locations"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/text"
+        },
+        "language": {
+          "enum": [
+            "en",
+            "zh-CN"
+          ]
+        },
+        "verdict": {
+          "enum": [
+            "pass",
+            "flag",
+            "block",
+            "not_run"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/text"
+        },
+        "revision_owner": {
+          "$ref": "#/$defs/text"
+        },
+        "recheck_scope": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/text"
+          }
+        },
+        "locations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/location"
+          }
+        }
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "language",
+        "verdict",
+        "reason",
+        "revision_owner",
+        "recheck_scope",
+        "locations",
+        "expression_summary",
+        "applicability",
+        "source_basis",
+        "affected_gaps",
+        "critical",
+        "visibility"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/text"
+        },
+        "language": {
+          "enum": [
+            "en",
+            "zh-CN"
+          ]
+        },
+        "verdict": {
+          "enum": [
+            "pass",
+            "flag",
+            "block",
+            "not_run"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/text"
+        },
+        "revision_owner": {
+          "$ref": "#/$defs/text"
+        },
+        "recheck_scope": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/text"
+          }
+        },
+        "locations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/location"
+          }
+        },
+        "expression_summary": {
+          "$ref": "#/$defs/text"
+        },
+        "applicability": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "reason"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "assessed",
+                "not_applicable",
+                "not_assessable"
+              ]
+            },
+            "reason": {
+              "$ref": "#/$defs/text"
+            }
+          }
+        },
+        "source_basis": {
+          "type": "object"
+        },
+        "affected_gaps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/text"
+          }
+        },
+        "critical": {
+          "type": "boolean"
+        },
+        "visibility": {
+          "enum": [
+            "visible",
+            "folded",
+            "absent"
+          ]
+        }
+      }
+    },
+    "semanticReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "request_id",
+        "prepared_fingerprint",
+        "identity",
+        "reviewed_ranges",
+        "items",
+        "rubric",
+        "criteria",
+        "limitations"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "phase22/reading-review-1.0"
+        },
+        "kind": {
+          "const": "reader_semantic_review"
+        },
+        "request_id": {
+          "$ref": "#/$defs/text"
+        },
+        "prepared_fingerprint": {
+          "$ref": "#/$defs/hash"
+        },
+        "identity": {
+          "type": "object"
+        },
+        "reviewed_ranges": {
+          "type": "array",
+          "minItems": 24,
+          "items": {
+            "$ref": "#/$defs/location"
+          }
+        },
+        "items": {
+          "type": "array",
+          "minItems": 32,
+          "items": {
+            "$ref": "#/$defs/item"
+          }
+        },
+        "rubric": {
+          "type": "array",
+          "minItems": 14,
+          "maxItems": 14,
+          "items": {
+            "$ref": "#/$defs/judgment"
+          }
+        },
+        "criteria": {
+          "type": "array",
+          "minItems": 12,
+          "maxItems": 12,
+          "items": {
+            "$ref": "#/$defs/judgment"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/text"
+          }
+        }
+      }
+    },
+    "readerAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "prepared_fingerprint",
+        "identity",
+        "gates",
+        "accepted",
+        "native_observation_status",
+        "native_acceptance_dependency",
+        "evidence_mode",
+        "native_evidence_mode",
+        "structural_findings",
+        "receipt_binding",
+        "review_fingerprint",
+        "limitations"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "phase22/reading-review-1.0"
+        },
+        "kind": {
+          "const": "reader_assessment"
+        },
+        "prepared_fingerprint": {
+          "$ref": "#/$defs/hash"
+        },
+        "identity": {
+          "type": "object"
+        },
+        "gates": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "completeness",
+            "readability",
+            "native_presentation"
+          ],
+          "properties": {
+            "completeness": {
+              "enum": [
+                "pass",
+                "flag",
+                "block",
+                "not_run"
+              ]
+            },
+            "readability": {
+              "enum": [
+                "pass",
+                "flag",
+                "block",
+                "not_run"
+              ]
+            },
+            "native_presentation": {
+              "enum": [
+                "pass",
+                "flag",
+                "block",
+                "not_run"
+              ]
+            }
+          }
+        },
+        "accepted": {
+          "const": false
+        },
+        "native_observation_status": {
+          "enum": [
+            "pass",
+            "flag",
+            "block",
+            "not_run"
+          ]
+        },
+        "native_acceptance_dependency": {
+          "$ref": "#/$defs/text"
+        },
+        "evidence_mode": {
+          "enum": [
+            "actual",
+            "synthetic",
+            "unknown"
+          ]
+        },
+        "native_evidence_mode": {
+          "enum": [
+            "actual",
+            "synthetic",
+            "not_run"
+          ]
+        },
+        "structural_findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "verdict"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/text"
+              },
+              "verdict": {
+                "enum": [
+                  "pass",
+                  "flag",
+                  "block",
+                  "not_run"
+                ]
+              },
+              "language": {
+                "enum": [
+                  "en",
+                  "zh-CN"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "receipt_binding": {
+          "type": "object"
+        },
+        "review_fingerprint": {
+          "$ref": "#/$defs/hash"
+        },
+        "limitations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/text"
+          }
+        }
+      }
+    }
+  }
+}

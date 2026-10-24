@@ -1,0 +1,737 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": ".agents/skills/academic-paper-analysis/agents/openai.yaml",
+      "sha256": "0f0b453aca483da0237c8ae9e6779271f56318fc37fc65a6f7ef9124ba0f3c45"
+    },
+    {
+      "path": ".agents/skills/academic-paper-analysis/references/contracts-and-tools.md",
+      "sha256": "3fc5b54ee5111d18e6bcf15ee96862a1cc994132510f78100057386fc01e77b0"
+    },
+    {
+      "path": ".agents/skills/academic-paper-analysis/references/evaluation.md",
+      "sha256": "e4cfa909a23141f3dca9e4927aa09c7b86c1ae0fdaf7cdbb3093a1333d0d8eab"
+    },
+    {
+      "path": ".agents/skills/academic-paper-analysis/references/execution-and-recovery.md",
+      "sha256": "95412bf0146f079f73d2072ca78b8af6c85b8289ad4cae56d13b1539c8acc6d8"
+    },
+    {
+      "path": ".agents/skills/academic-paper-analysis/references/presentation-and-reading-review.md",
+      "sha256": "bab845ddb7af920761ada3d924d8697afc012bf48bcffff18623c83948bc9338"
+    },
+    {
+      "path": ".agents/skills/academic-paper-analysis/references/scientific-reading.md",
+      "sha256": "6fa3e764c693d2b29c4a90d508375bb469b567a37559363374d5f7c7deac3735"
+    },
+    {
+      "path": ".agents/skills/academic-paper-analysis/SKILL.md",
+      "sha256": "7604dbf5f366d6eb8d0436babe3500f5718d91f76eae644f11862e446720c242"
+    },
+    {
+      "path": ".agents/skills/apa-setup/agents/openai.yaml",
+      "sha256": "9a0548aa891b88fe95bb75f430e989f7c53d3aebc9f907cc67aec9c7e6630552"
+    },
+    {
+      "path": ".agents/skills/apa-setup/SKILL.md",
+      "sha256": "679fdfdf763275c8379760c174692dd5d5ebfebc010c8c12236c17586ed8e16b"
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "2af58b2491b07234c41c980df0f2aa264ea65203c53a679f3c83cbdd09f401f2"
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "3e1e0a53ce118f3557307dfbda1b4e50c7e841124667c7d62697e0e5d209a536"
+    },
+    {
+      "path": "CLAUDE.md",
+      "sha256": "205308de8428ec1b96819f29d91b47f802a62c82eea2ccd53a5002a79e0963f4"
+    },
+    {
+      "path": "Clippings/.gitkeep",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "config/apa-public-files.json",
+      "sha256": "85f4feb7298dc13055172aa707dfc630389ae85d1ac715359c557a2d822a9ab5"
+    },
+    {
+      "path": "config/environment.json",
+      "sha256": "a18f18aaa4dc807f342cd8cba485fba41e6197b77e4991fbc3dbd23592172366"
+    },
+    {
+      "path": "docs/apa-v3/active-gap-enrichment.md",
+      "sha256": "7574600b100912aa1b5657c16a59bd98071e468ba11c24a701ec71d62a54fc1b"
+    },
+    {
+      "path": "docs/apa-v3/current-contracts.md",
+      "sha256": "06dac60bd11c1b2ff56a6a2701160bfb5a4cb45124dec2f9d3511e5cac17c254"
+    },
+    {
+      "path": "docs/apa-v3/reading-first-obsidian.md",
+      "sha256": "137678ed83ebe7bf2bd057073bc441a82fa7118b67fc37b6188283c420510eab"
+    },
+    {
+      "path": "docs/apa-v3/reading-first-publication.md",
+      "sha256": "dcf1c22672aa569bd5d86b447aecfb014de5aa56a82ae90f063d07aa43844a68"
+    },
+    {
+      "path": "docs/apa-v3/scientific-writing-modules.md",
+      "sha256": "5116aa4854aa8586db67bd11279aecf33e58c918bfc40493e7a1d31bff762579"
+    },
+    {
+      "path": "docs/CONFIGURATION.md",
+      "sha256": "ac9583e09308b9cefc76912396a89ea5c763035e3a4afca902eb210a0ecc861d"
+    },
+    {
+      "path": "Figures/.gitkeep",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "Ontology/concept-taxonomy.md",
+      "sha256": "bbbedbaab6c54d298b7cb675e9d0f2e8dcfc05e8b0dd6aa7982c000c041bcb2a"
+    },
+    {
+      "path": "Ontology/method-taxonomy.md",
+      "sha256": "a41a486745010746ef0e0aec30c040902dd6324daac89a29ef98c381ccfcb0d8"
+    },
+    {
+      "path": "Ontology/relation-types.md",
+      "sha256": "cc3d7a1dc406f26a4322cc99ed7af3d8129ae8bf390fef8551c797a9a95a0acf"
+    },
+    {
+      "path": "Ontology/vault-content-policy.md",
+      "sha256": "8d3218288077a6009299a67014bbf6bd7ca5630d4ee6c83a3d8c6251ee9c5c7e"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "cd0a0e0580be309cd5f1c563b8ca2b2d276c0ba0df868fb73ed1a238ca550523"
+    },
+    {
+      "path": "package.json",
+      "sha256": "29abca3ceec60755e9e6cf4dc6b47f14c22a6420ae3bd9134a7c84d3af280c76"
+    },
+    {
+      "path": "prompts/v3/phase21-scientific-contracts.md",
+      "sha256": "43be32335c2421588348d47f32fbef7dacddf8eb8e4064a7987c5f6b7c2c7d35"
+    },
+    {
+      "path": "prompts/v3/phase22-language-contracts.md",
+      "sha256": "3b0d0cbaa48e065aa0c9bc302f90d882e72d5c9b736fb96478de2e40440382c2"
+    },
+    {
+      "path": "prompts/v3/phase221-reading-contracts.md",
+      "sha256": "49ad394ba2d58f5d1a6664a6b0d50360358b668af8c8d7de8b74605282764a74"
+    },
+    {
+      "path": "prompts/v3/reading-first-contracts.md",
+      "sha256": "2071f937207bd18a5a15d74c6a50ce777315bdc99b0bab8ff1f9b58093818623"
+    },
+    {
+      "path": "Raw/.gitkeep",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "README.md",
+      "sha256": "c145c8e5178e934a0581805c0f6652bf7179a5adf853cef4b4639de1545fbbf2"
+    },
+    {
+      "path": "Schema/config/apa-config.schema.json",
+      "sha256": "86a6f6ddb27ba983b1321ce2645606dffadb01c16c83aca0127fa3f534282bf3"
+    },
+    {
+      "path": "Schema/contracts/v3-analysis-package.schema.json",
+      "sha256": "ddbc4ba0f642b07d18774ae290337d5a9a1ef46828fbf2505b5630fc8726048d"
+    },
+    {
+      "path": "Schema/contracts/v3-scientific/v3-scientific-package.schema.json",
+      "sha256": "95081477dc0eb73a23ff6b28dc2297d1a19b96d3d496671b1903d1cdd7a6c420"
+    },
+    {
+      "path": "Schema/contracts/v3-source-package.schema.json",
+      "sha256": "6ea836495f5b3f255a5457a4f9e6756ebb14ed1b97558b1572842aaacddf6a44"
+    },
+    {
+      "path": "Schema/phase21/accepted-reference.schema.json",
+      "sha256": "895d8d505e4ae26de7da33f7dba8ad902d71c9970e793ca3dc424a5c9f6890a7"
+    },
+    {
+      "path": "Schema/phase21/derived-workbook.schema.json",
+      "sha256": "b2cc03c8265f62ccc681588bca181ecb1346c476ef3016c17121df1fa555ed16"
+    },
+    {
+      "path": "Schema/phase21/gold-manifest.schema.json",
+      "sha256": "b8068354d744b301611b58e2f7058e427471ac727b96ce0e94045fb26e8f66dd"
+    },
+    {
+      "path": "Schema/phase21/host-capability.schema.json",
+      "sha256": "f90ace7e8cfa303ff189abb1d84900ad2afca1e217352e358153d2d14a3ac7c4"
+    },
+    {
+      "path": "Schema/phase21/native-scientific-input.schema.json",
+      "sha256": "ecd455f20f271d390f6190c37fa7cbb55c0a433b1449561f8741acc0be7763f0"
+    },
+    {
+      "path": "Schema/phase21/native-workbook.schema.json",
+      "sha256": "b082159ebd6fc19fcab7252998a11e551562cf6ed0671216f58e88a9803250e2"
+    },
+    {
+      "path": "Schema/phase21/original-xls-source-evidence.schema.json",
+      "sha256": "00388f24eb414ceaa1dbddb8efe549c80a6778b180c16d99e876345969a1db2b"
+    },
+    {
+      "path": "Schema/phase21/parser-run.schema.json",
+      "sha256": "4e29afcc7a8edab806a9ef5f445fe6f20f83a7ba5d840f826c739104417b222b"
+    },
+    {
+      "path": "Schema/phase21/proof-chain.schema.json",
+      "sha256": "9485114d9eb82b6f92d3fcf060a869e8418139a44a5d342c393fd5f8ce1321aa"
+    },
+    {
+      "path": "Schema/phase21/scientific-input.schema.json",
+      "sha256": "ae7cb804346192e4cd10950e074406457005eabcea71fcd405a4a62d162a58cb"
+    },
+    {
+      "path": "Schema/phase21/source-evidence-bundle.schema.json",
+      "sha256": "c01a636786ce39413e5c96853730344eb5d60834a798a9e96a7c43627bd98aa2"
+    },
+    {
+      "path": "Schema/phase21/source-evidence-reuse.schema.json",
+      "sha256": "85065d4707385b76d2aa3e687b413b14f4a9ba88b42217275736fe1dbd78821b"
+    },
+    {
+      "path": "Schema/phase21/source-evidence-scientific-input.schema.json",
+      "sha256": "98e016671e6864129828b6d7ca34465d4d81dc2d2501182546b321000c727b37"
+    },
+    {
+      "path": "Schema/phase21/whole-paper-scientific-input.schema.json",
+      "sha256": "df9ca65f2fa0fb0ee6f7e125157288354a496cd4e4eda93614003b0cc7dff025"
+    },
+    {
+      "path": "Schema/phase21/whole-paper-storage.schema.json",
+      "sha256": "9f1e6bb1ca3902c7deb06757c5808a48c829bf5a96bd5845c64f855e93fda343"
+    },
+    {
+      "path": "Schema/phase21/whole-paper.schema.json",
+      "sha256": "8b37ac96cdd62ff39c0fced12d355051fd72c1f3244942b1d2ee5e1938e6939b"
+    },
+    {
+      "path": "Schema/phase22/active-index.schema.json",
+      "sha256": "3a3b1d60b2aae6fa7c35b6444ebf341dc06f6df588ea7b7d455a3b82130f2077"
+    },
+    {
+      "path": "Schema/phase22/language-view.schema.json",
+      "sha256": "78df03183f5338481fdf5b82b6828efda0049eec826d7af0eb47e7aee485dadf"
+    },
+    {
+      "path": "Schema/phase22/parity-review.schema.json",
+      "sha256": "ab5899914209367e1252929e5a331e3a0cc9699df209ae3fe556822e17aa60b8"
+    },
+    {
+      "path": "Schema/phase22/publication-transaction.schema.json",
+      "sha256": "5e3aaa3de569eaaa8411ab19158bc758494dc3a3fadcdc4b25ed8c4e25788f9f"
+    },
+    {
+      "path": "Schema/phase22/reader-presentation.schema.json",
+      "sha256": "7f440ed84ce00fc823cf8909a5516644660ecf373a8d06aa246988c8b965f58b"
+    },
+    {
+      "path": "Schema/phase22/reading-basis.schema.json",
+      "sha256": "20e1c0f4ff857aae20f9ecc451cb83cb1f434deece37d0b3ba3cf04a866f20cf"
+    },
+    {
+      "path": "Schema/phase22/reading-first-publication.schema.json",
+      "sha256": "33736606d103cc8f9574103757f2979e31b1f7474ad33d35f918efc8f230bec7"
+    },
+    {
+      "path": "Schema/phase22/reading-review.schema.json",
+      "sha256": "6324819a44859124ccaf43c7a963e5ebd513dc2ed04ccb813f790db0b7c2bfeb"
+    },
+    {
+      "path": "Schema/phase22/render-context.schema.json",
+      "sha256": "cb013779bcb6f0c7bc4d8493938e2a41758ed1cd131b50983536167d67d29e98"
+    },
+    {
+      "path": "Schema/phase22/review-manifest.schema.json",
+      "sha256": "7db2875bf16d8ef9d1763abdf85e4512c6e1f5c626e689a8e0c188cdcd1346a5"
+    },
+    {
+      "path": "scripts/apa-model-policy.mjs",
+      "sha256": "390e9df91c4ad59382b10fb049c963c98ed0d5e7ed006820829deaa91de33b06"
+    },
+    {
+      "path": "scripts/apa-setup.mjs",
+      "sha256": "197d75178e0c8183c2ba455c8718183970888c36eac9b9ed38d1cd8ef521a4c0"
+    },
+    {
+      "path": "scripts/check-bm25-index.mjs",
+      "sha256": "e8c7e02f1642883bdde9bed17ef26212e80a0bde1d8b407c689f0ffd703fdabb"
+    },
+    {
+      "path": "scripts/lib/apa-config.mjs",
+      "sha256": "3b016274255067825bbd8ed6d6226e347407ec5be17483a615277d4b8e0de311"
+    },
+    {
+      "path": "scripts/lib/managed-process.mjs",
+      "sha256": "e8e03a807891465724231af0aacb365ec1adad92728a81a85e8a6e8e520fa720"
+    },
+    {
+      "path": "scripts/lib/mineru-parse.py",
+      "sha256": "db210b2724946f76bf00885c120b513bad1bb6119cfefa124d4d8a9daa414bde"
+    },
+    {
+      "path": "scripts/lib/mineru-runner.mjs",
+      "sha256": "ec686aef75a474dedb1b3355df7ee4580c7ef137f2f18c7e7bda6bf4b5c2e6c2"
+    },
+    {
+      "path": "scripts/lib/mineru-runtime.mjs",
+      "sha256": "1e2edce891439537f0858cca38813a9580582af7d13fa9bbeabd23e0614a23d9"
+    },
+    {
+      "path": "scripts/setup/apa-setup-page.mjs",
+      "sha256": "11d5c10f9832f35308e18c2fbaa006a72f80f98cfe5367cf2fc031baa51f6ab3"
+    },
+    {
+      "path": "scripts/setup/bootstrap-windows.ps1",
+      "sha256": "9c3ef6cf575f65729ea6d9b8d651e9e9ad565b2772f0209a9f205bd2147eaac7"
+    },
+    {
+      "path": "scripts/setup/environment.mjs",
+      "sha256": "338f878800ba8377924d90ba3306d8988912b0e3bab6d0e525ba1347627341b2"
+    },
+    {
+      "path": "scripts/setup/export-public-apa.mjs",
+      "sha256": "2780fe416280858ac948b35852c54fd98b266e0ab0cbf2b9636dc49660914cd9"
+    },
+    {
+      "path": "scripts/setup/install-apa-companion-skills.ps1",
+      "sha256": "7bb1a850abd202b25a5fdcd4ce3717669f7697028ab7932744520b0b9fc6c942"
+    },
+    {
+      "path": "scripts/setup/install-global-integrations.ps1",
+      "sha256": "b0cdd4fcedb3ba7cd7be45b6702c3524697e04867d5a50ae841e225798f10303"
+    },
+    {
+      "path": "scripts/setup/require-mineru-python.mjs",
+      "sha256": "979b8a1a85305f4d9b3c528883c4191a3f9e7e757b0c2d6995e521265bfa093c"
+    },
+    {
+      "path": "scripts/setup/setup-mineru.ps1",
+      "sha256": "c985038042cee40299a8169b9705f9b85a15a5425dc3f8ecbb15b3ce4b9dbc7a"
+    },
+    {
+      "path": "scripts/setup/verify-apa-skill-sync.mjs",
+      "sha256": "abc591c370a34b1933de5b8773395a1585f9b7ea7af3fc87d604d2bd0bf1fda0"
+    },
+    {
+      "path": "scripts/setup/verify-environment.mjs",
+      "sha256": "592240ba5bd93bfa79cb09774c61af98998e9fcbeaa956d37db8e721c549d57a"
+    },
+    {
+      "path": "scripts/v3/archive-office-to-pdf.ps1",
+      "sha256": "c93556f0a9795266c3b37a9a1987605b1bdd0d75e0bb4b049515ad08f74d0bd5"
+    },
+    {
+      "path": "scripts/v3/archive-representation.mjs",
+      "sha256": "4b7557bbf030a460ef1c72c14c01de5921c40f67b8877e2d101194cc655ac438"
+    },
+    {
+      "path": "scripts/v3/bilingual.mjs",
+      "sha256": "4ecf16cf4ed5bc97e8e591a69932d3e3ba816471cbab5aec068bc6cddf53557e"
+    },
+    {
+      "path": "scripts/v3/case-source-comparison.mjs",
+      "sha256": "b9daf14f7e0f2d8db449dd58609ee23915d1740bae68fd4d008de686a720ba8b"
+    },
+    {
+      "path": "scripts/v3/configured-reading.mjs",
+      "sha256": "e821309b7b6262fa95b1570216db01d4686f9466a05a1b261fd871a55092861e"
+    },
+    {
+      "path": "scripts/v3/contract-validator.mjs",
+      "sha256": "234127c8dad6420ad62842467fad56328e3ac9d9a89ed0b2f282aa42dee1fea3"
+    },
+    {
+      "path": "scripts/v3/derived-workbook-evidence.mjs",
+      "sha256": "26e38def23e15c173f87afa626165de518eee966337f5deddcdd3aea6ac332b5"
+    },
+    {
+      "path": "scripts/v3/grouped-source-comparison.mjs",
+      "sha256": "b75381d8151c3cae3f2c427722963bd2e10c9cdca15ee30138a101eca9a259ec"
+    },
+    {
+      "path": "scripts/v3/mineru-asset-evidence.mjs",
+      "sha256": "30ccfc0aa4a61db8550e8445ffd302ae4db119e8fc566640a7fe9dab202fc7ae"
+    },
+    {
+      "path": "scripts/v3/native-scientific-validator.mjs",
+      "sha256": "042c0d00c183da0660bdbddd6b221b82a8a3162843041f03a5ae69f44baf7178"
+    },
+    {
+      "path": "scripts/v3/obsidian-graph.mjs",
+      "sha256": "d122328224c5f0859742eea3e7fd978faf0ec1cc5a49d4fbf1ae910aba1fc046"
+    },
+    {
+      "path": "scripts/v3/office-original-comparison.mjs",
+      "sha256": "7d354a9cd91bb898752bbaab71b62644acf7057c9825a4c613dbd3e4bec6fe27"
+    },
+    {
+      "path": "scripts/v3/office-source-evidence-reader.py",
+      "sha256": "db8bd22b186a789b5f139587585e62c627c967787e58ba3fde2904bdc0335b9f"
+    },
+    {
+      "path": "scripts/v3/office-source-evidence.mjs",
+      "sha256": "316be4715788c2166207a89f19d993e81808e721a2e5514c256802d07962e9b5"
+    },
+    {
+      "path": "scripts/v3/original-xls-parser-evidence.mjs",
+      "sha256": "ce079445090c210dc04528e603daf465c68eaef28598693599aeb6ead57a1324"
+    },
+    {
+      "path": "scripts/v3/original-xls-source-evidence.mjs",
+      "sha256": "d95096d0990ae653f712d7b46798ceca1b861f1fea697a44549008df40bfc6f7"
+    },
+    {
+      "path": "scripts/v3/owned-artifact-store.mjs",
+      "sha256": "757e43ec81450e9328018b4171d290eb08e394473a9ad0bcd72a49371f3bcc14"
+    },
+    {
+      "path": "scripts/v3/parser-adapter.mjs",
+      "sha256": "fc8ea1a406a4393ea5fd2910634853a35e8b96637d1526d720363cf5f5b20c96"
+    },
+    {
+      "path": "scripts/v3/parser-comparison.mjs",
+      "sha256": "cb2a3675c2962936ad1e922ff1f217db2996de62911b91dd5518c5ce0c648a0e"
+    },
+    {
+      "path": "scripts/v3/phase21-contract-loader.mjs",
+      "sha256": "958bf0b03716393aba392464fec560bb6029d7ce7dc824cd0bed816d6c7efdd3"
+    },
+    {
+      "path": "scripts/v3/phase21-evaluation-driver.mjs",
+      "sha256": "bbd3c7893ab1ad6d56d63e377bcd8b8452264ee446fb15c26c373db5d53e9d39"
+    },
+    {
+      "path": "scripts/v3/phase21-runner.mjs",
+      "sha256": "e8eabad08ef7e27823763e67fb8ddd6e5c61b627e27f372d403075a1fdb25760"
+    },
+    {
+      "path": "scripts/v3/phase22-active-version.mjs",
+      "sha256": "0c7098b77703677f7e96ad0e5755c68e6af6d8401f1e78a3b1c0dfe0a0cdb181"
+    },
+    {
+      "path": "scripts/v3/phase22-contract-loader.mjs",
+      "sha256": "4391241b531963f32df8f257dab18739332cc0cf6ad9794bf30112e07397300a"
+    },
+    {
+      "path": "scripts/v3/phase22-graph.mjs",
+      "sha256": "5b6dc5c4f26a519ed5422bb2f7b92d510b494caa17620c470badc349498258db"
+    },
+    {
+      "path": "scripts/v3/phase22-input.mjs",
+      "sha256": "dc098c577522176704374821448943523583be2bcb828408c9d93a8e98318cd7"
+    },
+    {
+      "path": "scripts/v3/phase22-language.mjs",
+      "sha256": "442adfb7bc63298abd2dc8e86ceef500a238f5ab11d7e213d94900b5f490d21f"
+    },
+    {
+      "path": "scripts/v3/phase22-managed-markdown.mjs",
+      "sha256": "6df340eb687b75432f9d973dd1089ca2aeea1cd60bfc40941cf18cbd5575cc4b"
+    },
+    {
+      "path": "scripts/v3/phase22-parity.mjs",
+      "sha256": "987918d9267baf1358dc658672fea34f0ce223c5fef242e82a4347ee9003dbbb"
+    },
+    {
+      "path": "scripts/v3/phase22-publication.mjs",
+      "sha256": "60b86fd251ba2b0e27a837fc98b4c698235e139991442f0d374e1f09f20479c2"
+    },
+    {
+      "path": "scripts/v3/phase22-render-context.mjs",
+      "sha256": "75de6873ac9a6fad71cf43263dc41a8364b81de4a64668c2dac6d3d277f2bc7d"
+    },
+    {
+      "path": "scripts/v3/phase22-render.mjs",
+      "sha256": "8b757f9747e6a892ca31d8b2eb10771e022854f50b449c1660b14073cee54d24"
+    },
+    {
+      "path": "scripts/v3/phase22-review.mjs",
+      "sha256": "946943140f3e411ac02a163ed853f32a41d3d0ba27e4049b59ece01704fcfa3f"
+    },
+    {
+      "path": "scripts/v3/phase22-search.mjs",
+      "sha256": "2c322679a3705fb23e9930651d2aa6ae35b44751f0180714568df818ce164e9f"
+    },
+    {
+      "path": "scripts/v3/phase221-display.mjs",
+      "sha256": "887c88eeb3f6b30d47574a252d9495dc7e38ade152ffa49c6adcf9ba83022bc9"
+    },
+    {
+      "path": "scripts/v3/phase221-historical-input.mjs",
+      "sha256": "96c4a736e7efa317fec836b18de85650d267accd91254a2d585e5712770015f0"
+    },
+    {
+      "path": "scripts/v3/phase221-presentation.mjs",
+      "sha256": "243016de2249a67419ffadb581d10fd6d71e5c389baac746fb185b35fb0db388"
+    },
+    {
+      "path": "scripts/v3/phase221-reading-review.mjs",
+      "sha256": "8e6a2879334347c9275b90a32910492c5d1c0f27886d89a9d8e08044b2ea45df"
+    },
+    {
+      "path": "scripts/v3/phase221-research-map.mjs",
+      "sha256": "a7af442a4a326574dfb796dfe1f15689ad7e52af0b13ca1d43805e529dc76313"
+    },
+    {
+      "path": "scripts/v3/phase221-reviewed-support.mjs",
+      "sha256": "fbdcd3708af5e0b5556ed92ffb2fcd309482b83801afc3de2e4c83ce7bd479a4"
+    },
+    {
+      "path": "scripts/v3/phase221-source-assets.mjs",
+      "sha256": "438e8e495a9e4aa8e5ceda09de5fc7cc8338f0d101a499c75af94f0741a357f4"
+    },
+    {
+      "path": "scripts/v3/phase221-targets.mjs",
+      "sha256": "d2f837e134ae5860dfbc18c3233a527f43541b2388b3462cd505548a29a09fff"
+    },
+    {
+      "path": "scripts/v3/phase221-visuals.mjs",
+      "sha256": "d48de247463507fab93f8684b4652a9e216e4d3b0b3cf77d8f82163dc2201044"
+    },
+    {
+      "path": "scripts/v3/proof-chain-validator.mjs",
+      "sha256": "8058b79130e983d568f3071c60aa02f07eb59234ce84ba609024450e2185a437"
+    },
+    {
+      "path": "scripts/v3/reading-first-editor.mjs",
+      "sha256": "a70dff79260477094f9ab8d51188c71c7ae5c152cc4de3483ae00cf5388c0a11"
+    },
+    {
+      "path": "scripts/v3/reading-first-index.mjs",
+      "sha256": "19450eb000a1c7ac4dbf326967b69be94b75aeaae95044bdebc1a8a1da044637"
+    },
+    {
+      "path": "scripts/v3/reading-first-knowledge.mjs",
+      "sha256": "62439e5936a99b507d30290741e1f0112c92ef69eb8530e9a12619ae555d9af0"
+    },
+    {
+      "path": "scripts/v3/reading-first-obsidian.mjs",
+      "sha256": "b60573ed92848c10f30c55c3234f91214849e81829b683b63dc1c8988b2a96fe"
+    },
+    {
+      "path": "scripts/v3/reading-first-preview.mjs",
+      "sha256": "ed24833bf9233cacf9265bb98e89be2ec330ab54724967882f40008cb27a0069"
+    },
+    {
+      "path": "scripts/v3/reading-first-publication.mjs",
+      "sha256": "82e1a7b7412582f7a4a5d29c02343b21ccb8a06d46091a5422b63ba3915b020e"
+    },
+    {
+      "path": "scripts/v3/reading-first-runtime.mjs",
+      "sha256": "48f8cbb4e2116b06c75e1133d197223fb6de7969dc49c9b1b6d6935a36f9fb5a"
+    },
+    {
+      "path": "scripts/v3/render-pdf-regions.py",
+      "sha256": "4ee361423bab3e1ccf4e09bc3278bbf439929ff60a95cbc9b7169e594f3ea44e"
+    },
+    {
+      "path": "scripts/v3/scientific-input-validator.mjs",
+      "sha256": "49c239dea10a45c56fe3e9fb303fbdb5ed01e4172ae9ec0c1d228ab723f4af52"
+    },
+    {
+      "path": "scripts/v3/scientific-quality-validator.mjs",
+      "sha256": "bb2d74644643a885bd2473d89c0f13b16815284e832d0ca5cb4c3cbc47ad9e5d"
+    },
+    {
+      "path": "scripts/v3/semantic-package-validator.mjs",
+      "sha256": "1a3bb826e5477cc9f12ffcf19c980bbb96dd51a3baec542caefbdd2ba029d9de"
+    },
+    {
+      "path": "scripts/v3/snf-glyph-comparison.mjs",
+      "sha256": "162387625dfb38efcb70d6a2bb5a36c69f95ac65a0037843417de29a70fe0d1f"
+    },
+    {
+      "path": "scripts/v3/snf-source-comparison.mjs",
+      "sha256": "8b6144908f34391818d1d6a853c017078e6826e23a663fa46cab8ba2e3b1ac4a"
+    },
+    {
+      "path": "scripts/v3/source-evidence-bundle.mjs",
+      "sha256": "b5a4aa6e4658e0e517aed634ae7a31f99bbf04e07e197b212ab9714e7eb6e736"
+    },
+    {
+      "path": "scripts/v3/source-evidence-reuse.mjs",
+      "sha256": "c4498f372e8b93f5d242c64e2f3d9dce73b3a5c484faa3a136c00c99b44ebc15"
+    },
+    {
+      "path": "scripts/v3/source-literal-pdf-derivation.mjs",
+      "sha256": "3edad4a6329b88fea26c22d47bbd6b2c02487f9935fef9ed9e7be2f5922e89e3"
+    },
+    {
+      "path": "scripts/v3/whole-paper-adapter.mjs",
+      "sha256": "d2eff679ccf12f977a47da04b1c922448907f0f69547454ad167cc9b86b1c8e8"
+    },
+    {
+      "path": "scripts/v3/whole-paper-comparison.mjs",
+      "sha256": "cf129b4c3e3a90cd0e9301361dac4d777d8e21c808711510bfb7792c7e5f6560"
+    },
+    {
+      "path": "scripts/v3/whole-paper-scientific-validator.mjs",
+      "sha256": "7d3157d4aeab42162c8987bc57c68243048849afc2e641108133322de34c41b5"
+    },
+    {
+      "path": "scripts/v3/whole-paper-storage.mjs",
+      "sha256": "588087d410df88210a8fe89c5d5463ba1509c3be8df4d7487ca649fced835481"
+    },
+    {
+      "path": "scripts/v3/workflow-composer.mjs",
+      "sha256": "c95f453650f19a52f3fbee15b98d4942edae92c16cb5f3496eebf1ebb1ca1be2"
+    },
+    {
+      "path": "scripts/v3/workflow-orchestrator.mjs",
+      "sha256": "3ba96d760e4869923043ed79f106c73c8d8c16c21ef262892e5b3e048c954284"
+    },
+    {
+      "path": "SETUP.md",
+      "sha256": "9f5f1c8e8f1d72436661fd6ef59e6d5843a12eb566da4c917b928be26bc75f82"
+    },
+    {
+      "path": "Templates/apa-public/AGENTS.md",
+      "sha256": "3e1e0a53ce118f3557307dfbda1b4e50c7e841124667c7d62697e0e5d209a536"
+    },
+    {
+      "path": "Templates/apa-public/CLAUDE.md",
+      "sha256": "205308de8428ec1b96819f29d91b47f802a62c82eea2ccd53a5002a79e0963f4"
+    },
+    {
+      "path": "Templates/apa-setup/page.css",
+      "sha256": "ca2531cf4b92a617efcaf6a393e2a730100eec5412746ea2d75748adfceecdf1"
+    },
+    {
+      "path": "Templates/apa-setup/page.js",
+      "sha256": "aa334f4c2d9cd6a3bc5caf7a8e52881ed0bc83dac1a55aae62b1245eec42f164"
+    },
+    {
+      "path": "Templates/apa-v3/apa-readable.css",
+      "sha256": "feb29e9b6bbac9742368a5283e128704a9d1ed0eeecdf1ac8e4fb4918de64ce6"
+    },
+    {
+      "path": "test/setup/apa-companion-skills.test.mjs",
+      "sha256": "6084bee83537661456816f583899c250af134aa3af90e8993f0c2a457d48c989"
+    },
+    {
+      "path": "test/setup/apa-config-core.test.mjs",
+      "sha256": "f50cf71787a3dd7daa25f98715521873622b66c32beb52371ca8907652747ff4"
+    },
+    {
+      "path": "test/setup/apa-configuration.test.mjs",
+      "sha256": "8e549d1a976027f09f0fbce562b07474ad7304abaf917031e8949d33d43d5d27"
+    },
+    {
+      "path": "test/setup/apa-setup-page.test.mjs",
+      "sha256": "ecd1ecae1490dc9ff6808d1dc356815cd67c01683b9dc76af14f82a3719bb870"
+    },
+    {
+      "path": "test/setup/bootstrap-execution.test.mjs",
+      "sha256": "3f37bb87d92f6bed6470fc388d2701e8524c4033f35fac9ac1c92cecc9f5f4db"
+    },
+    {
+      "path": "test/setup/bootstrap-windows.test.mjs",
+      "sha256": "7c05e3c5b1411e537776f6fb1e64e679ee521513713b4e1ca3038a41324ca0ce"
+    },
+    {
+      "path": "test/setup/public-export.test.mjs",
+      "sha256": "cce9ce55f579e6124f7df2215077f486878323ab447c5e74cf28439773a15df6"
+    },
+    {
+      "path": "test/setup/verify-environment.test.mjs",
+      "sha256": "b6898d00fdeaae931c9240893c643b08333a19cba35aedde2acde979b29fac61"
+    },
+    {
+      "path": "test/shared/configured-mineru.test.mjs",
+      "sha256": "4e95b16d6111df49096dd67d1843944c906c7924e976e74219d176a5b80260ac"
+    },
+    {
+      "path": "test/v3/configured-reading-policy.test.mjs",
+      "sha256": "12efd0ff6d8ef4e9d4f4bc1da7331427a129f8adb939bbb853aa6cf20234cfec"
+    },
+    {
+      "path": "test/v3/configured-reading.test.mjs",
+      "sha256": "4ae2505eb29bfd88ae04bad68044d403e144201dc1c23596f1d54f3c223d7588"
+    },
+    {
+      "path": "test/v3/fixtures/phase21/composition-cases.json",
+      "sha256": "ae6b13216876f5a9393c94f4296195a6614ef98286962d675d3c9d6fb4362892"
+    },
+    {
+      "path": "test/v3/fixtures/scientific-reading/methods-control.json",
+      "sha256": "29e3fbb587d5dbd6ab07175a637e4eb0c76d7e35538dd387b85e5a0186288354"
+    },
+    {
+      "path": "test/v3/helpers/phase22-fixtures.mjs",
+      "sha256": "96210ee39a984a0cb59324904f76af131aa56c9986bc853559ac309c14ce1a94"
+    },
+    {
+      "path": "test/v3/helpers/phase221-fixtures.mjs",
+      "sha256": "ebfc996e84a15c970e08427f1769b1e37104c25de2247296f02d7982c08ad4c0"
+    },
+    {
+      "path": "test/v3/helpers/phase221-index-fixtures.mjs",
+      "sha256": "08cadedfc9f9e066af5bb2f1b163dfaf503e2db1787bd3119d9e49ce29cfda94"
+    },
+    {
+      "path": "test/v3/helpers/reading-first-index-fixtures.mjs",
+      "sha256": "01967a5cc884155a9b8e41d9e5b102c350984c1d18203e26924c997d76536e29"
+    },
+    {
+      "path": "test/v3/helpers/reading-first-publication-fixtures.mjs",
+      "sha256": "058414bf828bcdae2f8003d200930f6dcf84fcdb7ff3b9ffc85ab7f8c4ffaf23"
+    },
+    {
+      "path": "test/v3/helpers/reading-first-publication-source-fixtures.mjs",
+      "sha256": "8228844714391a86120b8cb4fb2114e81d871138bc323c74f475261775587f58"
+    },
+    {
+      "path": "test/v3/reading-first-editor.test.mjs",
+      "sha256": "f379d0a0b5e16ab54f3f57e1b9df2f332a4392d72d0479e5f3c253fe13742c45"
+    },
+    {
+      "path": "test/v3/reading-first-index.test.mjs",
+      "sha256": "cb166ed0799e63d4298e5efd2558606e93c236eff4bcdbd1325f98a3def7d7c6"
+    },
+    {
+      "path": "test/v3/reading-first-obsidian.test.mjs",
+      "sha256": "ed7e6a5fb12fff44af79cc5aca3486977ac35b4af78a4b69533e7755c1b0cc73"
+    },
+    {
+      "path": "test/v3/reading-first-publication.test.mjs",
+      "sha256": "1b16cafa26ad702b7cca5142554de571be133dd369a74f6369326279054dc10e"
+    },
+    {
+      "path": "test/v3/reading-first-runtime.test.mjs",
+      "sha256": "b97d120c9d782c82a5ce418804eeb9cbe15f2b23bbb4ee74956e6fdb8d76d0b3"
+    },
+    {
+      "path": "Views/graph/apa-only.md",
+      "sha256": "b3eb78cd618502e32ef72b556cac9acdd70ae500447c8afe5598adfe976620fb"
+    },
+    {
+      "path": "Views/indexes/apa-sources.md",
+      "sha256": "2107d833da4fda47eda16ac651ffb24b7c6b263ea274074fda700a1bcc88f94b"
+    },
+    {
+      "path": "Wiki/concepts/.gitkeep",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "Wiki/methods/.gitkeep",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "Wiki/papers/.gitkeep",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

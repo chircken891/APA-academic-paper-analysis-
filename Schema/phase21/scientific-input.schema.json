@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "phase21-scientific-input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "identity", "source_package", "core", "reading_card", "scientific_details", "input_fingerprint"],
+  "properties": {
+    "schema_version": { "const": "phase21-scientific-input-1.0" },
+    "identity": { "$ref": "v3/scientific-package#/$defs/identity" },
+    "source_package": { "$ref": "v3/source-package" },
+    "core": { "$ref": "v3/analysis-package#/properties/core" },
+    "reading_card": { "$ref": "v3/analysis-package#/properties/reading_card" },
+    "scientific_details": { "$ref": "v3/scientific-package#/$defs/details" },
+    "input_fingerprint": { "$ref": "v3/scientific-package#/$defs/hash" }
+  }
+}

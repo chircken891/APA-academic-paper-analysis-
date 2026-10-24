@@ -1,0 +1,1563 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "phase22/reader-presentation-1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "profile",
+    "identity",
+    "qualification",
+    "dependencies",
+    "targets",
+    "target_registry",
+    "records",
+    "ranges",
+    "navigation",
+    "gaps",
+    "review"
+  ],
+  "properties": {
+    "reader_support": {
+      "type": "object",
+      "required": ["schema_version", "identity", "support_fingerprint", "descriptor_fingerprint", "sources", "blocks", "expressions"],
+      "properties": {
+        "schema_version": { "const": "phase221-reviewed-support-1.0" },
+        "identity": { "type": "object" },
+        "support_fingerprint": { "$ref": "#/$defs/hash" },
+        "descriptor_fingerprint": { "$ref": "#/$defs/hash" },
+        "basis_fingerprint": { "$ref": "#/$defs/hash" },
+        "sources": { "type": "array", "minItems": 1, "items": { "type": "object" } },
+        "blocks": { "type": "array", "minItems": 4, "maxItems": 4, "items": { "type": "object" } },
+        "expressions": { "type": "array", "items": { "type": "object" } }
+      },
+      "additionalProperties": false
+    },
+    "audit_display": { "const": "compact" },
+    "shared_explanation_bindings": {
+      "type": "array", "minItems": 1, "items": {
+        "type": "object", "additionalProperties": false, "required": ["entity_id", "language", "span_id", "source_block_ids", "evidence_ids"],
+        "properties": {
+          "entity_id": { "type": "string", "minLength": 1 }, "language": { "enum": ["en", "zh-CN"] }, "span_id": { "type": "string", "minLength": 1 },
+          "source_block_ids": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }, "evidence_ids": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+        }
+      }
+    },
+    "shared_explanations": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["entity_id", "language", "span_ids", "support_only_span_ids"],
+        "properties": {
+          "entity_id": { "type": "string", "minLength": 1 },
+          "language": { "enum": ["en", "zh-CN"] },
+          "span_ids": { "$ref": "#/$defs/mapIds" },
+          "support_only_span_ids": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+        }
+      }
+    },
+    "research_map": {
+      "type": "object", "additionalProperties": false,
+      "required": ["map", "bindings", "navigation", "ranges"],
+      "properties": {
+        "map": { "$ref": "#/$defs/researchMap" },
+        "bindings": {
+          "type": "object", "additionalProperties": false, "required": ["map_fingerprint", "views", "paper_targets"],
+          "properties": {
+            "map_fingerprint": { "$ref": "#/$defs/hash" },
+            "views": { "type": "object", "additionalProperties": false, "required": ["en", "zh-CN"], "properties": { "en": { "$ref": "#/$defs/hash" }, "zh-CN": { "$ref": "#/$defs/hash" } } },
+            "paper_targets": { "type": "object", "additionalProperties": false, "required": ["en", "zh-CN"], "properties": { "en": { "type": "string", "minLength": 1 }, "zh-CN": { "type": "string", "minLength": 1 } } }
+          }
+        },
+        "navigation": { "type": "array", "items": {
+          "type": "object", "additionalProperties": false, "required": ["language", "kind", "step_id", "span_id", "target", "label"],
+          "properties": {
+            "language": { "enum": ["en", "zh-CN"] }, "kind": { "enum": ["research-map-design", "research-map-finding", "finding-research-map"] },
+            "step_id": { "type": "string", "minLength": 1 }, "span_id": { "type": "string", "minLength": 1 }, "target": { "type": "string", "minLength": 1 }, "label": { "type": "string", "minLength": 1 }
+          }
+        } },
+        "ranges": { "type": "array", "minItems": 2, "maxItems": 2, "items": {
+          "type": "object", "additionalProperties": false, "required": ["language", "section_id", "from", "to", "sha256"],
+          "properties": { "language": { "enum": ["en", "zh-CN"] }, "section_id": { "const": "study-design" }, "from": { "type": "integer", "minimum": 0 }, "to": { "type": "integer", "minimum": 1 }, "sha256": { "$ref": "#/$defs/hash" } }
+        } }
+      }
+    },
+    "schema_version": {
+      "const": "phase22/reader-presentation-1.0"
+    },
+    "profile": {
+      "const": "phase22-reader-note-1.0"
+    },
+    "identity": {
+      "type": "object",
+      "required": [
+        "paper_id",
+        "run_id",
+        "analysis_revision"
+      ],
+      "properties": {
+        "paper_id": {
+          "type": "string",
+          "pattern": "^pap_[0-9a-f]{32}$"
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^run_[0-9a-f]{32}$"
+        },
+        "analysis_revision": {
+          "type": "string",
+          "pattern": "^rev_[0-9a-f]{32}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "qualification": {
+      "type": "object"
+    },
+    "dependencies": {
+      "type": "object",
+      "required": [
+        "basis",
+        "context",
+        "science",
+        "terms",
+        "views",
+        "parity",
+        "reader_tools",
+        "targets",
+        "style"
+      ],
+      "properties": {
+        "basis": {
+          "$ref": "#/$defs/hash"
+        },
+        "presentation_options": { "$ref": "#/$defs/hash" },
+        "context": {
+          "$ref": "#/$defs/hash"
+        },
+        "science": {
+          "$ref": "#/$defs/hash"
+        },
+        "terms": {
+          "$ref": "#/$defs/hash"
+        },
+        "parity": {
+          "$ref": "#/$defs/hash"
+        },
+        "targets": {
+          "$ref": "#/$defs/hash"
+        },
+        "style": {
+          "$ref": "#/$defs/hash"
+        },
+      "visuals": {
+        "$ref": "#/$defs/hash"
+      },
+        "views": {
+          "type": "object",
+          "required": [
+            "en",
+            "zh-CN"
+          ],
+          "properties": {
+            "en": {
+              "$ref": "#/$defs/hash"
+            },
+            "zh-CN": {
+              "$ref": "#/$defs/hash"
+            }
+          },
+          "additionalProperties": false
+        },
+        "reader_tools": {
+          "type": "object",
+          "minProperties": 3,
+          "additionalProperties": {
+            "$ref": "#/$defs/hash"
+          }
+        },
+        "registration": {
+          "$ref": "#/$defs/hash"
+        },
+        "reviewed_support": {
+          "$ref": "#/$defs/hash"
+        }
+      },
+      "additionalProperties": false
+    },
+    "targets": {
+      "type": "object",
+      "required": [
+        "notes",
+        "presentation",
+        "support",
+        "assets"
+      ],
+      "properties": {
+        "notes": {
+          "type": "object",
+          "required": [
+            "en",
+            "zh-CN"
+          ],
+          "properties": {
+            "en": {
+              "type": "object",
+              "required": [
+                "path",
+                "byte_sha256",
+                "managed_hash"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "byte_sha256": {
+                  "$ref": "#/$defs/hash"
+                },
+                "managed_hash": {
+                  "$ref": "#/$defs/hash"
+                }
+              },
+              "additionalProperties": false
+            },
+            "zh-CN": {
+              "type": "object",
+              "required": [
+                "path",
+                "byte_sha256",
+                "managed_hash"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "byte_sha256": {
+                  "$ref": "#/$defs/hash"
+                },
+                "managed_hash": {
+                  "$ref": "#/$defs/hash"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "presentation": {
+          "type": "string",
+          "minLength": 1
+        },
+      "reading_records": {
+        "type": "object",
+        "required": ["en", "zh-CN"],
+        "properties": {
+          "en": { "$ref": "#/$defs/readingRecordTarget" },
+          "zh-CN": { "$ref": "#/$defs/readingRecordTarget" }
+        },
+        "additionalProperties": false
+      },
+        "support": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "target_registry": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "paper_id",
+        "identity_fingerprint",
+        "human_slug",
+        "discriminator",
+        "paper_targets",
+        "registry_fingerprint"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "phase221-target-registry-1.0"
+        },
+        "paper_id": {
+          "type": "string",
+          "pattern": "^pap_[0-9a-f]{32}$"
+        },
+        "identity_fingerprint": {
+          "$ref": "#/$defs/hash"
+        },
+        "human_slug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "discriminator": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{12}$"
+        },
+        "paper_targets": {
+          "type": "object",
+          "required": [
+            "en",
+            "zh-CN"
+          ],
+          "properties": {
+            "en": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^Wiki/sources/[^/\\\\]+\\.(en|zh-CN)\\.md$"
+            },
+            "zh-CN": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^Wiki/sources/[^/\\\\]+\\.(en|zh-CN)\\.md$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "registry_fingerprint": {
+          "$ref": "#/$defs/hash"
+        }
+      },
+      "additionalProperties": false
+    },
+    "records": {
+      "type": "array",
+      "minItems": 16,
+      "uniqueItemProperty": "id",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "origins",
+          "applicability",
+          "source_basis",
+          "expressions",
+          "quality",
+          "raw"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "origins": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "obligation_id": {
+            "type": "string",
+            "pattern": "^SR-(0[1-9]|1[0-6])$"
+          },
+          "applicability": {
+            "type": "object",
+            "required": [
+              "status",
+              "reason"
+            ],
+            "properties": {
+              "status": {
+                "enum": [
+                  "assessed",
+                  "not_applicable",
+                  "not_assessable"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "source_basis": {
+            "type": "object",
+            "required": [
+              "path",
+              "fingerprint",
+              "pointer",
+              "document"
+            ],
+            "properties": {
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fingerprint": {
+                "$ref": "#/$defs/hash"
+              },
+              "pointer": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^/"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "document": {
+                "enum": [
+                  "science",
+                  "qualification",
+                  "source_presentation",
+                  "producer",
+                  "reader_support"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "expressions": {
+            "type": "object",
+            "required": [
+              "en",
+              "zh-CN"
+            ],
+            "properties": {
+              "en": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/expression"
+                }
+              },
+              "zh-CN": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/expression"
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "quality": {
+            "const": "not_run"
+          },
+          "raw": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "type": "object",
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^SR-(0[1-9]|1[0-6])$"
+                }
+              }
+            },
+            "then": {
+              "type": "object",
+              "properties": {
+                "expressions": {
+                  "type": "object",
+                  "required": [
+                    "en",
+                    "zh-CN"
+                  ],
+                  "properties": {
+                    "en": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/expression"
+                      },
+                      "minItems": 1
+                    },
+                    "zh-CN": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/expression"
+                      },
+                      "minItems": 1
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        ]
+      },
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "SR-01"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "SR-02"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "SR-03"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "SR-04"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "SR-05"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "SR-06"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "SR-07"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "SR-08"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "SR-09"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "SR-10"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "SR-11"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "SR-12"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "SR-13"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "SR-14"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "SR-15"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "SR-16"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        }
+      ]
+    },
+    "ranges": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": [
+          "language",
+          "section_id",
+          "paragraph_id",
+          "span_id",
+          "anchor",
+          "text",
+          "source",
+          "transform",
+          "quantity_bindings",
+          "core_quantity_bindings",
+          "refs",
+          "from",
+          "to",
+          "unit",
+          "sha256"
+        ],
+        "properties": {
+          "language": {
+            "enum": [
+              "en",
+              "zh-CN"
+            ]
+          },
+          "section_id": {
+            "enum": [
+              "source",
+              "abstract",
+              "study-design",
+              "key-findings",
+              "methods-concepts-measures",
+              "figures-tables",
+              "discussion",
+              "limitations",
+              "conclusion",
+              "evidence",
+              "relations",
+              "coverage"
+            ]
+          },
+          "paragraph_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "span_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "anchor": {
+            "type": "string",
+            "minLength": 1
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "object",
+            "required": [
+              "start",
+              "end",
+              "text",
+              "unit"
+            ],
+            "properties": {
+              "start": {
+                "const": 0
+              },
+              "end": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1
+              },
+              "unit": {
+                "const": "UTF-16"
+              }
+            },
+            "additionalProperties": false
+          },
+          "transform": {
+            "enum": [
+              "identity",
+              "reader-display",
+              "registered-asset-embed",
+              "immutable-fence",
+              "reviewed-expression"
+            ]
+          },
+          "display_transforms": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "rule",
+                "version",
+                "original_ranges",
+                "output",
+                "proof"
+              ],
+              "properties": {
+                "rule": {
+                  "enum": [
+                    "term-first-use",
+                    "term-existing-atom",
+                    "term-duplicate-expansion",
+                    "term-full-name-classification",
+                    "integer-thousands-separator"
+                  ]
+                },
+                "version": {
+                  "const": "phase221-display-1.0"
+                },
+                "original_ranges": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "start",
+                      "end",
+                      "text",
+                      "unit"
+                    ],
+                    "properties": {
+                      "start": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "end": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "text": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "unit": {
+                        "const": "UTF-16"
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "output": {
+                  "type": "object",
+                  "required": [
+                    "from",
+                    "to",
+                    "text",
+                    "unit"
+                  ],
+                  "properties": {
+                    "from": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "to": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "unit": {
+                      "const": "UTF-8"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "proof": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "term_id",
+                        "sense",
+                        "section_id",
+                        "definition_unit_refs",
+                        "source_refs"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "term"
+                        },
+                        "term_id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sense": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "section_id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "definition_unit_refs": {
+                          "type": "array",
+                          "minItems": 1,
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "source_refs": {
+                          "type": "array",
+                          "minItems": 1,
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "language",
+                        "section_id",
+                        "paragraph_id",
+                        "span_id",
+                        "scientific_binding",
+                        "core_binding",
+                        "scientific_identity",
+                        "core_identity",
+                        "source_refs",
+                        "same_assertion",
+                        "artifact",
+                        "dependencies",
+                        "original_fragment"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "quantity"
+                        },
+                        "language": {
+                          "enum": [
+                            "en",
+                            "zh-CN"
+                          ]
+                        },
+                        "section_id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "paragraph_id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "span_id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "scientific_binding": {
+                        "$ref": "language-view-1.0#/$defs/quantityBinding"
+                        },
+                        "core_binding": {
+                        "$ref": "language-view-1.0#/$defs/coreQuantityBinding"
+                        },
+                        "scientific_identity": {
+                          "type": "object",
+                          "required": [
+                            "raw_precision",
+                            "unit",
+                            "denominator",
+                            "timepoint",
+                            "analysis_set",
+                            "metric_definition",
+                            "uncertainty_type",
+                            "uncertainty_value",
+                            "groups",
+                            "comparison",
+                            "population",
+                            "conditions",
+                            "uncertainty",
+                            "qualifiers"
+                          ],
+                          "properties": {
+                            "raw_precision": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "unit": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "denominator": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "timepoint": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "analysis_set": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "metric_definition": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "uncertainty_type": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "uncertainty_value": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "groups": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "comparison": {
+                              "type": "object"
+                            },
+                            "population": {
+                              "type": "object"
+                            },
+                            "conditions": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "uncertainty": {
+                              "type": "object"
+                            },
+                            "qualifiers": {
+                              "type": "object",
+                              "required": [
+                                "scientific",
+                                "core"
+                              ],
+                              "properties": {
+                                "scientific": {
+                                  "type": "object"
+                                },
+                                "core": {
+                                  "type": "object"
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "core_identity": {
+                          "type": "object",
+                          "required": [
+                            "raw_precision",
+                            "unit",
+                            "denominator",
+                            "timepoint",
+                            "analysis_set",
+                            "metric_definition",
+                            "uncertainty_type",
+                            "uncertainty_value",
+                            "groups",
+                            "comparison",
+                            "population",
+                            "conditions",
+                            "uncertainty",
+                            "qualifiers"
+                          ],
+                          "properties": {
+                            "raw_precision": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "unit": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "denominator": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "timepoint": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "analysis_set": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "metric_definition": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "uncertainty_type": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "uncertainty_value": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "groups": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "comparison": {
+                              "type": "object"
+                            },
+                            "population": {
+                              "type": "object"
+                            },
+                            "conditions": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "uncertainty": {
+                              "type": "object"
+                            },
+                            "qualifiers": {
+                              "type": "object",
+                              "required": [
+                                "scientific",
+                                "core"
+                              ],
+                              "properties": {
+                                "scientific": {
+                                  "type": "object"
+                                },
+                                "core": {
+                                  "type": "object"
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "source_refs": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "minItems": 1
+                        },
+                        "same_assertion": {
+                          "type": "object",
+                          "required": [
+                            "judgment",
+                            "reason"
+                          ],
+                          "properties": {
+                            "judgment": {
+                              "const": "same"
+                            },
+                            "reason": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "artifact": {
+                          "type": "object",
+                          "required": [
+                            "artifact_id",
+                            "run_id",
+                            "owner_actor_id",
+                            "role",
+                            "path",
+                            "revision",
+                            "sha256",
+                            "byte_length"
+                          ],
+                          "properties": {
+                            "schema_version": {
+                              "const": "phase21-owned-artifact-receipt-1.0"
+                            },
+                            "artifact_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "run_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "owner_actor_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "role": {
+                              "const": "integration"
+                            },
+                            "path": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "revision": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "sha256": {
+                              "type": "string",
+                              "pattern": "^sha256:[a-f0-9]{64}$"
+                            },
+                            "byte_length": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "local_enforcement_scope": {
+                              "const": "artifact_root_only"
+                            },
+                            "host_filesystem_enforcement": {
+                              "const": "unverified"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "dependencies": {
+                          "type": "object",
+                          "required": [
+                            "basis",
+                            "context",
+                            "science",
+                            "core",
+                            "views"
+                          ],
+                          "properties": {
+                            "basis": {
+                              "type": "string",
+                              "pattern": "^sha256:[a-f0-9]{64}$"
+                            },
+                            "context": {
+                              "type": "string",
+                              "pattern": "^sha256:[a-f0-9]{64}$"
+                            },
+                            "science": {
+                              "type": "string",
+                              "pattern": "^sha256:[a-f0-9]{64}$"
+                            },
+                            "core": {
+                              "type": "string",
+                              "pattern": "^sha256:[a-f0-9]{64}$"
+                            },
+                            "views": {
+                              "type": "object",
+                              "required": [
+                                "en",
+                                "zh-CN"
+                              ],
+                              "properties": {
+                                "en": {
+                                  "type": "string",
+                                  "pattern": "^sha256:[a-f0-9]{64}$"
+                                },
+                                "zh-CN": {
+                                  "type": "string",
+                                  "pattern": "^sha256:[a-f0-9]{64}$"
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "original_fragment": {
+                          "type": "object",
+                          "required": [
+                            "start",
+                            "end",
+                            "text",
+                            "unit"
+                          ],
+                          "properties": {
+                            "start": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "end": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "text": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "unit": {
+                              "const": "UTF-16"
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "quantity_bindings": {
+            "type": "array"
+          },
+          "support_range": {
+            "type": "object", "additionalProperties": false, "required": ["support_id", "start", "end"],
+            "properties": {
+              "support_id": { "enum": ["support:cox", "support:pca", "support:mean-field", "support:elbo"] },
+              "start": { "type": "integer", "minimum": 0 },
+              "end": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "reviewed_expression": { "type": "string", "minLength": 1 },
+          "core_quantity_bindings": {
+            "type": "array"
+          },
+          "refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "from": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "to": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "unit": {
+            "const": "UTF-8"
+          },
+          "sha256": {
+            "$ref": "#/$defs/hash"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "navigation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "language",
+          "kind",
+          "target",
+          "label"
+        ],
+        "properties": {
+          "language": {
+            "enum": [
+              "en",
+              "zh-CN"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "quick",
+              "semantic"
+            ]
+          },
+          "target": {
+            "type": "string",
+            "minLength": 1
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "semantic_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "reason",
+          "impact",
+          "owner"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "not_displayed",
+              "source_unavailable"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "impact": {
+            "type": "string",
+            "minLength": 1
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "review": {
+      "type": "object",
+      "required": [
+        "completeness",
+        "readability",
+        "native_presentation"
+      ],
+      "properties": {
+        "completeness": {
+          "const": "not_run"
+        },
+        "readability": {
+          "const": "not_run"
+        },
+        "native_presentation": {
+          "const": "not_run"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "mapIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "mapRefs": { "type": "object", "additionalProperties": false, "required": ["en", "zh-CN"], "properties": { "en": { "$ref": "#/$defs/mapIds" }, "zh-CN": { "$ref": "#/$defs/mapIds" } } },
+    "mapLabelRange": { "type": "object", "additionalProperties": false, "required": ["span_id", "start", "end"], "properties": { "span_id": { "type": "string", "minLength": 1 }, "start": { "type": "integer", "minimum": 0 }, "end": { "type": "integer", "minimum": 1 } } },
+    "mapLabels": { "type": "object", "additionalProperties": false, "required": ["en", "zh-CN"], "properties": { "en": { "$ref": "#/$defs/mapLabelRange" }, "zh-CN": { "$ref": "#/$defs/mapLabelRange" } } },
+    "researchMap": {
+      "type": "object", "additionalProperties": false, "required": ["schema_version", "layout", "steps", "edges"],
+      "properties": {
+        "schema_version": { "const": "phase221-research-map-1.0" }, "layout": { "enum": ["staged", "swimlane"] },
+        "steps": { "type": "array", "minItems": 1, "items": {
+          "type": "object", "additionalProperties": false, "required": ["step_id", "labels", "design_span_ids", "finding_span_ids"],
+          "properties": { "step_id": { "type": "string", "minLength": 1 }, "lane_id": { "type": "string", "minLength": 1 }, "labels": { "$ref": "#/$defs/mapLabels" }, "design_span_ids": { "$ref": "#/$defs/mapRefs" }, "finding_span_ids": { "$ref": "#/$defs/mapRefs" } }
+        } },
+        "lanes": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["lane_id", "labels"], "properties": { "lane_id": { "type": "string", "minLength": 1 }, "labels": { "$ref": "#/$defs/mapLabels" } } } },
+        "edges": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["from_step_id", "to_step_id", "relation"], "properties": { "from_step_id": { "type": "string", "minLength": 1 }, "to_step_id": { "type": "string", "minLength": 1 }, "relation": { "enum": ["sequence", "parallel_branch", "merge"] } } } }
+      }
+    },
+    "readingRecordTarget": {
+      "type": "object",
+      "required": ["path", "byte_sha256"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^Reading Records/[^\\\\]+\\.md$" },
+        "byte_sha256": { "$ref": "#/$defs/hash" }
+      },
+      "additionalProperties": false
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "expression": {
+      "type": "object",
+      "required": [
+        "span_id",
+        "section_id",
+        "anchor",
+        "from",
+        "to",
+        "sha256"
+      ],
+      "properties": {
+        "span_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "section_id": {
+          "enum": [
+            "source",
+            "abstract",
+            "study-design",
+            "key-findings",
+            "methods-concepts-measures",
+            "figures-tables",
+            "discussion",
+            "limitations",
+            "conclusion",
+            "evidence",
+            "relations",
+            "coverage"
+          ]
+        },
+        "anchor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "from": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "to": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/hash"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

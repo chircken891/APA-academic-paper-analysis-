@@ -1,0 +1,828 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "v3/analysis-package",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "content_profile",
+    "source_package",
+    "run_id",
+    "run_label",
+    "analysis_revision",
+    "revision_label",
+    "core",
+    "reading_card",
+    "views",
+    "manifest",
+    "dependency_inputs",
+    "review_evidence",
+    "approval_evidence"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "3.0.0"
+    },
+    "content_profile": {
+      "const": "apa-v3.0"
+    },
+    "source_package": {
+      "$ref": "source-package",
+      "$comment": "Resolves against v3/analysis-package to v3/source-package."
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^run_[0-9a-f]{32}$"
+    },
+    "run_label": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "analysis_revision": {
+      "type": "string",
+      "pattern": "^rev_[0-9a-f]{32}$"
+    },
+    "revision_label": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "core": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "paper_id",
+        "analysis_revision",
+        "evidence",
+        "units"
+      ],
+      "properties": {
+        "paper_id": {
+          "type": "string",
+          "pattern": "^pap_[0-9a-f]{32}$"
+        },
+        "analysis_revision": {
+          "type": "string",
+          "pattern": "^rev_[0-9a-f]{32}$"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "evidence_id",
+              "evidence_label",
+              "attachment_id",
+              "locator",
+              "extracted_text"
+            ],
+            "properties": {
+              "evidence_id": {
+                "type": "string",
+                "pattern": "^ev_[0-9a-f]{32}$"
+              },
+              "evidence_label": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "attachment_id": {
+                "type": "string",
+                "pattern": "^att_[0-9a-f]{32}$"
+              },
+              "locator": {
+                "$ref": "source-package#/$defs/locator"
+              },
+              "extracted_text": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            }
+          },
+          "minItems": 1,
+          "uniqueItemProperty": "evidence_id"
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "unit_id",
+              "kind",
+              "canonical_statement",
+              "population",
+              "comparison",
+              "quantity",
+              "conditions",
+              "provenance",
+              "evidence_ids",
+              "qualifiers",
+              "uncertainty",
+              "conclusion_boundary",
+              "required_for_view"
+            ],
+            "properties": {
+              "unit_id": {
+                "type": "string",
+                "pattern": "^unit_[0-9a-f]{32}$"
+              },
+              "kind": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "canonical_statement": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "population": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "description",
+                  "sample_size"
+                ],
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "pattern": "\\S"
+                  },
+                  "sample_size": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  }
+                }
+              },
+              "comparison": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "description",
+                  "groups"
+                ],
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "pattern": "\\S"
+                  },
+                  "groups": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "\\S"
+                    }
+                  }
+                }
+              },
+              "quantity": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "name",
+                    "value",
+                    "unit",
+                    "denominator"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "\\S"
+                    },
+                    "value": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "unit": {
+                      "type": "string",
+                      "pattern": "\\S"
+                    },
+                    "denominator": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "minimum": 0
+                    }
+                  }
+                }
+              },
+              "conditions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "\\S"
+                }
+              },
+              "provenance": {
+                "enum": [
+                  "author_reported",
+                  "analyst_inference"
+                ]
+              },
+              "evidence_ids": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "pattern": "^ev_[0-9a-f]{32}$"
+                },
+                "uniqueItems": true
+              },
+              "qualifiers": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "\\S"
+                }
+              },
+              "uncertainty": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "description",
+                  "status"
+                ],
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "pattern": "\\S"
+                  },
+                  "status": {
+                    "enum": [
+                      "reported",
+                      "not_reported",
+                      "not_applicable"
+                    ]
+                  }
+                }
+              },
+              "conclusion_boundary": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "allowed",
+                  "not_supported"
+                ],
+                "properties": {
+                  "allowed": {
+                    "type": "string",
+                    "pattern": "\\S"
+                  },
+                  "not_supported": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "\\S"
+                    }
+                  }
+                }
+              },
+              "required_for_view": {
+                "type": "boolean"
+              }
+            }
+          },
+          "minItems": 1,
+          "uniqueItemProperty": "unit_id"
+        }
+      }
+    },
+    "reading_card": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "paper_id",
+        "analysis_revision",
+        "items"
+      ],
+      "properties": {
+        "paper_id": {
+          "type": "string",
+          "pattern": "^pap_[0-9a-f]{32}$"
+        },
+        "analysis_revision": {
+          "type": "string",
+          "pattern": "^rev_[0-9a-f]{32}$"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "obligation_id",
+              "status",
+              "unit_ids"
+            ],
+            "properties": {
+              "obligation_id": {
+                "enum": [
+                  "SR-01",
+                  "SR-02",
+                  "SR-03",
+                  "SR-04",
+                  "SR-05",
+                  "SR-06",
+                  "SR-07",
+                  "SR-08",
+                  "SR-09",
+                  "SR-10",
+                  "SR-11",
+                  "SR-12",
+                  "SR-13",
+                  "SR-14",
+                  "SR-15",
+                  "SR-16"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "assessed",
+                  "not_applicable",
+                  "not_assessable"
+                ]
+              },
+              "unit_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^unit_[0-9a-f]{32}$"
+                },
+                "uniqueItems": true
+              },
+              "reason": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "not_applicable",
+                        "not_assessable"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "reason": {
+                      "type": "string",
+                      "pattern": "\\S"
+                    }
+                  },
+                  "required": [
+                    "reason"
+                  ]
+                }
+              }
+            ]
+          },
+          "minItems": 16,
+          "maxItems": 16,
+          "uniqueItemProperty": "obligation_id"
+        }
+      }
+    },
+    "views": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "paper_id",
+          "analysis_revision",
+          "language",
+          "analysis_core_hash",
+          "required_unit_ids",
+          "units"
+        ],
+        "properties": {
+          "paper_id": {
+            "type": "string",
+            "pattern": "^pap_[0-9a-f]{32}$"
+          },
+          "analysis_revision": {
+            "type": "string",
+            "pattern": "^rev_[0-9a-f]{32}$"
+          },
+          "language": {
+            "enum": [
+              "en",
+              "zh-CN"
+            ]
+          },
+          "analysis_core_hash": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "required_unit_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^unit_[0-9a-f]{32}$"
+            },
+            "uniqueItems": true
+          },
+          "units": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "unit_id",
+                "text"
+              ],
+              "properties": {
+                "unit_id": {
+                  "type": "string",
+                  "pattern": "^unit_[0-9a-f]{32}$"
+                },
+                "text": {
+                  "type": "string",
+                  "pattern": "\\S"
+                }
+              }
+            },
+            "uniqueItemProperty": "unit_id"
+          }
+        }
+      },
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItemProperty": "language"
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "paper_id",
+        "analysis_revision",
+        "manifest_version",
+        "canonical_serialization",
+        "hash_algorithm",
+        "members",
+        "publication_contract",
+        "member_hashes",
+        "dependency_hashes"
+      ],
+      "properties": {
+        "paper_id": {
+          "type": "string",
+          "pattern": "^pap_[0-9a-f]{32}$"
+        },
+        "analysis_revision": {
+          "type": "string",
+          "pattern": "^rev_[0-9a-f]{32}$"
+        },
+        "manifest_version": {
+          "const": "3.0.0"
+        },
+        "canonical_serialization": {
+          "const": "jcs-rfc8785"
+        },
+        "hash_algorithm": {
+          "const": "sha256"
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "analysis.core.json",
+              "analysis.en.json",
+              "analysis.zh-CN.json",
+              "scientific-reading-card.json",
+              "analysis.manifest.json"
+            ]
+          },
+          "minItems": 5,
+          "maxItems": 5,
+          "uniqueItems": true
+        },
+        "publication_contract": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maintenance_window_required",
+            "persistent_recovery_evidence_required",
+            "native_multifile_atomicity",
+            "recovery_owner_phase"
+          ],
+          "properties": {
+            "maintenance_window_required": {
+              "const": true
+            },
+            "persistent_recovery_evidence_required": {
+              "const": true
+            },
+            "native_multifile_atomicity": {
+              "const": false
+            },
+            "recovery_owner_phase": {
+              "const": "22"
+            }
+          }
+        },
+        "member_hashes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "analysis.core.json": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "analysis.en.json": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "analysis.zh-CN.json": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "scientific-reading-card.json": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "dependency_hashes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "analysis.core.json": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [],
+              "properties": {
+                "source_package": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "schema": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "profile": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "run_context": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                }
+              }
+            },
+            "scientific-reading-card.json": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [],
+              "properties": {
+                "analysis.core.json": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "schema": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "profile": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                }
+              }
+            },
+            "analysis.en.json": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [],
+              "properties": {
+                "analysis.core.json": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "scientific-reading-card.json": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "schema": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "profile": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "template": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "config": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                }
+              }
+            },
+            "analysis.zh-CN.json": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [],
+              "properties": {
+                "analysis.core.json": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "scientific-reading-card.json": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "schema": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "profile": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "template": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "config": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "dependency_inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "profile",
+        "template",
+        "config"
+      ],
+      "properties": {
+        "schema": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "profile": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "template": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "config": {
+          "type": "string",
+          "pattern": "\\S"
+        }
+      }
+    },
+    "review_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dependency_hashes"
+      ],
+      "properties": {
+        "dependency_hashes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "source_package": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "schema": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "profile": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "template": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "config": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "run_context": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "analysis.core.json": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "analysis.en.json": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "analysis.zh-CN.json": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "scientific-reading-card.json": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "analysis.manifest.json": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
+        }
+      }
+    },
+    "approval_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dependency_hashes",
+        "review_hash"
+      ],
+      "properties": {
+        "dependency_hashes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "source_package": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "schema": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "profile": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "template": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "config": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "run_context": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "analysis.core.json": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "analysis.en.json": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "analysis.zh-CN.json": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "scientific-reading-card.json": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "analysis.manifest.json": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "review_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    }
+  }
+}

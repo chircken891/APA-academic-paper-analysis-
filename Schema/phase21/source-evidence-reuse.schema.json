@@ -1,0 +1,402 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "phase21/source-evidence-reuse",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/registration"
+    },
+    {
+      "$ref": "#/$defs/reference"
+    }
+  ],
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "paper_id",
+        "run_id",
+        "analysis_revision"
+      ],
+      "properties": {
+        "paper_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "analysis_revision": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "bundleRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "expected_kind",
+        "physical_sha256",
+        "logical_fingerprint"
+      ],
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/id"
+        },
+        "expected_kind": {
+          "const": "source_evidence_bundle"
+        },
+        "physical_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "logical_fingerprint": {
+          "$ref": "#/$defs/hash"
+        }
+      }
+    },
+    "viewRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "expected_kind",
+        "physical_sha256",
+        "logical_fingerprint"
+      ],
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/id"
+        },
+        "expected_kind": {
+          "const": "source_evidence_visible_view"
+        },
+        "physical_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "logical_fingerprint": {
+          "$ref": "#/$defs/hash"
+        }
+      }
+    },
+    "smallRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "physical_sha256"
+      ],
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/id"
+        },
+        "physical_sha256": {
+          "$ref": "#/$defs/hash"
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approval_ref",
+        "authorization_fingerprint",
+        "allowed_steps",
+        "model",
+        "reasoning_effort"
+      ],
+      "properties": {
+        "approval_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "artifact_id",
+            "physical_sha256"
+          ],
+          "properties": {
+            "artifact_id": {
+              "$ref": "#/$defs/id"
+            },
+            "physical_sha256": {
+              "$ref": "#/$defs/hash"
+            }
+          }
+        },
+        "authorization_fingerprint": {
+          "$ref": "#/$defs/hash"
+        },
+        "allowed_steps": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "scientific_input",
+              "source_check",
+              "roles",
+              "handoff"
+            ]
+          }
+        },
+        "model": {
+          "const": "gpt-6.1-sol"
+        },
+        "reasoning_effort": {
+          "const": "medium"
+        }
+      }
+    },
+    "negative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary_ref",
+        "comparison_identity",
+        "full_result_fingerprint",
+        "build_ref",
+        "results_ref",
+        "input",
+        "baseline_identity",
+        "candidate_identity",
+        "reference_fingerprint",
+        "source_scope_fingerprint",
+        "source_document_map",
+        "required_coverage"
+      ],
+      "properties": {
+        "summary_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "artifact_id",
+            "physical_sha256"
+          ],
+          "properties": {
+            "artifact_id": {
+              "$ref": "#/$defs/id"
+            },
+            "physical_sha256": {
+              "$ref": "#/$defs/hash"
+            }
+          }
+        },
+        "comparison_identity": {
+          "$ref": "#/$defs/hash"
+        },
+        "full_result_fingerprint": {
+          "$ref": "#/$defs/hash"
+        },
+        "build_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "artifact_id",
+            "physical_sha256"
+          ],
+          "properties": {
+            "artifact_id": {
+              "$ref": "#/$defs/id"
+            },
+            "physical_sha256": {
+              "$ref": "#/$defs/hash"
+            }
+          }
+        },
+        "results_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "artifact_id",
+            "physical_sha256"
+          ],
+          "properties": {
+            "artifact_id": {
+              "$ref": "#/$defs/id"
+            },
+            "physical_sha256": {
+              "$ref": "#/$defs/hash"
+            }
+          }
+        },
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "physical_sha256",
+            "logical_fingerprint"
+          ],
+          "properties": {
+            "physical_sha256": {
+              "$ref": "#/$defs/hash"
+            },
+            "logical_fingerprint": {
+              "$ref": "#/$defs/hash"
+            }
+          }
+        },
+        "baseline_identity": {
+          "$ref": "#/$defs/hash"
+        },
+        "candidate_identity": {
+          "$ref": "#/$defs/hash"
+        },
+        "reference_fingerprint": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_scope_fingerprint": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_document_map": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object"
+          }
+        },
+        "required_coverage": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "registration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binding_version",
+        "identity",
+        "source_scope_fingerprint",
+        "acquisition",
+        "execution_binding",
+        "bundle_ref",
+        "view_ref",
+        "negative_parser_binding"
+      ],
+      "properties": {
+        "binding_version": {
+          "const": "source-evidence-reuse-1"
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "source_scope_fingerprint": {
+          "$ref": "#/$defs/hash"
+        },
+        "acquisition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authorization_fingerprint",
+            "policy_fingerprint",
+            "tool_fingerprint"
+          ],
+          "properties": {
+            "authorization_fingerprint": {
+              "$ref": "#/$defs/hash"
+            },
+            "policy_fingerprint": {
+              "$ref": "#/$defs/hash"
+            },
+            "tool_fingerprint": {
+              "$ref": "#/$defs/hash"
+            }
+          }
+        },
+        "execution_binding": {
+          "$ref": "#/$defs/execution"
+        },
+        "bundle_ref": {
+          "$ref": "#/$defs/bundleRef"
+        },
+        "view_ref": {
+          "$ref": "#/$defs/viewRef"
+        },
+        "negative_parser_binding": {
+          "$ref": "#/$defs/negative"
+        }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "scientific_input_fields",
+        "bundle_ref",
+        "view_ref",
+        "reference_fingerprint"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "phase21-source-evidence-scientific-input-ref-1.0"
+        },
+        "scientific_input_fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schema_version",
+            "identity",
+            "source_package",
+            "core",
+            "reading_card",
+            "scientific_details",
+            "input_fingerprint",
+            "source_value_metadata",
+            "parser_evaluation_disposition"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": "phase21-scientific-input-source-evidence-1.0"
+            },
+            "identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "source_package": {
+              "type": "object"
+            },
+            "core": {
+              "type": "object"
+            },
+            "reading_card": {
+              "type": "object"
+            },
+            "scientific_details": {
+              "type": "object"
+            },
+            "input_fingerprint": {
+              "$ref": "#/$defs/hash"
+            },
+            "source_value_metadata": {
+              "type": "array"
+            },
+            "parser_evaluation_disposition": {
+              "type": "object"
+            }
+          }
+        },
+        "bundle_ref": {
+          "$ref": "#/$defs/bundleRef"
+        },
+        "view_ref": {
+          "$ref": "#/$defs/viewRef"
+        },
+        "reference_fingerprint": {
+          "$ref": "#/$defs/hash"
+        }
+      }
+    }
+  }
+}

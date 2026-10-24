@@ -1,0 +1,1258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "phase22/language-view-1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "identity",
+    "language",
+    "basis_fingerprint",
+    "context_fingerprint",
+    "request_id",
+    "revision",
+    "sections",
+    "coverage"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "phase22/language-view-1.0"
+    },
+    "identity": {
+      "$ref": "reading-basis-1.0#/properties/identity"
+    },
+    "language": {
+      "enum": [
+        "en",
+        "zh-CN"
+      ]
+    },
+    "basis_fingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "context_fingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "sections": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "section_id",
+          "paragraphs"
+        ],
+        "properties": {
+          "section_id": {
+            "enum": [
+              "source",
+              "abstract",
+              "study-design",
+              "key-findings",
+              "methods-concepts-measures",
+              "figures-tables",
+              "discussion",
+              "limitations",
+              "conclusion",
+              "evidence",
+              "relations",
+              "coverage"
+            ]
+          },
+          "paragraphs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "paragraph_id",
+                "spans"
+              ],
+              "properties": {
+                "paragraph_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "spans": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "span_id",
+                      "kind",
+                      "text",
+                      "explain_only",
+                      "semantic_refs",
+                      "claim_refs",
+                      "evidence_refs",
+                      "quantity_refs",
+                      "term_refs",
+                      "applicability_refs",
+                      "boundary_refs",
+                      "quantity_bindings",
+                      "core_quantity_bindings"
+                    ],
+                    "properties": {
+                      "span_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "kind": {
+                        "enum": [
+                          "analysis",
+                          "quotation",
+                          "title",
+                          "formula",
+                          "code",
+                          "link_label",
+                          "link_target",
+                          "asset"
+                        ]
+                      },
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "explain_only": {
+                        "type": "boolean"
+                      },
+                      "semantic_refs": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        }
+                      },
+                      "claim_refs": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        }
+                      },
+                      "evidence_refs": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        }
+                      },
+                      "quantity_refs": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        }
+                      },
+                      "term_refs": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        }
+                      },
+                      "applicability_refs": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        }
+                      },
+                      "boundary_refs": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        }
+                      },
+                      "quantity_bindings": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "quantity_id",
+                            "raw_value",
+                            "unit",
+                            "denominator",
+                            "groups",
+                            "timepoint",
+                            "analysis_set",
+                            "uncertainty_type",
+                            "uncertainty_value",
+                            "metric_definition",
+                            "raw_precision",
+                            "token"
+                          ],
+                          "properties": {
+                            "quantity_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "raw_value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "unit": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "denominator": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "groups": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "pattern": "\\S"
+                              }
+                            },
+                            "timepoint": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "analysis_set": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "uncertainty_type": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "uncertainty_value": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "metric_definition": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "raw_precision": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "token": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "start",
+                                "end"
+                              ],
+                              "properties": {
+                                "start": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "end": {
+                                  "type": "integer",
+                                  "minimum": 1
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "core_quantity_bindings": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "unit_id",
+                            "quantity_index",
+                            "quantity",
+                            "population",
+                            "comparison",
+                            "conditions",
+                            "uncertainty",
+                            "token"
+                          ],
+                          "properties": {
+                            "unit_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "quantity_index": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "quantity": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "name",
+                                "value",
+                                "unit",
+                                "denominator"
+                              ],
+                              "properties": {
+                                "name": {
+                                  "type": "string",
+                                  "pattern": "\\S"
+                                },
+                                "value": {
+                                  "type": [
+                                    "number",
+                                    "null"
+                                  ]
+                                },
+                                "unit": {
+                                  "type": "string",
+                                  "pattern": "\\S"
+                                },
+                                "denominator": {
+                                  "type": [
+                                    "number",
+                                    "null"
+                                  ],
+                                  "minimum": 0
+                                }
+                              }
+                            },
+                            "population": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "description",
+                                "sample_size"
+                              ],
+                              "properties": {
+                                "description": {
+                                  "type": "string",
+                                  "pattern": "\\S"
+                                },
+                                "sample_size": {
+                                  "type": [
+                                    "integer",
+                                    "null"
+                                  ],
+                                  "minimum": 0
+                                }
+                              }
+                            },
+                            "comparison": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "description",
+                                "groups"
+                              ],
+                              "properties": {
+                                "description": {
+                                  "type": "string",
+                                  "pattern": "\\S"
+                                },
+                                "groups": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "pattern": "\\S"
+                                  }
+                                }
+                              }
+                            },
+                            "conditions": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "pattern": "\\S"
+                              }
+                            },
+                            "uncertainty": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "description",
+                                "status"
+                              ],
+                              "properties": {
+                                "description": {
+                                  "type": "string",
+                                  "pattern": "\\S"
+                                },
+                                "status": {
+                                  "enum": [
+                                    "reported",
+                                    "not_reported",
+                                    "not_applicable"
+                                  ]
+                                }
+                              }
+                            },
+                            "token": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "start",
+                                    "end"
+                                  ],
+                                  "properties": {
+                                    "start": {
+                                      "type": "integer",
+                                      "minimum": 0
+                                    },
+                                    "end": {
+                                      "type": "integer",
+                                      "minimum": 1
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "immutable_ref": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "authority",
+                          "id",
+                          "start",
+                          "end"
+                        ],
+                        "properties": {
+                          "authority": {
+                            "enum": [
+                              "source_block",
+                              "evidence",
+                              "source_title",
+                              "context_target",
+                              "source_asset",
+                              "reviewed_expression"
+                            ]
+                          },
+                          "id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "start": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "end": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "classification_id": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        }
+                      },
+                      "asset_refs": {
+                        "type": "array",
+                        "uniqueItems": true,
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "support_refs": {
+                        "type": "array",
+                        "uniqueItems": true,
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "support_range": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "support_id",
+                          "start",
+                          "end"
+                        ],
+                        "properties": {
+                          "support_id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "start": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "end": {
+                            "type": "integer",
+                            "minimum": 1
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "semantic_id",
+          "span_ids",
+          "status",
+          "reason"
+        ],
+        "properties": {
+          "semantic_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "span_ids": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "status": {
+            "enum": [
+              "represented",
+              "not_applicable",
+              "not_assessable"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "span_id",
+        "kind",
+        "text",
+        "explain_only",
+        "semantic_refs",
+        "claim_refs",
+        "evidence_refs",
+        "quantity_refs",
+        "term_refs",
+        "applicability_refs",
+        "boundary_refs",
+        "quantity_bindings",
+        "core_quantity_bindings"
+      ],
+      "properties": {
+        "span_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "kind": {
+          "enum": [
+            "analysis",
+            "quotation",
+            "title",
+            "formula",
+            "code",
+            "link_label",
+            "link_target",
+            "asset"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "explain_only": {
+          "type": "boolean"
+        },
+        "semantic_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "claim_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "quantity_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "term_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "applicability_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "boundary_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "quantity_bindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "quantity_id",
+              "raw_value",
+              "unit",
+              "denominator",
+              "groups",
+              "timepoint",
+              "analysis_set",
+              "uncertainty_type",
+              "uncertainty_value",
+              "metric_definition",
+              "raw_precision",
+              "token"
+            ],
+            "properties": {
+              "quantity_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "raw_value": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "unit": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "denominator": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "groups": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                }
+              },
+              "timepoint": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "analysis_set": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "uncertainty_type": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "uncertainty_value": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "metric_definition": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "raw_precision": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "token": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "start",
+                  "end"
+                ],
+                "properties": {
+                  "start": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "end": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "core_quantity_bindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "unit_id",
+              "quantity_index",
+              "quantity",
+              "population",
+              "comparison",
+              "conditions",
+              "uncertainty",
+              "token"
+            ],
+            "properties": {
+              "unit_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "quantity_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "quantity": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "value",
+                  "unit",
+                  "denominator"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "\\S"
+                  },
+                  "value": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "unit": {
+                    "type": "string",
+                    "pattern": "\\S"
+                  },
+                  "denominator": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "minimum": 0
+                  }
+                }
+              },
+              "population": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "description",
+                  "sample_size"
+                ],
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "pattern": "\\S"
+                  },
+                  "sample_size": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  }
+                }
+              },
+              "comparison": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "description",
+                  "groups"
+                ],
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "pattern": "\\S"
+                  },
+                  "groups": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "\\S"
+                    }
+                  }
+                }
+              },
+              "conditions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "\\S"
+                }
+              },
+              "uncertainty": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "description",
+                  "status"
+                ],
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "pattern": "\\S"
+                  },
+                  "status": {
+                    "enum": [
+                      "reported",
+                      "not_reported",
+                      "not_applicable"
+                    ]
+                  }
+                }
+              },
+              "token": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "start",
+                  "end"
+                ],
+                "properties": {
+                  "start": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "end": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "immutable_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority",
+            "id",
+            "start",
+            "end"
+          ],
+          "properties": {
+            "authority": {
+              "enum": [
+                "source_block",
+                "evidence",
+                "source_title",
+                "context_target",
+                "source_asset",
+                "reviewed_expression"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "start": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "end": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "classification_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "asset_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "support_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "support_range": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "support_id",
+            "start",
+            "end"
+          ],
+          "properties": {
+            "support_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "start": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "end": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "quantityBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "quantity_id",
+        "raw_value",
+        "unit",
+        "denominator",
+        "groups",
+        "timepoint",
+        "analysis_set",
+        "uncertainty_type",
+        "uncertainty_value",
+        "metric_definition",
+        "raw_precision",
+        "token"
+      ],
+      "properties": {
+        "quantity_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "raw_value": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "denominator": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "timepoint": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "analysis_set": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "uncertainty_type": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "uncertainty_value": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "metric_definition": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "raw_precision": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "token": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "start",
+            "end"
+          ],
+          "properties": {
+            "start": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "end": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "coreQuantityBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit_id",
+        "quantity_index",
+        "quantity",
+        "population",
+        "comparison",
+        "conditions",
+        "uncertainty",
+        "token"
+      ],
+      "properties": {
+        "unit_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "quantity_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "quantity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "value",
+            "unit",
+            "denominator"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "unit": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "denominator": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        },
+        "population": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "description",
+            "sample_size"
+          ],
+          "properties": {
+            "description": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "sample_size": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        },
+        "comparison": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "description",
+            "groups"
+          ],
+          "properties": {
+            "description": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "groups": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            }
+          }
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        },
+        "uncertainty": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "description",
+            "status"
+          ],
+          "properties": {
+            "description": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "status": {
+              "enum": [
+                "reported",
+                "not_reported",
+                "not_applicable"
+              ]
+            }
+          }
+        },
+        "token": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "start",
+                "end"
+              ],
+              "properties": {
+                "start": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "end": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

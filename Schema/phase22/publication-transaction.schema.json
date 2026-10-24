@@ -1,0 +1,545 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "phase22/publication-transaction-1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "transaction_id",
+    "vault_root",
+    "root_identity",
+    "run_id",
+    "analysis_revision",
+    "generation",
+    "previous_generation",
+    "evidence_mode",
+    "hashes",
+    "authority",
+    "authority_hash",
+    "state",
+    "inventory",
+    "read_dependencies",
+    "events",
+    "event_head",
+    "blocked_paths",
+    "prepared_inventory",
+    "controller_grant"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "phase22/publication-transaction-1.0"
+    },
+    "transaction_id": {
+      "type": "string"
+    },
+    "vault_root": {
+      "type": "string"
+    },
+    "root_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dev",
+        "ino"
+      ],
+      "properties": {
+        "dev": {
+          "type": "string"
+        },
+        "ino": {
+          "type": "string"
+        }
+      }
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "analysis_revision": {
+      "type": "string"
+    },
+    "generation": {
+      "type": "string"
+    },
+    "previous_generation": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "evidence_mode": {
+      "enum": [
+        "synthetic",
+        "actual"
+      ]
+    },
+    "hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scientific_review_hash",
+        "review_hash",
+        "review_output_inventory_hash",
+        "output_inventory_hash"
+      ],
+      "properties": {
+        "scientific_review_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "review_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "review_output_inventory_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "output_inventory_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "authority": {
+      "type": "object"
+    },
+    "authority_hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "state": {
+      "enum": [
+        "prepared",
+        "staged",
+        "promoting",
+        "committed",
+        "rolling_back",
+        "rolled_back",
+        "recovery_blocked"
+      ]
+    },
+    "inventory": {
+      "type": "array",
+      "minItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "kind",
+          "byte_sha256",
+          "byte_length",
+          "before_sha256",
+          "before_byte_length",
+          "before_identity",
+          "parents",
+          "state",
+          "stage_path",
+          "backup_path",
+          "displaced_path",
+          "after_identity"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "paper",
+              "support",
+              "asset",
+              "reader-presentation",
+              "reading-review",
+              "reader-record",
+              "reader-style",
+              "active",
+              "index",
+              "manifest",
+              "history",
+              "commit"
+            ]
+          },
+          "byte_sha256": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "byte_length": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "before_sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "before_byte_length": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "before_identity": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "dev",
+                  "ino"
+                ],
+                "properties": {
+                  "dev": {
+                    "type": "string"
+                  },
+                  "ino": {
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "dev",
+                "ino"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "dev": {
+                  "type": "string"
+                },
+                "ino": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "language": {
+            "enum": [
+              "en",
+              "zh-CN"
+            ]
+          },
+          "managed_hash": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "before_managed_hash": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "entity_id": {
+            "type": "string"
+          },
+          "asset_id": {
+            "type": "string"
+          },
+          "source_path": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "staged",
+              "intent",
+              "completed",
+              "restore_intent",
+              "restored"
+            ]
+          },
+          "stage_path": {
+            "type": "string"
+          },
+          "backup_path": {
+            "type": "string"
+          },
+          "displaced_path": {
+            "type": "string"
+          },
+          "after_identity": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "dev",
+                  "ino"
+                ],
+                "properties": {
+                  "dev": {
+                    "type": "string"
+                  },
+                  "ino": {
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "read_dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "seq",
+          "type",
+          "path",
+          "previous_hash",
+          "data_hash",
+          "event_hash"
+        ],
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "type": {
+            "type": "string"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "previous_hash": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "data_hash": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "event_hash": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    "event_head": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "blocked_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "prepared_inventory": {
+      "minItems": 6,
+      "items": {
+        "required": [
+          "path",
+          "kind",
+          "byte_sha256",
+          "byte_length",
+          "before_sha256",
+          "before_byte_length",
+          "before_identity",
+          "parents"
+        ],
+        "properties": {
+          "entity_id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "managed_hash": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "before_identity": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "dev",
+                  "ino"
+                ],
+                "properties": {
+                  "dev": {
+                    "type": "string"
+                  },
+                  "ino": {
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "before_sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_path": {
+            "type": "string"
+          },
+          "asset_id": {
+            "type": "string"
+          },
+          "parents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "dev",
+                "ino"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "dev": {
+                  "type": "string"
+                },
+                "ino": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "byte_length": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "byte_sha256": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "before_managed_hash": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "before_byte_length": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "kind": {
+            "enum": [
+              "paper",
+              "support",
+              "asset",
+              "reader-presentation",
+              "reading-review",
+              "reader-record",
+              "reader-style",
+              "active",
+              "index",
+              "manifest",
+              "history",
+              "commit"
+            ]
+          },
+          "language": {
+            "enum": [
+              "en",
+              "zh-CN"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "controller_grant": {
+      "properties": {
+        "key_fingerprint": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1
+        },
+        "payload": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "payload",
+        "key_fingerprint",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "type": "object"
+    }
+  }
+}

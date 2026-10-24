@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "phase21/proof-chain",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "artifacts", "dependencies", "required_artifacts", "integration_prerequisites", "delivery_status", "metadata"],
+  "properties": {
+    "schema_version": { "const": "phase21-proof-chain-1.0" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+    "dependencies": { "type": "array", "items": { "$ref": "#/$defs/dependency" } },
+    "required_artifacts": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/requiredArtifact" }, "uniqueItems": true },
+    "integration_prerequisites": { "$ref": "#/$defs/integrationPrerequisites" },
+    "delivery_status": { "enum": ["pending_resolver", "blocked", "deliverable"] },
+    "critical_defects": { "type": "array", "items": { "$ref": "#/$defs/issue" } },
+    "important_disagreements": { "type": "array", "items": { "$ref": "#/$defs/disagreement" } },
+    "source_check": { "$ref": "#/$defs/sourceCheck" },
+    "analysis_draft_frozen": { "type": "boolean" },
+    "isolation_observation": { "enum": ["observed", "not_independent", "unknown"] },
+    "p20_e12_status": { "const": "unverified" },
+    "metadata": { "type": "object", "additionalProperties": false, "required": ["requirement_refs"], "properties": { "requirement_refs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true } } }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "artifact": { "type": "object", "additionalProperties": false, "required": ["artifact_id", "path", "revision", "owner_actor_id", "sha256", "status"], "properties": { "artifact_id": { "type": "string", "minLength": 1 }, "path": { "type": "string", "minLength": 1 }, "revision": { "type": "string", "minLength": 1 }, "owner_actor_id": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "#/$defs/sha256" }, "receipt_sha256": { "$ref": "#/$defs/sha256" }, "status": { "enum": ["current", "invalid"] }, "parent_revision": { "type": ["string", "null"] }, "depends_on": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }, "evidence_tier": { "enum": ["offline", "host"] } } },
+    "dependency": { "type": "object", "additionalProperties": false, "required": ["artifact_id", "fingerprints", "status"], "properties": { "artifact_id": { "type": "string", "minLength": 1 }, "fingerprints": { "type": "object", "additionalProperties": false, "required": ["source", "parser_tool", "permission", "parent_revision", "policy", "authorization"], "properties": { "source": { "$ref": "#/$defs/sha256" }, "parser_tool": { "$ref": "#/$defs/sha256" }, "permission": { "$ref": "#/$defs/sha256" }, "parent_revision": { "$ref": "#/$defs/sha256" }, "policy": { "$ref": "#/$defs/sha256" }, "authorization": { "$ref": "#/$defs/sha256" } } }, "status": { "enum": ["current", "invalid"] } } },
+    "issue": { "type": "object", "additionalProperties": false, "required": ["id", "severity", "status", "evidence_links"], "properties": { "id": { "type": "string" }, "severity": { "enum": ["critical", "major", "minor"] }, "status": { "enum": ["resolved", "open"] }, "evidence_links": { "type": "array", "items": { "type": "string" } } } },
+    "disagreement": { "type": "object", "additionalProperties": false, "required": ["id", "evidence_links", "disposition"], "properties": { "id": { "type": "string" }, "evidence_links": { "type": "array", "items": { "type": "string" }, "minItems": 1 }, "disposition": { "enum": ["resolved", "bounded", "open"] } } },
+    "sourceCheck": { "type": "object", "additionalProperties": false, "required": ["status", "sealed", "distribution_status"], "properties": { "status": { "enum": ["pending", "not_independent", "independent"] }, "sealed": { "type": "boolean" }, "distribution_status": { "enum": ["withheld", "released"] } } },
+    "requiredArtifact": { "type": "object", "additionalProperties": false, "required": ["artifact_id", "owner_actor_id", "path"], "properties": { "artifact_id": { "type": "string", "minLength": 1 }, "owner_actor_id": { "type": "string", "minLength": 1 }, "path": { "type": "string", "minLength": 1 } } },
+    "integrationPrerequisites": { "type": "object", "additionalProperties": false, "required": ["source_check_artifact_id", "analysis_draft_artifact_id", "integration_artifact_id", "approval_artifact_id"], "properties": { "source_check_artifact_id": { "type": "string", "minLength": 1 }, "analysis_draft_artifact_id": { "type": "string", "minLength": 1 }, "integration_artifact_id": { "type": "string", "minLength": 1 }, "approval_artifact_id": { "type": "string", "minLength": 1 } } }
+  }
+}

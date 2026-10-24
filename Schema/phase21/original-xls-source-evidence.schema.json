@@ -1,0 +1,748 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "phase21/original-xls-source-evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "profile",
+    "format",
+    "source",
+    "source_binding",
+    "proof",
+    "scope",
+    "parts",
+    "records",
+    "coverage",
+    "source_only_scope"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "phase21-original-xls-source-evidence-1.0"
+    },
+    "profile": {
+      "const": "paper04-three-original-xls-source-only-1"
+    },
+    "format": {
+      "const": "xls"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha256",
+        "byte_length"
+      ],
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "source_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "document_id",
+        "source_sha256",
+        "kind",
+        "role",
+        "critical",
+        "availability",
+        "purpose"
+      ],
+      "properties": {
+        "document_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_sha256": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "kind": {
+          "enum": [
+            "pdf",
+            "docx",
+            "workbook"
+          ]
+        },
+        "format": {
+          "enum": [
+            "pdf",
+            "docx",
+            "xlsx",
+            "xls"
+          ]
+        },
+        "role": {
+          "enum": [
+            "main",
+            "attachment"
+          ]
+        },
+        "critical": {
+          "type": "boolean"
+        },
+        "availability": {
+          "enum": [
+            "available",
+            "missing"
+          ]
+        },
+        "purpose": {
+          "enum": [
+            "content",
+            "catalogue_only"
+          ]
+        },
+        "container": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "document_id",
+                "source_sha256"
+              ],
+              "properties": {
+                "document_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source_sha256": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                }
+              }
+            }
+          ]
+        },
+        "member_path": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1
+            }
+          ]
+        }
+      }
+    },
+    "proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "original_snapshot",
+        "qualification_report",
+        "reader_code",
+        "raw_record_validation"
+      ],
+      "properties": {
+        "original_snapshot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sha256",
+            "bytes_base64",
+            "decoded_sha256",
+            "encoding"
+          ],
+          "properties": {
+            "sha256": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "bytes_base64": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16777216
+            },
+            "decoded_sha256": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "encoding": {
+              "const": "gzip"
+            }
+          }
+        },
+        "qualification_report": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sha256",
+            "bytes_base64"
+          ],
+          "properties": {
+            "sha256": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "bytes_base64": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 134217728
+            }
+          }
+        },
+        "reader_code": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sha256",
+            "bytes_base64"
+          ],
+          "properties": {
+            "sha256": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "bytes_base64": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 134217728
+            }
+          }
+        },
+        "raw_record_validation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sha256",
+            "bytes_base64"
+          ],
+          "properties": {
+            "sha256": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "bytes_base64": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 134217728
+            }
+          }
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile",
+        "format",
+        "parts",
+        "sheets"
+      ],
+      "properties": {
+        "profile": {
+          "const": "paper04-three-original-xls-source-only-1"
+        },
+        "format": {
+          "const": "xls"
+        },
+        "parts": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "sheets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "index",
+              "name",
+              "range"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "name": {
+                "type": "string"
+              },
+              "range": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Z]+[1-9][0-9]*:[A-Z]+[1-9][0-9]*$"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "parts": {
+      "type": "array",
+      "maxItems": 0
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "physical_page",
+          "evidence_origin",
+          "sheet",
+          "address",
+          "row",
+          "column",
+          "state",
+          "biff_type",
+          "raw_value",
+          "text",
+          "value",
+          "lexical_origin",
+          "serialized",
+          "merges",
+          "formula",
+          "cache",
+          "unresolved",
+          "number_format",
+          "number_format_interpretation",
+          "biff_record",
+          "reader_cell_type"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "workbook_cell"
+          },
+          "physical_page": {
+            "type": "null"
+          },
+          "evidence_origin": {
+            "const": "source_only"
+          },
+          "sheet": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "index",
+              "name",
+              "sheet_id",
+              "visibility"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "name": {
+                "type": "string"
+              },
+              "sheet_id": {
+                "type": "string"
+              },
+              "visibility": {
+                "enum": [
+                  "visible",
+                  "hidden",
+                  "veryHidden"
+                ]
+              }
+            }
+          },
+          "address": {
+            "type": "string"
+          },
+          "row": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "column": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "state": {
+            "enum": [
+              "format_only",
+              "error",
+              "value"
+            ]
+          },
+          "biff_type": {
+            "enum": [
+              "text",
+              "number",
+              "formatted_blank",
+              "boolean",
+              "error"
+            ]
+          },
+          "raw_value": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "lexical_origin": {
+            "enum": [
+              "decoded_binary_storage_value_not_printed_precision",
+              "stored_string",
+              "storage_attribute"
+            ]
+          },
+          "serialized": {
+            "const": true
+          },
+          "merges": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "formula": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "present",
+              "text",
+              "attributes"
+            ],
+            "properties": {
+              "present": {
+                "const": false
+              },
+              "text": {
+                "type": "null"
+              },
+              "attributes": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            }
+          },
+          "cache": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "element_present",
+              "raw_value"
+            ],
+            "properties": {
+              "element_present": {
+                "const": false
+              },
+              "raw_value": {
+                "type": "null"
+              }
+            }
+          },
+          "unresolved": {
+            "const": false
+          },
+          "number_format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "number_format_interpretation": {
+            "const": "not_rendered"
+          },
+          "biff_record": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "offset",
+              "code",
+              "expanded_index",
+              "sha256",
+              "xf_index"
+            ],
+            "properties": {
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "code": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "expanded_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "xf_index": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "reader_cell_type": {
+            "enum": [
+              "reader_empty",
+              "text",
+              "number",
+              "date_serial",
+              "boolean",
+              "error",
+              "formatted_blank"
+            ]
+          }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "complete_selected_parts",
+        "sheets",
+        "uninterpreted_parts",
+        "empty_sheets"
+      ],
+      "properties": {
+        "complete_selected_parts": {
+          "const": true
+        },
+        "sheets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "index",
+              "name",
+              "range",
+              "serialized_cells",
+              "merged_ranges",
+              "unserialized_not_assumed_blank"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "name": {
+                "type": "string"
+              },
+              "range": {
+                "type": "string",
+                "pattern": "^[A-Z]+[1-9][0-9]*:[A-Z]+[1-9][0-9]*$"
+              },
+              "serialized_cells": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "merged_ranges": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "unserialized_not_assumed_blank": {
+                "const": true
+              }
+            }
+          }
+        },
+        "uninterpreted_parts": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "empty_sheets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "index",
+              "name",
+              "rows",
+              "columns",
+              "worksheet_eof_observed",
+              "materialized_cells"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "name": {
+                "type": "string"
+              },
+              "rows": {
+                "const": 0
+              },
+              "columns": {
+                "const": 0
+              },
+              "worksheet_eof_observed": {
+                "const": true
+              },
+              "materialized_cells": {
+                "const": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "source_only_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_truth",
+        "scientific_eligible",
+        "parser_eligible",
+        "printed_precision",
+        "formula_records",
+        "unmaterialized_positions",
+        "unmaterialized_ranges",
+        "date_epochs",
+        "unknown_contexts",
+        "original_record_absences",
+        "candidate_denominator"
+      ],
+      "properties": {
+        "source_truth": {
+          "const": "original_xls"
+        },
+        "scientific_eligible": {
+          "const": false
+        },
+        "parser_eligible": {
+          "const": false
+        },
+        "printed_precision": {
+          "const": "not_established"
+        },
+        "formula_records": {
+          "const": 0
+        },
+        "unmaterialized_positions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unmaterialized_ranges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "index",
+              "name",
+              "ranges"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "name": {
+                "type": "string"
+              },
+              "ranges": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "row",
+                    "start_column",
+                    "end_column"
+                  ],
+                  "properties": {
+                    "row": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "start_column": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "end_column": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "date_epochs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "index",
+              "datemode",
+              "meaning"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "datemode": {
+                "enum": [
+                  0,
+                  1
+                ]
+              },
+              "meaning": {
+                "enum": [
+                  "1904",
+                  "1900_excel_leap_year_convention"
+                ]
+              }
+            }
+          }
+        },
+        "unknown_contexts": {
+          "const": 91
+        },
+        "original_record_absences": {
+          "const": 36
+        },
+        "candidate_denominator": {
+          "const": 1061
+        }
+      }
+    }
+  }
+}

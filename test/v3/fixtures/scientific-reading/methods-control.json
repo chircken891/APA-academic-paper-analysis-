@@ -1,0 +1,1674 @@
+{
+  "contract_version": "3.0.0-scientific",
+  "identity": {
+    "paper_id": "pap_00000000000000000000000000000001",
+    "run_id": "run_00000000000000000000000000000001",
+    "analysis_revision": "rev_00000000000000000000000000000001"
+  },
+  "boundary_package": {
+    "schema_version": "3.0.0",
+    "content_profile": "apa-v3.0",
+    "source_package": {
+      "schema_version": "3.0.0",
+      "content_profile": "apa-v3.0",
+      "paper_id": "pap_00000000000000000000000000000001",
+      "paper_label": "Invented seedling experiment",
+      "source_documents": [
+        {
+          "source_document_id": "src_00000000000000000000000000000001",
+          "source_label": "Synthetic main",
+          "source_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+          "role": "main",
+          "media_type": "application/pdf",
+          "support_status": "supported",
+          "included": true,
+          "locators": [
+            {
+              "source_document_id": "src_00000000000000000000000000000001",
+              "source_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+              "page_index": 0,
+              "block_id": "b1"
+            }
+          ]
+        },
+        {
+          "source_document_id": "src_00000000000000000000000000000002",
+          "source_label": "Synthetic supplement",
+          "source_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+          "role": "supplement",
+          "media_type": "application/pdf",
+          "support_status": "supported",
+          "included": true,
+          "locators": [
+            {
+              "source_document_id": "src_00000000000000000000000000000002",
+              "source_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+              "page_index": 0,
+              "block_id": "b1"
+            },
+            {
+              "source_document_id": "src_00000000000000000000000000000002",
+              "source_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+              "page_index": 1,
+              "block_id": "supplement-only"
+            }
+          ]
+        }
+      ],
+      "attachments": [
+        {
+          "attachment_id": "att_00000000000000000000000000000001",
+          "attachment_label": "Invented main attachment",
+          "source_document_id": "src_00000000000000000000000000000001",
+          "critical": true,
+          "included": true
+        },
+        {
+          "attachment_id": "att_00000000000000000000000000000002",
+          "attachment_label": "Invented supplement attachment",
+          "source_document_id": "src_00000000000000000000000000000002",
+          "critical": true,
+          "included": true
+        }
+      ]
+    },
+    "run_id": "run_00000000000000000000000000000001",
+    "run_label": "Synthetic contract run",
+    "analysis_revision": "rev_00000000000000000000000000000001",
+    "revision_label": "Synthetic first revision",
+    "core": {
+      "paper_id": "pap_00000000000000000000000000000001",
+      "analysis_revision": "rev_00000000000000000000000000000001",
+      "evidence": [
+        {
+          "evidence_id": "ev_00000000000000000000000000000001",
+          "evidence_label": "Invented observation 1",
+          "attachment_id": "att_00000000000000000000000000000001",
+          "locator": {
+            "source_document_id": "src_00000000000000000000000000000001",
+            "source_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+            "page_index": 0,
+            "block_id": "b1"
+          },
+          "extracted_text": "Synthetic seedlings measured after seven days."
+        },
+        {
+          "evidence_id": "ev_00000000000000000000000000000002",
+          "evidence_label": "Invented observation 2",
+          "attachment_id": "att_00000000000000000000000000000002",
+          "locator": {
+            "source_document_id": "src_00000000000000000000000000000002",
+            "source_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+            "page_index": 0,
+            "block_id": "b1"
+          },
+          "extracted_text": "Synthetic seedlings measured after seven days."
+        }
+      ],
+      "units": [
+        {
+          "unit_id": "unit_00000000000000000000000000000001",
+          "kind": "result",
+          "canonical_statement": "In this invented experiment, seedlings in group A were 2 cm taller at day 7.",
+          "population": {
+            "description": "Invented seedlings",
+            "sample_size": 20
+          },
+          "comparison": {
+            "description": "Group A versus group B",
+            "groups": [
+              "A",
+              "B"
+            ]
+          },
+          "quantity": [
+            {
+              "name": "mean height difference",
+              "value": 2,
+              "unit": "cm",
+              "denominator": null
+            }
+          ],
+          "conditions": [
+            "day 7"
+          ],
+          "provenance": "author_reported",
+          "evidence_ids": [
+            "ev_00000000000000000000000000000001",
+            "ev_00000000000000000000000000000002"
+          ],
+          "qualifiers": [
+            "synthetic observation"
+          ],
+          "uncertainty": {
+            "description": "Precision is not supplied by this invented example.",
+            "status": "not_reported"
+          },
+          "conclusion_boundary": {
+            "allowed": "Group difference in this experiment.",
+            "not_supported": [
+              "General effectiveness."
+            ]
+          },
+          "required_for_view": true
+        }
+      ]
+    },
+    "reading_card": {
+      "paper_id": "pap_00000000000000000000000000000001",
+      "analysis_revision": "rev_00000000000000000000000000000001",
+      "items": [
+        {
+          "obligation_id": "SR-01",
+          "status": "assessed",
+          "unit_ids": [
+            "unit_00000000000000000000000000000001"
+          ]
+        },
+        {
+          "obligation_id": "SR-02",
+          "status": "assessed",
+          "unit_ids": [
+            "unit_00000000000000000000000000000001"
+          ]
+        },
+        {
+          "obligation_id": "SR-03",
+          "status": "assessed",
+          "unit_ids": [
+            "unit_00000000000000000000000000000001"
+          ]
+        },
+        {
+          "obligation_id": "SR-04",
+          "status": "assessed",
+          "unit_ids": [
+            "unit_00000000000000000000000000000001"
+          ]
+        },
+        {
+          "obligation_id": "SR-05",
+          "status": "assessed",
+          "unit_ids": [
+            "unit_00000000000000000000000000000001"
+          ]
+        },
+        {
+          "obligation_id": "SR-06",
+          "status": "assessed",
+          "unit_ids": [
+            "unit_00000000000000000000000000000001"
+          ]
+        },
+        {
+          "obligation_id": "SR-07",
+          "status": "assessed",
+          "unit_ids": [
+            "unit_00000000000000000000000000000001"
+          ]
+        },
+        {
+          "obligation_id": "SR-08",
+          "status": "assessed",
+          "unit_ids": [
+            "unit_00000000000000000000000000000001"
+          ]
+        },
+        {
+          "obligation_id": "SR-09",
+          "status": "assessed",
+          "unit_ids": [
+            "unit_00000000000000000000000000000001"
+          ]
+        },
+        {
+          "obligation_id": "SR-10",
+          "status": "assessed",
+          "unit_ids": [
+            "unit_00000000000000000000000000000001"
+          ]
+        },
+        {
+          "obligation_id": "SR-11",
+          "status": "assessed",
+          "unit_ids": [
+            "unit_00000000000000000000000000000001"
+          ]
+        },
+        {
+          "obligation_id": "SR-12",
+          "status": "assessed",
+          "unit_ids": [
+            "unit_00000000000000000000000000000001"
+          ]
+        },
+        {
+          "obligation_id": "SR-13",
+          "status": "assessed",
+          "unit_ids": [
+            "unit_00000000000000000000000000000001"
+          ]
+        },
+        {
+          "obligation_id": "SR-14",
+          "status": "assessed",
+          "unit_ids": [
+            "unit_00000000000000000000000000000001"
+          ]
+        },
+        {
+          "obligation_id": "SR-15",
+          "status": "assessed",
+          "unit_ids": [
+            "unit_00000000000000000000000000000001"
+          ]
+        },
+        {
+          "obligation_id": "SR-16",
+          "status": "assessed",
+          "unit_ids": [
+            "unit_00000000000000000000000000000001"
+          ]
+        }
+      ]
+    },
+    "views": [
+      {
+        "paper_id": "pap_00000000000000000000000000000001",
+        "analysis_revision": "rev_00000000000000000000000000000001",
+        "language": "en",
+        "analysis_core_hash": "sha256:189460c3217dba440f4380e1cb1f2cee04eb8f6cad11aa3b407ae7b0dbbebee5",
+        "required_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "units": [
+          {
+            "unit_id": "unit_00000000000000000000000000000001",
+            "text": "In this invented experiment, seedlings in group A were 2 cm taller at day 7."
+          }
+        ]
+      },
+      {
+        "paper_id": "pap_00000000000000000000000000000001",
+        "analysis_revision": "rev_00000000000000000000000000000001",
+        "language": "zh-CN",
+        "analysis_core_hash": "sha256:189460c3217dba440f4380e1cb1f2cee04eb8f6cad11aa3b407ae7b0dbbebee5",
+        "required_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "units": [
+          {
+            "unit_id": "unit_00000000000000000000000000000001",
+            "text": "在这项虚构实验中，第 7 天 A 组幼苗比 B 组高 2 厘米。"
+          }
+        ]
+      }
+    ],
+    "manifest": {
+      "paper_id": "pap_00000000000000000000000000000001",
+      "analysis_revision": "rev_00000000000000000000000000000001",
+      "manifest_version": "3.0.0",
+      "canonical_serialization": "jcs-rfc8785",
+      "hash_algorithm": "sha256",
+      "members": [
+        "analysis.core.json",
+        "analysis.en.json",
+        "analysis.zh-CN.json",
+        "scientific-reading-card.json",
+        "analysis.manifest.json"
+      ],
+      "publication_contract": {
+        "maintenance_window_required": true,
+        "persistent_recovery_evidence_required": true,
+        "native_multifile_atomicity": false,
+        "recovery_owner_phase": "22"
+      },
+      "member_hashes": {
+        "analysis.core.json": "sha256:189460c3217dba440f4380e1cb1f2cee04eb8f6cad11aa3b407ae7b0dbbebee5",
+        "analysis.en.json": "sha256:65cde1a6c75df41301bf204b0c8794a9457c0152fdac044992be2f7ad6c388db",
+        "analysis.zh-CN.json": "sha256:a4536516e8d0597c104ae4f080c9cb0778260235fd74bc3ba6538bfb6230dd72",
+        "scientific-reading-card.json": "sha256:f951545561a400adf68995e43f3e8ebdd6fa9d81961f1aef752e95930f6cc62f"
+      },
+      "dependency_hashes": {
+        "analysis.core.json": {
+          "source_package": "sha256:a05ece870d76ec8ea3f40b9f0f29f2463ee07ea00aea74ca56cc2ae36739a465",
+          "schema": "sha256:09fd0d4979c498fe630f19543f8473c05a556c02395beb6ff3a40aaad7d5ec1c",
+          "profile": "sha256:3e936f07e7d86eea6f69b7160c045aa778993ee7a1fca21e414e5868321e8fd4",
+          "run_context": "sha256:066c71c6ab3aa41b4cf3554785e203e1b9ea1ab606bc20fbf894f434a4d5f767"
+        },
+        "scientific-reading-card.json": {
+          "analysis.core.json": "sha256:189460c3217dba440f4380e1cb1f2cee04eb8f6cad11aa3b407ae7b0dbbebee5",
+          "schema": "sha256:09fd0d4979c498fe630f19543f8473c05a556c02395beb6ff3a40aaad7d5ec1c",
+          "profile": "sha256:3e936f07e7d86eea6f69b7160c045aa778993ee7a1fca21e414e5868321e8fd4"
+        },
+        "analysis.en.json": {
+          "analysis.core.json": "sha256:189460c3217dba440f4380e1cb1f2cee04eb8f6cad11aa3b407ae7b0dbbebee5",
+          "scientific-reading-card.json": "sha256:f951545561a400adf68995e43f3e8ebdd6fa9d81961f1aef752e95930f6cc62f",
+          "schema": "sha256:09fd0d4979c498fe630f19543f8473c05a556c02395beb6ff3a40aaad7d5ec1c",
+          "profile": "sha256:3e936f07e7d86eea6f69b7160c045aa778993ee7a1fca21e414e5868321e8fd4",
+          "template": "sha256:82005a242ba06b49aa7b10d348aa97c506d9b16346c25ef846911bea568aea01",
+          "config": "sha256:44798d23963a79165ea7034e49355f33c2b7a2ff8dd1c243a0e9d7ee46711722"
+        },
+        "analysis.zh-CN.json": {
+          "analysis.core.json": "sha256:189460c3217dba440f4380e1cb1f2cee04eb8f6cad11aa3b407ae7b0dbbebee5",
+          "scientific-reading-card.json": "sha256:f951545561a400adf68995e43f3e8ebdd6fa9d81961f1aef752e95930f6cc62f",
+          "schema": "sha256:09fd0d4979c498fe630f19543f8473c05a556c02395beb6ff3a40aaad7d5ec1c",
+          "profile": "sha256:3e936f07e7d86eea6f69b7160c045aa778993ee7a1fca21e414e5868321e8fd4",
+          "template": "sha256:82005a242ba06b49aa7b10d348aa97c506d9b16346c25ef846911bea568aea01",
+          "config": "sha256:44798d23963a79165ea7034e49355f33c2b7a2ff8dd1c243a0e9d7ee46711722"
+        }
+      }
+    },
+    "dependency_inputs": {
+      "schema": "synthetic schema",
+      "profile": "synthetic profile",
+      "template": "synthetic template",
+      "config": "synthetic config"
+    },
+    "review_evidence": {
+      "dependency_hashes": {
+        "source_package": "sha256:a05ece870d76ec8ea3f40b9f0f29f2463ee07ea00aea74ca56cc2ae36739a465",
+        "schema": "sha256:09fd0d4979c498fe630f19543f8473c05a556c02395beb6ff3a40aaad7d5ec1c",
+        "profile": "sha256:3e936f07e7d86eea6f69b7160c045aa778993ee7a1fca21e414e5868321e8fd4",
+        "template": "sha256:82005a242ba06b49aa7b10d348aa97c506d9b16346c25ef846911bea568aea01",
+        "config": "sha256:44798d23963a79165ea7034e49355f33c2b7a2ff8dd1c243a0e9d7ee46711722",
+        "run_context": "sha256:066c71c6ab3aa41b4cf3554785e203e1b9ea1ab606bc20fbf894f434a4d5f767",
+        "analysis.core.json": "sha256:189460c3217dba440f4380e1cb1f2cee04eb8f6cad11aa3b407ae7b0dbbebee5",
+        "analysis.en.json": "sha256:65cde1a6c75df41301bf204b0c8794a9457c0152fdac044992be2f7ad6c388db",
+        "analysis.zh-CN.json": "sha256:a4536516e8d0597c104ae4f080c9cb0778260235fd74bc3ba6538bfb6230dd72",
+        "scientific-reading-card.json": "sha256:f951545561a400adf68995e43f3e8ebdd6fa9d81961f1aef752e95930f6cc62f",
+        "analysis.manifest.json": "sha256:fab313816f12a455227e6a551239712b26bc3d10b1cadba64dc6de089bab8b72"
+      }
+    },
+    "approval_evidence": {
+      "dependency_hashes": {
+        "source_package": "sha256:a05ece870d76ec8ea3f40b9f0f29f2463ee07ea00aea74ca56cc2ae36739a465",
+        "schema": "sha256:09fd0d4979c498fe630f19543f8473c05a556c02395beb6ff3a40aaad7d5ec1c",
+        "profile": "sha256:3e936f07e7d86eea6f69b7160c045aa778993ee7a1fca21e414e5868321e8fd4",
+        "template": "sha256:82005a242ba06b49aa7b10d348aa97c506d9b16346c25ef846911bea568aea01",
+        "config": "sha256:44798d23963a79165ea7034e49355f33c2b7a2ff8dd1c243a0e9d7ee46711722",
+        "run_context": "sha256:066c71c6ab3aa41b4cf3554785e203e1b9ea1ab606bc20fbf894f434a4d5f767",
+        "analysis.core.json": "sha256:189460c3217dba440f4380e1cb1f2cee04eb8f6cad11aa3b407ae7b0dbbebee5",
+        "analysis.en.json": "sha256:65cde1a6c75df41301bf204b0c8794a9457c0152fdac044992be2f7ad6c388db",
+        "analysis.zh-CN.json": "sha256:a4536516e8d0597c104ae4f080c9cb0778260235fd74bc3ba6538bfb6230dd72",
+        "scientific-reading-card.json": "sha256:f951545561a400adf68995e43f3e8ebdd6fa9d81961f1aef752e95930f6cc62f",
+        "analysis.manifest.json": "sha256:fab313816f12a455227e6a551239712b26bc3d10b1cadba64dc6de089bab8b72"
+      },
+      "review_hash": "sha256:dc1c902424103a6690e683701a348eda2ab3a38d3e9c82025b439d04e1eee956"
+    }
+  },
+  "scientific_details": {
+    "scientific_schema_version": "v3/scientific-package@3.0.0-scientific",
+    "prompt_contract_version": "phase20-scientific-prompt@1",
+    "lens_registry_version": "phase20-six-lenses@1",
+    "rubric_version": "phase20-scientific-rubric@1",
+    "source_inventory_version": "phase20-source-inventory@1",
+    "primary_lens": "methods",
+    "secondary_lens": null,
+    "source_blocks": [
+      {
+        "source_block_id": "blk_00000000000000000000000000000001",
+        "source_document_id": "src_00000000000000000000000000000001",
+        "source_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+        "page_index": 0,
+        "block_id": "b1",
+        "role": "method",
+        "text": "Model inputs were frozen before a held-out evaluation of 100 cases."
+      },
+      {
+        "source_block_id": "blk_00000000000000000000000000000002",
+        "source_document_id": "src_00000000000000000000000000000002",
+        "source_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+        "page_index": 0,
+        "block_id": "b1",
+        "role": "result",
+        "text": "The held-out score was 0.80 for the component and 0.71 for the baseline. The result block reports 0.80."
+      },
+      {
+        "source_block_id": "blk_00000000000000000000000000000003",
+        "source_document_id": "src_00000000000000000000000000000002",
+        "source_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+        "page_index": 1,
+        "block_id": "supplement-only",
+        "role": "discussion",
+        "text": "The authors limit the result to this evaluation split and do not claim general superiority. A conflicting discussion statement reports 0.71."
+      }
+    ],
+    "claims": [
+      {
+        "claim_id": "clm_00000000000000000000000000000001",
+        "record_ids": [
+          "sci_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "allowed_conclusion": "The synthetic component is associated with the reported synthetic result under the stated comparison.",
+        "forbidden_stronger_interpretation": "This synthetic control does not establish general causal superiority."
+      }
+    ],
+    "quantities": [
+      {
+        "quantity_id": "qty_00000000000000000000000000000001",
+        "record_id": "sci_00000000000000000000000000000001",
+        "source_block_id": "blk_00000000000000000000000000000001",
+        "raw_value": "0.80",
+        "unit": "synthetic score",
+        "denominator": "100 synthetic evaluations",
+        "groups": [
+          "component",
+          "baseline"
+        ],
+        "timepoint": "synthetic evaluation",
+        "analysis_set": "all synthetic examples",
+        "uncertainty_type": "not_reported",
+        "uncertainty_value": "95% CI 12-28",
+        "metric_definition": "Synthetic lens-specific outcome",
+        "raw_precision": "reported as written",
+        "source_occurrences": [
+          {
+            "source_block_id": "blk_00000000000000000000000000000002",
+            "source_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+            "page_index": 0,
+            "block_id": "b1",
+            "raw_excerpt": "The held-out score was 0.80 for the component and 0.71 for the baseline.",
+            "metric_definition": "Synthetic lens-specific outcome",
+            "raw_value": "0.80",
+            "raw_precision": "reported as written",
+            "unit": "synthetic score",
+            "denominator": "100 synthetic evaluations",
+            "groups": [
+              "component",
+              "baseline"
+            ],
+            "timepoint": "synthetic evaluation",
+            "analysis_set": "all synthetic examples",
+            "uncertainty_type": "not_reported",
+            "uncertainty_value": "95% CI 12-28"
+          }
+        ]
+      }
+    ],
+    "records": [
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000001",
+        "kind": "bibliographic-position",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-01",
+        "finding": "Synthetic methods control has a bounded stated position.",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "boundary_evidence_ids": [
+          "ev_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true,
+        "status": "assessed",
+        "content_present": true,
+        "reason": "The supplied synthetic source supports this bounded finding."
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000002",
+        "kind": "bounded-summary",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-02",
+        "finding": "Synthetic method has a stated bounded result.",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "boundary_evidence_ids": [
+          "ev_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true,
+        "status": "assessed",
+        "content_present": true,
+        "reason": "The supplied synthetic source supports this bounded finding."
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000003",
+        "kind": "research-question",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-03",
+        "finding": "Synthetic question compares a component with a baseline.",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "boundary_evidence_ids": [
+          "ev_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true,
+        "status": "assessed",
+        "content_present": true,
+        "reason": "The supplied synthetic source supports this bounded finding."
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000004",
+        "kind": "background-route",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-04",
+        "finding": "Synthetic background remains source-bounded.",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "boundary_evidence_ids": [
+          "ev_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true,
+        "status": "assessed",
+        "content_present": true,
+        "reason": "The supplied synthetic source supports this bounded finding."
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000005",
+        "kind": "pain-points",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-05",
+        "finding": "Synthetic baseline is the stated limitation.",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "boundary_evidence_ids": [
+          "ev_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true,
+        "status": "assessed",
+        "content_present": true,
+        "reason": "The supplied synthetic source supports this bounded finding."
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000006",
+        "kind": "core-idea",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-06",
+        "finding": "Synthetic component is distinguished from its implementation bundle.",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "boundary_evidence_ids": [
+          "ev_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true,
+        "status": "assessed",
+        "content_present": true,
+        "reason": "The supplied synthetic source supports this bounded finding."
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000007",
+        "kind": "method-overview",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-07",
+        "finding": "Synthetic method connects input, component and output.",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "boundary_evidence_ids": [
+          "ev_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true,
+        "status": "assessed",
+        "content_present": true,
+        "reason": "The supplied synthetic source supports this bounded finding."
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000008",
+        "kind": "module-breakdown",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-08",
+        "finding": "Synthetic component has a stated role and comparison.",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "boundary_evidence_ids": [
+          "ev_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true,
+        "status": "assessed",
+        "content_present": true,
+        "reason": "The supplied synthetic source supports this bounded finding."
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000009",
+        "kind": "essential-formulas",
+        "provenance": "analyst",
+        "epistemic_status": "interpretation",
+        "obligation_id": "SR-09",
+        "finding": "No essential formula is supplied; this is explicit rather than fabricated.",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "boundary_evidence_ids": [
+          "ev_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true,
+        "status": "assessed",
+        "content_present": true,
+        "reason": "The supplied synthetic source supports this bounded finding."
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000010",
+        "kind": "experiment-claim-chain",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-10",
+        "finding": "Synthetic comparison tests the stated claim.",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "boundary_evidence_ids": [
+          "ev_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true,
+        "status": "assessed",
+        "content_present": true,
+        "reason": "The supplied synthetic source supports this bounded finding."
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000011",
+        "kind": "conclusion-boundary",
+        "provenance": "analyst",
+        "epistemic_status": "interpretation",
+        "obligation_id": "SR-11",
+        "finding": "Synthetic result has an explicit stronger-claim boundary.",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "boundary_evidence_ids": [
+          "ev_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true,
+        "status": "assessed",
+        "content_present": true,
+        "reason": "The supplied synthetic source supports this bounded finding."
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000012",
+        "kind": "author-limitations",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-12",
+        "finding": "Synthetic source provides no wider limitation claim.",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "boundary_evidence_ids": [
+          "ev_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true,
+        "status": "assessed",
+        "content_present": true,
+        "reason": "The supplied synthetic source supports this bounded finding."
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000013",
+        "kind": "critical-analysis",
+        "provenance": "analyst",
+        "epistemic_status": "interpretation",
+        "obligation_id": "SR-13",
+        "finding": "Synthetic control cannot establish general superiority.",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "boundary_evidence_ids": [
+          "ev_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true,
+        "status": "assessed",
+        "content_present": true,
+        "reason": "The supplied synthetic source supports this bounded finding."
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000014",
+        "kind": "candidate-insights",
+        "provenance": "analyst",
+        "epistemic_status": "hypothesis",
+        "obligation_id": "SR-14",
+        "finding": "Synthetic insight remains a candidate.",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "boundary_evidence_ids": [
+          "ev_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true,
+        "status": "assessed",
+        "content_present": true,
+        "reason": "The supplied synthetic source supports this bounded finding."
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000015",
+        "kind": "knowledge-connections",
+        "provenance": "analyst",
+        "epistemic_status": "interpretation",
+        "obligation_id": "SR-15",
+        "finding": "Synthetic connection is not external verification.",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "boundary_evidence_ids": [
+          "ev_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true,
+        "status": "assessed",
+        "content_present": true,
+        "reason": "The supplied synthetic source supports this bounded finding."
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000016",
+        "kind": "research-candidates",
+        "provenance": "analyst",
+        "epistemic_status": "hypothesis",
+        "obligation_id": "SR-16",
+        "finding": "Synthetic follow-up remains testable hypothesis only.",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "boundary_evidence_ids": [
+          "ev_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true,
+        "status": "assessed",
+        "content_present": true,
+        "reason": "The supplied synthetic source supports this bounded finding."
+      }
+    ],
+    "required_semantic_units": [
+      {
+        "semantic_unit_id": "clm_00000000000000000000000000000001",
+        "kind": "claim",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-01",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "exp_00000000000000000000000000000001",
+        "kind": "explanation",
+        "provenance": "analyst",
+        "epistemic_status": "interpretation",
+        "obligation_id": "SR-07",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000003"
+        ],
+        "claim_ids": [],
+        "quantity_ids": [],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "qty_00000000000000000000000000000001",
+        "kind": "quantity",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-01",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000001",
+        "kind": "bibliographic-position",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-01",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000002",
+        "kind": "bounded-summary",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-02",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000003",
+        "kind": "research-question",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-03",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000004",
+        "kind": "background-route",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-04",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000005",
+        "kind": "pain-points",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-05",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000006",
+        "kind": "core-idea",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-06",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000007",
+        "kind": "method-overview",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-07",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000008",
+        "kind": "module-breakdown",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-08",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000009",
+        "kind": "essential-formulas",
+        "provenance": "analyst",
+        "epistemic_status": "interpretation",
+        "obligation_id": "SR-09",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000010",
+        "kind": "experiment-claim-chain",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-10",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000011",
+        "kind": "conclusion-boundary",
+        "provenance": "analyst",
+        "epistemic_status": "interpretation",
+        "obligation_id": "SR-11",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000012",
+        "kind": "author-limitations",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-12",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000013",
+        "kind": "critical-analysis",
+        "provenance": "analyst",
+        "epistemic_status": "interpretation",
+        "obligation_id": "SR-13",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000014",
+        "kind": "candidate-insights",
+        "provenance": "analyst",
+        "epistemic_status": "hypothesis",
+        "obligation_id": "SR-14",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000015",
+        "kind": "knowledge-connections",
+        "provenance": "analyst",
+        "epistemic_status": "interpretation",
+        "obligation_id": "SR-15",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "sci_00000000000000000000000000000016",
+        "kind": "research-candidates",
+        "provenance": "analyst",
+        "epistemic_status": "hypothesis",
+        "obligation_id": "SR-16",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ],
+        "claim_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "quantity_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "required_for_downstream": true
+      },
+      {
+        "semantic_unit_id": "stm_00000000000000000000000000000001",
+        "kind": "statement",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "obligation_id": "SR-01",
+        "boundary_unit_ids": [
+          "unit_00000000000000000000000000000001"
+        ],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000003"
+        ],
+        "claim_ids": [],
+        "quantity_ids": [],
+        "required_for_downstream": true
+      }
+    ],
+    "source_status": {
+      "coverage": "complete",
+      "completeness": "complete",
+      "affected_ids": []
+    },
+    "lens_checks": [
+      {
+        "lens": "methods",
+        "check_id": "input_output",
+        "status": "reported",
+        "reason": "Model inputs were frozen before a held-out evaluation of 100 cases.",
+        "source_block_ids": [
+          "blk_00000000000000000000000000000001"
+        ]
+      },
+      {
+        "lens": "methods",
+        "check_id": "train_evaluation_isolation",
+        "status": "reported",
+        "reason": "The held-out score was 0.80 for the component and 0.71 for the baseline.",
+        "source_block_ids": [
+          "blk_00000000000000000000000000000002"
+        ]
+      },
+      {
+        "lens": "methods",
+        "check_id": "comparable_baseline",
+        "status": "reported",
+        "reason": "The authors limit the result to this evaluation split and do not claim general superiority.",
+        "source_block_ids": [
+          "blk_00000000000000000000000000000003"
+        ]
+      },
+      {
+        "lens": "methods",
+        "check_id": "budget_oracle",
+        "status": "reported",
+        "reason": "The authors limit the result to this evaluation split and do not claim general superiority.",
+        "source_block_ids": [
+          "blk_00000000000000000000000000000003"
+        ]
+      },
+      {
+        "lens": "methods",
+        "check_id": "leakage",
+        "status": "reported",
+        "reason": "The authors limit the result to this evaluation split and do not claim general superiority.",
+        "source_block_ids": [
+          "blk_00000000000000000000000000000003"
+        ]
+      },
+      {
+        "lens": "methods",
+        "check_id": "ablation",
+        "status": "reported",
+        "reason": "The authors limit the result to this evaluation split and do not claim general superiority.",
+        "source_block_ids": [
+          "blk_00000000000000000000000000000003"
+        ]
+      }
+    ],
+    "statements": [
+      {
+        "statement_id": "stm_00000000000000000000000000000001",
+        "text": "The authors report a bounded association.",
+        "provenance": "author",
+        "epistemic_status": "report",
+        "source_block_ids": [
+          "blk_00000000000000000000000000000003"
+        ],
+        "authorised_snapshot_id": null
+      }
+    ],
+    "experiment_claim_matrix": [
+      {
+        "claim_id": "clm_00000000000000000000000000000001",
+        "comparison_conditions": "Independent comparison against the stated baseline.",
+        "result": "Observed quantity is retained with its condition.",
+        "supported_scope": "Synthetic source only.",
+        "forbidden_stronger_interpretation": "Does not establish general superiority.",
+        "experiment_id": "exp_00000000000000000000000000000001",
+        "source_block_ids": [
+          "blk_00000000000000000000000000000002"
+        ]
+      }
+    ],
+    "explanations": [
+      {
+        "explanation_id": "exp_00000000000000000000000000000001",
+        "meaning_plain": "Independent evaluation checks performance on data not used to tune a method.",
+        "role_in_this_paper": "It bounds the reported comparison.",
+        "interpretation_boundary": "It does not prove absence of all bias.",
+        "illustrative": false,
+        "source_block_ids": [
+          "blk_00000000000000000000000000000003"
+        ],
+        "concept_record_id": "sci_00000000000000000000000000000007"
+      }
+    ],
+    "research_candidates": [],
+    "inventory": [
+      {
+        "inventory_id": "inv_00000000000000000000000000000001",
+        "kind": "table",
+        "status": "verified",
+        "affected_ids": [],
+        "source_block_ids": [
+          "blk_00000000000000000000000000000002"
+        ]
+      }
+    ],
+    "external_checks": [
+      {
+        "check_id": "ext_00000000000000000000000000000001",
+        "metadata_verified": true,
+        "claim_verified": false,
+        "source_block_ids": []
+      }
+    ],
+    "source_conflicts": [
+      {
+        "conflict_id": "cnf_00000000000000000000000000000001",
+        "quantity_id": "qty_00000000000000000000000000000001",
+        "disclosed": true,
+        "locator_ids": [
+          "blk_00000000000000000000000000000002",
+          "blk_00000000000000000000000000000003"
+        ],
+        "occurrences": [
+          {
+            "source_block_id": "blk_00000000000000000000000000000002",
+            "raw_value": "0.80"
+          },
+          {
+            "source_block_id": "blk_00000000000000000000000000000003",
+            "raw_value": "0.71"
+          }
+        ],
+        "limited_conclusion": "The conflicting values remain separately located and the conclusion is limited to the unresolved source record."
+      }
+    ],
+    "authorised_user_snapshots": []
+  },
+  "scientific_audit": {
+    "input_fingerprint": "sha256:1ed97604d7de4d65896d4b932f9bd603a7414c5a3250bec13de1f0aa9208cd16",
+    "verdict": "pass",
+    "dimensions": [
+      {
+        "dimension_id": "AUD-01",
+        "verdict": "pass",
+        "reason": "synthetic methods control",
+        "target_ids": [
+          "sci_00000000000000000000000000000001"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-02",
+        "verdict": "pass",
+        "reason": "synthetic methods control",
+        "target_ids": [
+          "sci_00000000000000000000000000000002"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-03",
+        "verdict": "pass",
+        "reason": "synthetic methods control",
+        "target_ids": [
+          "sci_00000000000000000000000000000003"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-04",
+        "verdict": "pass",
+        "reason": "synthetic methods control",
+        "target_ids": [
+          "sci_00000000000000000000000000000004"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-05",
+        "verdict": "pass",
+        "reason": "synthetic methods control",
+        "target_ids": [
+          "sci_00000000000000000000000000000005"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-06",
+        "verdict": "pass",
+        "reason": "synthetic methods control",
+        "target_ids": [
+          "sci_00000000000000000000000000000006"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-07",
+        "verdict": "pass",
+        "reason": "synthetic methods control",
+        "target_ids": [
+          "sci_00000000000000000000000000000007"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-08",
+        "verdict": "pass",
+        "reason": "synthetic methods control",
+        "target_ids": [
+          "sci_00000000000000000000000000000008"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-09",
+        "verdict": "pass",
+        "reason": "synthetic methods control",
+        "target_ids": [
+          "sci_00000000000000000000000000000009"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-10",
+        "verdict": "pass",
+        "reason": "synthetic methods control",
+        "target_ids": [
+          "sci_00000000000000000000000000000010"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-11",
+        "verdict": "pass",
+        "reason": "synthetic methods control",
+        "target_ids": [
+          "sci_00000000000000000000000000000011"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-12",
+        "verdict": "pass",
+        "reason": "synthetic methods control",
+        "target_ids": [
+          "sci_00000000000000000000000000000012"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-13",
+        "verdict": "pass",
+        "reason": "synthetic methods control",
+        "target_ids": [
+          "sci_00000000000000000000000000000013"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-14",
+        "verdict": "pass",
+        "reason": "synthetic methods control",
+        "target_ids": [
+          "sci_00000000000000000000000000000014"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-15",
+        "verdict": "pass",
+        "reason": "synthetic methods control",
+        "target_ids": [
+          "sci_00000000000000000000000000000015"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-16",
+        "verdict": "pass",
+        "reason": "synthetic methods control",
+        "target_ids": [
+          "sci_00000000000000000000000000000016"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-17",
+        "verdict": "pass",
+        "reason": "Required claim relation is structurally bound.",
+        "target_ids": [
+          "clm_00000000000000000000000000000001"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-18",
+        "verdict": "pass",
+        "reason": "Required explanation relation is structurally bound.",
+        "target_ids": [
+          "exp_00000000000000000000000000000001"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-19",
+        "verdict": "pass",
+        "reason": "Required quantity relation is structurally bound.",
+        "target_ids": [
+          "qty_00000000000000000000000000000001"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      },
+      {
+        "dimension_id": "AUD-20",
+        "verdict": "pass",
+        "reason": "Required statement relation is structurally bound.",
+        "target_ids": [
+          "stm_00000000000000000000000000000001"
+        ],
+        "evidence_ids": [],
+        "checker_kind": "deterministic"
+      }
+    ],
+    "audit_hash": "sha256:136992ecbe633e42eb5636fde11c9b1ff2e084bded2afdad0543ad8a65d9cf60"
+  },
+  "bindings": {
+    "boundary_package_hash": "sha256:c2af1d4a7cc71d7f3d406fee2a31d30a18a8282cc48f20bacbbbc3263de390c7",
+    "source_package_hash": "sha256:a05ece870d76ec8ea3f40b9f0f29f2463ee07ea00aea74ca56cc2ae36739a465",
+    "scientific_details_hash": "sha256:360b77281ed2e9f06355d6800e526c36cf6c54a49dd5e8a62e260151476a0b3f",
+    "required_semantic_units_hash": "sha256:93fb192dba345b5c8d54ad1d0e983f8d7cfec707caba272738e3637d3e7a8d54",
+    "scientific_input_fingerprint": "sha256:1ed97604d7de4d65896d4b932f9bd603a7414c5a3250bec13de1f0aa9208cd16"
+  }
+}
+

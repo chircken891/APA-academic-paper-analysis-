@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "platform": {
+    "os": "windows",
+    "arch": "x64"
+  },
+  "node": {
+    "major": 24,
+    "channel": "LTS"
+  },
+  "npm": {
+    "major": 11
+  },
+  "python": {
+    "major": 3,
+    "minor": 12
+  },
+  "mineru": {
+    "update_policy": "latest-stable",
+    "package": "mineru",
+    "model_source": "modelscope"
+  },
+  "disk": {
+    "minimum_free_gib": 20
+  },
+  "obsidian": {
+    "plugins": [
+      { "id": "obsidian42-brat", "name": "BRAT" },
+      { "id": "realclaudian", "name": "Claudian" },
+      { "id": "dataview", "name": "Dataview" },
+      { "id": "templater-obsidian", "name": "Templater" }
+    ]
+  }
+}

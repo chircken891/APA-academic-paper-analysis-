@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "phase21/native-scientific-input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "identity", "source_package", "core", "reading_card", "scientific_details", "input_fingerprint", "native_source_run", "native_cell_metadata"],
+  "properties": {
+    "schema_version": {"const": "phase21-scientific-input-workbook-1.0"},
+    "identity": {"$ref": "native-scientific-details#/$defs/identity"},
+    "source_package": {"$ref": "native-scientific-source"},
+    "core": {"$ref": "native-scientific-analysis#/properties/core"},
+    "reading_card": {"$ref": "native-scientific-analysis#/properties/reading_card"},
+    "scientific_details": {"$ref": "native-scientific-details#/$defs/details"},
+    "input_fingerprint": {"$ref": "native-scientific-details#/$defs/hash"},
+    "native_source_run": {"$ref": "native-workbook#/$defs/run"},
+    "native_cell_metadata": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cellMetadata"}}
+  },
+  "$defs": {
+    "workbookLocator": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "source_document_id", "source_hash", "block_id", "member_path", "sheet", "range"],
+      "properties": {
+        "kind": {"const": "workbook"},
+        "source_document_id": {"type": "string", "pattern": "^src_[0-9a-f]{32}$"},
+        "source_hash": {"$ref": "native-workbook#/$defs/sha256"},
+        "block_id": {"type": "string", "pattern": "\\S"},
+        "member_path": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+        "sheet": {"$ref": "native-workbook#/$defs/sheet"},
+        "range": {"$ref": "native-workbook#/$defs/range"}
+      }
+    },
+    "valueCell": {
+      "type": "object", "additionalProperties": false, "required": ["row", "column"],
+      "properties": {"row": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1}}
+    },
+    "cellMetadata": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_document_id", "sheet", "row", "column", "original_type", "raw_lexical_value"],
+      "properties": {
+        "source_document_id": {"type": "string", "pattern": "^src_[0-9a-f]{32}$"},
+        "sheet": {"$ref": "native-workbook#/$defs/sheet"},
+        "row": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1},
+        "original_type": {"enum": ["xlsx:n", "xlsx:s", "xlsx:inlineStr", "xlsx:b", "xlsx:e", "xlsx:blank", "xls:number", "xls:string", "xls:boolean", "xls:error", "xls:blank"]},
+        "raw_lexical_value": {"type": "string"}
+      }
+    }
+  }
+}

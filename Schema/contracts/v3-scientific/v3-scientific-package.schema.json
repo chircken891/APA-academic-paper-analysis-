@@ -1,0 +1,673 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "v3/scientific-package",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "identity",
+    "boundary_package",
+    "scientific_details",
+    "scientific_audit",
+    "bindings"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "3.0.0-scientific"
+    },
+    "identity": {
+      "$ref": "#/$defs/identity"
+    },
+    "boundary_package": {
+      "type": "object"
+    },
+    "scientific_details": {
+      "$ref": "#/$defs/details"
+    },
+    "scientific_audit": {
+      "$ref": "#/$defs/audit"
+    },
+    "bindings": {
+      "$ref": "#/$defs/bindings"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*_[0-9a-f]{32}$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "paper_id",
+        "run_id",
+        "analysis_revision"
+      ],
+      "properties": {
+        "paper_id": {
+          "type": "string",
+          "pattern": "^pap_[0-9a-f]{32}$"
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^run_[0-9a-f]{32}$"
+        },
+        "analysis_revision": {
+          "type": "string",
+          "pattern": "^rev_[0-9a-f]{32}$"
+        }
+      }
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scientific_schema_version",
+        "prompt_contract_version",
+        "lens_registry_version",
+        "rubric_version",
+        "source_inventory_version",
+        "primary_lens",
+        "secondary_lens",
+        "source_status",
+        "lens_checks",
+        "statements",
+        "experiment_claim_matrix",
+        "explanations",
+        "research_candidates",
+        "inventory",
+        "external_checks",
+        "source_conflicts",
+        "source_blocks",
+        "claims",
+        "quantities",
+        "records",
+        "required_semantic_units"
+      ],
+      "properties": {
+        "scientific_schema_version": {
+          "const": "v3/scientific-package@3.0.0-scientific"
+        },
+        "prompt_contract_version": {
+          "const": "phase20-scientific-prompt@1"
+        },
+        "lens_registry_version": {
+          "const": "phase20-six-lenses@1"
+        },
+        "rubric_version": {
+          "const": "phase20-scientific-rubric@1"
+        },
+        "source_inventory_version": {
+          "const": "phase20-source-inventory@1"
+        },
+        "primary_lens": {
+          "enum": ["methods", "discovery_mechanism", "resource_dataset", "clinical_population", "materials_engineering", "review_meta_analysis"]
+        },
+        "secondary_lens": {
+          "enum": [null, "methods", "discovery_mechanism", "resource_dataset", "clinical_population", "materials_engineering", "review_meta_analysis"]
+        },
+        "source_status": { "$ref": "#/$defs/sourceStatus" },
+        "lens_checks": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/lensCheck" } },
+        "statements": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/statement" } },
+        "experiment_claim_matrix": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/experiment" } },
+        "explanations": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/explanation" } },
+        "research_candidates": { "type": "array", "items": { "$ref": "#/$defs/candidate" } },
+        "inventory": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/inventory" } },
+        "external_checks": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/externalCheck" } },
+        "source_conflicts": { "type": "array", "items": { "$ref": "#/$defs/sourceConflict" } },
+        "authorised_user_snapshots": { "type": "array", "items": { "$ref": "#/$defs/userSnapshot" } },
+        "source_blocks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/sourceBlock"
+          }
+        },
+        "claims": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/claim"
+          }
+        },
+        "quantities": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/quantity"
+          }
+        },
+        "records": {
+          "type": "array",
+          "minItems": 16,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/record"
+          }
+        },
+        "required_semantic_units": {
+          "type": "array",
+          "minItems": 16,
+          "items": {
+            "$ref": "#/$defs/manifest"
+          }
+        }
+      }
+    },
+    "sourceBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_block_id",
+        "source_document_id",
+        "source_hash",
+        "page_index",
+        "block_id",
+        "role",
+        "text"
+      ],
+      "properties": {
+        "source_block_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_document_id": {
+          "type": "string",
+          "pattern": "^src_[0-9a-f]{32}$"
+        },
+        "source_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "page_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "block_id": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "role": {
+          "enum": [
+            "method",
+            "result",
+            "discussion",
+            "limitation",
+            "background"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "pattern": "\\S"
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim_id",
+        "record_ids",
+        "source_block_ids",
+        "allowed_conclusion",
+        "forbidden_stronger_interpretation"
+      ],
+      "properties": {
+        "claim_id": {
+          "$ref": "#/$defs/id"
+        },
+        "record_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "source_block_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "allowed_conclusion": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "forbidden_stronger_interpretation": {
+          "type": "string",
+          "pattern": "\\S"
+        }
+      }
+    },
+    "quantity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "quantity_id",
+        "record_id",
+        "source_block_id",
+        "metric_definition",
+        "raw_value",
+        "raw_precision",
+        "unit",
+        "denominator",
+        "groups",
+        "timepoint",
+        "analysis_set",
+        "uncertainty_type",
+        "uncertainty_value",
+        "source_occurrences"
+      ],
+      "properties": {
+        "quantity_id": {
+          "$ref": "#/$defs/id"
+        },
+        "record_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_block_id": {
+          "$ref": "#/$defs/id"
+        },
+        "metric_definition": { "type": "string", "pattern": "\\S" },
+        "raw_value": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "raw_precision": { "type": "string", "pattern": "\\S" },
+        "unit": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "denominator": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "groups": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        },
+        "timepoint": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "analysis_set": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "uncertainty_type": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "uncertainty_value": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "source_occurrences": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/quantityOccurrence" } }
+      }
+    },
+    "quantityOccurrence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_block_id", "source_hash", "page_index", "block_id", "raw_excerpt", "metric_definition", "raw_value", "raw_precision", "unit", "denominator", "groups", "timepoint", "analysis_set", "uncertainty_type", "uncertainty_value"],
+      "properties": {
+        "source_block_id": { "$ref": "#/$defs/id" }, "source_hash": { "$ref": "#/$defs/hash" }, "page_index": { "type": "integer", "minimum": 0 }, "block_id": { "type": "string", "pattern": "\\S" }, "raw_excerpt": { "type": "string", "pattern": "\\S" },
+        "metric_definition": { "type": "string", "pattern": "\\S" }, "raw_value": { "type": "string", "pattern": "\\S" }, "raw_precision": { "type": "string", "pattern": "\\S" }, "unit": { "type": "string", "pattern": "\\S" }, "denominator": { "type": "string", "pattern": "\\S" }, "groups": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "\\S" } }, "timepoint": { "type": "string", "pattern": "\\S" }, "analysis_set": { "type": "string", "pattern": "\\S" }, "uncertainty_type": { "type": "string", "pattern": "\\S" }, "uncertainty_value": { "type": "string", "pattern": "\\S" }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "semantic_unit_id",
+        "kind",
+        "provenance",
+        "epistemic_status",
+        "obligation_id",
+        "finding",
+        "boundary_unit_ids",
+        "boundary_evidence_ids",
+        "source_block_ids",
+        "claim_ids",
+        "quantity_ids",
+        "status",
+        "reason",
+        "content_present",
+        "required_for_downstream"
+      ],
+      "properties": {
+        "semantic_unit_id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "provenance": {
+          "enum": [
+            "author",
+            "external",
+            "analyst",
+            "user"
+          ]
+        },
+        "epistemic_status": {
+          "enum": [
+            "report",
+            "interpretation",
+            "hypothesis"
+          ]
+        },
+        "obligation_id": {
+          "type": "string",
+          "pattern": "^SR-(?:0[1-9]|1[0-6])$"
+        },
+        "status": {
+          "enum": ["assessed", "not_applicable", "not_assessable"]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "content_present": {
+          "type": "boolean"
+        },
+        "finding": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "boundary_unit_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^unit_[0-9a-f]{32}$"
+          }
+        },
+        "boundary_evidence_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^ev_[0-9a-f]{32}$"
+          }
+        },
+        "source_block_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "claim_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "quantity_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "source_block_ids": { "type": "array", "items": { "$ref": "#/$defs/id" } },
+        "claim_ids": { "type": "array", "items": { "$ref": "#/$defs/id" } },
+        "quantity_ids": { "type": "array", "items": { "$ref": "#/$defs/id" } },
+        "required_for_downstream": {
+          "const": true
+        }
+      }
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "semantic_unit_id",
+        "kind",
+        "provenance",
+        "epistemic_status",
+        "obligation_id",
+        "boundary_unit_ids",
+        "required_for_downstream"
+      ],
+      "properties": {
+        "semantic_unit_id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "provenance": {
+          "enum": [
+            "author",
+            "external",
+            "analyst",
+            "user"
+          ]
+        },
+        "epistemic_status": {
+          "enum": [
+            "report",
+            "interpretation",
+            "hypothesis"
+          ]
+        },
+        "obligation_id": {
+          "type": "string",
+          "pattern": "^SR-(?:0[1-9]|1[0-6])$"
+        },
+        "boundary_unit_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^unit_[0-9a-f]{32}$"
+          }
+        },
+        "source_block_ids": { "type": "array", "items": { "$ref": "#/$defs/id" } },
+        "claim_ids": { "type": "array", "items": { "$ref": "#/$defs/id" } },
+        "quantity_ids": { "type": "array", "items": { "$ref": "#/$defs/id" } },
+        "required_for_downstream": {
+          "const": true
+        }
+      }
+    },
+    "sourceStatus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["coverage", "completeness", "affected_ids"],
+      "properties": {
+        "coverage": { "enum": ["complete", "full_paper", "partial_paper", "abstract_only", "metadata_only", "source_limited"] },
+        "completeness": { "enum": ["complete", "partial"] },
+        "affected_ids": { "type": "array", "items": { "$ref": "#/$defs/id" } }
+      }
+    },
+    "lensCheck": {
+      "type": "object", "additionalProperties": false,
+      "required": ["lens", "check_id", "status", "reason", "source_block_ids"],
+      "properties": {
+        "lens": { "enum": ["methods", "discovery_mechanism", "resource_dataset", "clinical_population", "materials_engineering", "review_meta_analysis"] },
+        "check_id": { "type": "string", "pattern": "\\S" },
+        "status": { "enum": ["reported", "not_reported", "not_applicable", "not_assessable"] },
+        "reason": { "type": "string", "pattern": "\\S" },
+        "source_block_ids": { "type": "array", "items": { "$ref": "#/$defs/id" } }
+      }
+    },
+    "statement": {
+      "type": "object", "additionalProperties": false,
+      "required": ["statement_id", "text", "provenance", "epistemic_status", "source_block_ids"],
+      "properties": {
+        "statement_id": { "$ref": "#/$defs/id" }, "text": { "type": "string", "pattern": "\\S" },
+        "provenance": { "enum": ["author", "external", "analyst", "user"] },
+        "epistemic_status": { "enum": ["report", "interpretation", "hypothesis"] },
+        "source_block_ids": { "type": "array", "items": { "$ref": "#/$defs/id" } },
+        "authorised_snapshot_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "external_check_id": { "$ref": "#/$defs/id" },
+        "claim_asserted": { "type": "boolean" },
+        "asserted_as_established": { "type": "boolean" }, "presented_as_user": { "type": "boolean" }
+      }
+    },
+    "experiment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["experiment_id", "claim_id", "source_block_ids", "comparison_conditions", "result", "supported_scope", "forbidden_stronger_interpretation"],
+      "properties": {
+        "experiment_id": { "$ref": "#/$defs/id" }, "claim_id": { "$ref": "#/$defs/id" },
+        "source_block_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+        "comparison_conditions": { "type": "string", "pattern": "\\S" }, "result": { "type": "string", "pattern": "\\S" },
+        "supported_scope": { "type": "string", "pattern": "\\S" }, "forbidden_stronger_interpretation": { "type": "string", "pattern": "\\S" }
+      }
+    },
+    "explanation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["explanation_id", "concept_record_id", "meaning_plain", "role_in_this_paper", "interpretation_boundary", "illustrative", "source_block_ids"],
+      "properties": {
+        "explanation_id": { "$ref": "#/$defs/id" }, "concept_record_id": { "$ref": "#/$defs/id" },
+        "meaning_plain": { "type": "string", "pattern": "\\S" }, "role_in_this_paper": { "type": "string", "pattern": "\\S" },
+        "interpretation_boundary": { "type": "string", "pattern": "\\S" }, "illustrative": { "type": "boolean" },
+        "source_block_ids": { "type": "array", "items": { "$ref": "#/$defs/id" } }, "full_term": { "type": "string", "pattern": "\\S" }
+      }
+    },
+    "candidate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["candidate_id", "gap", "hypothesis", "delta", "verification_method", "failure_condition", "source_block_ids"],
+      "properties": { "candidate_id": { "$ref": "#/$defs/id" }, "gap": { "type": "string", "pattern": "\\S" }, "hypothesis": { "type": "string", "pattern": "\\S" }, "delta": { "type": "string", "pattern": "\\S" }, "verification_method": { "type": "string", "pattern": "\\S" }, "failure_condition": { "type": "string", "pattern": "\\S" }, "source_block_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } } }
+    },
+    "inventory": {
+      "type": "object", "additionalProperties": false, "required": ["inventory_id", "kind", "status", "affected_ids", "source_block_ids"],
+      "properties": { "inventory_id": { "$ref": "#/$defs/id" }, "kind": { "enum": ["figure", "table", "essential_formula"] }, "status": { "enum": ["verified", "missing", "not_applicable"] }, "affected_ids": { "type": "array", "items": { "$ref": "#/$defs/id" } }, "source_block_ids": { "type": "array", "items": { "$ref": "#/$defs/id" } } }
+    },
+    "externalCheck": {
+      "type": "object", "additionalProperties": false, "required": ["check_id", "metadata_verified", "claim_verified", "source_block_ids"],
+      "properties": { "check_id": { "$ref": "#/$defs/id" }, "metadata_verified": { "type": "boolean" }, "claim_verified": { "type": "boolean" }, "source_block_ids": { "type": "array", "items": { "$ref": "#/$defs/id" } } }
+    },
+    "sourceConflict": {
+      "type": "object", "additionalProperties": false, "required": ["conflict_id", "quantity_id", "disclosed", "locator_ids", "occurrences", "limited_conclusion"],
+      "properties": { "conflict_id": { "$ref": "#/$defs/id" }, "quantity_id": { "$ref": "#/$defs/id" }, "disclosed": { "type": "boolean" }, "locator_ids": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/id" } }, "occurrences": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/conflictOccurrence" } }, "limited_conclusion": { "type": "string", "pattern": "\\S" } }
+    },
+    "conflictOccurrence": {
+      "type": "object", "additionalProperties": false, "required": ["source_block_id", "raw_value"],
+      "properties": { "source_block_id": { "$ref": "#/$defs/id" }, "raw_value": { "type": "string", "pattern": "\\S" } }
+    },
+    "userSnapshot": {
+      "type": "object", "additionalProperties": false, "required": ["snapshot_id", "scope", "source_block_ids", "snapshot_hash"],
+      "properties": { "snapshot_id": { "$ref": "#/$defs/id" }, "scope": { "type": "string", "pattern": "\\S" }, "source_block_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } }, "snapshot_hash": { "$ref": "#/$defs/hash" } }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_fingerprint",
+        "audit_hash",
+        "verdict",
+        "dimensions"
+      ],
+      "properties": {
+        "input_fingerprint": {
+          "$ref": "#/$defs/hash"
+        },
+        "audit_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "verdict": {
+          "enum": [
+            "pass",
+            "flag",
+            "block"
+          ]
+        },
+        "dimensions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/dimension"
+          }
+        }
+      }
+    },
+    "dimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dimension_id",
+        "verdict",
+        "reason",
+        "target_ids",
+        "evidence_ids",
+        "checker_kind"
+      ],
+      "properties": {
+        "dimension_id": {
+          "type": "string",
+          "pattern": "^AUD-[0-9]{2}$"
+        },
+        "verdict": {
+          "enum": [
+            "pass",
+            "flag",
+            "block"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "target_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^ev_[0-9a-f]{32}$"
+          }
+        },
+        "checker_kind": {
+          "enum": [
+            "deterministic",
+            "review_handoff"
+          ]
+        }
+      }
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "boundary_package_hash",
+        "source_package_hash",
+        "scientific_details_hash",
+        "required_semantic_units_hash",
+        "scientific_input_fingerprint"
+      ],
+      "properties": {
+        "boundary_package_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "source_package_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "scientific_details_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "required_semantic_units_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "scientific_input_fingerprint": {
+          "$ref": "#/$defs/hash"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,763 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "phase22/render-context-1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "identity",
+    "basis_fingerprint",
+    "ledger_version",
+    "terminology_ledger",
+    "terms_fingerprint",
+    "entityMappings",
+    "anchorMappings",
+    "paper_storage_key",
+    "paper_targets",
+    "section_scope",
+    "integrator_binding",
+    "existingSupportRefs",
+    "invalidation_dependencies",
+    "context_fingerprint"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "phase22/render-context-1.0"
+    },
+    "identity": {
+      "$ref": "reading-basis-1.0#/properties/identity"
+    },
+    "basis_fingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "ledger_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "terminology_ledger": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "term_id",
+          "canonical_node_id",
+          "en_full_form",
+          "zh_full_form",
+          "abbreviation",
+          "aliases",
+          "sense",
+          "domain",
+          "version",
+          "definition_unit_refs",
+          "source_refs",
+          "translation",
+          "disambiguation_note"
+        ],
+        "properties": {
+          "term_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "canonical_node_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "en_full_form": {
+            "type": "string",
+            "minLength": 1
+          },
+          "zh_full_form": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "abbreviation": {
+            "type": "string",
+            "minLength": 1
+          },
+          "aliases": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "en",
+              "zh-CN"
+            ],
+            "properties": {
+              "en": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "zh-CN": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "sense": {
+            "type": "string",
+            "minLength": 1
+          },
+          "domain": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "definition_unit_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "translation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "status",
+              "reason",
+              "source_refs"
+            ],
+            "properties": {
+              "status": {
+                "enum": [
+                  "approved",
+                  "no_stable_translation"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_refs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "disambiguation_note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "terms_fingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "entityMappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entity_id",
+          "entity_type",
+          "canonical_key",
+          "display_ordinal",
+          "labels",
+          "aliases",
+          "definition_unit_refs",
+          "source_refs",
+          "scope",
+          "limitations",
+          "storage_key",
+          "target_path",
+          "anchor",
+          "disposition",
+          "definition_fingerprint"
+        ],
+        "properties": {
+          "entity_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "entity_type": {
+            "enum": [
+              "method",
+              "concept",
+              "measure"
+            ]
+          },
+          "canonical_key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "display_ordinal": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "en",
+              "zh-CN"
+            ],
+            "properties": {
+              "en": {
+                "type": "string",
+                "minLength": 1
+              },
+              "zh-CN": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "aliases": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "en",
+              "zh-CN"
+            ],
+            "properties": {
+              "en": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "zh-CN": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "definition_unit_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "scope": {
+            "type": "string",
+            "minLength": 1
+          },
+          "limitations": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "storage_key": {
+            "type": "string",
+            "pattern": "^(method|concept|measure)-[a-f0-9]{32}$"
+          },
+          "target_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "anchor": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9-]+$"
+          },
+          "disposition": {
+            "enum": [
+              "create",
+              "reuse"
+            ]
+          },
+          "definition_fingerprint": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    "anchorMappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "semantic_id",
+          "anchor"
+        ],
+        "properties": {
+          "semantic_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "anchor": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9-]+$"
+          }
+        }
+      }
+    },
+    "paper_storage_key": {
+      "type": "string",
+      "pattern": "^paper-[a-f0-9]{32}$"
+    },
+    "paper_targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "en",
+        "zh-CN"
+      ],
+      "properties": {
+        "en": {
+          "type": "string",
+          "minLength": 1
+        },
+        "zh-CN": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "section_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "region_ids",
+        "subheadings_share_scope",
+        "reset_each_region",
+        "exempt_kinds",
+        "expansion"
+      ],
+      "properties": {
+        "region_ids": {
+          "type": "array",
+          "minItems": 12,
+          "maxItems": 12,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "source",
+              "abstract",
+              "study-design",
+              "key-findings",
+              "methods-concepts-measures",
+              "figures-tables",
+              "discussion",
+              "limitations",
+              "conclusion",
+              "evidence",
+              "relations",
+              "coverage"
+            ]
+          }
+        },
+        "subheadings_share_scope": {
+          "const": true
+        },
+        "reset_each_region": {
+          "const": true
+        },
+        "exempt_kinds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "expansion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "en",
+            "zh-CN",
+            "zh_without_stable_translation"
+          ],
+          "properties": {
+            "en": {
+              "type": "string",
+              "minLength": 1
+            },
+            "zh-CN": {
+              "type": "string",
+              "minLength": 1
+            },
+            "zh_without_stable_translation": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "integrator_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "run_id",
+        "owner_actor_id",
+        "role",
+        "path",
+        "revision",
+        "sha256"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner_actor_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "const": "integration"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "existingSupportRefs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entity_id",
+          "target_path",
+          "byte_sha256",
+          "definition_fingerprint",
+          "disposition"
+        ],
+        "properties": {
+          "entity_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "byte_sha256": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "definition_fingerprint": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "disposition": {
+            "const": "reuse"
+          }
+        }
+      }
+    },
+    "invalidation_dependencies": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^sha256:[a-f0-9]{64}$"
+      }
+    },
+    "context_fingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  },
+  "$defs": {
+    "term": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "term_id",
+        "canonical_node_id",
+        "en_full_form",
+        "zh_full_form",
+        "abbreviation",
+        "aliases",
+        "sense",
+        "domain",
+        "version",
+        "definition_unit_refs",
+        "source_refs",
+        "translation",
+        "disambiguation_note"
+      ],
+      "properties": {
+        "term_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "canonical_node_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "en_full_form": {
+          "type": "string",
+          "minLength": 1
+        },
+        "zh_full_form": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "abbreviation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "aliases": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "en",
+            "zh-CN"
+          ],
+          "properties": {
+            "en": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "zh-CN": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "sense": {
+          "type": "string",
+          "minLength": 1
+        },
+        "domain": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "definition_unit_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "translation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "reason",
+            "source_refs"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "approved",
+                "no_stable_translation"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source_refs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "disambiguation_note": {
+          "type": "string"
+        }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity_id",
+        "entity_type",
+        "canonical_key",
+        "display_ordinal",
+        "labels",
+        "aliases",
+        "definition_unit_refs",
+        "source_refs",
+        "scope",
+        "limitations",
+        "storage_key",
+        "target_path",
+        "anchor",
+        "disposition",
+        "definition_fingerprint"
+      ],
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "entity_type": {
+          "enum": [
+            "method",
+            "concept",
+            "measure"
+          ]
+        },
+        "canonical_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "display_ordinal": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "en",
+            "zh-CN"
+          ],
+          "properties": {
+            "en": {
+              "type": "string",
+              "minLength": 1
+            },
+            "zh-CN": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "aliases": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "en",
+            "zh-CN"
+          ],
+          "properties": {
+            "en": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "zh-CN": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "definition_unit_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "storage_key": {
+          "type": "string",
+          "pattern": "^(method|concept|measure)-[a-f0-9]{32}$"
+        },
+        "target_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "anchor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]+$"
+        },
+        "disposition": {
+          "enum": [
+            "create",
+            "reuse"
+          ]
+        },
+        "definition_fingerprint": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    }
+  }
+}

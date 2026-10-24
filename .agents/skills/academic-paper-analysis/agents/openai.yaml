@@ -1,0 +1,6 @@
+interface:
+  display_name: "APA"
+  short_description: "Read research papers into bilingual Obsidian notes"
+  default_prompt: "Use $academic-paper-analysis to read this paper and produce bilingual Obsidian notes."
+policy:
+  allow_implicit_invocation: true

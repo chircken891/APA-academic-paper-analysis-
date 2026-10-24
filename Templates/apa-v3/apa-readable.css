@@ -1,0 +1,53 @@
+/* Optional candidate stylesheet. Never installed by the renderer. */
+.apa-readable {
+  --apa-xs: 4px;
+  --apa-sm: 8px;
+  --apa-md: 16px;
+  --apa-lg: 24px;
+  --apa-xl: 32px;
+  --apa-2xl: 48px;
+  --apa-3xl: 64px;
+  --apa-surface: #FFFFFF;
+  --apa-secondary: #F5F6F7;
+  --apa-accent: #2457A7;
+  --apa-text: #202124;
+  --apa-muted: #53575C;
+  --file-line-width: 42rem;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.75;
+  color: var(--apa-text);
+  background-color: var(--apa-surface);
+  overflow-wrap: anywhere;
+  box-sizing: border-box;
+  padding: var(--apa-xl) var(--apa-lg);
+  max-width: 100%;
+}
+.theme-dark .apa-readable {
+  --apa-surface: #1E1E1E;
+  --apa-secondary: #282A2D;
+  --apa-accent: #9BBEFF;
+  --apa-text: #ECEFF1;
+  --apa-muted: #BBC0C7;
+}
+.apa-readable p { max-width: 42rem; margin-bottom: var(--apa-md); }
+.apa-readable h1 { font-size: 30px; font-weight: 600; line-height: 1.25; }
+.apa-readable h2 { font-size: 22px; font-weight: 600; line-height: 1.35; margin-top: var(--apa-2xl); }
+.apa-readable h3 { font-size: 16px; font-weight: 600; line-height: 1.5; margin-top: var(--apa-lg); }
+.apa-readable h4 { font-size: 14px; font-weight: 600; line-height: 1.5; }
+.apa-readable strong { font-weight: 600; }
+.apa-readable a { color: var(--apa-accent); overflow-wrap: anywhere; }
+.apa-readable a:focus-visible,
+.apa-readable summary:focus-visible,
+.apa-readable .callout-title:focus-visible { outline: 2px solid var(--apa-accent); outline-offset: var(--apa-xs); }
+.apa-readable .callout { background-color: var(--apa-secondary); margin-block: var(--apa-md); }
+.apa-readable .image-embed,
+.apa-readable img { max-width: min(100%, 72rem); height: auto; }
+.apa-readable table,
+.apa-readable .math-block { display: block; max-width: min(100%, 72rem); overflow-x: auto; margin-block: var(--apa-lg); }
+.apa-readable th { background-color: var(--apa-secondary); font-weight: 600; }
+.apa-readable figcaption { font-size: 14px; line-height: 1.6; margin-top: var(--apa-sm); }
+@media (max-width: 600px) {
+  .apa-readable { padding-inline: var(--apa-md); }
+}

@@ -1,0 +1,506 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "phase22/active-index-1.0",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/active"
+    },
+    {
+      "$ref": "#/$defs/index"
+    },
+    {
+      "$ref": "#/$defs/commit"
+    }
+  ],
+  "$defs": {
+    "readingFirstPaper": {
+      "type": "object", "additionalProperties": false,
+      "required": ["paper_id", "run_id", "analysis_revision", "core_hash", "pipeline_version", "profile", "dependencies", "paths", "reader_presentation"],
+      "properties": {
+        "paper_id": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "run_id": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "analysis_revision": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "core_hash": { "$ref": "#/$defs/file/properties/sha256" },
+        "pipeline_version": { "const": "3.0" }, "profile": { "const": "reading-first-obsidian-1.0" },
+        "dependencies": { "type": "object" }, "paths": { "$ref": "#/$defs/v3Paper/properties/paths" },
+        "reader_presentation": { "$ref": "#/$defs/readerPaper/properties/reader_presentation" }
+      }
+    },
+    "readerPaper": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["paper_id", "run_id", "analysis_revision", "core_hash", "pipeline_version", "profile", "dependencies", "paths", "reader_presentation"],
+      "properties": {
+        "paper_id": { "type": "string", "pattern": "^pap_[a-f0-9]{32}$" },
+        "run_id": { "type": "string", "pattern": "^run_[a-f0-9]{32}$" },
+        "analysis_revision": { "type": "string", "pattern": "^rev_[a-f0-9]{32}$" },
+        "core_hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "pipeline_version": { "const": "3.0" },
+        "profile": { "const": "phase22-reader-note-1.0" },
+        "dependencies": { "type": "object" },
+        "paths": { "$ref": "#/$defs/v3Paper/properties/paths" },
+        "reader_presentation": {
+          "type": "object", "additionalProperties": false, "required": ["path", "sha256"],
+          "properties": { "path": { "type": "string", "minLength": 1 }, "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" } }
+        },
+        "terminology": {
+          "type": "object", "additionalProperties": false, "required": ["version", "terms"],
+          "properties": { "version": { "type": "string" }, "terms": { "type": "array", "items": { "type": "object" } } }
+        }
+      }
+    },
+    "v3Paper": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "paper_id",
+        "run_id",
+        "analysis_revision",
+        "core_hash",
+        "pipeline_version",
+        "basis_fingerprint",
+        "context_fingerprint",
+        "view_fingerprints",
+        "paths"
+      ],
+      "properties": {
+        "paper_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "analysis_revision": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "core_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "pipeline_version": {
+          "const": "3.0"
+        },
+        "basis_fingerprint": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "context_fingerprint": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "view_fingerprints": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "en",
+            "zh-CN"
+          ],
+          "properties": {
+            "en": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "zh-CN": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "paths": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "en",
+            "zh-CN"
+          ],
+          "properties": {
+            "en": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "zh-CN": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          }
+        }
+      }
+    },
+    "paper": {
+      "oneOf": [
+        { "$ref": "#/$defs/readingFirstPaper" },
+        { "$ref": "#/$defs/readerPaper" },
+        {
+          "$ref": "#/$defs/v3Paper"
+        }
+      ]
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "kind",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "kind": {
+          "enum": [
+            "v3-note",
+            "support",
+            "asset",
+            "reader-presentation",
+            "reading-review",
+            "reader-record",
+            "reader-style"
+          ]
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "active": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "generation_id",
+        "evidence_mode",
+        "kind",
+        "papers",
+        "objects",
+        "shared_nodes"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "phase22/active-index-1.0"
+        },
+        "generation_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$"
+        },
+        "evidence_mode": {
+          "enum": [
+            "synthetic",
+            "actual"
+          ]
+        },
+        "kind": {
+          "const": "active"
+        },
+        "papers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/paper"
+          }
+        },
+        "objects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/file"
+          }
+        },
+        "shared_nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "entity_id",
+              "path"
+            ],
+            "properties": {
+              "entity_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            }
+          }
+        },
+        "index_manifest": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "sha256"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/file/properties/sha256"
+              },
+              "sha256": {
+                "$ref": "#/$defs/file/properties/sha256"
+              }
+            }
+          }
+        }
+      }
+    },
+    "index": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "generation_id",
+        "evidence_mode",
+        "kind",
+        "active_fingerprint",
+        "documents"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "phase22/active-index-1.0"
+        },
+        "generation_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$"
+        },
+        "evidence_mode": {
+          "enum": [
+            "synthetic",
+            "actual"
+          ]
+        },
+        "kind": {
+          "const": "index"
+        },
+        "active_fingerprint": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "documents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "allOf": [{
+              "if": { "required": ["profile"], "properties": { "profile": {} } },
+              "then": { "required": ["anchor_type"], "properties": { "anchor_type": {}, "anchor": { "type": "string", "minLength": 1, "pattern": "^[^\\r\\n#]+$" } } },
+              "else": { "not": { "required": ["anchor_type"], "properties": { "anchor_type": {} } }, "properties": { "anchor": { "anyOf": [{ "type": "string", "pattern": "^[A-Za-z0-9-]+$" }, { "type": "null" }] } } }
+            }, {
+              "if": { "required": ["entity_id"], "properties": { "entity_id": {} } },
+              "then": { "required": ["profile"], "properties": { "profile": { "const": "reading-first-obsidian-1.0" }, "section_id": { "const": "knowledge" } } }
+            }],
+            "required": [
+              "id",
+              "paper_id",
+              "run_id",
+              "analysis_revision",
+              "core_hash",
+              "pipeline_version",
+              "language",
+              "path",
+              "section_id",
+              "span_id",
+              "unit_ids",
+              "anchor",
+              "content",
+              "aliases",
+              "title"
+            ],
+            "properties": {
+              "profile": { "enum": ["phase22-reader-note-1.0", "reading-first-obsidian-1.0"] },
+              "entity_id": { "type": "string", "minLength": 1, "pattern": "\\S" },
+              "anchor_type": { "enum": ["block", "heading"] },
+              "id": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "paper_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "run_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "analysis_revision": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "core_hash": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "pipeline_version": { "const": "3.0" },
+              "language": {
+                "enum": [
+                  "en",
+                  "zh-CN"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "section_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "span_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "unit_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "uniqueItems": true
+              },
+              "anchor": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "content": {
+                "type": "string"
+              },
+              "aliases": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "commit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "generation_id",
+        "evidence_mode",
+        "kind",
+        "status",
+        "active",
+        "index",
+        "approval"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "phase22/active-index-1.0"
+        },
+        "generation_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$"
+        },
+        "evidence_mode": {
+          "enum": [
+            "synthetic",
+            "actual"
+          ]
+        },
+        "kind": {
+          "const": "commit"
+        },
+        "status": {
+          "const": "COMMITTED"
+        },
+        "active": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "index": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "approval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "review_hash",
+            "output_inventory_hash",
+            "evidence_mode"
+          ],
+          "properties": {
+            "review_hash": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "output_inventory_hash": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "evidence_mode": {
+              "enum": [
+                "synthetic",
+                "actual"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

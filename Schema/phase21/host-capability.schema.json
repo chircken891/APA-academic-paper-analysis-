@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "phase21/host-capability",
+  "title": "Phase 21 host capability record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "evidence_tier",
+    "capability",
+    "status",
+    "requested_model",
+    "observed_model",
+    "task_id",
+    "turn_id",
+    "source_rule_binding",
+    "initial_delivery",
+    "continuation_delivery",
+    "evidence_refs",
+    "affected_acceptance_ids",
+    "remaining_owner"
+  ],
+  "properties": {
+    "evidence_tier": { "enum": ["offline", "host_observed", "real_corpus"] },
+    "capability": {
+      "enum": ["source_rule_bytes", "instruction_delivery", "model_identity", "context_isolation", "write_enforcement", "usage_observation", "resume_evidence"]
+    },
+    "status": { "enum": ["observed", "blocked", "not_run", "unverified"] },
+    "reason": { "type": "string", "minLength": 1 },
+    "requested_model": { "type": "string", "minLength": 1 },
+    "observed_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "observation"],
+      "properties": {
+        "value": { "type": ["string", "null"] },
+        "observation": { "enum": ["host_turn_context", "self_report", "unavailable"] }
+      }
+    },
+    "task_id": { "type": ["string", "null"] },
+    "turn_id": { "type": ["string", "null"] },
+    "source_rule_binding": { "$ref": "#/$defs/bindingDisposition" },
+    "initial_delivery": { "$ref": "#/$defs/bindingDisposition" },
+    "continuation_delivery": { "$ref": "#/$defs/bindingDisposition" },
+    "evidence_refs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/evidenceRef" }
+    },
+    "affected_acceptance_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "remaining_owner": { "enum": ["host_platform", "phase21_execution", "user_approval", "independent_reviewer"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "enum": ["blocked", "not_run", "unverified"] } }, "required": ["status"] },
+      "then": { "properties": { "reason": true }, "required": ["reason"] }
+    }
+  ],
+  "$defs": {
+    "bindingDisposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["verified", "unverified", "blocked", "not_run", "unsupported"] },
+        "reason": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "not": { "const": "verified" } } }, "required": ["status"] },
+          "then": { "properties": { "reason": true }, "required": ["reason"] }
+        }
+      ]
+    },
+    "evidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "description"],
+      "properties": {
+        "kind": { "enum": ["local_fixture", "host_receipt", "model_self_report", "output_file", "host_event", "source_byte_observation"] },
+        "description": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "task_id": { "type": "string", "minLength": 1 },
+        "turn_id": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    }
+  }
+}

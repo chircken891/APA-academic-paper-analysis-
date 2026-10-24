@@ -1,0 +1,282 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "APA repository personal answers",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "apa-local-config-1.0"
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "science": {
+          "$ref": "#/definitions/modelChoice"
+        },
+        "overrides": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "evidence": {
+              "$ref": "#/definitions/modelChoice"
+            },
+            "methods": {
+              "$ref": "#/definitions/modelChoice"
+            },
+            "results": {
+              "$ref": "#/definitions/modelChoice"
+            },
+            "interpretation": {
+              "$ref": "#/definitions/modelChoice"
+            },
+            "scientific-reading": {
+              "$ref": "#/definitions/modelChoice"
+            },
+            "integration": {
+              "$ref": "#/definitions/modelChoice"
+            }
+          }
+        },
+        "roles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "english-writer": {
+              "$ref": "#/definitions/modelChoice"
+            },
+            "chinese-writer": {
+              "$ref": "#/definitions/modelChoice"
+            },
+            "reading-editor": {
+              "$ref": "#/definitions/modelChoice"
+            },
+            "independent-verifier": {
+              "$ref": "#/definitions/modelChoice"
+            }
+          }
+        }
+      }
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runs": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "parse": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "candidates": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      }
+    },
+    "parser": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runtime_home": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "python": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "config_path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      }
+    },
+    "reading": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source_language": {
+          "enum": [
+            "en",
+            "zh-CN"
+          ]
+        },
+        "presentation_mode": {
+          "enum": [
+            "writer",
+            "reading-editor"
+          ]
+        }
+      }
+    },
+    "writing_skills": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "nature-writing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "required": [
+            "enabled"
+          ]
+        },
+        "nature-polishing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "required": [
+            "enabled"
+          ]
+        },
+        "nature-shared": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "required": [
+            "enabled"
+          ]
+        },
+        "humanizer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "required": [
+            "enabled"
+          ]
+        },
+        "humanizer-zh": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "required": [
+            "enabled"
+          ]
+        },
+        "stss": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "required": [
+            "enabled"
+          ]
+        }
+      }
+    }
+  },
+  "required": [
+    "schema_version"
+  ],
+  "definitions": {
+    "modelChoice": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "const": "follow-main"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "model",
+            "reasoning_effort"
+          ],
+          "properties": {
+            "mode": {
+              "const": "explicit"
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "reasoning_effort": {
+              "enum": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"phase21/derived-workbook",
+  "type":"object","additionalProperties":false,
+  "required":["schema_version","profile","format","source","source_binding","proof","scope","parts","records","coverage","derivation"],
+  "properties":{
+    "schema_version":{"const":"phase21-derived-workbook-evidence-1.0"},
+    "profile":{"const":"paper04-qualified-s6-xls-xlsx-1"},
+    "format":{"const":"xls"},
+    "source":{"type":"object"},"source_binding":{"type":"object"},
+    "proof":{"type":"object","minProperties":9,"maxProperties":9,"additionalProperties":{"type":"object","additionalProperties":false,"required":["sha256","bytes_base64"],"properties":{"sha256":{"type":"string","pattern":"^sha256:[a-f0-9]{64}$"},"bytes_base64":{"type":"string","minLength":1}}}},
+    "scope":{"type":"object"},"parts":{"type":"array","maxItems":0},
+    "records":{"type":"array","minItems":1,"items":{"type":"object"}},
+    "coverage":{"type":"object"},"derivation":{"type":"object"}
+  },
+  "$comment":"Shape only. Semantic admission requires exact reconstruction using the pinned qualified source/proof bytes in derived-workbook-evidence.mjs; caller-declared fields never grant qualification. This is a bounded S6 profile, not general XLS support."
+}

@@ -1,0 +1,250 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "v3/source-package",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "content_profile",
+    "paper_id",
+    "paper_label",
+    "source_documents",
+    "attachments"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "3.0.0"
+    },
+    "content_profile": {
+      "const": "apa-v3.0"
+    },
+    "paper_id": {
+      "type": "string",
+      "pattern": "^pap_[0-9a-f]{32}$"
+    },
+    "paper_label": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "doi": {
+      "type": "string",
+      "pattern": "\\S",
+      "$comment": "Optional display metadata, never a machine identity."
+    },
+    "pmid": {
+      "type": "string",
+      "pattern": "^[0-9]+$",
+      "$comment": "Optional display metadata, never a machine identity."
+    },
+    "source_documents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source_document_id",
+          "source_label",
+          "source_hash",
+          "role",
+          "media_type",
+          "support_status",
+          "included",
+          "locators"
+        ],
+        "properties": {
+          "source_document_id": {
+            "type": "string",
+            "pattern": "^src_[0-9a-f]{32}$"
+          },
+          "source_label": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "filename": {
+            "type": "string",
+            "pattern": "\\S",
+            "$comment": "Optional display metadata, never a storage path or identity."
+          },
+          "source_hash": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "role": {
+            "enum": [
+              "main",
+              "supplement",
+              "correction",
+              "other"
+            ]
+          },
+          "media_type": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "support_status": {
+            "enum": [
+              "supported",
+              "unsupported",
+              "unavailable"
+            ]
+          },
+          "included": {
+            "type": "boolean"
+          },
+          "locators": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/locator"
+            },
+            "uniqueItems": true
+          },
+          "exclusion_reason": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "included": {
+                  "const": false
+                }
+              },
+              "required": [
+                "included"
+              ]
+            },
+            "then": {
+              "properties": {
+                "exclusion_reason": {
+                  "type": "string",
+                  "pattern": "\\S"
+                }
+              },
+              "required": [
+                "exclusion_reason"
+              ]
+            }
+          }
+        ]
+      },
+      "uniqueItemProperty": "source_document_id"
+    },
+    "attachments": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "attachment_id",
+          "attachment_label",
+          "source_document_id",
+          "critical",
+          "included"
+        ],
+        "properties": {
+          "attachment_id": {
+            "type": "string",
+            "pattern": "^att_[0-9a-f]{32}$"
+          },
+          "attachment_label": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "source_document_id": {
+            "type": "string",
+            "pattern": "^src_[0-9a-f]{32}$"
+          },
+          "critical": {
+            "type": "boolean"
+          },
+          "included": {
+            "type": "boolean"
+          },
+          "exclusion_reason": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "included": {
+                  "const": false
+                }
+              },
+              "required": [
+                "included"
+              ]
+            },
+            "then": {
+              "properties": {
+                "exclusion_reason": {
+                  "type": "string",
+                  "pattern": "\\S"
+                }
+              },
+              "required": [
+                "exclusion_reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "critical": {
+                  "const": true
+                }
+              },
+              "required": [
+                "critical"
+              ]
+            },
+            "then": {
+              "properties": {
+                "included": {
+                  "const": true
+                }
+              }
+            }
+          }
+        ]
+      },
+      "uniqueItemProperty": "attachment_id"
+    }
+  },
+  "$defs": {
+    "locator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_document_id",
+        "source_hash",
+        "page_index",
+        "block_id"
+      ],
+      "properties": {
+        "source_document_id": {
+          "type": "string",
+          "pattern": "^src_[0-9a-f]{32}$"
+        },
+        "source_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "page_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "block_id": {
+          "type": "string",
+          "pattern": "\\S"
+        }
+      }
+    }
+  }
+}
