@@ -97,6 +97,34 @@ test('selected English guidance enters only the actual English Writer instructio
   }
 });
 
+test('configured non-GPT main and explicit role models survive the binding and emitted host requests', async t => {
+  const { root, config } = await configuredRepo(t);
+  const mainSession = { model: 'synthetic-provider/main-model', reasoning_effort: 'high' };
+  config.models.science = { mode: 'explicit', model: 'synthetic-provider/science-model', reasoning_effort: 'low' };
+  config.models.overrides = {};
+  config.models.roles['english-writer'] = { mode: 'follow-main' };
+  await writeFile(join(root, 'config/apa.local.json'), JSON.stringify(config));
+  let prepared;
+  const runId = 'run_' + 'f'.repeat(32);
+  const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId,
+    createRunControl: options => {
+      prepared = prepareConfiguredReading({ ...options, repoRoot: root, mainSession,
+        supportedModelPairs: [mainSession, { model: 'synthetic-provider/science-model', reasoning_effort: 'low' }, { model: 'gpt-6.1-sol', reasoning_effort: 'low' }] });
+      return prepared.runControl;
+    } });
+  const policy = prepared.runControl.reading_first_binding.role_model_policy;
+  assert.deepEqual(policy.main_session, mainSession);
+  const writer = snapshotReadingFirstRuntime(fixture.controller).state.request_entries.find(entry => entry.key === 'en').request;
+  assert.equal(writer.emittedStep.arguments.model, 'synthetic-provider/main-model');
+  assert.equal(writer.emittedStep.arguments.reasoning_effort, 'high');
+  const science = createConfiguredScienceRequest({ prepared, role: 'evidence', dispatchContext: fixture.broker.dispatchContext,
+    task: { task_name: 'configured_generic_evidence', native_path: 'native/generic-evidence.json' } });
+  assert.equal(science.emittedStep.arguments.model, 'synthetic-provider/science-model');
+  assert.equal(science.emittedStep.arguments.reasoning_effort, 'low');
+  assert.equal(science.emittedStep.arguments.fork_turns, 'none');
+  assert.throws(() => prepareConfiguredReading({ repoRoot: root, mainSession, supportedModelPairs: [], runId }), /APA_MODEL_UNSUPPORTED/);
+});
+
 test('configured writer-only presentation omits the Editor call and follows the main session only for selected roles', async t => {
   const { root, config } = await configuredRepo(t);
   config.reading = { source_language: 'en', presentation_mode: 'writer' };

@@ -159,7 +159,7 @@ test('verifier CLI emits only stable JSON even when setup is incomplete', async 
   assert.equal(result.stderr, '');
   assert.deepEqual(Object.keys(report), ['core_ready', 'obsidian_ready', 'ready', 'checks']);
   assert.equal(Array.isArray(report.checks), true);
-  assert(report.checks.every(check => ['pass', 'fail'].includes(check.status)));
+  assert(report.checks.every(check => ['pass', 'fail', 'warn'].includes(check.status)));
   for (const id of ['python', 'disk_space']) assert.equal(report.checks.find(check => check.id === id).scope, 'parser');
   assert.equal(result.code, report.core_ready ? 0 : 1);
 });

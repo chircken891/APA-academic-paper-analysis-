@@ -35,7 +35,7 @@ test('bootstrap reads all supported versions and disk policy from the central co
     '$environment.npm.major',
     '$environment.python.major',
     '$environment.python.minor',
-    '$environment.disk.minimum_free_gib',
+    '$environment.disk.recommended_free_gib',
     '$environment.mineru.model_source',
   ]) assert.match(script, new RegExp(expression.replaceAll('.', '\\.').replace('$', '\\$')));
 });

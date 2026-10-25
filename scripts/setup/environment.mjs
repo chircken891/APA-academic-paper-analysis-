@@ -22,8 +22,8 @@ function validateContract(contract) {
     && contract?.mineru?.version === undefined
     && contract?.mineru?.package === 'mineru'
     && contract?.mineru?.model_source === 'modelscope'
-    && Number.isInteger(contract?.disk?.minimum_free_gib)
-    && contract.disk.minimum_free_gib > 0
+    && Number.isInteger(contract?.disk?.recommended_free_gib)
+    && contract.disk.recommended_free_gib > 0
     && Array.isArray(pluginIds)
     && pluginIds.length === 4
     && new Set(pluginIds).size === pluginIds.length;
@@ -55,7 +55,7 @@ export function validatePackageContract(packageJson, contract) {
 }
 
 export function evaluatePrerequisites(snapshot, contract) {
-  const diskMinimum = contract.disk.minimum_free_gib * 1024 ** 3;
+  const diskReserve = contract.disk.recommended_free_gib * 1024 ** 3;
   const [pythonMajor, pythonMinor] = majorMinor(snapshot.pythonVersion);
   return [
     snapshot.repositoryRootValid
@@ -76,8 +76,9 @@ export function evaluatePrerequisites(snapshot, contract) {
     pythonMajor === contract.python.major && pythonMinor === contract.python.minor
       ? pass('python', `Python ${contract.python.major}.${contract.python.minor}.x`, snapshot.pythonVersion)
       : fail('python', `Python ${contract.python.major}.${contract.python.minor}.x`, snapshot.pythonVersion, 'Install the Python major/minor declared in config/environment.json.'),
-    Number.isFinite(snapshot.freeBytes) && snapshot.freeBytes >= diskMinimum
-      ? pass('disk_space', `at least ${contract.disk.minimum_free_gib} GiB free`, snapshot.freeBytes)
-      : fail('disk_space', `at least ${contract.disk.minimum_free_gib} GiB free`, snapshot.freeBytes, 'Free disk space on the repository drive before running bootstrap.'),
+    Number.isFinite(snapshot.freeBytes) && snapshot.freeBytes >= diskReserve
+      ? pass('disk_space', `${contract.disk.recommended_free_gib} GiB recommended reserve for a new MinerU installation`, snapshot.freeBytes)
+      : { ...fail('disk_space', `${contract.disk.recommended_free_gib} GiB recommended reserve for a new MinerU installation`, snapshot.freeBytes,
+        'Review space for the selected runtime, models, download caches and outputs; this reserve is not a minimum requirement or a measured installation size.'), status: 'warn' },
   ];
 }

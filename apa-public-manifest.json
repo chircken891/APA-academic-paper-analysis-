@@ -59,7 +59,7 @@
     },
     {
       "path": "config/environment.json",
-      "sha256": "a18f18aaa4dc807f342cd8cba485fba41e6197b77e4991fbc3dbd23592172366"
+      "sha256": "b03fdd26fc6f2e982d6e37e502d380bdcf3db1fe12a5d44d72763009ff067474"
     },
     {
       "path": "docs/apa-v3/active-gap-enrichment.md",
@@ -83,7 +83,7 @@
     },
     {
       "path": "docs/CONFIGURATION.md",
-      "sha256": "ac9583e09308b9cefc76912396a89ea5c763035e3a4afca902eb210a0ecc861d"
+      "sha256": "4e36b4add8d40bae256cda6a378bef92c4ab092e8b4450940e6e0146c31f2125"
     },
     {
       "path": "Figures/.gitkeep",
@@ -135,7 +135,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "dcfd0cd55a2c1af983fcc848750e0eb50a3cc3e9a65101be28aa27878fb316f0"
+      "sha256": "0772018b6359d63c06ce59a1d297e01596cb9e6d6288d19d4d743b1cff530493"
     },
     {
       "path": "Schema/config/apa-config.schema.json",
@@ -259,7 +259,7 @@
     },
     {
       "path": "scripts/apa-model-policy.mjs",
-      "sha256": "390e9df91c4ad59382b10fb049c963c98ed0d5e7ed006820829deaa91de33b06"
+      "sha256": "ee011321f3eb6a19114153980dac020f16aeebcaac0315a7a99a142aef7e306b"
     },
     {
       "path": "scripts/apa-setup.mjs",
@@ -291,15 +291,15 @@
     },
     {
       "path": "scripts/setup/apa-setup-page.mjs",
-      "sha256": "11d5c10f9832f35308e18c2fbaa006a72f80f98cfe5367cf2fc031baa51f6ab3"
+      "sha256": "dc1db63da3c354d69437f1f6a34af3665a934e608eaf79c45163301ac59f8ad1"
     },
     {
       "path": "scripts/setup/bootstrap-windows.ps1",
-      "sha256": "9c3ef6cf575f65729ea6d9b8d651e9e9ad565b2772f0209a9f205bd2147eaac7"
+      "sha256": "f694f4a868529f85f4863efa2db628113bbb672199cee755e2b1d69845e78368"
     },
     {
       "path": "scripts/setup/environment.mjs",
-      "sha256": "338f878800ba8377924d90ba3306d8988912b0e3bab6d0e525ba1347627341b2"
+      "sha256": "a1ad1bca3e6867015aac0f8599258f8644a4af07c5a27b7eaf281a3d53d8fa24"
     },
     {
       "path": "scripts/setup/export-public-apa.mjs",
@@ -595,7 +595,7 @@
     },
     {
       "path": "SETUP.md",
-      "sha256": "a62e157b5dc2b4a60af19d7ab67a4df8a6590152258bdb815959a3916c4a8415"
+      "sha256": "5db78ca119934f6b6dc2b6e3c52ac75495bd36419595b1b44d8190b7a6683e46"
     },
     {
       "path": "Templates/apa-public/AGENTS.md",
@@ -607,11 +607,11 @@
     },
     {
       "path": "Templates/apa-setup/page.css",
-      "sha256": "ca2531cf4b92a617efcaf6a393e2a730100eec5412746ea2d75748adfceecdf1"
+      "sha256": "0a5b1facf5ca95385434381fe8e834300f7ba0bb8e116fc3288b3ab59e30e56d"
     },
     {
       "path": "Templates/apa-setup/page.js",
-      "sha256": "aa334f4c2d9cd6a3bc5caf7a8e52881ed0bc83dac1a55aae62b1245eec42f164"
+      "sha256": "197147d959b923f200d2a95f5ebb536b57b05460014ab9a105db0ffa93126e48"
     },
     {
       "path": "Templates/apa-v3/apa-readable.css",
@@ -631,15 +631,15 @@
     },
     {
       "path": "test/setup/apa-setup-page.test.mjs",
-      "sha256": "ecd1ecae1490dc9ff6808d1dc356815cd67c01683b9dc76af14f82a3719bb870"
+      "sha256": "849316ff076405b93d5150ff35f8971ab5a40b7a75929bbf9a8b55b6f506261b"
     },
     {
       "path": "test/setup/bootstrap-execution.test.mjs",
-      "sha256": "3f37bb87d92f6bed6470fc388d2701e8524c4033f35fac9ac1c92cecc9f5f4db"
+      "sha256": "d0cba05005681482798093acacd58b100de5070a594fc0ced9a093f4c4ee575f"
     },
     {
       "path": "test/setup/bootstrap-windows.test.mjs",
-      "sha256": "7c05e3c5b1411e537776f6fb1e64e679ee521513713b4e1ca3038a41324ca0ce"
+      "sha256": "5a07bb8c9933ff7599a9dff5fec1931139be9cd20fda96085574e217c133ea85"
     },
     {
       "path": "test/setup/public-export.test.mjs",
@@ -647,7 +647,7 @@
     },
     {
       "path": "test/setup/verify-environment.test.mjs",
-      "sha256": "b6898d00fdeaae931c9240893c643b08333a19cba35aedde2acde979b29fac61"
+      "sha256": "52228473150e2312b28672daf2d5bc934a55047afced1fe1dc79e9ef56cf990e"
     },
     {
       "path": "test/shared/configured-mineru.test.mjs",
@@ -655,11 +655,11 @@
     },
     {
       "path": "test/v3/configured-reading-policy.test.mjs",
-      "sha256": "12efd0ff6d8ef4e9d4f4bc1da7331427a129f8adb939bbb853aa6cf20234cfec"
+      "sha256": "cfb5f06794e7f8c6e5c0a15d8d861066f21ce90094d531dbf0054e10b8522942"
     },
     {
       "path": "test/v3/configured-reading.test.mjs",
-      "sha256": "4ae2505eb29bfd88ae04bad68044d403e144201dc1c23596f1d54f3c223d7588"
+      "sha256": "3fcbc8c6805d61e1d9abb74c2e9130dd0258ba4879534f5ac20fe66132cb74f7"
     },
     {
       "path": "test/v3/fixtures/phase21/composition-cases.json",

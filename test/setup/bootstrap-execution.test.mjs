@@ -8,7 +8,7 @@ import test from 'node:test';
 const sourceBootstrap = join(process.cwd(), 'scripts', 'setup', 'bootstrap-windows.ps1');
 const powershell = join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 
-async function createHarness(t, { minimumFreeGib = 0 } = {}) {
+async function createHarness(t, { recommendedFreeGib = 0 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'apa-bootstrap-execution-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const repoRoot = join(root, 'C盘 新知识库');
@@ -26,7 +26,7 @@ async function createHarness(t, { minimumFreeGib = 0 } = {}) {
     npm: { major: 11 },
     python: { major: 3, minor: 12 },
     mineru: { update_policy: 'latest-stable', package: 'mineru', model_source: 'modelscope' },
-    disk: { minimum_free_gib: minimumFreeGib },
+    disk: { recommended_free_gib: recommendedFreeGib },
   }), 'utf8');
   await writeFile(join(repoRoot, 'package.json'), '{"name":"bootstrap-harness","version":"1.0.0"}\n', 'utf8');
   await writeFile(join(repoRoot, 'package-lock.json'), '{"lockfileVersion":3}\n', 'utf8');
@@ -148,14 +148,14 @@ test('bootstrap default installs only base dependencies without invoking optiona
 });
 
 test('base-only setup reports optional Python and MinerU disk gaps without blocking Node dependency install', async t => {
-  const harness = await createHarness(t, { minimumFreeGib: 9_000_000 });
+  const harness = await createHarness(t, { recommendedFreeGib: 9_000_000 });
   harness.python = join(harness.root, 'missing-python.exe');
   const result = await runBootstrap(harness, {}, []);
   assert.equal(result.code, 0, result.stderr);
   const report = JSON.parse(result.stdout.trim().split(/\r?\n/)[0]);
   assert.equal(report.prerequisites_ready, true);
   for (const id of ['python', 'disk_space']) {
-    assert.equal(report.checks.find(item => item.id === id).status, 'missing');
+    assert.equal(report.checks.find(item => item.id === id).status, id === 'disk_space' ? 'warning' : 'missing');
     assert.equal(report.checks.find(item => item.id === id).required, false);
   }
   assert.deepEqual(report.prerequisite_actions, []);
@@ -210,11 +210,18 @@ test('bootstrap prerequisite failure performs no dependency or runtime writes', 
   assert.match(`${missingGit.stdout}\n${missingGit.stderr}`, /install Git for Windows/i);
 });
 
-test('bootstrap rejects insufficient disk space before creating runtime state', async t => {
-  const harness = await createHarness(t, { minimumFreeGib: 9_000_000 });
-  const failed = await runBootstrap(harness);
-
-  assert.notEqual(failed.code, 0);
-  assert.match(`${failed.stdout}\n${failed.stderr}`, /disk_space: at least 9000000 GiB/i);
+test('MinerU disk reserve is advisory and CheckOnly never installs when below it', async t => {
+  const harness = await createHarness(t, { recommendedFreeGib: 9_000_000 });
+  const checked = await runBootstrap(harness, {}, ['-CheckOnly', '-InstallMineru']);
+  assert.equal(checked.code, 0, checked.stderr);
+  const report = JSON.parse(checked.stdout.trim());
+  const disk = report.checks.find(item => item.id === 'disk_space');
+  assert.equal(disk.status, 'warning');
+  assert.equal(disk.required, false);
+  assert.equal(disk.recommended_free_gib, 9_000_000);
+  assert.equal(report.prerequisites_ready, true);
   await assert.rejects(readFile(join(harness.repoRoot, '.runtime', 'test', 'npm-ci.log')));
+  const installed = await runBootstrap(harness, {}, ['-InstallMineru']);
+  assert.equal(installed.code, 0, installed.stderr);
+  assert.equal((await readFile(join(harness.repoRoot, '.runtime', 'mineru', 'complete.marker'), 'utf8')), 'ready');
 });

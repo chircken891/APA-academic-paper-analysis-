@@ -22,17 +22,17 @@ README 负责安装、使用和更新说明；apa-setup 只管理交互配置；
 | reading.presentation_mode | reading-editor 或 writer |
 | writing_skills | 六技能各自明确 enabled；启用时提供 SKILL.md 路径 |
 
-显式模型对象为 `{mode:'explicit',model,reasoning_effort}`，跟随主会话为 `{mode:'follow-main'}`。实际派发需符合当前 Codex 支持的模型组合。配置不是用量、来源或执行授权。
+显式模型对象为 `{mode:'explicit',model,reasoning_effort}`，跟随主会话为 `{mode:'follow-main'}`。配置接受非空模型标识，不限定 GPT；实际派发须符合当前宿主支持的模型和参数组合。现有自动派发对接 Codex，其他宿主需要对应调用与回执适配。配置不是用量、来源或执行授权。
 
 技能键为 nature-writing、nature-polishing、nature-shared、humanizer、humanizer-zh、stss。Nature Writing/Polishing 还要求 Shared。仅选中的指导注入对应语言 Writer；停用项不暗中保留。科学事实、证据和发布边界属于固定合同，不随文风技能关闭。
 
 ## 页面与操作
 
-`npm run apa:setup -- page` 生成 `.tmp/apa-setup/index.html`。向导分为概览、六类配置、导入、去除、备份和结果，共11页；每次只显示一页，支持顺序切换或直接跳转，切页保留已填内容。任一配置页都能预览全部选中的修改，生成后自动进入结果页。页面内嵌脚本和样式，不启动后台服务，不向网络发送答案。
+`npm run apa:setup -- page` 生成 `.tmp/apa-setup/index.html`。首页提供完善配置、去除配置和导出配置三个独立入口。进入功能后只显示该功能的分页、预览及输出；返回首页可切换功能，填写内容保留，各功能的结果和下载文件名独立。页面内嵌脚本和样式，不启动后台服务，不向网络发送答案。
 
-- **完善**：填写或修改，预览后生成局部操作。
+- **完善**：六类配置分页填写或修改，可在本功能内导入备份；预览后生成局部操作。任一字段页都能预览手动选中的修改，导入变化单独预览，不混合去除或导出操作。
 - **去除**：默认全部，也可选定字段；只移除答案，不删除笔记或卸载依赖。
-- **导出**：自定义文件名，导出 apa-config-export-1.0 JSON。可能含个人路径，分享前审阅。
+- **导出**：自定义文件名，导出 apa-config-export-1.0 JSON。只包含页面读取时已保存的答案，不包含完善配置中尚未应用的修改。可能含个人路径，分享前审阅。
 - **导入**：读取导出文件，展示差异再生成操作。未提供字段保留，模型模式整体替换。
 
 下载操作 JSON 与复制同一 JSON 等价。将文件、路径或粘贴内容交给助手并明确要求应用。剪贴板受限时手动选择文本复制。助手应用后回读并报告缺项和依赖。
@@ -68,7 +68,7 @@ README 负责安装、使用和更新说明；apa-setup 只管理交互配置；
 | `mineru.update_policy` | 解析器更新策略 |
 | `mineru.package` | 解析器包名 |
 | `mineru.model_source` | 模型下载来源 |
-| `disk.minimum_free_gib` | 安装磁盘要求 |
+| `disk.recommended_free_gib` | 新装 MinerU 的建议预留空间，低于时提示，不作为安装阻断条件 |
 | `obsidian.plugins` | 可选 Obsidian 集成检查项 |
 
 不得只修改文档声称支持新环境；真实适配与安装需另行实施和验证。

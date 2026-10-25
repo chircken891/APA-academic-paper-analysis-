@@ -88,40 +88,62 @@ export async function copySetupPayload(payload, clipboard = globalThis.navigator
 
 export const setupPages = [
   { id: 'overview', title: '开始前：用途与当前状态' },
-  { id: 'science', title: '科学内容模型' },
-  { id: 'writers', title: '写作、编辑与核验模型' },
-  { id: 'paths', title: '工作文件目录' },
-  { id: 'parser', title: 'PDF 解析环境' },
-  { id: 'reading', title: '双语顺序与笔记呈现' },
-  { id: 'skills', title: '可选写作指导' },
-  { id: 'import-section', title: '导入已有备份' },
-  { id: 'remove', title: '去除设置' },
-  { id: 'export-section', title: '导出配置备份' },
-  { id: 'result', title: '本次结果与下一步' }
+  { id: 'science', title: '科学内容模型', flow: 'edit' },
+  { id: 'writers', title: '写作、编辑与核验模型', flow: 'edit' },
+  { id: 'paths', title: '工作文件目录', flow: 'edit' },
+  { id: 'parser', title: 'PDF 解析环境', flow: 'edit' },
+  { id: 'reading', title: '双语顺序与笔记呈现', flow: 'edit' },
+  { id: 'skills', title: '可选写作指导', flow: 'edit' },
+  { id: 'import-section', title: '导入已有备份（可选）', flow: 'edit' },
+  { id: 'edit-result', title: '完善配置结果', flow: 'edit' },
+  { id: 'remove', title: '选择去除范围', flow: 'remove' },
+  { id: 'remove-result', title: '去除配置结果', flow: 'remove' },
+  { id: 'export-section', title: '导出已保存配置', flow: 'export' },
+  { id: 'export-result', title: '配置备份结果', flow: 'export' }
 ];
+const flowNames = { edit: '完善配置', remove: '去除配置', export: '导出配置' };
+
+export function createSetupResults() {
+  const results = {
+    edit: { payload: null, filename: 'apa-config-operation.json' },
+    remove: { payload: null, filename: 'apa-config-remove.json' },
+    export: { payload: null, filename: 'apa-config-backup.json' }
+  };
+  return { get: flow => results[flow], set: (flow, payload) => { results[flow].payload = payload; }, clear: flow => { results[flow].payload = null; } };
+}
 
 // Navigation only changes visibility. Existing form nodes and generated payloads stay intact.
 export function createSetupNavigator({ pages, buttons, status, previous, next, onChange = () => {} }) {
   let current = 0;
+  let flow;
   const show = id => {
     const index = pages.findIndex(page => page.id === id);
     if (index < 0) throw new Error('未知的配置页面');
+    if (pages[index].flow !== flow) throw new Error('请从首页进入该功能；当前功能不能跳转到其他功能。');
     current = index;
+    const active = pages.filter(page => page.flow === flow);
+    const position = active.findIndex(page => page.id === id);
     pages.forEach((page, position) => { page.element.hidden = position !== current; });
     buttons.forEach((button, position) => {
+      button.hidden = !flow || pages[position].flow !== flow;
       if (position === current) button.setAttribute('aria-current', 'step');
       else button.removeAttribute('aria-current');
     });
-    status.textContent = `第 ${current + 1} / ${pages.length} 页 · ${pages[current].title}`;
-    previous.disabled = current === 0;
-    next.disabled = current === pages.length - 1;
+    status.textContent = flow ? `${flowNames[flow]} · 第 ${position + 1} / ${active.length} 页 · ${pages[current].title}` : '选择配置功能';
+    previous.disabled = position === 0;
+    next.disabled = position === active.length - 1;
     onChange(pages[current]);
   };
   buttons.forEach((button, position) => button.addEventListener('click', () => show(pages[position].id)));
-  previous.addEventListener('click', () => show(pages[Math.max(0, current - 1)].id));
-  next.addEventListener('click', () => show(pages[Math.min(pages.length - 1, current + 1)].id));
+  const move = delta => {
+    const active = pages.filter(page => page.flow === flow);
+    const index = active.findIndex(page => page.id === pages[current].id);
+    show(active[Math.max(0, Math.min(active.length - 1, index + delta))].id);
+  };
+  previous.addEventListener('click', () => move(-1));
+  next.addEventListener('click', () => move(1));
   show(pages[0].id);
-  return { show, current: () => pages[current].id };
+  return { show, enter: value => { if (!flowNames[value]) throw new Error('未知的配置功能'); flow = value; show(pages.find(page => page.flow === flow).id); }, home: () => { flow = undefined; show('overview'); }, current: () => pages[current].id };
 }
 
 export function fieldValue(field, values) {
@@ -179,8 +201,8 @@ export function mountApaSetup(document, snapshot, inspection) {
     const inputs = {};
     if (field.type === 'model') {
       inputs.mode = addInput(row, '选择方式', `${field.key}-mode`, current?.mode || (current?.model ? 'explicit' : ''), ['', 'explicit', 'follow-main']);
-      inputs.model = addInput(row, '模型标识（填写 Codex 实际支持的名称）', `${field.key}-model`, current?.model || '');
-      inputs.model.placeholder = '例如 gpt-6.1-sol；仅示例，不会自动采用';
+      inputs.model = addInput(row, '模型标识（填写当前宿主实际支持的名称）', `${field.key}-model`, current?.model || '');
+      inputs.model.placeholder = '填写当前宿主支持的模型标识；不限定 GPT';
       inputs.effort = addInput(row, '推理强度', `${field.key}-effort`, current?.reasoning_effort || '', ['', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
     } else if (field.type === 'skill') {
       inputs.enabled = addInput(row, '是否使用', `${field.key}-enabled`, current?.enabled === undefined ? '' : String(current.enabled), ['', 'true', 'false']);
@@ -199,11 +221,11 @@ export function mountApaSetup(document, snapshot, inspection) {
   const navigation = document.querySelector('nav');
   const pageHost = make('div', undefined, 'wizard-pages');
   const overview = make('div'); overview.id = 'overview';
-  overview.append(document.querySelector('header'), byId('start-title').closest('section'), byId('current-title').closest('section'), document.querySelector('aside'));
+  overview.append(document.querySelector('header'), byId('function-menu'), byId('current-title').closest('section'), document.querySelector('aside'));
   pageHost.append(overview);
   for (const group of groups.filter(group => !group.collapsed)) {
     const page = make('section'); page.id = group.id; page.hidden = true;
-    if (group.id === 'science') page.append(edit.querySelector('.explanation'));
+    if (group.id === 'science') page.append(byId('start-title').closest('section'), edit.querySelector('.explanation'));
     page.append(groupElements[group.id]);
     page.append(make('p', '勾选“修改此项”后填写；未勾选项目保留原值。预览会合并各页已选修改，不会直接应用设置。', 'hint'));
     if (group.id === 'science') page.append(groupElements.overrides);
@@ -211,7 +233,7 @@ export function mountApaSetup(document, snapshot, inspection) {
     const previewButton = make('button', '预览全部已选修改'); previewButton.type = 'button'; previewButton.dataset.preview = 'patch'; page.append(previewButton);
     pageHost.append(page);
   }
-  for (const id of ['import-section', 'remove', 'export-section', 'result']) { byId(id).hidden = true; pageHost.append(byId(id)); }
+  for (const id of ['import-section', 'remove', 'export-section', 'edit-result', 'remove-result', 'export-result']) { byId(id).hidden = true; pageHost.append(byId(id)); }
   edit.remove();
   navigation.replaceChildren();
   const buttons = setupPages.map(page => { const button = make('button', page.title, 'secondary'); button.type = 'button'; navigation.append(button); return button; });
@@ -221,9 +243,12 @@ export function mountApaSetup(document, snapshot, inspection) {
   const status = make('h1'); status.id = 'page-status'; status.tabIndex = -1; status.setAttribute('aria-live', 'polite');
   const next = make('button', '下一步', 'secondary'); next.type = 'button';
   pager.append(previous, status, next);
-  main.prepend(pager, navigation); main.append(pageHost);
+  const homeButton = make('button', '返回首页，选择其他功能', 'secondary'); homeButton.type = 'button'; homeButton.id = 'return-home';
+  main.prepend(homeButton, pager, navigation); main.append(pageHost);
   const pageNavigator = createSetupNavigator({ pages: setupPages.map(page => ({ ...page, element: byId(page.id) })), buttons, status, previous, next,
-    onChange: () => { pager.scrollIntoView({ block: 'start' }); status.focus({ preventScroll: true }); } });
+    onChange: page => { pager.hidden = !page.flow; navigation.hidden = !page.flow; homeButton.hidden = !page.flow; if (page.flow) { pager.scrollIntoView({ block: 'start' }); status.focus({ preventScroll: true }); } } });
+  homeButton.addEventListener('click', () => pageNavigator.home());
+  for (const flow of Object.keys(flowNames)) byId(`enter-${flow}`).addEventListener('click', () => pageNavigator.enter(flow));
   const collect = () => {
     const set = {};
     for (const { field, selected, inputs } of controls) {
@@ -238,47 +263,67 @@ export function mountApaSetup(document, snapshot, inspection) {
     }
     return createOperation(snapshot, { set });
   };
-  let payload;
-  const preview = value => {
-    payload = value;
-    byId('payload').value = serializePayload(value);
+  const results = createSetupResults();
+  const resultElement = (flow, id) => byId(`${flow}-${id}`);
+  const clearResult = flow => {
+    results.clear(flow);
+    resultElement(flow, 'payload').value = '';
+    resultElement(flow, 'change-summary').replaceChildren();
+    resultElement(flow, 'next-step').textContent = '';
+    resultElement(flow, 'download').disabled = true; resultElement(flow, 'copy').disabled = true;
+    resultElement(flow, 'message').textContent = '尚未生成当前选择的结果，请重新生成预览。';
+  };
+  const preview = (flow, value) => {
+    results.set(flow, value);
+    resultElement(flow, 'payload').value = serializePayload(value);
     const backup = value.schema_version === 'apa-config-export-1.0';
     const changes = describeChanges(snapshot, value);
-    byId('change-summary').replaceChildren(...changes.map(change => make('li', change)));
-    byId('message').textContent = backup ? '已生成配置备份，尚未下载。' : changes.length ? `已生成${value.action === 'remove' ? '去除' : '修改'}操作，共 ${changes.length} 项。配置尚未生效。` : '没有选中任何变化，当前配置将保持不变。';
-    byId('next-step').textContent = backup ? '下一步：取一个便于辨认的文件名并下载保存。备份用于以后导入，不需要让助手直接执行；也可以复制内容自行保存。' : '下一步：检查上述变化。下载文件后把完整路径交给助手，并说“请应用这份配置”；或复制下面的完整内容粘贴给助手，提出同一请求。助手应用并回读后，设置才生效。';
-    const filename = byId('filename');
-    if (['apa-config-operation.json', 'apa-config-backup.json'].includes(filename.value)) filename.value = backup ? 'apa-config-backup.json' : 'apa-config-operation.json';
-    pageNavigator.show('result');
-    byId('result').focus({ preventScroll: true });
+    resultElement(flow, 'change-summary').replaceChildren(...changes.map(change => make('li', change)));
+    resultElement(flow, 'message').textContent = backup ? '已生成配置备份，尚未下载。' : changes.length ? `已生成${value.action === 'remove' ? '去除' : '修改'}操作，共 ${changes.length} 项。配置尚未生效。` : '没有选中任何变化，当前配置将保持不变。';
+    resultElement(flow, 'next-step').textContent = backup ? '下一步：取一个便于辨认的文件名并下载保存。备份用于以后导入，不需要让助手直接执行；也可以复制内容自行保存。' : '下一步：检查上述变化。下载文件后把完整路径交给助手，并说“请应用这份配置”；或复制下面的完整内容粘贴给助手，提出同一请求。助手应用并回读后，设置才生效。';
+    resultElement(flow, 'download').disabled = false; resultElement(flow, 'copy').disabled = false;
+    pageNavigator.show(`${flow}-result`);
+    byId(`${flow}-result`).focus({ preventScroll: true });
   };
-  const guard = fn => async () => { try { await fn(); } catch (error) { byId('message').textContent = error.message; pageNavigator.show('result'); } };
-  for (const button of document.querySelectorAll('[data-preview="patch"]')) button.addEventListener('click', guard(() => preview(collect())));
+  const guard = (flow, fn) => async () => { try { await fn(); } catch (error) { clearResult(flow); resultElement(flow, 'message').textContent = error.message; pageNavigator.show(`${flow}-result`); } };
+  for (const button of document.querySelectorAll('[data-preview="patch"]')) button.addEventListener('click', guard('edit', () => { clearResult('edit'); preview('edit', collect()); }));
+  for (const { selected, inputs } of controls) for (const input of [selected, ...Object.values(inputs)]) {
+    input.addEventListener('input', () => clearResult('edit'));
+    input.addEventListener('change', () => clearResult('edit'));
+  }
   const leaves = flattenConfig(snapshot.config);
   for (const [key, value] of Object.entries(leaves)) {
     const label = make('label', `${fieldLabel(key)}：${display(value, key)}`); const input = make('input'); input.type = 'checkbox'; input.value = key; input.name = 'remove-field'; label.prepend(input); byId('remove-fields').append(label);
   }
   const syncRemove = () => { byId('remove-fields').disabled = byId('remove-all').checked; };
-  byId('remove-all').addEventListener('change', syncRemove); syncRemove();
-  byId('generate-remove').addEventListener('click', guard(() => {
+  byId('remove-all').addEventListener('change', () => { syncRemove(); clearResult('remove'); }); syncRemove();
+  byId('remove-fields').addEventListener('change', () => clearResult('remove'));
+  byId('generate-remove').addEventListener('click', guard('remove', () => {
+    clearResult('remove');
     const all = byId('remove-all').checked;
     const remove = [...document.querySelectorAll('[name="remove-field"]:checked')].map(input => input.value);
     byId('removal-preview').textContent = serializePayload(all ? leaves : Object.fromEntries(remove.map(key => [key, leaves[key]])));
-    preview(createOperation(snapshot, { action: 'remove', all, remove }));
+    preview('remove', createOperation(snapshot, { action: 'remove', all, remove }));
   }));
-  byId('export').addEventListener('click', guard(() => preview({ schema_version: 'apa-config-export-1.0', answers: snapshot.config })));
-  byId('download').addEventListener('click', guard(() => {
-    if (!payload) throw new Error('请先生成并审阅操作或导出。');
-    const name = byId('filename').value.trim(); if (!name || /[\\/:*?"<>|]/.test(name)) throw new Error('请填写不含路径符号的文件名。');
-    const url = URL.createObjectURL(new Blob([serializePayload(payload)], { type: 'application/json' }));
-    const link = make('a'); link.href = url; link.download = name.endsWith('.json') ? name : `${name}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }));
-  byId('copy').addEventListener('click', guard(async () => {
-    if (!payload) throw new Error('请先生成操作或导出。');
-    if (await copySetupPayload(payload)) { byId('message').textContent = '已复制完整 JSON。'; return; }
-    byId('payload-details').open = true; byId('payload').focus(); byId('payload').select(); byId('message').textContent = '浏览器未允许剪贴板访问；完整 JSON 已选中，请按 Ctrl+C（macOS 为 Command+C）。';
-  }));
-  byId('import-file').addEventListener('change', guard(async () => {
+  byId('export').addEventListener('click', guard('export', () => preview('export', { schema_version: 'apa-config-export-1.0', answers: snapshot.config })));
+  for (const flow of Object.keys(flowNames)) {
+    resultElement(flow, 'filename').addEventListener('input', () => { results.get(flow).filename = resultElement(flow, 'filename').value; });
+    resultElement(flow, 'download').addEventListener('click', guard(flow, () => {
+      const payload = results.get(flow).payload;
+      if (!payload) throw new Error('请先生成并审阅操作或导出。');
+      const name = results.get(flow).filename.trim(); if (!name || /[\\/:*?"<>|]/.test(name)) throw new Error('请填写不含路径符号的文件名。');
+      const url = URL.createObjectURL(new Blob([serializePayload(payload)], { type: 'application/json' }));
+      const link = make('a'); link.href = url; link.download = name.endsWith('.json') ? name : `${name}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }));
+    resultElement(flow, 'copy').addEventListener('click', guard(flow, async () => {
+      const payload = results.get(flow).payload;
+      if (!payload) throw new Error('请先生成操作或导出。');
+      if (await copySetupPayload(payload)) { resultElement(flow, 'message').textContent = '已复制完整 JSON。'; return; }
+      resultElement(flow, 'payload-details').open = true; resultElement(flow, 'payload').focus(); resultElement(flow, 'payload').select(); resultElement(flow, 'message').textContent = '浏览器未允许剪贴板访问；完整 JSON 已选中，请按 Ctrl+C（macOS 为 Command+C）。';
+    }));
+  }
+  byId('import-file').addEventListener('change', guard('edit', async () => {
+    clearResult('edit'); byId('differences').replaceChildren();
     const file = byId('import-file').files[0]; if (!file) return;
     const imported = JSON.parse(await file.text());
     if (imported.schema_version !== 'apa-config-export-1.0' || imported.answers?.schema_version !== 'apa-local-config-1.0') throw new Error('请选择 APA 配置导出文件；操作文件不能作为导出导入。');
@@ -299,16 +344,18 @@ export function mountApaSetup(document, snapshot, inspection) {
       else inputs.value.value = value;
       selected.dispatchEvent(new Event('change'));
     }
-    byId('message').textContent = '已填入导出值。请审阅前后差异，勾选要采用的变化，再生成导入补丁；未选变化保留原值。';
+    resultElement('edit', 'message').textContent = '已填入导出值。请审阅前后差异，勾选要采用的变化，再生成导入补丁；未选变化保留原值。';
   }));
-  byId('generate-import').addEventListener('click', guard(() => {
+  byId('differences').addEventListener('change', () => clearResult('edit'));
+  byId('generate-import').addEventListener('click', guard('edit', () => {
+    clearResult('edit');
     const set = Object.fromEntries([...document.querySelectorAll('[name="import-change"]:checked')].map(input => [input.dataset.key, JSON.parse(input.dataset.value)]));
-    preview(createOperation(snapshot, { set }));
+    preview('edit', createOperation(snapshot, { set }));
   }));
   byId('suggestions').addEventListener('click', () => {
     const suggestions = { 'paths.runs': '.tmp/apa-runs', 'paths.parse': '.tmp/apa-parse', 'paths.candidates': '.tmp/apa-candidates', 'reading.presentation_mode': 'reading-editor' };
     for (const { field, selected, inputs } of controls) if (field.key in suggestions) { selected.checked = true; inputs.value.value = suggestions[field.key]; selected.dispatchEvent(new Event('change')); }
-    byId('message').textContent = '已选入通用目录与阅读编辑建议，可继续修改；尚未写入仓库。';
+    clearResult('edit'); resultElement('edit', 'message').textContent = '已选入通用目录与阅读编辑建议，可继续修改；尚未写入仓库。';
   });
   main.hidden = false;
 }

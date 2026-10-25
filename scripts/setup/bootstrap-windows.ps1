@@ -133,10 +133,7 @@ function Assert-Prerequisites {
 
   $driveRoot = [System.IO.Path]::GetPathRoot($repoRoot)
   $freeBytes = ([System.IO.DriveInfo]::new($driveRoot)).AvailableFreeSpace
-  $minimumBytes = [int64]$environment.disk.minimum_free_gib * 1GB
-  if ($freeBytes -lt $minimumBytes) {
-    $failures += "disk_space: at least $($environment.disk.minimum_free_gib) GiB is required on $driveRoot"
-  }
+  $recommendedBytes = [int64]$environment.disk.recommended_free_gib * 1GB
 
   $checks = @(
     @{ id = 'platform'; actual = "$env:OS/$architecture" },
@@ -144,12 +141,16 @@ function Assert-Prerequisites {
     @{ id = 'node'; actual = $nodeVersion },
     @{ id = 'npm'; actual = $npmVersion },
     @{ id = 'python'; actual = $pythonVersion; path = $script:ResolvedBasePython; required = [bool]($InstallMineru -or $CompanionSkills.Count -gt 0) },
-    @{ id = 'disk_space'; actual = $freeBytes; required = [bool]$InstallMineru }
+    @{ id = 'disk_space'; actual = $freeBytes; path = $driveRoot; required = $false; recommended_free_gib = $environment.disk.recommended_free_gib }
   )
   foreach ($check in $checks) {
     if (-not $check.ContainsKey('required')) { $check.required = $true }
     $check.status = if (@($failures | Where-Object { $_.StartsWith($check.id + ':') }).Count) { 'missing' } else { 'satisfied' }
     $check.details = @($failures | Where-Object { $_.StartsWith($check.id + ':') })
+    if ($check.id -eq 'disk_space' -and $freeBytes -lt $recommendedBytes) {
+      $check.status = 'warning'
+      $check.details = @("disk_space: $($environment.disk.recommended_free_gib) GiB is a recommended reserve on $driveRoot, not a minimum requirement or a measured installation size; review runtime, models, download caches and outputs for the selected installation")
+    }
   }
   $blockingFailures = @($checks | Where-Object { $_.required -and $_.status -eq 'missing' } | ForEach-Object { $_.details })
   $dependenciesReady = Test-Path -LiteralPath (Join-Path $repoRoot 'node_modules') -PathType Container

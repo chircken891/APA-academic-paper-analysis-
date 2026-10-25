@@ -1,10 +1,12 @@
 # APA：论文阅读与 Obsidian 知识库
 
-APA 在 Codex 中组织有证据依据的论文阅读，输出可直接使用的中英文 Obsidian 笔记、图表、方法与概念链接。当前实现支持 Windows x64、Node.js 24、npm 11，以及已有的 MinerU 本地解析路线。
+APA 是一套可配置的论文阅读与 Obsidian 知识库工作流，输出可直接使用的中英文笔记、图表、方法与概念链接。通过 apa-setup 选择角色模型和推理强度，或让角色跟随当前会话；模型名称不限定 GPT。当前安装脚本的环境基线是 Windows x64、Node.js 24、npm 11，以及 MinerU 本地解析路线。
 
 新论文由六个科学角色整合研究问题、设计、方法、结果与局限，再由双语 Writer 成稿。可选 Reading Editor 整理层级、重点和目录。完整候选经过一次整体审查，至多一次实质问题局部复核。正式入库需要对精确候选单独批准，只有已提交的 V3 代次进入默认图谱和检索。
 
 ## 安装与首次使用
+
+配置页面和本地命令可独立使用。当前自动角色派发对接 Codex 的协作接口，其他 AI 助手宿主需要相应的调用与回执适配；填写模型名不会安装模型或接入服务商。以下操作中的“助手”须具备相应的本地工具和模型调用能力，配置成功不等于任意宿主均已兼容。
 
 ### 1. 获取工程，确认命令运行位置
 
@@ -15,23 +17,24 @@ git clone https://github.com/chircken891/APA.git
 cd APA
 ```
 
-没有 Git 时，可在本仓库页面选择 **Code → Download ZIP**，解压后进入包含 `package.json` 和 `scripts` 的文件夹；不要在 ZIP 内直接运行。后面的命令都从这个工程根目录执行。用 Codex 打开同一个文件夹，并确认已登录、可以使用模型与本地工具。
+没有 Git 时，可在本仓库页面选择 **Code → Download ZIP**，解压后进入包含 `package.json` 和 `scripts` 的文件夹；不要在 ZIP 内直接运行。后面的命令都从这个工程根目录执行。让所用 AI 助手以同一个文件夹为工作目录，确认模型调用和本地工具可用。
 
-工程自带 `.agents/skills/academic-paper-analysis/` 和 `.agents/skills/apa-setup/`，首次使用不需要安装全局 APA。若会话未发现技能，在工程中新开会话，或直接告诉 Codex：“请读取 `.agents/skills/apa-setup/SKILL.md`，配置当前工程。”
+工程自带 `.agents/skills/academic-paper-analysis/` 和 `.agents/skills/apa-setup/`，首次使用不需要安装全局 APA。若会话未发现技能，在工程中新开会话，或直接告诉助手：“请读取 `.agents/skills/apa-setup/SKILL.md`，配置当前工程。”支持 `$` 技能调用语法的宿主也可使用 `$academic-paper-analysis` 调用阅读技能。
 
 ### 2. 先检测，再安装基础依赖
 
 即使还没有 Node.js，也可以先运行以下只读检测；它不会安装、下载或写入配置：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1 -CheckOnly
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup\bootstrap-windows.ps1 -CheckOnly
 ```
 
-报告是 JSON，可直接交给 Codex 解释。重点看：
+报告是 JSON，可直接交给助手解释。重点看：
 
 | 报告字段 | 怎样判断和处理 |
 | --- | --- |
 | `checks` 中 `required: true` 且 `status: missing` | 本次安装缺少必要前置；先按该项说明解决 |
+| `disk_space` 中 `status: warning` | 低于建议预留空间；结合所选依赖、模型和缓存评估，不作为统一最低空间门槛 |
 | `prerequisites_ready` | `true` 表示安装前置已满足，不代表依赖已经装好 |
 | `targets` | 将操作哪些目录、哪些项目已存在，以及可能的影响 |
 | `next_commands` | 根据所选项目生成的后续命令；审阅后再决定执行，不会自动执行 |
@@ -55,7 +58,11 @@ npm.cmd run setup:check
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1 -CheckOnly -InstallMineru
 ```
 
-这次还要求 Python **3.12.x** 和工程所在磁盘至少 **20 GiB** 可用空间。Python 可从 [官方 Windows 下载页](https://www.python.org/downloads/windows/) 选择对应版本；不是页面上任意一个最新版。按报告处理缺项、重新检测并确认下载与磁盘影响后，再执行：
+本工程安装器采用 Python **3.12.x** 作为验证基线，可从 [Python 官方 Windows 下载页](https://www.python.org/downloads/windows/) 获取。[MinerU 官方安装说明](https://opendatalab.github.io/MinerU/quick_start/) 当前给出的包范围为 `>=3.10,<3.15`，具体引擎另有约束；这不等于其他 Python 版本已通过本工程验证。
+
+**20 GiB 是新安装的建议预留值，不是 APA 或 MinerU 的统一最低占用。** 当前脚本选择 Standard、ONNX 小模型和 llama.cpp，[官方模型说明](https://github.com/opendatalab/MinerU#model-engines-with-extras) 列出的模型下载量约 **2 GB**，还需另计 Python 环境、依赖、下载缓存和解析输出，实际大小随版本和组件变化。低于 20 GiB 时预检给出提示，不因此阻止安装；基础安装或复用已有解析环境也不要求额外预留 20 GiB。
+
+按报告处理必要缺项、审阅空间提示并确认所选安装后，再执行：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1 -InstallMineru
@@ -67,18 +74,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-wind
 
 ### 4. 生成分页向导，填写本库设置
 
-在 Codex 中说“使用 apa-setup 配置当前知识库”，或手动运行：
+向助手说“使用 apa-setup 配置当前知识库”，或手动运行：
 
 ```powershell
 npm.cmd run apa:setup -- inspect
 npm.cmd run apa:setup -- page
 ```
 
-首次 `inspect` 显示 `exists: false`、`ready: false` 是正常的：公开工程没有任何人的配置答案。`page` 返回 HTML 的完整路径；用浏览器打开 `.tmp/apa-setup/index.html`。向导共11页，可顺序切换或直接跳转，切页保留填写内容。先勾选“修改此项”才能填写；没有修改的项目保留原值。
+首次 `inspect` 显示 `exists: false`、`ready: false` 是正常的：公开工程没有任何人的配置答案。`page` 返回 HTML 的完整路径；用浏览器打开 `.tmp/apa-setup/index.html`。首页有“完善配置”“去除配置”“导出配置”三个独立入口，各自拥有分页、预览和输出，可返回首页切换。
+
+首次使用选择“完善配置”：六组设置可顺序切换或直接跳转，切页保留填写内容；导入已有备份也在这个功能内。先勾选“修改此项”才能填写，未勾选项目保留原值。“去除配置”单独生成清除操作；“导出配置”单独保存已生效设置，不包含其他功能中尚未应用的填写。
 
 首次至少完成以下选择：
 
-- **模型**：填写六科学角色的共同选择，以及中文写作、英文写作、阅读编辑、独立核验四项选择。可以使用“跟随主会话”；指定模型时需核对当前 Codex 实际支持的名称与推理强度。单个科学角色的覆盖可不填，暂不使用阅读编辑时也仍需保存其模型选择。
+- **模型**：填写六科学角色的共同选择，以及中文写作、英文写作、阅读编辑、独立核验四项选择。可以使用“跟随主会话”；指定模型时填写当前宿主实际支持的模型标识与推理强度，不要求名称带有 `gpt-` 前缀。单个科学角色的覆盖可不填，暂不使用阅读编辑时也仍需保存其模型选择。
 - **三个输出目录**：分别存执行记录、解析资料和阅读候选，必须在本库内。例如 `Eval/apa-v3/runs`、`Eval/apa-v3/parse`、`Eval/apa-v3/reading`；每次运行自动追加独立编号，不必提前创建每篇论文的子目录。
 - **MinerU 位置**：使用上一步安装结果时，运行目录填 `.runtime/mineru`；Python 和配置文件可留作未配置，由运行目录派生。已有环境则填写其实际位置。
 - **阅读设置**：选择首先写作的语言和是否使用阅读编辑；两种语言都会生成。
@@ -88,7 +97,7 @@ npm.cmd run apa:setup -- page
 
 ### 5. 应用操作，回读确认
 
-下载的是**操作文件**，不是已经生效的配置。将下载文件的实际路径交给 Codex，并说“请应用这份配置并回读检查”；也可以复制完整 JSON 到对话并提出同一请求。不要把“导出配置备份”生成的文件当作操作文件直接应用。
+下载的是**操作文件**，不是已经生效的配置。将下载文件的实际路径交给助手，并说“请应用这份配置并回读检查”；也可以复制完整 JSON 到对话并提出同一请求。不要把“导出配置备份”生成的文件当作操作文件直接应用。
 
 需要手动应用时，以下示例假定浏览器保存到了用户 Downloads，文件名仍是 `apa-config-operation.json`；请按实际下载位置或改名结果替换：
 
@@ -101,11 +110,11 @@ node scripts/apa-setup.mjs inspect
 
 ### 6. 开始第一篇论文，找到输出
 
-把自己的 PDF 放入 `Raw/`，在当前工程的 Codex 会话中提出明确任务，例如：
+把自己的 PDF 放入 `Raw/`，在以当前工程为工作目录的助手会话中提出明确任务，例如：
 
 > 用本库 APA 分析 `Raw/论文.pdf`，交付中英文 Obsidian 笔记。先检查配置和已有解析资料，再提出这次的来源范围、调用预算及截止时间，等我批准后执行；需要补充材料时先说明原因。
 
-把示例文件名换成实际文件名。首次任务由 Codex 按项目技能组织执行，`npm run apa` 是底层工具入口，不是输入一个 PDF 就自动完成阅读的命令。配置通过也不代替这次运行的授权。
+把示例文件名换成实际文件名。首次任务由助手通过已接入的宿主适配器按项目技能组织执行，`npm run apa` 是底层工具入口，不是输入一个 PDF 就自动完成阅读的命令。配置通过也不代替这次运行的授权。
 
 完成后，助手应给出**候选目录下中英文 Markdown 的实际路径**，以及本次完成情况和限制。以配置的候选目录为准；不要在空的 `Wiki/` 中寻找尚未正式发布的笔记。可在 Obsidian 中把此工程作为知识库打开，查看双语笔记、图表和知识链接。若中断，提供运行目录或检查点继续，不要重复重跑已完成内容。要进入正式 Wiki、默认检索和图谱，另行审阅并批准精确发布清单。
 

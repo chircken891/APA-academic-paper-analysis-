@@ -14,6 +14,9 @@ const validMainSession = value => value && typeof value === 'object' && !Array.i
 
 export const APA_CONFIGURED_MODEL_POLICY_VERSION = 'apa-configured-role-model-policy-1.0';
 export const APA_CONFIGURED_ROLES = Object.freeze(['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration', 'english-writer', 'chinese-writer', 'reading-editor', 'independent-verifier']);
+const validConfiguredModelPair = value => !!(value && typeof value === 'object' && !Array.isArray(value)
+  && Object.keys(value).length === 2 && typeof value.model === 'string' && value.model.trim()
+  && ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(value.reasoning_effort));
 
 export function resolveApaRoleModel(role, mainSession, policy) {
   if (policy?.version === APA_CONFIGURED_MODEL_POLICY_VERSION) {
@@ -29,13 +32,10 @@ export function resolveApaRoleModel(role, mainSession, policy) {
 }
 
 export function validateApaRoleModelPolicy(policy) {
-  if (policy?.version === APA_CONFIGURED_MODEL_POLICY_VERSION) return Object.keys(policy).length === 3
-    && validMainSession(policy.main_session) && policy.roles && Object.keys(policy.roles).length === APA_CONFIGURED_ROLES.length
-    && APA_CONFIGURED_ROLES.every(role => {
-      const pair = policy.roles[role];
-      return pair && Object.keys(pair).length === 2 && typeof pair.model === 'string' && !!pair.model.trim()
-        && ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(pair.reasoning_effort);
-    });
+  if (policy?.version === APA_CONFIGURED_MODEL_POLICY_VERSION) return !!(!Array.isArray(policy) && Object.keys(policy).length === 3
+    && validConfiguredModelPair(policy.main_session) && policy.roles && typeof policy.roles === 'object' && !Array.isArray(policy.roles)
+    && Object.keys(policy.roles).length === APA_CONFIGURED_ROLES.length
+    && APA_CONFIGURED_ROLES.every(role => validConfiguredModelPair(policy.roles[role])));
   return !!(policy && typeof policy === 'object' && !Array.isArray(policy) && Object.keys(policy).length === 2
     && policy.version === APA_ROLE_MODEL_POLICY_VERSION && validMainSession(policy.main_session));
 }

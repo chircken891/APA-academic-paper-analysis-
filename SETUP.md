@@ -1,6 +1,6 @@
 # 安装与排障
 
-当前支持 Windows x64 和 Codex。版本基线见 [config/environment.json](config/environment.json)：Node.js 24、npm 11，MinerU 使用 Python 3.12。命令从工程根目录运行。
+当前安装脚本支持 Windows x64。版本基线见 [config/environment.json](config/environment.json)：Node.js 24、npm 11，MinerU 安装器使用 Python 3.12。模型通过 apa-setup 选择，不限定 GPT；现有自动派发对接 Codex，其他宿主需完成相应适配。命令从工程根目录运行。
 
 ## 基础环境
 
@@ -20,7 +20,7 @@ npm run apa:setup -- inspect
 npm run apa:setup -- page
 ```
 
-打开返回的 HTML，填写答案并预览操作。下载操作 JSON 后，将路径交给 Codex 并要求应用；也可复制页面同一 JSON 到对话。手动应用和回读：
+打开返回的 HTML，在首页选择“完善配置”“去除配置”或“导出配置”。三个功能分别操作、预览和输出；只有完善配置包含字段分页及备份导入，不必经过另外两个功能。下载完善或去除的操作 JSON 后，将路径交给助手并要求应用；也可复制该功能的同一 JSON 到对话。导出生成的是已保存答案的备份，用于以后导入。手动应用和回读：
 
 ```powershell
 node scripts/apa-setup.mjs apply --file "$env:USERPROFILE\Downloads\apa-config-operation.json"
@@ -32,6 +32,8 @@ node scripts/apa-setup.mjs inspect
 ## MinerU
 
 已有环境可在页面选择目录、Python 和配置文件。默认派生路径为运行目录下 `venv/Scripts/python.exe` 和 `config.yaml`。显式选择只传递给当前解析进程，不改全局环境变量。
+
+Python 3.12 是本工程安装器的验证基线。[MinerU 官方](https://opendatalab.github.io/MinerU/quick_start/) 当前包支持 `>=3.10,<3.15`，具体引擎可能有更窄的范围。20 GiB 是新安装的建议预留值，低于时报告提示而不阻断安装。当前 Standard + ONNX + llama.cpp 的[官方模型下载参考](https://github.com/opendatalab/MinerU#model-engines-with-extras)约为 2 GB，不包含 Python 环境、依赖、下载缓存或输出文件，不能作为总安装大小。
 
 需要新安装时，先用同选项加 `-CheckOnly` 检测并审阅报告，再明确执行：
 
@@ -52,11 +54,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-wind
 
 先给同一命令加 `-CheckOnly` 获取检测报告；直接技能检测模式允许省略 `-BasePython` 并报告缺项。审阅后才执行安装。选择 Nature 会补齐 Shared；不选择时不会默认安装全部。安装后回配置页选择路径。技能只指导既有 Writer 的表达，不增加独立润色角色或审核轮次。
 
-技能安装器还依赖 Codex 的 `skills/.system/skill-installer/scripts/install-skill-from-github.py`。请用直接技能安装命令的 `-CheckOnly` 检查其 `installer` 项；缺少时先让 Codex 检查该安装辅助工具，或用 `-InstallerPath` 指定已存在的正确文件，不要反复执行安装。首次阅读不需要这些额外技能，可先在配置中逐项选“不使用”。
+此可选技能安装器当前复用 Codex 的 `skills/.system/skill-installer/scripts/install-skill-from-github.py`，这是该辅助工具的依赖，并非模型限制。请用直接技能安装命令的 `-CheckOnly` 检查其 `installer` 项；缺少时让助手检查该工具，或用 `-InstallerPath` 指定已有文件。也可通过所用宿主支持的方式准备技能，再在 apa-setup 填写路径。首次阅读不需要这些额外技能，可先在配置中逐项选“不使用”。
 
 ## 可选全局集成
 
-本库技能可直接使用。需要全局 APA 副本与命令集成时才执行：
+本库技能可直接使用。以下可选安装器针对 Codex 的全局 APA 副本与命令集成，需要时才执行：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1 -InstallGlobalIntegration

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { renderApaSetupPage } from '../../scripts/setup/apa-setup-page.mjs';
-import { configDifferences, copySetupPayload, createOperation, createSetupNavigator, describeChanges, describeValue, fieldValue, flattenConfig, serializePayload, setupPages } from '../../Templates/apa-setup/page.js';
+import { configDifferences, copySetupPayload, createOperation, createSetupNavigator, createSetupResults, describeChanges, describeValue, fieldValue, flattenConfig, serializePayload, setupPages } from '../../Templates/apa-setup/page.js';
 import { loadApaConfig, applyApaConfigOperation } from '../../scripts/lib/apa-config.mjs';
 
 const config = { schema_version: 'apa-local-config-1.0', paths: { runs: '.tmp/old', parse: '.tmp/parse' }, reading: { source_language: 'en' } };
@@ -18,23 +18,42 @@ test('clipboard copy uses the same serialized payload and reports when fallback 
   assert.equal(await copySetupPayload(payload, { writeText: async () => { throw new Error('denied'); } }), false);
 });
 
-test('wizard changes one visible page without replacing form state and previews can select result', () => {
+test('each function has its own navigation and returning home preserves form nodes', () => {
   const control = () => ({ listeners: {}, attributes: {}, addEventListener(name, listener) { this.listeners[name] = listener; }, setAttribute(name, value) { this.attributes[name] = value; }, removeAttribute(name) { delete this.attributes[name]; } });
   const pages = setupPages.map(page => ({ ...page, element: { hidden: false, form: { value: '', checked: false } } }));
   const buttons = setupPages.map(control);
   const status = {}; const previous = control(); const next = control(); const observed = [];
   const navigator = createSetupNavigator({ pages, buttons, status, previous, next, onChange: page => observed.push(page.id) });
   const assertSingle = id => assert.deepEqual(pages.filter(page => !page.element.hidden).map(page => page.id), [id]);
-  assert.equal(pages.length, 11); assertSingle('overview'); assert.equal(previous.disabled, true);
-  next.listeners.click(); assertSingle('science');
+  assertSingle('overview'); assert.equal(previous.disabled, true); assert.equal(next.disabled, true);
+  navigator.enter('edit'); assertSingle('science');
   const scienceForm = pages[1].element.form; scienceForm.value = 'retained-model'; scienceForm.checked = true;
-  buttons[3].listeners.click(); assertSingle('paths');
+  buttons[setupPages.findIndex(page => page.id === 'paths')].listeners.click(); assertSingle('paths');
   navigator.show('science'); assertSingle('science'); assert.equal(pages[1].element.form, scienceForm); assert.equal(scienceForm.value, 'retained-model'); assert.equal(scienceForm.checked, true);
-  navigator.show('result'); assertSingle('result'); assert.equal(next.disabled, true); assert.match(status.textContent, /第 11 \/ 11 页/);
-  assert.equal(buttons.at(-1).attributes['aria-current'], 'step');
-  previous.listeners.click(); assertSingle('export-section'); assert.equal(pages[1].element.form.value, 'retained-model');
-  assert.throws(() => navigator.show('missing'), /未知/); assertSingle('export-section');
-  assert.deepEqual(observed, ['overview', 'science', 'paths', 'science', 'result', 'export-section']);
+  navigator.show('edit-result'); assertSingle('edit-result'); assert.equal(next.disabled, true); assert.match(status.textContent, /完善配置.*第 8 \/ 8 页/);
+  assert.throws(() => navigator.show('remove'), /当前功能/); assertSingle('edit-result');
+  navigator.home(); assertSingle('overview');
+  navigator.enter('remove'); assertSingle('remove'); next.listeners.click(); assertSingle('remove-result'); assert.equal(next.disabled, true);
+  previous.listeners.click(); assertSingle('remove');
+  navigator.home(); navigator.enter('export'); assertSingle('export-section'); next.listeners.click(); assertSingle('export-result'); assert.equal(next.disabled, true);
+  navigator.home(); navigator.enter('edit'); assertSingle('science'); assert.equal(pages[1].element.form.value, 'retained-model');
+  assert.throws(() => navigator.show('missing'), /未知/);
+  assert.ok(observed.includes('remove-result')); assert.ok(observed.includes('export-result'));
+});
+
+test('function results keep payloads and filenames separate and clear failed regeneration', () => {
+  const results = createSetupResults();
+  const patch = createOperation(snapshot, { set: { 'paths.runs': '.tmp/new' } });
+  const removal = createOperation(snapshot, { action: 'remove', all: true });
+  const backup = { schema_version: 'apa-config-export-1.0', answers: config };
+  results.set('edit', patch); results.get('edit').filename = 'my-change.json';
+  assert.equal(results.get('remove').payload, null); assert.equal(results.get('export').payload, null);
+  results.set('remove', removal); results.set('export', backup);
+  assert.equal(results.get('edit').payload, patch); assert.equal(results.get('edit').filename, 'my-change.json');
+  assert.equal(results.get('remove').payload, removal); assert.equal(results.get('remove').filename, 'apa-config-remove.json');
+  assert.equal(results.get('export').payload, backup); assert.equal(results.get('export').filename, 'apa-config-backup.json');
+  results.clear('edit'); assert.equal(results.get('edit').payload, null);
+  assert.equal(results.get('remove').payload, removal); assert.equal(results.get('export').payload, backup);
 });
 
 test('self-contained HTML safely embeds personal strings as data without executing markup', () => {

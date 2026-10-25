@@ -21,7 +21,7 @@
     "model_source": "modelscope"
   },
   "disk": {
-    "minimum_free_gib": 20
+    "recommended_free_gib": 20
   },
   "obsidian": {
     "plugins": [
