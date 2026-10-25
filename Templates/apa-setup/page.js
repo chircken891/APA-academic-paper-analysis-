@@ -5,16 +5,21 @@ const roleNames = { evidence: '证据梳理', methods: '研究设计与方法', 
 const roleHelp = { evidence: '找出主结论对应的证据和关键缺口。', methods: '解释研究怎样设计、方法怎样运行。', results: '解释结果、数值关系和图表。', interpretation: '判断结论强度、替代解释和适用边界。', 'scientific-reading': '把分散材料组织成完整研究讲解。', integration: '合并各角色内容，处理分歧，交给写作角色。', 'english-writer': '生成完整英文阅读笔记。', 'chinese-writer': '生成完整中文阅读笔记。', 'reading-editor': '整理双语笔记的重点、层级和导航；不是再分析一遍论文。仅在“笔记呈现方式”中选择阅读编辑时调用，但这里仍需保存模型选择。', 'independent-verifier': '审查最终候选的关键内容、双语意义和呈现；独立核验指独立任务，不要求换成不同型号的模型。' };
 const skillHelp = { 'nature-writing': '帮助组织科学论证和解释方法步骤。', 'nature-polishing': '帮助改善已有学术表达，保留事实和术语。', 'nature-shared': 'Nature 两项技能共同依赖的指导；启用其中任一项时也要启用它。', humanizer: '减少英文中的模板句、空泛表达与机械结构。', 'humanizer-zh': '减少中文翻译腔、套话与机械表达。', stss: '减少冗余的自我说明和防御性措辞，保留必要科学限定。' };
 export const groups = [
-  { id: 'science', title: '1. 科学内容由哪些模型处理', help: '角色是分工，模型是执行这项分工的 AI。前六个角色分别梳理证据、方法、结果、解释、阅读主线，再整合为共同科学底稿。它们可以共用同一个模型，并不需要准备六种不同模型。先设置共同模型即可。' },
+  { id: 'query', title: '知识库查询', help: '选择库内回答使用的模型、默认语言、详略和讲解对象。当次问题中的明确要求优先；未配置时跟随问题语言，按问题决定详略和讲解程度。查询只用一个回答任务，不要求配置论文阅读依赖。专题候选复用“工作文件目录”中的候选目录，表达规则复用“可选写作指导”；保存已有回答不会因这些默认偏好自动重写正文。' },
+  { id: 'science', title: '1. 科学内容模型', help: '新论文阅读由前六个科学角色梳理证据、方法、结果、解释、阅读主线，再整合为共同科学底稿；它们可以共用同一个模型。' },
   { id: 'overrides', title: '按科学角色单独设置（可选）', help: '只有想让某个科学角色使用不同模型或推理强度时才填写。未设置的角色沿用上方共同模型；已有单独设置若不再需要，请在“去除配置”中移除该项，恢复继承。', collapsed: true },
   { id: 'writers', title: '2. 谁来写作、整理和核验', help: '科学底稿完成后，中文与英文写作角色分别生成笔记，阅读编辑可整理版式，独立核验最后审查候选。每项都需选择模型；可以全部跟随主会话，也可以分别指定。跟随主会话会在新论文运行开始时固定下来，中途改会话设置不会改变该次运行。' },
   { id: 'paths', title: '3. 工作文件和阅读笔记存到哪里', help: '三个目录分别存放执行记录、解析资料和最终阅读候选，不需要自己为每篇论文建目录，系统会追加独立运行编号。填写相对于当前知识库的路径，例如 Eval/apa-v3/runs；也可用位于本库内的绝对路径。改路径只影响新运行，不会搬动已有文件。' },
   { id: 'parser', title: '4. 使用哪套 PDF 解析环境', help: 'MinerU 把 PDF 转为后续阅读所需的文字、表格和图片。这一块选择已安装的环境，不选择语言模型。运行目录是必填项，通常为 .runtime/mineru；若还没有安装，先让助手检测并报告缺项与安装目标，再决定安装。仅填写路径不会安装软件。' },
-  { id: 'reading', title: '5. 双语写作顺序与笔记呈现', help: '两种语言都会生成。先写哪种语言决定写作顺序，第二种语言会参考已接受的第一种内容；这不是更改原论文语言。呈现方式决定是否在写作后增加阅读编辑整理。两种方式都沿用一次整体审查和既有发布规则。' },
+  { id: 'reading', title: '5. 双语写作顺序与笔记呈现', help: '两种语言都会生成。先写哪种语言决定写作顺序，第二种语言会参考已接受的第一种内容；每篇论文的实际原文语言在运行前按文献另行确定，用于原文笔记与译文的目录归属，不受这里的顺序影响。呈现方式决定是否在写作后增加阅读编辑整理。两种方式都沿用一次整体审查和既有发布规则。' },
   { id: 'skills', title: '6. 是否使用额外写作指导', help: '这些是给写作角色参考的表达规则，不是新的模型，也不会另开润色任务。每项都要明确选择“启用”或“不使用”；启用时必须填写该技能的 SKILL.md 文件路径。没有安装且暂时不需要的项目可以选“不使用”。关闭文风指导不会关闭科学事实、证据和双语质量要求。' }
 ];
 export const optionNames = { '': '请选择…', explicit: '指定模型和推理强度', 'follow-main': '跟随当前主会话', true: '启用这项指导', false: '不使用这项指导', en: '先写英文，再写中文', 'zh-CN': '先写中文，再写英文', writer: '直接使用两语写作结果', 'reading-editor': '由阅读编辑整理重点、层级与导航', none: '不启用推理 · none', minimal: '最低 · minimal', low: '低 · low', medium: '中 · medium', high: '高 · high', xhigh: '更高 · xhigh', max: '最大 · max', ultra: '最高 · ultra' };
 export const fields = [
+  { key: 'models.query', label: '知识库查询模型（可选）', type: 'model', group: 'query', help: '未保存或移除此项时，查询跟随当前会话的模型与推理强度。指定组合须由当前宿主确认支持；不支持时停止并说明，不会自动换模型。查询不需要阅读目录、MinerU 或写作指导。' },
+  { key: 'query.answer_language', label: '默认回答语言（可选）', type: 'select', group: 'query', help: '问题中没有明确语言要求时使用。未配置时跟随问题语言；更新已有专题时保留该专题的语言。', options: ['question', 'zh-CN', 'en'], optionNames: { question: '跟随问题语言', 'zh-CN': '中文', en: '英文' }, defaultValue: 'question' },
+  { key: 'query.detail', label: '默认回答详略（可选）', type: 'select', group: 'query', help: '未配置时按问题决定详略。简明回答仍保留会改变结论的证据、研究条件和局限。', options: ['adaptive', 'concise', 'detailed'], optionNames: { adaptive: '按问题决定', concise: '简明回答', detailed: '详细讲解' }, defaultValue: 'adaptive' },
+  { key: 'query.audience', label: '默认讲解对象（可选）', type: 'select', group: 'query', help: '未配置时按问题决定解释程度。面向初学者时补足必要术语与方法背景；面向研究者时保留专业表达。', options: ['adaptive', 'beginner', 'researcher'], optionNames: { adaptive: '按问题决定', beginner: '文献阅读初学者', researcher: '相关领域研究者' }, defaultValue: 'adaptive' },
   { key: 'models.science', label: '六个科学角色的共同模型', type: 'model', group: 'science', help: '没有单独设置的科学角色都使用这一项。已有选择合适时不用修改。' },
   ...scienceRoles.map(role => ({ key: `models.overrides.${role}`, label: `${roleNames[role]}的单独设置`, type: 'model', group: 'overrides', help: roleHelp[role] })),
   ...writingRoles.map(role => ({ key: `models.roles.${role}`, label: `${roleNames[role]}模型`, type: 'model', group: 'writers', help: roleHelp[role] })),
@@ -24,7 +29,7 @@ export const fields = [
   { key: 'parser.runtime_home', label: 'MinerU 安装目录', type: 'text', group: 'parser', help: '填写环境文件夹，不是论文 PDF 或解析结果目录。例：.runtime/mineru。' },
   { key: 'parser.python', label: 'Python 程序路径（可选）', type: 'text', group: 'parser', help: '未配置时使用 MinerU 安装目录下的 venv/Scripts/python.exe。仅在实际位置不同或需明确指定时填写。' },
   { key: 'parser.config_path', label: 'MinerU 配置文件（可选）', type: 'text', group: 'parser', help: '未配置时使用 MinerU 安装目录下的 config.yaml。应填现有文件路径，不是文件内容。' },
-  { key: 'reading.source_language', label: '首先写作的语言', type: 'select', group: 'reading', help: '选择与你希望先形成的阅读稿一致的语言，两种选择都会交付中英文。', options: ['en', 'zh-CN'] },
+  { key: 'reading.source_language', label: '首先写作的语言', type: 'select', group: 'reading', help: '选择你希望先形成的阅读稿语言，两种选择都会交付中英文。原文语言按每篇论文另行确定；这里的选择不改变原文与译文的目录归属。', options: ['en', 'zh-CN'] },
   { key: 'reading.presentation_mode', label: '笔记呈现方式', type: 'select', group: 'reading', help: '直接使用写作结果：省去编辑这一步。阅读编辑：额外整理重点、编号层级和目录，需要计入本次运行预算。', options: ['writer', 'reading-editor'] },
   ...writingSkills.map(key => ({ key: `writing_skills.${key}`, label: key, type: 'skill', group: 'skills', help: skillHelp[key] }))
 ];
@@ -34,11 +39,14 @@ export function fieldLabel(key) {
 }
 
 export function describeValue(value, key) {
+  if (key === 'models.query' && (value === undefined || value?.mode === 'follow-main')) return '跟随当前会话（在本次查询开始时确定）';
+  const field = fields.find(field => field.key === key);
+  if (value === undefined && field?.defaultValue) return `未配置；默认${field.optionNames[field.defaultValue]}`;
   if (value === undefined) return '尚未配置';
   if (value?.mode === 'follow-main') return '跟随主会话（在新运行开始时固定）';
   if (value?.mode === 'explicit') return `${value.model}；推理强度：${optionNames[value.reasoning_effort] || value.reasoning_effort}`;
   if (value && typeof value === 'object' && 'enabled' in value) return value.enabled ? `启用；${value.path || '尚未填写 SKILL.md 路径'}` : '不使用';
-  return key?.startsWith('reading.') ? optionNames[value] || String(value) : String(value);
+  return field?.optionNames?.[value] || (key?.startsWith('reading.') ? optionNames[value] || String(value) : String(value));
 }
 
 export function describeChanges(snapshot, payload) {
@@ -88,6 +96,7 @@ export async function copySetupPayload(payload, clipboard = globalThis.navigator
 
 export const setupPages = [
   { id: 'overview', title: '开始前：用途与当前状态' },
+  { id: 'query', title: '知识库查询', flow: 'edit' },
   { id: 'science', title: '科学内容模型', flow: 'edit' },
   { id: 'writers', title: '写作、编辑与核验模型', flow: 'edit' },
   { id: 'paths', title: '工作文件目录', flow: 'edit' },
@@ -152,7 +161,15 @@ export function fieldValue(field, values) {
   return values.value.trim();
 }
 
-export function mountApaSetup(document, snapshot, inspection) {
+export function readinessMessages(inspection, queryInspection) {
+  const validation = inspection?.validation;
+  return {
+    reading: inspection?.ready ? '阅读配置已齐全，所选依赖文件可找到。' : validation?.complete ? '阅读配置已填全，但部分依赖文件还不可用。请查看检查结果，修正路径或先安排安装检测。' : `阅读还需填写：${[...new Set((validation?.missing || ['模型、目录、解析器、阅读与写作技能选择']).map(fieldLabel))].join('、')}。可分次保存，全部必填项和所选依赖就绪后才能开始新论文。`,
+    query: `${queryInspection?.ready ? '查询配置已就绪；未选查询模型时跟随当前会话。' : '查询配置尚未检查或存在结构错误。'} 此处未检查当前宿主的模型可用性，也未执行模型；实际查询时确认支持的模型与推理强度。`
+  };
+}
+
+export function mountApaSetup(document, snapshot, inspection, queryInspection) {
   const byId = id => document.getElementById(id);
   const make = (tag, text, className) => {
     const element = document.createElement(tag);
@@ -162,11 +179,11 @@ export function mountApaSetup(document, snapshot, inspection) {
   };
   const controls = [];
   const display = describeValue;
-  const addInput = (parent, label, name, value = '', options) => {
+  const addInput = (parent, label, name, value = '', options, labels = optionNames) => {
     const wrapper = make('label', label);
     const input = make(options ? 'select' : 'input');
     input.name = name;
-    if (options) for (const option of options) { const node = make('option', optionNames[option] || option); node.value = option; input.append(node); }
+    if (options) for (const option of options) { const node = make('option', labels[option] || optionNames[option] || option); node.value = option; input.append(node); }
     else input.type = 'text';
     input.value = value;
     wrapper.append(input);
@@ -175,8 +192,9 @@ export function mountApaSetup(document, snapshot, inspection) {
   };
   byId('current').textContent = serializePayload(snapshot.config);
   byId('location').textContent = `${snapshot.exists ? '已读取' : '尚未保存'}：${snapshot.path || 'config/apa.local.json'}`;
-  const validation = inspection?.validation;
-  byId('readiness').textContent = inspection?.ready ? '当前必填答案已齐全，所选依赖文件可找到。若不需要调整，可以保留现有配置。' : validation?.complete ? '配置已填全，但部分依赖文件还不可用。请查看下方检查结果，修正路径或先安排安装检测。' : `还需填写：${[...new Set((validation?.missing || ['模型、目录、解析器、阅读与写作技能选择']).map(fieldLabel))].join('、')}。可分次保存，全部必填项和所选依赖就绪后才能开始新论文。`;
+  const readiness = readinessMessages(inspection, queryInspection);
+  byId('readiness').textContent = readiness.reading;
+  byId('query-readiness').textContent = readiness.query;
   const dependencies = inspection?.dependencies || [];
   const dependencyStatus = { available: '文件或目录可找到', missing: '未找到，请检查路径或安装情况', 'wrong-type': '路径类型不符，请检查填的是文件还是目录', unavailable: '暂时无法读取' };
   byId('dependencies').textContent = dependencies.length ? dependencies.map(item => `${fieldLabel(item.key)}：${dependencyStatus[item.status] || item.status}\n${item.path || ''}`).join('\n\n') : '尚无可检查的依赖路径。填写解析器和已启用技能的位置后，由助手回读检查。';
@@ -208,7 +226,7 @@ export function mountApaSetup(document, snapshot, inspection) {
       inputs.enabled = addInput(row, '是否使用', `${field.key}-enabled`, current?.enabled === undefined ? '' : String(current.enabled), ['', 'true', 'false']);
       inputs.path = addInput(row, 'SKILL.md 文件路径（启用时必填）', `${field.key}-path`, current?.path || '');
       inputs.path.placeholder = '填写实际 SKILL.md 文件，不是它所在的文件夹';
-    } else inputs.value = addInput(row, field.label, field.key, current ?? '', field.options ? ['', ...field.options] : undefined);
+    } else inputs.value = addInput(row, field.label, field.key, current ?? '', field.options ? ['', ...field.options] : undefined, field.optionNames);
     const sync = () => {
       for (const [key, input] of Object.entries(inputs)) input.disabled = !selected.checked || (field.type === 'model' && key !== 'mode' && inputs.mode.value !== 'explicit') || (field.type === 'skill' && key === 'path' && inputs.enabled.value !== 'true');
     };
@@ -225,7 +243,8 @@ export function mountApaSetup(document, snapshot, inspection) {
   pageHost.append(overview);
   for (const group of groups.filter(group => !group.collapsed)) {
     const page = make('section'); page.id = group.id; page.hidden = true;
-    if (group.id === 'science') page.append(byId('start-title').closest('section'), edit.querySelector('.explanation'));
+    if (group.id === 'query') page.append(byId('start-title').closest('section'));
+    if (group.id === 'science') page.append(edit.querySelector('.explanation'));
     page.append(groupElements[group.id]);
     page.append(make('p', '勾选“修改此项”后填写；未勾选项目保留原值。预览会合并各页已选修改，不会直接应用设置。', 'hint'));
     if (group.id === 'science') page.append(groupElements.overrides);

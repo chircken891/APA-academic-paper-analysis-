@@ -7,7 +7,7 @@ import { assertBilingualParity } from './phase22-parity.mjs';
 import { collectLanguageSpans } from './phase22-language.mjs';
 import { assertActiveGeneration, assertActiveIndexContract, assertIndexGeneration, assertCommittedSnapshot, verifyIndexPaperBytes,
   INDEX_READER_PROFILE, INDEX_READING_FIRST_PROFILE, verifyReaderPresentation, readerIndexDocuments,
-  verifyReadingFirstPresentation, readingFirstIndexDocuments, assertV3SupportBytes } from './phase22-active-version.mjs';
+  verifyReadingFirstPresentation, readingFirstIndexDocuments, topicIndexDocuments, assertV3SupportBytes } from './phase22-active-version.mjs';
 import { getReaderPresentationContent } from './phase221-presentation.mjs';
 
 const fail = (code, details = {}) => { throw Object.assign(new Error(code), { code, details }); };
@@ -178,6 +178,10 @@ function buildIndex(validatedInputs, generation, readers = new Map(), previous) 
       }
     }
   }
+  for (const topic of generation.topics ?? []) {
+    documents.push(...topicIndexDocuments({ topic, bytes: fileBytes(validatedInputs, topic.path), generation }));
+    coveredPaths.add(topic.path);
+  }
   for (const object of generation.objects.filter(object => !coveredPaths.has(object.path))) {
     const matches = (validatedInputs.files ?? []).filter(file => file.path === object.path);
     if (matches.length !== 1 || !(matches[0].bytes instanceof Uint8Array) || sha(matches[0].bytes) !== object.sha256) fail('P22_CANDIDATE_OBJECT_MISSING', { path: object.path });
@@ -208,11 +212,17 @@ export function queryBilingualIndex({ index, activeSnapshot, query } = {}) {
   const groups = new Map(), papers = new Map(activeSnapshot.generation.papers.map(paper => [paper.paper_id, paper]));
   for (const match of engine(index).search(query)) {
     const doc = docs.get(match.id), paper = papers.get(doc.paper_id);
-    let group = groups.get(doc.paper_id);
+    const topic = doc.entity_type === 'topic' ? activeSnapshot.generation.topics.find(row => row.topic_id === doc.topic_id) : null;
+    const key = topic ? 'topic:' + doc.topic_id : 'paper:' + doc.paper_id;
+    let group = groups.get(key);
     if (!group) {
-      group = { paper_id: doc.paper_id, run_id: doc.run_id, analysis_revision: doc.analysis_revision,
-        path: paper.paths['zh-CN'], score: match.score, hits: [] };
-      groups.set(doc.paper_id, group);
+      group = topic ? { entity_type: 'topic', topic_id: topic.topic_id, revision: topic.revision, language: topic.language,
+        claim_verification: 'not_performed',
+        path: topic.path, dependencies: structuredClone(topic.dependencies),
+        underlying_papers: [...new Set(topic.dependencies.map(row => row.paper_id))], score: match.score, hits: [] }
+        : { paper_id: doc.paper_id, run_id: doc.run_id, analysis_revision: doc.analysis_revision,
+          path: paper.paths['zh-CN'], score: match.score, hits: [] };
+      groups.set(key, group);
     }
     group.score = Math.max(group.score, match.score);
     group.hits.push({ language: doc.language, section_id: doc.section_id, span_id: doc.span_id,
@@ -223,7 +233,7 @@ export function queryBilingualIndex({ index, activeSnapshot, query } = {}) {
   for (const group of groups.values()) group.hits.sort((a, b) =>
     b.score - a.score || Number(a.span_id.startsWith('section:')) - Number(b.span_id.startsWith('section:')) || a.span_id.localeCompare(b.span_id));
   return { generation_id: index.generation_id, evidence_mode: index.evidence_mode,
-    scientific_approval: index.evidence_mode === 'actual',
-    results: [...groups.values()].sort((a, b) => b.score - a.score || a.paper_id.localeCompare(b.paper_id)) };
+    scientific_approval: index.evidence_mode === 'actual' && ![...groups.values()].some(group => group.entity_type === 'topic'),
+    results: [...groups.values()].sort((a, b) => b.score - a.score || (a.paper_id ?? a.topic_id).localeCompare(b.paper_id ?? b.topic_id)) };
 }
 

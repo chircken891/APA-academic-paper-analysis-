@@ -14,38 +14,134 @@
   ],
   "$defs": {
     "readingFirstPaper": {
-      "type": "object", "additionalProperties": false,
-      "required": ["paper_id", "run_id", "analysis_revision", "core_hash", "pipeline_version", "profile", "dependencies", "paths", "reader_presentation"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "paper_id",
+        "run_id",
+        "analysis_revision",
+        "core_hash",
+        "pipeline_version",
+        "profile",
+        "dependencies",
+        "paths",
+        "reader_presentation"
+      ],
       "properties": {
-        "paper_id": { "type": "string", "minLength": 1, "pattern": "\\S" },
-        "run_id": { "type": "string", "minLength": 1, "pattern": "\\S" },
-        "analysis_revision": { "type": "string", "minLength": 1, "pattern": "\\S" },
-        "core_hash": { "$ref": "#/$defs/file/properties/sha256" },
-        "pipeline_version": { "const": "3.0" }, "profile": { "const": "reading-first-obsidian-1.0" },
-        "dependencies": { "type": "object" }, "paths": { "$ref": "#/$defs/v3Paper/properties/paths" },
-        "reader_presentation": { "$ref": "#/$defs/readerPaper/properties/reader_presentation" }
+        "paper_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "analysis_revision": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "core_hash": {
+          "$ref": "#/$defs/file/properties/sha256"
+        },
+        "pipeline_version": {
+          "const": "3.0"
+        },
+        "profile": {
+          "const": "reading-first-obsidian-1.0"
+        },
+        "dependencies": {
+          "type": "object"
+        },
+        "paths": {
+          "$ref": "#/$defs/v3Paper/properties/paths"
+        },
+        "reader_presentation": {
+          "$ref": "#/$defs/readerPaper/properties/reader_presentation"
+        }
       }
     },
     "readerPaper": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["paper_id", "run_id", "analysis_revision", "core_hash", "pipeline_version", "profile", "dependencies", "paths", "reader_presentation"],
+      "required": [
+        "paper_id",
+        "run_id",
+        "analysis_revision",
+        "core_hash",
+        "pipeline_version",
+        "profile",
+        "dependencies",
+        "paths",
+        "reader_presentation"
+      ],
       "properties": {
-        "paper_id": { "type": "string", "pattern": "^pap_[a-f0-9]{32}$" },
-        "run_id": { "type": "string", "pattern": "^run_[a-f0-9]{32}$" },
-        "analysis_revision": { "type": "string", "pattern": "^rev_[a-f0-9]{32}$" },
-        "core_hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
-        "pipeline_version": { "const": "3.0" },
-        "profile": { "const": "phase22-reader-note-1.0" },
-        "dependencies": { "type": "object" },
-        "paths": { "$ref": "#/$defs/v3Paper/properties/paths" },
+        "paper_id": {
+          "type": "string",
+          "pattern": "^pap_[a-f0-9]{32}$"
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^run_[a-f0-9]{32}$"
+        },
+        "analysis_revision": {
+          "type": "string",
+          "pattern": "^rev_[a-f0-9]{32}$"
+        },
+        "core_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "pipeline_version": {
+          "const": "3.0"
+        },
+        "profile": {
+          "const": "phase22-reader-note-1.0"
+        },
+        "dependencies": {
+          "type": "object"
+        },
+        "paths": {
+          "$ref": "#/$defs/v3Paper/properties/paths"
+        },
         "reader_presentation": {
-          "type": "object", "additionalProperties": false, "required": ["path", "sha256"],
-          "properties": { "path": { "type": "string", "minLength": 1 }, "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" } }
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
         },
         "terminology": {
-          "type": "object", "additionalProperties": false, "required": ["version", "terms"],
-          "properties": { "version": { "type": "string" }, "terms": { "type": "array", "items": { "type": "object" } } }
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "terms"
+          ],
+          "properties": {
+            "version": {
+              "type": "string"
+            },
+            "terms": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          }
         }
       }
     },
@@ -136,8 +232,12 @@
     },
     "paper": {
       "oneOf": [
-        { "$ref": "#/$defs/readingFirstPaper" },
-        { "$ref": "#/$defs/readerPaper" },
+        {
+          "$ref": "#/$defs/readingFirstPaper"
+        },
+        {
+          "$ref": "#/$defs/readerPaper"
+        },
         {
           "$ref": "#/$defs/v3Paper"
         }
@@ -165,7 +265,8 @@
             "reader-presentation",
             "reading-review",
             "reader-record",
-            "reader-style"
+            "reader-style",
+            "topic"
           ]
         },
         "sha256": {
@@ -256,6 +357,18 @@
               }
             }
           }
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/topic"
+          }
+        },
+        "source_events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sourceEvent"
+          }
         }
       }
     },
@@ -294,112 +407,14 @@
         "documents": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "allOf": [{
-              "if": { "required": ["profile"], "properties": { "profile": {} } },
-              "then": { "required": ["anchor_type"], "properties": { "anchor_type": {}, "anchor": { "type": "string", "minLength": 1, "pattern": "^[^\\r\\n#]+$" } } },
-              "else": { "not": { "required": ["anchor_type"], "properties": { "anchor_type": {} } }, "properties": { "anchor": { "anyOf": [{ "type": "string", "pattern": "^[A-Za-z0-9-]+$" }, { "type": "null" }] } } }
-            }, {
-              "if": { "required": ["entity_id"], "properties": { "entity_id": {} } },
-              "then": { "required": ["profile"], "properties": { "profile": { "const": "reading-first-obsidian-1.0" }, "section_id": { "const": "knowledge" } } }
-            }],
-            "required": [
-              "id",
-              "paper_id",
-              "run_id",
-              "analysis_revision",
-              "core_hash",
-              "pipeline_version",
-              "language",
-              "path",
-              "section_id",
-              "span_id",
-              "unit_ids",
-              "anchor",
-              "content",
-              "aliases",
-              "title"
-            ],
-            "properties": {
-              "profile": { "enum": ["phase22-reader-note-1.0", "reading-first-obsidian-1.0"] },
-              "entity_id": { "type": "string", "minLength": 1, "pattern": "\\S" },
-              "anchor_type": { "enum": ["block", "heading"] },
-              "id": {
-                "type": "string",
-                "pattern": "^sha256:[a-f0-9]{64}$"
+            "oneOf": [
+              {
+                "$ref": "#/$defs/paperDocument"
               },
-              "paper_id": {
-                "type": "string",
-                "minLength": 1,
-                "pattern": "\\S"
-              },
-              "run_id": {
-                "type": "string",
-                "minLength": 1,
-                "pattern": "\\S"
-              },
-              "analysis_revision": {
-                "type": "string",
-                "minLength": 1,
-                "pattern": "\\S"
-              },
-              "core_hash": {
-                "type": "string",
-                "pattern": "^sha256:[a-f0-9]{64}$"
-              },
-              "pipeline_version": { "const": "3.0" },
-              "language": {
-                "enum": [
-                  "en",
-                  "zh-CN"
-                ]
-              },
-              "path": {
-                "type": "string",
-                "minLength": 1,
-                "pattern": "\\S"
-              },
-              "section_id": {
-                "type": "string",
-                "minLength": 1,
-                "pattern": "\\S"
-              },
-              "span_id": {
-                "type": "string",
-                "minLength": 1,
-                "pattern": "\\S"
-              },
-              "unit_ids": {
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "minLength": 1,
-                  "pattern": "\\S"
-                },
-                "uniqueItems": true
-              },
-              "anchor": {
-                "anyOf": [
-                  {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "content": {
-                "type": "string"
-              },
-              "aliases": {
-                "type": "string"
-              },
-              "title": {
-                "type": "string"
+              {
+                "$ref": "#/$defs/topicDocument"
               }
-            }
+            ]
           }
         }
       }
@@ -501,6 +516,726 @@
           }
         }
       }
+    },
+    "topic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "topic_id",
+        "revision",
+        "previous_revision",
+        "question",
+        "language",
+        "title",
+        "query_terms",
+        "managed_hash",
+        "dependencies",
+        "path"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "phase24-topic-1.0"
+        },
+        "topic_id": {
+          "type": "string",
+          "pattern": "^topic-[a-f0-9]{24}$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "previous_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "language": {
+          "enum": [
+            "en",
+            "zh-CN"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "query_terms": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "uniqueItems": true
+        },
+        "managed_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "dependencies": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "paper_id",
+              "analysis_revision",
+              "adopted_generation_id",
+              "source_id",
+              "source_sha256",
+              "source_version",
+              "locators",
+              "adopted_for"
+            ],
+            "properties": {
+              "paper_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "analysis_revision": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "adopted_generation_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "source_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "source_sha256": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "source_version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "locators": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "id",
+                    "page",
+                    "label"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "figure",
+                        "table",
+                        "formula"
+                      ]
+                    },
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    },
+                    "page": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "label": {
+                      "type": "object"
+                    }
+                  }
+                }
+              },
+              "adopted_for": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "uniqueItems": true
+              }
+            }
+          }
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^Wiki/topics/topic-[a-f0-9]{24}\\.md$"
+        },
+        "resolved_event_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$"
+          }
+        },
+        "event_resolutions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "event_id",
+              "disposition",
+              "base_revision",
+              "input_fingerprint",
+              "statement_locator",
+              "replacement_dependency"
+            ],
+            "properties": {
+              "event_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$"
+              },
+              "disposition": {
+                "enum": [
+                  "corrected",
+                  "removed",
+                  "replaced"
+                ]
+              },
+              "base_revision": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "input_fingerprint": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "statement_locator": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "replacement_dependency": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "paper_id",
+                      "analysis_revision",
+                      "adopted_generation_id",
+                      "source_id",
+                      "source_sha256",
+                      "source_version",
+                      "locators",
+                      "adopted_for"
+                    ],
+                    "properties": {
+                      "paper_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "analysis_revision": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "adopted_generation_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "source_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "source_sha256": {
+                        "type": "string",
+                        "pattern": "^sha256:[a-f0-9]{64}$"
+                      },
+                      "source_version": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "locators": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "kind",
+                            "id",
+                            "page",
+                            "label"
+                          ],
+                          "properties": {
+                            "kind": {
+                              "enum": [
+                                "figure",
+                                "table",
+                                "formula"
+                              ]
+                            },
+                            "id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "page": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "label": {
+                              "type": "object"
+                            }
+                          }
+                        }
+                      },
+                      "adopted_for": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "uniqueItems": true
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "paperDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "profile"
+            ],
+            "properties": {
+              "profile": {}
+            }
+          },
+          "then": {
+            "required": [
+              "anchor_type"
+            ],
+            "properties": {
+              "anchor_type": {},
+              "anchor": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^\\r\\n#]+$"
+              }
+            }
+          },
+          "else": {
+            "not": {
+              "required": [
+                "anchor_type"
+              ],
+              "properties": {
+                "anchor_type": {}
+              }
+            },
+            "properties": {
+              "anchor": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9-]+$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "entity_id"
+            ],
+            "properties": {
+              "entity_id": {}
+            }
+          },
+          "then": {
+            "required": [
+              "profile"
+            ],
+            "properties": {
+              "profile": {
+                "const": "reading-first-obsidian-1.0"
+              },
+              "section_id": {
+                "const": "knowledge"
+              }
+            }
+          }
+        }
+      ],
+      "required": [
+        "id",
+        "paper_id",
+        "run_id",
+        "analysis_revision",
+        "core_hash",
+        "pipeline_version",
+        "language",
+        "path",
+        "section_id",
+        "span_id",
+        "unit_ids",
+        "anchor",
+        "content",
+        "aliases",
+        "title"
+      ],
+      "properties": {
+        "profile": {
+          "enum": [
+            "phase22-reader-note-1.0",
+            "reading-first-obsidian-1.0"
+          ]
+        },
+        "entity_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "anchor_type": {
+          "enum": [
+            "block",
+            "heading"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "paper_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "analysis_revision": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "core_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "pipeline_version": {
+          "const": "3.0"
+        },
+        "language": {
+          "enum": [
+            "en",
+            "zh-CN"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "section_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "span_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "unit_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "uniqueItems": true
+        },
+        "anchor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "content": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      }
+    },
+    "topicDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "entity_type",
+        "topic_id",
+        "revision",
+        "language",
+        "path",
+        "managed_hash",
+        "section_id",
+        "span_id",
+        "anchor",
+        "unit_ids",
+        "content",
+        "aliases",
+        "title"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "entity_type": {
+          "const": "topic"
+        },
+        "topic_id": {
+          "type": "string",
+          "pattern": "^topic-[a-f0-9]{24}$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "language": {
+          "enum": [
+            "en",
+            "zh-CN"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^Wiki/topics/topic-[a-f0-9]{24}\\.md$"
+        },
+        "managed_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "section_id": {
+          "enum": [
+            "topic",
+            "sources"
+          ]
+        },
+        "span_id": {
+          "enum": [
+            "section:topic",
+            "section:sources"
+          ]
+        },
+        "anchor": {
+          "type": "null"
+        },
+        "unit_ids": {
+          "type": "array",
+          "maxItems": 0,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "content": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      }
+    },
+    "sourceEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "kind",
+        "target",
+        "target_generation_id",
+        "reason",
+        "recorded_from",
+        "replacement"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$"
+        },
+        "kind": {
+          "enum": [
+            "correction",
+            "replacement",
+            "withdrawal"
+          ]
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "paper_id",
+            "analysis_revision",
+            "source_id",
+            "source_sha256"
+          ],
+          "properties": {
+            "paper_id": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "analysis_revision": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "source_id": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "source_sha256": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "target_generation_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "recorded_from": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "replacement": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "paper_id",
+                "analysis_revision",
+                "source_id",
+                "source_sha256",
+                "generation_id"
+              ],
+              "properties": {
+                "paper_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "analysis_revision": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "source_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "source_sha256": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "generation_id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "replacement"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "replacement": {
+                "type": "object"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "replacement": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

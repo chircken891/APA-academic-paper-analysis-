@@ -13,7 +13,7 @@ const comparisonRoot = 'Eval/apa-v3/phase21/office-original-comparison-r1';
 const implementationRoot = 'Eval/apa-v3/phase21/office-formal-ingress-scope-r1';
 const readerPath = path.join(root, 'scripts/v3/office-source-evidence-reader.py');
 const modulePath = fileURLToPath(import.meta.url);
-const python = 'D:/文献知识库/.runtime/mineru/venv/Scripts/python.exe';
+const python = path.join(root, '.runtime', 'mineru', 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
 const sha = data => 'sha256:' + createHash('sha256').update(data).digest('hex');
 const same = (a, b) => canonicalizeV3Json(a) === canonicalizeV3Json(b);
 const schemaId = 'phase21/office-source-evidence-r1';

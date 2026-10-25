@@ -1,0 +1,6 @@
+interface:
+  display_name: "APA Query"
+  short_description: "Search cited evidence and maintain APA vault topics"
+  default_prompt: "Use $apa-query to answer my question from this knowledge vault and cite the sources."
+policy:
+  allow_implicit_invocation: true

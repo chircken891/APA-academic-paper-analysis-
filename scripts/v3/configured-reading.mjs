@@ -36,6 +36,7 @@ export function prepareConfiguredReading({ repoRoot, mainSession, supportedModel
   const resolvedConfig = resolveApaConfig({ config: loaded.config, repoRoot, mainSession, supportedModelPairs });
   if (!loaded.ready) throw new Error('APA_CONFIG_DEPENDENCIES_UNAVAILABLE: ' + loaded.dependencies.filter(item => item.status !== 'available').map(item => item.key + '=' + item.status).join(', '));
   if (!/^[a-zA-Z0-9_-]+$/.test(options.runId ?? '')) throw new Error('APA_CONFIGURED_RUN_ID_INVALID');
+  if (!['en', 'zh-CN'].includes(options.sourceLanguage)) throw new Error('APA_CONFIGURED_SOURCE_LANGUAGE_REQUIRED');
   const paths = { runRoot: join(resolvedConfig.paths.runs, options.runId), parseRoot: join(resolvedConfig.paths.parse, options.runId), candidateRoot: join(resolvedConfig.paths.candidates, options.runId) };
   const parserOptions = { runtimeHome: resolvedConfig.parser.runtime_home,
     python: resolvedConfig.parser.python ?? join(resolvedConfig.parser.runtime_home, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
@@ -44,7 +45,7 @@ export function prepareConfiguredReading({ repoRoot, mainSession, supportedModel
     role_model_policy: createConfiguredApaRoleModelPolicy(mainSession, resolvedConfig.roles),
     ...buildConfiguredReadingInstructions(resolvedConfig.writingSkills) };
   const runControl = createReadingFirstRunControl({ ...options, mainSession, configuredSetup, writingMode: 'source-first',
-    sourceLanguage: resolvedConfig.reading.source_language, presentationMode: resolvedConfig.reading.presentation_mode });
+    firstWritingLanguage: resolvedConfig.reading.source_language, presentationMode: resolvedConfig.reading.presentation_mode });
   return freeze({ resolvedConfig, scientificInput: structuredClone(options.scientificInput), configurationFingerprint: loaded.fingerprint, paths, parserOptions, runControl });
 }
 
@@ -105,7 +106,8 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
   mkdirSync(dirname(prepared.paths.candidateRoot), { recursive: true });
   const exported = await exportReadingFirstPreview({ outputRoot: prepared.paths.candidateRoot, identity: handoff.identity,
     views: ['en', 'zh-CN'].map(language => checkpoint.state.views[language].value), presentation: handoff.presentation, resources,
-    ...(checkpoint.state.readingEditor ? { readingEditor: checkpoint.state.readingEditor.value } : {}), ...renderOptions });
+    ...(checkpoint.state.readingEditor ? { readingEditor: checkpoint.state.readingEditor.value } : {}), ...renderOptions,
+    targetRegistry: candidate.targetRegistry });
   if (candidate.notes.some(note => exported.notes.find(other => other.path === note.path)?.content !== note.content)) throw new Error('APA_CONFIGURED_CANDIDATE_RENDER_MISMATCH');
   return { candidate, exported };
 }

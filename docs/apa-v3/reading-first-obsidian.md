@@ -12,7 +12,7 @@
 
 ### 阅读呈现编辑
 
-新功能性交付建议在新控制绑定中显式设 `presentationMode:'reading-editor'`。顺序为科学整合 → 源语言 Writer → 对应语言 Writer → 一次双语 Reading Editor → 渲染 → 原有一次整体审查。Writer 保留完整讲解和资源落点；Reading Editor 为这些真实 accepted views 添加呈现信息，不改写科学段落，不增加科学核对或润色调用。旧绑定和默认 `presentationMode:'writer'` 保持兼容，不自动升级。
+新功能性交付建议在新控制绑定中显式设 `presentationMode:'reading-editor'`。顺序为科学整合 → 首先写作语言的 Writer → 另一语言 Writer → 一次双语 Reading Editor → 渲染 → 原有一次整体审查。Writer 保留完整讲解和资源落点；Reading Editor 为这些真实 accepted views 添加呈现信息，不改写科学段落，不增加科学核对或润色调用。旧绑定和默认 `presentationMode:'writer'` 保持兼容，不自动升级。
 
 两语 Writer 接收后调用 `createReadingFirstPresentationRequest({controller})`。请求包含 `views`、原 `view_receipts`、登记的 `presentation`、`output_schema:'reading-editor-1.0'`；局部修订附 `issues`。按既有真实 host/native/owned 流程接收编辑输出后再渲染。编辑角色沿用冻结的主会话模型及推理强度。新模式控制器允许总上限4–7次，并不自动授予这些调用；具体授权可更小，复用已接收两语稿的窗口无需重跑 Writer。恢复不重置额度和期限。
 
@@ -51,7 +51,7 @@ Writer 输出：
 
 正文可使用 `[方法页](apa-source:paper#page=2)`、`[图1](apa-visual:fig1)`、`[年龄标化](apa-knowledge:age-standardization)`。渲染器根据目录转换为库内相对链接；源页为物理页，印刷页标签使用已确认映射。Writer 选择引用位置和可读标签，不编造路径或页码。文献信息、资源导航和独立个人笔记由渲染器生成。
 
-新控制绑定使用 `writingMode:'source-first'` 和 `sourceLanguage`。先运行源语言 Writer，再将其已接收 `source_view` 交另一位 Writer；第06篇先英文后中文。第二位 Writer 保持结构、科学含义及资源关系，以自然目标语言表达；事实仍以科学材料为准。旧绑定不切换写作顺序，不从旧文字稿映射制造新 Writer 回执。
+新配置阅读使用 `writingMode:'source-first'`，但论文原文语言与写作顺序分别冻结：调用者按实际主论文显式传入 `sourceLanguage`，控制绑定的 `source_language` 用于原文笔记和译文目录归属；本库 `reading.source_language` 仍是首先写作的偏好，由配置入口传为 `firstWritingLanguage` 并冻结为 `first_writing_language`。先运行首先写作语言的 Writer，再将其已接收 `source_view` 交另一位 Writer。例如英文论文也可先写中文，英文笔记仍在 sources、中文仍在 translations。第06篇历史绑定先英文后中文。第二位 Writer 保持结构、科学含义及资源关系，以自然目标语言表达；事实仍以科学材料为准。旧绑定缺少 `first_writing_language` 时继续沿原 `source_language` 决定顺序，不切换旧顺序，也不从旧文字稿映射制造新 Writer 回执。
 
 `scientificInput.presentation_assets` 可登记导出的来源资源 `{path,sha256,byte_length}`，随输入指纹冻结并在运行/恢复时检查。它不授权新增论文来源；原页派生与外部方法背景沿用既有来源许可。
 
@@ -87,7 +87,7 @@ Methods 提供通用知识，Results 识别图型、子图和裁切区域，Inte
 
 `knowledgeRegistry` 每项含已有 `path` 以及可用的 id/canonical_key/title/aliases/language；兼容旧节点时 Controller 将 measure_id 等已有身份映射到 canonical_key。渲染先按 id/canonical_key 匹配已有稳定身份，确认后沿用原路径，只形成增补建议；稳定身份不与名称字段交叉匹配。只有名称/别名命中而身份未确认时返回 `RF_OBSIDIAN_KNOWLEDGE_IDENTITY_UNRESOLVED`，交回 Methods/Integrator 消歧，不自动合并或另建卡片。多个路径命中稳定身份，或名称候选本身涉及多个路径时，保留 `RF_OBSIDIAN_KNOWLEDGE_AMBIGUOUS`。已确认稳定身份优先于无关名称命中；名称检索不构成语义同义识别。自包含样例需提供该目标的候选快照或节选；不能把其中的旧链接留成悬空引用，也不改动正式条目。
 
-论文保持 `Wiki/sources/`，方法与概念保持 `Wiki/methods/`、`Wiki/concepts/`。新 profile 为 `reading-first-obsidian-1.0`，管理 source/reading/resources 三个区域以保持完整段落顺序；沿用原 managed merge，保留其他正文、属性和个人笔记。旧12区段 profile 不自动转换。
+新未绑定阅读冻结 `note_layout:'source-language-1.0'`，按实际 `sourceLanguage` 将原文同语言稿放 `Wiki/sources/`，另一语言稿放 `Wiki/translations/`。例如英文原文的英文稿留在 sources、中文稿进入 translations；中文原文则相反。文件名、论文身份、互链与知识反链沿用。缺少布局字段的旧绑定、已有目标 registry 保留原路径，不自动重绑。方法与概念保持 `Wiki/methods/`、`Wiki/concepts/`。profile 为 `reading-first-obsidian-1.0`，管理 source/reading/resources 三个区域以保持完整段落顺序；沿用原 managed merge，保留其他正文、属性和个人笔记。旧12区段 profile 不自动转换。
 
 ## 第06篇及验收
 

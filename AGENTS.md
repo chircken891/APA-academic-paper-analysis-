@@ -2,6 +2,7 @@
 
 - Work from this repository root. Keep task scratch files below `.tmp/<task>/`.
 - Read root `README.md`, `SETUP.md`, and `docs/CONFIGURATION.md` before first use. Use the repository `apa-setup` skill to inspect or change personal configuration.
+- Use `academic-paper-analysis` for paper reading and continuation. Use the repository `apa-query` skill for committed-library questions, source lookup, topic saving and selected updates; load its specific procedures only for that work.
 - Personal configuration belongs only in ignored `config/apa.local.json`. A public export deliberately contains no personal answers. Missing required settings block a new configured reading; existing bound runs keep their frozen configuration.
 - Before any installation, produce a read-only report of available and missing prerequisites, exact selected targets and expected effects. Install only after the user explicitly authorizes that selection.
 - Preserve source files, human notes, evidence and unrelated changes. Reading candidates do not authorize publication. Dependency installation, external writes, publication and Git operations require explicit user authorization.

@@ -9,7 +9,9 @@ export const PHASE22_MACHINE_FIELDS = Object.freeze([
 ]);
 export const PHASE221_MACHINE_FIELDS = Object.freeze(['type', 'pipeline_version', 'rendering_profile', 'language', 'graph_scope']);
 export const READING_FIRST_MACHINE_FIELDS = Object.freeze([...PHASE221_MACHINE_FIELDS, 'paper_id', 'title', 'status', 'alternate_language_path']);
+export const TOPIC_MACHINE_FIELDS = Object.freeze(['type', 'pipeline_version', 'rendering_profile', 'topic_id', 'revision', 'language', 'title', 'aliases', 'graph_scope']);
 export function machineFieldsForProfile(profile) {
+  if (profile === 'phase24-topic-1.0') return TOPIC_MACHINE_FIELDS;
   if (profile === 'reading-first-obsidian-1.0') return READING_FIRST_MACHINE_FIELDS;
   if (profile === 'phase22-reader-note-1.0') return PHASE221_MACHINE_FIELDS;
   if (profile === undefined || profile === 'phase22-managed-note-1.0') return PHASE22_MACHINE_FIELDS;
@@ -32,7 +34,7 @@ function parse(bytes) {
   const doc = YAML.parseDocument(match[2], { keepSourceTokens: true, uniqueKeys: true });
   if (doc.errors.length || !YAML.isMap(doc.contents)) fail('P22_YAML_INVALID', Buffer.byteLength(text.slice(0, yamlStart)));
   const profile = doc.get('rendering_profile');
-  const activeRegionIds = profile === 'reading-first-obsidian-1.0' ? ['source', 'reading', 'resources'] : regionIds;
+  const activeRegionIds = profile === 'phase24-topic-1.0' ? ['topic', 'sources'] : profile === 'reading-first-obsidian-1.0' ? ['source', 'reading', 'resources'] : regionIds;
   const machineFields = machineFieldsForProfile(profile);
   const fields = new Set(machineFields);
   const owners = new Map(); const anchors = new Map(); const aliases = [];
@@ -77,12 +79,12 @@ function parse(bytes) {
     cursor = range.to;
   }
   if (cursor < bytes.length) humanRanges.push({ from: cursor, to: bytes.length, bytes: bytes.subarray(cursor) });
-  if (profile === 'phase22-reader-note-1.0') {
-    if (machineFields.some(key => !Object.hasOwn(frontmatter, key))) fail('P221_READER_FIELDS_REQUIRED');
+  if (profile === 'phase24-topic-1.0' || profile === 'phase22-reader-note-1.0') {
+    if (machineFields.some(key => !Object.hasOwn(frontmatter, key))) fail(profile === 'phase24-topic-1.0' ? 'P24_TOPIC_FIELDS_REQUIRED' : 'P221_READER_FIELDS_REQUIRED');
     const personalAt = byteOffset(bodyStart + notes[0].index);
     for (const range of humanRanges) {
       const from = Math.max(range.from, byteOffset(bodyStart)), to = Math.min(range.to, personalAt);
-      if (to > from && bytes.subarray(from, to).toString('utf8').replace(/<!--[\s\S]*?-->/g, '').trim()) fail('P221_HUMAN_STRUCTURE', from);
+      if (to > from && bytes.subarray(from, to).toString('utf8').replace(/<!--[\s\S]*?-->/g, '').trim()) fail(profile === 'phase24-topic-1.0' ? 'P24_TOPIC_HUMAN_STRUCTURE' : 'P221_HUMAN_STRUCTURE', from);
     }
   }
   const machine = Object.fromEntries(machineFields.filter(key => Object.hasOwn(frontmatter, key)).map(key => [key, frontmatter[key]]));
@@ -101,6 +103,7 @@ export function mergeManagedNote({ existingBytes, rendered, expectedManagedHash 
     return { bytes: candidateBytes, managedHash: candidate.managedHash, humanRanges: candidate.humanRanges };
   }
   const bytes = asBytes(existingBytes); const existing = parse(bytes);
+  if (candidate.profile !== existing.profile && (candidate.profile === 'phase24-topic-1.0' || existing.profile === 'phase24-topic-1.0')) fail('P24_PROFILE_MISMATCH');
   if (candidate.profile !== existing.profile && (candidate.profile === 'reading-first-obsidian-1.0' || existing.profile === 'reading-first-obsidian-1.0')) fail('RF_OBSIDIAN_PROFILE_MISMATCH');
   if (candidate.profile !== existing.profile && (candidate.profile === 'phase22-reader-note-1.0' || existing.profile === 'phase22-reader-note-1.0')) fail('P221_PROFILE_MISMATCH');
   if (expectedManagedHash !== undefined && expectedManagedHash !== existing.managedHash) fail('P22_MANAGED_HASH_MISMATCH');

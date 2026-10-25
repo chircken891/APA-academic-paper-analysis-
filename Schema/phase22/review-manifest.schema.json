@@ -10,38 +10,412 @@
     },
     {
       "$ref": "#/$defs/readingFirst"
+    },
+    {
+      "$ref": "#/$defs/noteRelocation"
+    },
+    {
+      "$ref": "#/$defs/topic"
+    },
+    {
+      "$ref": "#/$defs/sourceChange"
     }
   ],
   "$defs": {
-    "readingFirst": {
-      "type": "object", "additionalProperties": false,
-      "required": ["schema_version", "profile", "identity", "status", "evidence_mode", "review_ready", "publishable", "reading_accepted", "native_presentation", "scientific_review_hash", "generation", "previous_generation", "previews", "support_notes", "assets", "read_dependencies", "dependencies", "tools", "index", "active", "write_set", "diagnostics", "provenance_limits"],
+    "noteRelocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "profile",
+        "identity",
+        "status",
+        "evidence_mode",
+        "review_ready",
+        "publishable",
+        "reading_accepted",
+        "native_presentation",
+        "scientific_review_hash",
+        "generation",
+        "previous_generation",
+        "previews",
+        "support_notes",
+        "assets",
+        "read_dependencies",
+        "dependencies",
+        "tools",
+        "index",
+        "active",
+        "write_set",
+        "diagnostics",
+        "provenance_limits",
+        "relocations"
+      ],
       "properties": {
-        "schema_version": { "const": "phase22/review-manifest-1.0" },
-        "profile": { "const": "reading-first-obsidian-1.0" },
-        "identity": {
-          "type": "object", "additionalProperties": false, "required": ["paper_id", "run_id", "analysis_revision"],
-          "properties": { "paper_id": { "type": "string", "minLength": 1 }, "run_id": { "type": "string", "minLength": 1 }, "analysis_revision": { "type": "string", "minLength": 1 } }
+        "schema_version": {
+          "const": "phase22/review-manifest-1.0"
         },
-        "status": { "enum": ["review_ready", "synthetic_prepared"] },
-        "evidence_mode": { "enum": ["actual", "synthetic"] },
-        "review_ready": { "type": "boolean" }, "publishable": { "const": false }, "reading_accepted": { "const": true },
-        "native_presentation": { "type": "object", "required": ["status"], "properties": { "status": { "const": "not_run" } } },
-        "scientific_review_hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
-        "generation": { "type": "string", "minLength": 1 },
-        "previous_generation": { "type": ["string", "null"] },
-        "previews": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "object" } },
-        "support_notes": { "type": "array", "items": { "type": "object" } },
-        "assets": { "type": "array", "items": { "type": "object" } },
-        "read_dependencies": { "type": "array", "items": { "type": "object" } },
-        "dependencies": { "type": "object" }, "tools": { "type": "object" },
-        "index": { "type": "object" }, "active": { "type": "object" },
-        "write_set": { "type": "array", "items": { "type": "object" } },
-        "diagnostics": { "type": "array", "maxItems": 0 }, "provenance_limits": { "type": "object" }
+        "profile": {
+          "const": "phase22-note-relocation-1.0"
+        },
+        "identity": {
+          "$ref": "#/$defs/readingFirst/properties/identity"
+        },
+        "status": {
+          "enum": [
+            "review_ready",
+            "synthetic_prepared"
+          ]
+        },
+        "evidence_mode": {
+          "enum": [
+            "actual",
+            "synthetic"
+          ]
+        },
+        "review_ready": {
+          "type": "boolean"
+        },
+        "publishable": {
+          "const": false
+        },
+        "reading_accepted": {
+          "const": true
+        },
+        "native_presentation": {
+          "$ref": "#/$defs/readingFirst/properties/native_presentation"
+        },
+        "scientific_review_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "generation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "previous_generation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "previews": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object"
+          }
+        },
+        "support_notes": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "assets": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "read_dependencies": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "dependencies": {
+          "type": "object"
+        },
+        "tools": {
+          "type": "object"
+        },
+        "index": {
+          "type": "object"
+        },
+        "active": {
+          "type": "object"
+        },
+        "write_set": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "diagnostics": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "provenance_limits": {
+          "type": "object"
+        },
+        "relocations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "paper_id",
+              "source_language",
+              "language",
+              "from",
+              "to",
+              "before_sha256",
+              "before_byte_length"
+            ],
+            "properties": {
+              "paper_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_language": {
+                "enum": [
+                  "en",
+                  "zh-CN"
+                ]
+              },
+              "language": {
+                "enum": [
+                  "en",
+                  "zh-CN"
+                ]
+              },
+              "from": {
+                "type": "string",
+                "pattern": "^Wiki/(sources|translations)/[^/]+\\.md$"
+              },
+              "to": {
+                "type": "string",
+                "pattern": "^Wiki/(sources|translations)/[^/]+\\.md$"
+              },
+              "before_sha256": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "before_byte_length": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
       },
-      "allOf": [{ "if": { "properties": { "evidence_mode": { "const": "actual" } } },
-        "then": { "properties": { "status": { "const": "review_ready" }, "review_ready": { "const": true } } },
-        "else": { "properties": { "status": { "const": "synthetic_prepared" }, "review_ready": { "const": false } } } }]
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "evidence_mode": {
+                "const": "actual"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "const": "review_ready"
+              },
+              "review_ready": {
+                "const": true
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "status": {
+                "const": "synthetic_prepared"
+              },
+              "review_ready": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    "readingFirst": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "profile",
+        "identity",
+        "status",
+        "evidence_mode",
+        "review_ready",
+        "publishable",
+        "reading_accepted",
+        "native_presentation",
+        "scientific_review_hash",
+        "generation",
+        "previous_generation",
+        "previews",
+        "support_notes",
+        "assets",
+        "read_dependencies",
+        "dependencies",
+        "tools",
+        "index",
+        "active",
+        "write_set",
+        "diagnostics",
+        "provenance_limits"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "phase22/review-manifest-1.0"
+        },
+        "profile": {
+          "const": "reading-first-obsidian-1.0"
+        },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "paper_id",
+            "run_id",
+            "analysis_revision"
+          ],
+          "properties": {
+            "paper_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "run_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "analysis_revision": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "status": {
+          "enum": [
+            "review_ready",
+            "synthetic_prepared"
+          ]
+        },
+        "evidence_mode": {
+          "enum": [
+            "actual",
+            "synthetic"
+          ]
+        },
+        "review_ready": {
+          "type": "boolean"
+        },
+        "publishable": {
+          "const": false
+        },
+        "reading_accepted": {
+          "const": true
+        },
+        "native_presentation": {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "const": "not_run"
+            }
+          }
+        },
+        "scientific_review_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "generation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "previous_generation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "previews": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "object"
+          }
+        },
+        "support_notes": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "read_dependencies": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "dependencies": {
+          "type": "object"
+        },
+        "tools": {
+          "type": "object"
+        },
+        "index": {
+          "type": "object"
+        },
+        "active": {
+          "type": "object"
+        },
+        "write_set": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "diagnostics": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "provenance_limits": {
+          "type": "object"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "evidence_mode": {
+                "const": "actual"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "const": "review_ready"
+              },
+              "review_ready": {
+                "const": true
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "status": {
+                "const": "synthetic_prepared"
+              },
+              "review_ready": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
     },
     "supportNote": {
       "type": "object",
@@ -1203,6 +1577,355 @@
           }
         }
       }
+    },
+    "topic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "profile",
+        "identity",
+        "status",
+        "evidence_mode",
+        "review_ready",
+        "publishable",
+        "scientific_review_hash",
+        "generation",
+        "previous_generation",
+        "previews",
+        "support_notes",
+        "assets",
+        "read_dependencies",
+        "dependencies",
+        "tools",
+        "index",
+        "active",
+        "write_set",
+        "diagnostics",
+        "provenance_limits"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "phase22/review-manifest-1.0"
+        },
+        "profile": {
+          "const": "phase24-topic-1.0"
+        },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "topic_id",
+            "topic_revision",
+            "run_id",
+            "analysis_revision"
+          ],
+          "properties": {
+            "topic_id": {
+              "type": "string",
+              "pattern": "^topic-[a-f0-9]{24}$"
+            },
+            "topic_revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "run_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "analysis_revision": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "status": {
+          "enum": [
+            "review_ready",
+            "synthetic_prepared"
+          ]
+        },
+        "evidence_mode": {
+          "enum": [
+            "actual",
+            "synthetic"
+          ]
+        },
+        "review_ready": {
+          "type": "boolean"
+        },
+        "publishable": {
+          "const": false
+        },
+        "scientific_review_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "generation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "previous_generation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "previews": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object"
+          }
+        },
+        "support_notes": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "read_dependencies": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "dependencies": {
+          "type": "object"
+        },
+        "tools": {
+          "type": "object"
+        },
+        "index": {
+          "type": "object"
+        },
+        "active": {
+          "type": "object"
+        },
+        "write_set": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "diagnostics": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "provenance_limits": {
+          "type": "object"
+        },
+        "operation": {
+          "enum": [
+            "save",
+            "update"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "evidence_mode": {
+                "const": "actual"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "const": "review_ready"
+              },
+              "review_ready": {
+                "const": true
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "status": {
+                "const": "synthetic_prepared"
+              },
+              "review_ready": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    "sourceChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "profile",
+        "identity",
+        "status",
+        "evidence_mode",
+        "review_ready",
+        "publishable",
+        "scientific_review_hash",
+        "generation",
+        "previous_generation",
+        "previews",
+        "support_notes",
+        "assets",
+        "read_dependencies",
+        "dependencies",
+        "tools",
+        "index",
+        "active",
+        "write_set",
+        "diagnostics",
+        "provenance_limits",
+        "operation"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "phase22/review-manifest-1.0"
+        },
+        "profile": {
+          "const": "phase24-topic-1.0"
+        },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "run_id",
+            "analysis_revision"
+          ],
+          "properties": {
+            "run_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$"
+            },
+            "analysis_revision": {
+              "const": "source-change"
+            }
+          }
+        },
+        "status": {
+          "enum": [
+            "review_ready",
+            "synthetic_prepared"
+          ]
+        },
+        "evidence_mode": {
+          "enum": [
+            "actual",
+            "synthetic"
+          ]
+        },
+        "review_ready": {
+          "type": "boolean"
+        },
+        "publishable": {
+          "const": false
+        },
+        "scientific_review_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "generation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "previous_generation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "previews": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "support_notes": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "read_dependencies": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "dependencies": {
+          "type": "object"
+        },
+        "tools": {
+          "type": "object"
+        },
+        "index": {
+          "type": "object"
+        },
+        "active": {
+          "type": "object"
+        },
+        "write_set": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "diagnostics": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "provenance_limits": {
+          "type": "object"
+        },
+        "operation": {
+          "const": "source-change"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "evidence_mode": {
+                "const": "actual"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "const": "review_ready"
+              },
+              "review_ready": {
+                "const": true
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "status": {
+                "const": "synthetic_prepared"
+              },
+              "review_ready": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

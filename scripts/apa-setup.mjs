@@ -7,11 +7,12 @@ function options(argv) {
   if (!['inspect', 'page', 'apply', 'export'].includes(command)) throw new Error('Usage: apa-setup inspect|page|apply|export [--repo-root path] [--file path] [--output path]');
   const result = { command, repoRoot: process.cwd() };
   for (let index = 0; index < rest.length; index += 2) {
-    const key = { '--repo-root': 'repoRoot', '--file': 'file', '--output': 'output' }[rest[index]];
+    const key = { '--repo-root': 'repoRoot', '--file': 'file', '--output': 'output', '--capability': 'capability' }[rest[index]];
     if (!key || !rest[index + 1] || rest[index + 1].startsWith('--') || result[key] && key !== 'repoRoot') throw new Error('APA_SETUP_ARGUMENT_INVALID');
     result[key] = rest[index + 1];
   }
   if (result.file && command !== 'apply' || result.output && !['page', 'export'].includes(command)) throw new Error('APA_SETUP_ARGUMENT_INVALID');
+  if (result.capability && (command !== 'inspect' || !['query', 'reading'].includes(result.capability))) throw new Error('APA_SETUP_ARGUMENT_INVALID');
   result.repoRoot = path.resolve(result.repoRoot);
   return result;
 }
@@ -41,7 +42,8 @@ try {
     const snapshot = loadApaConfig(args);
     const inspection = inspectApaConfig(args);
     const { renderApaSetupPage } = await import('./setup/apa-setup-page.mjs');
-    const html = renderApaSetupPage({ snapshot, inspection, repoRoot: args.repoRoot });
+    const queryInspection = inspectApaConfig({ repoRoot: args.repoRoot, capability: 'query' });
+    const html = renderApaSetupPage({ snapshot, inspection, queryInspection, repoRoot: args.repoRoot });
     fs.mkdirSync(path.dirname(output), { recursive: true });
     fs.writeFileSync(output, html);
     result = { output, fingerprint: snapshot.fingerprint };

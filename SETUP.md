@@ -56,6 +56,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-wind
 
 此可选技能安装器当前复用 Codex 的 `skills/.system/skill-installer/scripts/install-skill-from-github.py`，这是该辅助工具的依赖，并非模型限制。请用直接技能安装命令的 `-CheckOnly` 检查其 `installer` 项；缺少时让助手检查该工具，或用 `-InstallerPath` 指定已有文件。也可通过所用宿主支持的方式准备技能，再在 apa-setup 填写路径。首次阅读不需要这些额外技能，可先在配置中逐项选“不使用”。
 
+## 项目技能入口
+
+工程自带 `academic-paper-analysis`、`apa-query` 和 `apa-setup` 三个项目技能。论文阅读与续接使用 `academic-paper-analysis`；已入库论文的查询、比较、专题保存和更新使用 [apa-query](.agents/skills/apa-query/SKILL.md)；配置检查和修改使用 `apa-setup`。它们读取同一个 `config/apa.local.json`。新论文阅读需要完整阅读配置；查询模型和回答偏好均可留空，分别默认跟随当前会话、问题语言和问题所需详略。明确保存专题时才需要共享候选目录，无需为查询再次完成整套阅读设置。
+
+若宿主没有自动发现新技能，在本工程中新开会话，或直接让助手读取 `.agents/skills/apa-query/SKILL.md`。下面的可选全局安装器仍只管理全局 APA 副本与 MinerU 命令，不安装独立的全局 `apa-query` 副本。
+
 ## 可选全局集成
 
 本库技能可直接使用。以下可选安装器针对 Codex 的全局 APA 副本与命令集成，需要时才执行：

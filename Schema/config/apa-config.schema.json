@@ -7,10 +7,22 @@
     "schema_version": {
       "const": "apa-local-config-1.0"
     },
+    "query": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "answer_language": { "enum": ["question", "en", "zh-CN"] },
+        "detail": { "enum": ["adaptive", "concise", "detailed"] },
+        "audience": { "enum": ["adaptive", "beginner", "researcher"] }
+      }
+    },
     "models": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "query": {
+          "$ref": "#/definitions/modelChoice"
+        },
         "science": {
           "$ref": "#/definitions/modelChoice"
         },

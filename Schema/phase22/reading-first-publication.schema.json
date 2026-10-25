@@ -14,6 +14,12 @@
     },
     "presentation_fingerprint": { "$ref": "#/$defs/hash" },
     "scientific_input_fingerprint": { "$ref": "#/$defs/hash" },
+    "path_migration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["previous_generation", "previous_presentation_sha256", "path_mapping_fingerprint"],
+      "properties": { "previous_generation": { "$ref": "#/$defs/text" },
+        "previous_presentation_sha256": { "$ref": "#/$defs/hash" }, "path_mapping_fingerprint": { "$ref": "#/$defs/hash" } }
+    },
     "evidence_mode": { "enum": ["synthetic", "actual"] },
     "dependencies": { "type": "object" },
     "qualification": {
@@ -37,7 +43,36 @@
         "assets": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^(Raw|Figures)/.+" } }
       }
     },
-    "navigation": { "type": "array", "items": { "type": "object" } }
+    "navigation": { "type": "array", "items": { "type": "object" } },
+    "citation": {
+      "type": "object", "additionalProperties": false, "required": ["bibliography", "sources"],
+      "properties": {
+        "bibliography": { "type": "object" },
+        "sources": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["source_id", "path", "sha256", "byte_length", "source_version", "locators"],
+            "properties": {
+              "source_id": { "$ref": "#/$defs/text" },
+              "path": { "type": "string", "pattern": "^Raw/.+\\.[pP][dD][fF]$" },
+              "sha256": { "$ref": "#/$defs/hash" },
+              "byte_length": { "type": "integer", "minimum": 0 },
+              "source_version": { "type": ["string", "null"] },
+              "locators": {
+                "type": "array", "items": {
+                  "type": "object", "additionalProperties": false, "required": ["kind", "id", "page", "label"],
+                  "properties": {
+                    "kind": { "enum": ["figure", "table", "formula"] }, "id": { "$ref": "#/$defs/text" },
+                    "page": { "type": "integer", "minimum": 1 }, "label": { "type": "object" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
   },
   "$defs": {
     "hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
@@ -45,7 +80,7 @@
     "note": {
       "type": "object", "additionalProperties": false, "required": ["path", "managed_hash", "byte_sha256"],
       "properties": {
-        "path": { "type": "string", "pattern": "^Wiki/sources/[^/]+\\.md$" },
+        "path": { "type": "string", "pattern": "^Wiki/(sources|translations)/[^/]+\\.md$" },
         "managed_hash": { "$ref": "#/$defs/hash" }, "byte_sha256": { "$ref": "#/$defs/hash" }
       }
     }

@@ -7,7 +7,7 @@ import { buildGraphProposal } from './phase22-graph.mjs';
 
 const commands = new Set(['review', 'dry-run', 'apply', 'recover', 'query', 'graph-proposal']);
 const commonFlags = ['vault-root', 'run'];
-const profiles = new Set(['phase22-managed-note-1.0', 'phase22-reader-note-1.0', 'reading-first-obsidian-1.0']);
+const profiles = new Set(['phase22-managed-note-1.0', 'phase22-reader-note-1.0', 'reading-first-obsidian-1.0', 'phase24-topic-1.0']);
 const commandFlags = {
   review: ['profile'], 'dry-run': ['profile'],
   apply: ['review-sha256', 'output-sha256', 'approval-record', 'maintenance-window-record'],

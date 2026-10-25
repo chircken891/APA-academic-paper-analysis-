@@ -32,7 +32,7 @@ function document({ language, paperId, title, alternate, source, reading, resour
 }
 
 /** Pure candidate rendering. Paths are vault relative; assets are copied by the caller. */
-export function renderReadingFirstObsidian({ identity, views, presentation, targetRegistry, existingTargets = [], knowledgeRegistry = [], readingEditor } = {}) {
+export function renderReadingFirstObsidian({ identity, views, presentation, targetRegistry, existingTargets = [], knowledgeRegistry = [], readingEditor, noteLayout, sourceLanguage } = {}) {
   if (!presentation || presentation.schema_version !== 'reading-first-obsidian-1.0' || !Array.isArray(views) || views.length !== 2 || languages.some(language => views.filter(view => view.language === language).length !== 1)) fail('RF_OBSIDIAN_INPUT_INVALID');
   const p = applyReadingFirstKnowledgeContent({ presentation, views });
   const sharedKnowledge = p.knowledge_layout === 'shared-bilingual-1.0';
@@ -57,7 +57,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
   localized(p.bibliography?.title);
   vaultPath(p.source_pdf);
   if (!/^Raw\/.+\.pdf$/i.test(p.source_pdf)) fail('RF_OBSIDIAN_PATH_INVALID');
-  const registry = registerReaderTargets({ identity, registeredBibliography: { ...p.bibliography, first_author: filenameLabel(p.bibliography.first_author), title: filenameLabel(local(p.bibliography.title, 'en')) }, existingRegistry: targetRegistry ?? [], occupiedPaths: existingTargets.map(note => note.path), namingStyle: writerLayout ? 'bibliographic' : 'lowercase' });
+  const registry = registerReaderTargets({ identity, registeredBibliography: { ...p.bibliography, first_author: filenameLabel(p.bibliography.first_author), title: filenameLabel(local(p.bibliography.title, 'en')) }, existingRegistry: targetRegistry ?? [], occupiedPaths: existingTargets.map(note => note.path), namingStyle: writerLayout ? 'bibliographic' : 'lowercase', noteLayout, sourceLanguage });
   const sectionSpecs = writerLayout ? views[0].sections.map(section => ({ id: section.id })) : p.sections;
   const sections = sectionSpecs?.map(section => ({ ...section, indices: Object.fromEntries(languages.map(language => {
     const matches = views.find(view => view.language === language).sections.map((row, index) => row.id === section.id ? index : -1).filter(index => index >= 0);

@@ -12,6 +12,66 @@ const temporary = t => {
   return root;
 };
 const operation = (snapshot, fields) => ({ schema_version: 'apa-config-operation-1.0', base_fingerprint: snapshot.fingerprint, ...fields });
+
+test('query preferences patch export import and removal preserve unrelated answers', t => {
+  const repoRoot = temporary(t);
+  const initial = api.loadApaConfig({ repoRoot });
+  const saved = api.applyApaConfigOperation({ repoRoot, operation: operation(initial, { action: 'patch', set: {
+    'query.answer_language': 'zh-CN', 'query.detail': 'detailed', 'query.audience': 'beginner', 'paths.candidates': 'chosen-candidates',
+  } }) });
+  const exported = api.exportApaConfig(saved.config);
+  const importedRoot = temporary(t);
+  const imported = api.applyApaConfigOperation({ repoRoot: importedRoot, operation: operation(api.loadApaConfig({ repoRoot: importedRoot }), { action: 'import', answers: exported.answers }) });
+  assert.deepEqual(imported.config, saved.config);
+  const removed = api.applyApaConfigOperation({ repoRoot, operation: operation(saved, { action: 'remove', remove: ['query.detail'] }) });
+  assert.deepEqual(api.resolveQueryPreferences(removed.config.query), { answer_language: 'zh-CN', detail: 'adaptive', audience: 'beginner' });
+  assert.equal(removed.config.paths.candidates, 'chosen-candidates');
+  for (const query of [{ detail: 'unlimited' }, { audience: true }, { answer_language: 'auto' }, { external_search: true }, null, []]) {
+    assert.equal(api.validateApaConfig({ schema_version: api.APA_CONFIG_VERSION, query }, { repoRoot }).valid, false);
+    assert.throws(() => api.resolveQueryPreferences({}, query), /APA_QUERY_PREFERENCES_INVALID/);
+  }
+});
+test('query needs no reading answers or dependency files and never persists defaults', t => {
+  const repoRoot = temporary(t);
+  const config = api.loadApaConfig({ repoRoot }).config;
+  const mainSession = { model: 'main-model', reasoning_effort: 'high' };
+  assert.equal(api.validateApaConfig(config, { repoRoot, capability: 'query', complete: true }).valid, true);
+  assert.deepEqual(api.resolveApaConfig({ config, repoRoot, capability: 'query', mainSession }), { query: mainSession, queryMode: 'follow-main', queryPreferences: api.APA_QUERY_DEFAULTS });
+  assert.throws(() => api.resolveApaConfig({ config, repoRoot, capability: 'query' }), /APA_MAIN_SESSION_INVALID/);
+  assert.throws(() => api.resolveApaConfig({ config, repoRoot, capability: 'query', mainSession, supportedModelPairs: [] }), /APA_MODEL_UNSUPPORTED/);
+  const inspected = api.inspectApaConfig({ repoRoot, capability: 'query' });
+  assert.equal(inspected.ready, true);
+  assert.equal(inspected.model_availability, 'not_checked');
+  assert.deepEqual(inspected.dependencies, []);
+  assert.equal(api.inspectApaConfig({ repoRoot }).ready, false);
+  assert.deepEqual(fs.readdirSync(repoRoot), []);
+});
+test('explicit query requires host confirmation and never substitutes unsupported models', t => {
+  const repoRoot = temporary(t);
+  const pair = { model: 'query-model', reasoning_effort: 'medium' };
+  const config = { schema_version: 'apa-local-config-1.0', models: { query: { mode: 'explicit', ...pair } }, parser: { runtime_home: 'missing' }, writing_skills: { humanizer: { enabled: true, path: 'missing.md' } } };
+  assert.throws(() => api.resolveApaConfig({ config, repoRoot, capability: 'query' }), /APA_MODEL_AVAILABILITY_UNKNOWN/);
+  assert.throws(() => api.resolveApaConfig({ config, repoRoot, capability: 'query', supportedModelPairs: [] }), /APA_MODEL_UNSUPPORTED/);
+  assert.deepEqual(api.resolveApaConfig({ config, repoRoot, capability: 'query', supportedModelPairs: [pair] }), { query: pair, queryMode: 'explicit', queryPreferences: api.APA_QUERY_DEFAULTS });
+  fs.mkdirSync(path.join(repoRoot, 'config'));
+  fs.writeFileSync(path.join(repoRoot, 'config/apa.local.json'), JSON.stringify(config));
+  assert.deepEqual(api.inspectApaConfig({ repoRoot, capability: 'query' }).dependencies, []);
+  assert.equal(api.inspectApaConfig({ repoRoot, capability: 'query' }).ready, true);
+  assert.equal(api.inspectApaConfig({ repoRoot }).ready, false);
+  assert.throws(() => api.resolveApaConfig({ config: { schema_version: 'apa-local-config-1.0' }, repoRoot, capability: 'query', mainSession: { model: ' ', reasoning_effort: 'high' } }), /APA_MAIN_SESSION_INVALID/);
+  assert.equal(api.validateApaConfig({ ...config, models: { query: { mode: 'explicit', model: 'q' } } }, { repoRoot, capability: 'query' }).valid, false);
+});
+test('CLI query inspection distinguishes configuration from live model availability', t => {
+  const repoRoot = temporary(t);
+  const cli = path.resolve('scripts/apa-setup.mjs');
+  const run = capability => spawnSync(process.execPath, [cli, 'inspect', '--repo-root', repoRoot, '--capability', capability], { encoding: 'utf8' });
+  const result = run('query');
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).ready, true);
+  assert.equal(JSON.parse(result.stdout).model_availability, 'not_checked');
+  assert.equal(JSON.parse(run('reading').stdout).ready, false);
+  assert.notEqual(run('unknown').status, 0);
+});
 test('blank snapshot is incomplete and inspect does not write', t => {
   const repoRoot = temporary(t);
   const snapshot = api.loadApaConfig({ repoRoot });

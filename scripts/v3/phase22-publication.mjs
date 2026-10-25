@@ -1,3 +1,5 @@
+import { captureTopicPublicationRegistration, rebuildRegisteredTopicReview, assertTopicPublicationReviewLive } from './topic-publication.mjs';
+import { loadApaConfig } from '../lib/apa-config.mjs';
 import { createHash, randomUUID, generateKeyPairSync, createPublicKey, sign, verify } from 'node:crypto';
 import { readFile, writeFile, open, lstat, realpath, mkdir, rename, link, unlink } from 'node:fs/promises';
 import { readFileSync, realpathSync, lstatSync, openSync, readSync, fstatSync, closeSync } from 'node:fs';
@@ -165,6 +167,7 @@ async function currentPlan(plan, { promotion = false } = {}) {
   const record = plans.get(plan);
   if (!record) fail('P22_PUBLICATION_PLAN_NOT_OWNED');
   if (record.stamp !== planStamp(plan)) fail('P22_PUBLICATION_PLAN_CHANGED');
+  await assertTopicOperationNotCancelled({ vaultRoot: plan.vault_root, operationId: plan.run_id, trustAnchor: record.trustAnchor });
   if (promotion && record.validatePromotion) record.validatePromotion();
   else if (record.validate) await record.validate();
   else await assertBilingualReviewCurrent(record.review);
@@ -198,6 +201,7 @@ export async function dryRunBilingualPublication({ vaultRoot, run, review, plan:
   }
   if (!identifier(run)) fail('P22_RUN_REQUIRED');
   await assertBilingualReviewCurrent(review);
+  if (review.reviewManifest.profile === 'phase24-topic-1.0') await assertTopicPublicationReviewLive(review);
   if (review.reviewManifest.profile === 'reading-first-obsidian-1.0') await assertReadingFirstPublicationReviewLive(review);
   if (!review.ok || !review.hashes.output_inventory_hash || review.reviewManifest.identity.run_id !== run) fail('P22_REVIEW_NOT_APPROVABLE');
   const rootInfo = await rootState(vaultRoot), root = rootInfo.root;
@@ -217,7 +221,7 @@ export async function dryRunBilingualPublication({ vaultRoot, run, review, plan:
   if (previousGeneration !== review.reviewManifest.previous_generation) fail('P22_PREVIOUS_GENERATION_CHANGED');
   const inventory = [];
   for (const row of review.outputInventory) {
-    if (!['paper', 'support', 'asset', 'active', 'index', 'manifest', 'reader-presentation', 'reading-review', 'reader-record', 'reader-style'].includes(row.kind)) fail('P22_PUBLICATION_KIND_INVALID');
+    if (!['paper', 'support', 'asset', 'active', 'index', 'manifest', 'reader-presentation', 'reading-review', 'reader-record', 'reader-style', 'topic'].includes(row.kind)) fail('P22_PUBLICATION_KIND_INVALID');
     const entry = await bindOutput(root, row);
     if (row.kind === 'paper' && entry.before_sha256 !== null) {
       const old = await observe(root, row.path);
@@ -607,6 +611,18 @@ function resultFor(journal) {
     cleanup_policy: 'retain_backups_and_journal_until_separately_approved', external_reader_atomicity: false };
 }
 
+async function withTopicHints(result, plan, record) {
+  const paperId = record.review?.reviewManifest.identity.paper_id;
+  if (result.status !== 'committed' || !paperId || record.review.reviewManifest.profile === 'phase24-topic-1.0') return result;
+  try {
+    const { getTopicUpdateHints } = await import('./topic-library.mjs');
+    const hints = await getTopicUpdateHints({ vaultRoot: plan.vault_root, generationId: result.generation, changedPaperIds: [paperId] });
+    return { ...result, relevance_hints: hints.relevance_hints ?? hints.hints ?? [], hint_status: hints.ok === false ? 'retryable' : 'available' };
+  } catch (error) {
+    return { ...result, relevance_hints: [], hint_status: 'retryable', hint_error: { code: error.code ?? error.message } };
+  }
+}
+
 /** Exact controller authority is required even for a synthetic temporary apply. */
 export async function applyBilingualPublication(args = {}) {
   const { plan } = args;
@@ -627,6 +643,16 @@ export async function applyBilingualPublication(args = {}) {
   try {
     lock = await acquireLock(ctx, hash(authority));
     await currentPlan(plan); await assertAuthority(args, plan); await checkPreimages(ctx.root, plan);
+    if (planRecord.review?.reviewManifest.profile === 'phase24-topic-1.0'
+      && !(await observe(ctx.root, CONTROL + '/runs/' + plan.run_id + '/CURRENT.json')).exists) {
+      const { getTopicPublicationCandidate } = await import('./topic-publication.mjs');
+      const candidate = getTopicPublicationCandidate(planRecord.review);
+      if (!controllerKey(ctx.root, plan.run_id, false)) fail('P24_CANCELLATION_AUTHORITY_REQUIRED');
+      const payload = { schema_version: 'phase22-controller-grant-1.0', kind: 'topic-attempt', vault_root: ctx.root,
+        run_id: plan.run_id, candidate_fingerprint: hash(candidate), generation: plan.generation, transaction_id: transactionId };
+      await writeRegisteredRecord(ctx, CONTROL + '/runs/' + plan.run_id + '/TOPIC-ATTEMPT.json',
+        jsonBytes({ schema_version: 'phase24-topic-attempt-1.0', controller_grant: signControllerGrant(payload) }));
+    }
     journal = journalFromPlan(plan, transactionId, authority, controllerGrant);
     await ensureDirectories(ctx, CONTROL + '/transactions/' + transactionId);
     await saveJournal(ctx, journal, lock, 'prepared');
@@ -691,14 +717,14 @@ export async function applyBilingualPublication(args = {}) {
     if (!observed.ok) fail('P22_COMMITTED_READER_REJECTED', { errors: observed.errors });
     await ctx.operation('post_commit.retained', CONTROL + '/transactions/' + transactionId + '/retained.json',
       () => writeFile(join(ctx.root, CONTROL, 'transactions', transactionId, 'retained.json'), jsonBytes({ committed: true, cleanup_authorized: false }), { flag: 'wx' }));
-    return resultFor(journal);
+    return await withTopicHints(resultFor(journal), plan, planRecord);
   } catch (error) {
     if (journal && !committed) {
       const marker = journal.inventory.find(row => row.kind === 'commit');
       try { committed = Boolean(marker && await ownedPostimage(ctx, marker)); } catch { /* Do not infer a commit from unreadable bytes. */ }
     }
     if (committed || journal?.state === 'committed') {
-      return { ...resultFor({ ...journal, state: 'committed' }), cleanup_warnings: [{ code: error.code ?? error.message }] };
+      return await withTopicHints({ ...resultFor({ ...journal, state: 'committed' }), cleanup_warnings: [{ code: error.code ?? error.message }] }, plan, planRecord);
     }
     if (journal && lock) {
       try { error.recovery = await rollback(ctx, journal, lock); }
@@ -1130,12 +1156,147 @@ async function writeRegisteredRecord(ctx, path, bytes, { replace = false } = {})
   }
 }
 
+async function topicRegistration(vaultRoot, operationId, trustAnchor) {
+  const root = (await rootState(vaultRoot)).root;
+  const registered = await observe(root, CONTROL + '/runs/' + operationId + '/CURRENT.json');
+  if (!registered.exists) fail('P22_RUN_NOT_REGISTERED');
+  const pointer = JSON.parse(registered.bytes), { controller_grant: grant, ...body } = pointer;
+  const anchor = verifyControllerGrant(grant, root, operationId, trustAnchor);
+  if (pointer.schema_version !== 'phase22-publication-registration-1.0' || pointer.vault_root !== root || pointer.run_id !== operationId
+    || grant.payload.kind !== 'registration' || grant.payload.registration_hash !== hash(body)
+    || !pointer.bundle?.path?.startsWith(CONTROL + '/runs/' + operationId + '/')) fail('P22_REGISTRATION_INVALID');
+  const stored = await observe(root, pointer.bundle.path);
+  if (!stored.exists || stored.sha256 !== pointer.bundle.sha256) fail('P22_REGISTERED_BUNDLE_CHANGED');
+  const bundle = JSON.parse(stored.bytes);
+  if (bundle.reviewManifest?.profile !== 'phase24-topic-1.0' || !bundle.topic_recipe?.options?.candidate
+    || bundle.vault_root !== root || bundle.run_id !== operationId || !identifier(bundle.transaction_id)) fail('P24_CANCELLATION_INPUT_INVALID');
+  return { root, pointer, bundle, anchor, candidateFingerprint: hash(bundle.topic_recipe.options.candidate) };
+}
+
+function cancellationPayload(registration, operationId, candidateFingerprint) {
+  if (candidateFingerprint !== registration.candidateFingerprint) fail('P24_CANDIDATE_CHANGED');
+  return { schema_version: 'phase22-controller-grant-1.0', kind: 'topic-cancellation', vault_root: registration.root,
+    run_id: operationId, operation_id: operationId, candidate_fingerprint: candidateFingerprint,
+    registration_bundle_hash: registration.pointer.bundle.sha256, status: 'cancelled' };
+}
+
+/** A signed control revocation is checked by both live and reloaded publication plans. */
+export async function assertTopicOperationNotCancelled({ vaultRoot, operationId, candidateFingerprint, trustAnchor } = {}) {
+  if (!identifier(operationId)) fail('P24_OPERATION_INVALID');
+  const cancelled = await observe(resolve(vaultRoot), CONTROL + '/runs/' + operationId + '/TOPIC-CANCELLED.json');
+  if (!cancelled.exists) return;
+  const registration = await topicRegistration(vaultRoot, operationId, trustAnchor);
+  const value = JSON.parse(cancelled.bytes);
+  verifyControllerGrant(value.cancellation_grant, registration.root, operationId, registration.anchor);
+  if (value.schema_version !== 'phase24-topic-cancellation-1.0'
+    || !same(value.cancellation_grant.payload, cancellationPayload(registration, operationId, candidateFingerprint ?? registration.candidateFingerprint))) fail('P24_CANCELLATION_INPUT_INVALID');
+  fail('P24_OPERATION_CANCELLED');
+}
+
+/** Only the existing Controller private key can authorize cancellation of its registered topic. */
+export async function createTopicCancellationGrant({ plan, candidateFingerprint } = {}) {
+  const record = plans.get(plan);
+  if (!record) fail('P22_PUBLICATION_PLAN_NOT_OWNED');
+  const pair = controllerKey(plan.vault_root, plan.run_id, false);
+  if (!pair) fail('P24_CANCELLATION_AUTHORITY_REQUIRED');
+  await currentPlan(plan);
+  const registration = await topicRegistration(plan.vault_root, plan.run_id, record.trustAnchor);
+  if (registration.anchor.public_key !== pair.publicDer.toString('base64')
+    || registration.bundle.plan_fingerprint !== planStamp(plan)) fail('P24_CANCELLATION_AUTHORITY_REQUIRED');
+  return signControllerGrant(cancellationPayload(registration, plan.run_id, candidateFingerprint));
+}
+
+/** The unregistered candidate path shares the publication lock and exact attempt/journal addressing. */
+export async function cancelUnregisteredTopicOperation({ vaultRoot, operationId, candidateFingerprint, candidatePath, trustAnchor } = {}) {
+  if (!identifier(operationId) || !/^sha256:[a-f0-9]{64}$/.test(candidateFingerprint ?? '')) fail('P24_CANCELLATION_INPUT_INVALID');
+  if (typeof candidatePath !== 'string' || !candidatePath.trim()) fail('P24_CANDIDATE_PATH_REQUIRED');
+  const root = (await rootState(vaultRoot)).root, config = loadApaConfig({ repoRoot: root });
+  const configured = config.config.paths?.candidates;
+  if (typeof configured !== 'string' || !configured.trim()) fail('P24_CANDIDATES_REQUIRED');
+  const candidates = resolve(root, configured), candidateAbsolute = resolve(candidatePath);
+  if (!inside(root, candidates) || candidates === root || !inside(candidates, candidateAbsolute) || candidates === candidateAbsolute
+    || /^(?:Raw|Wiki|Figures|Clippings|Schema|Ontology|\.git|\.obsidian)(?:[\\/]|$)/i.test(relative(root, candidates))) fail('P24_CANDIDATE_PATH_INVALID');
+  const path = relative(root, candidateAbsolute).split(sep).join('/');
+  const statePath = relative(root, join(dirname(candidateAbsolute), 'operation.json')).split(sep).join('/');
+  const ctx = runtime(root, 'cancellation-' + randomUUID());
+  let lock;
+  try {
+    try { lock = await acquireLock(ctx, hash({ operationId, candidateFingerprint })); }
+    catch (error) { if (error.code === 'P22_VAULT_LOCKED') fail('P24_OPERATION_IN_PROGRESS', error.details); throw error; }
+    // Registration may have appeared after the library entry point selected this branch.
+    if ((await observe(root, CONTROL + '/runs/' + operationId + '/CURRENT.json')).exists) fail('P24_CANCELLATION_AUTHORITY_REQUIRED');
+    const candidateFile = await observe(root, path), candidate = JSON.parse(candidateFile.bytes);
+    const stateFile = await observe(root, statePath), state = JSON.parse(stateFile.bytes);
+    if (candidate.operation_id !== operationId || hash(candidate) !== candidateFingerprint) fail('P24_CANCELLATION_INPUT_INVALID');
+    if (state.schema_version !== 'phase24-topic-operation-1.0' || state.operation_id !== operationId
+      || state.candidate_fingerprint !== candidateFingerprint || !['pending', 'cancelled'].includes(state.status)) fail('P24_OPERATION_STATE_INVALID');
+    const attempt = await observe(root, CONTROL + '/runs/' + operationId + '/TOPIC-ATTEMPT.json');
+    if (attempt.exists) {
+      const value = JSON.parse(attempt.bytes), grant = value.controller_grant;
+      verifyControllerGrant(grant, root, operationId, trustAnchor);
+      const payload = grant.payload;
+      if (value.schema_version !== 'phase24-topic-attempt-1.0' || payload.kind !== 'topic-attempt'
+        || payload.candidate_fingerprint !== candidateFingerprint || !identifier(payload.generation) || !identifier(payload.transaction_id)) fail('P24_CANCELLATION_INPUT_INVALID');
+      const committed = await observe(root, PHASE22_COMMIT_PATH);
+      if (committed.exists && JSON.parse(committed.bytes).generation_id === payload.generation) fail('P24_ALREADY_COMMITTED');
+      const journal = await observe(root, CONTROL + '/transactions/' + payload.transaction_id + '/journal.json');
+      if (journal.exists) {
+        const value = JSON.parse(journal.bytes); checkJournal(value);
+        if (value.run_id !== operationId || value.generation !== payload.generation || value.transaction_id !== payload.transaction_id) fail('P22_TRANSACTION_BINDING_INVALID');
+        if (value.state === 'committed') fail('P24_ALREADY_COMMITTED');
+        if (value.events.some(row => row.type === 'promotion_intent') || !['prepared', 'staged', 'rolled_back'].includes(value.state)) fail('P24_OPERATION_IN_PROGRESS');
+      }
+    }
+    await assertLock(ctx, lock);
+    await writeRegisteredRecord(ctx, statePath, jsonBytes({ ...state, status: 'cancelled' }), { replace: true });
+    return { ok: true, status: 'cancelled', operation_id: operationId, candidate_fingerprint: candidateFingerprint, business_writes: 0 };
+  } finally { if (lock) await releaseLock(ctx, lock); }
+}
+
+/** Cancel under the original publication lock, without changing any committed business bytes. */
+export async function cancelRegisteredTopicOperation({ vaultRoot, operationId, candidateFingerprint, cancellationGrant, trustAnchor } = {}) {
+  if (!identifier(operationId)) fail('P24_OPERATION_INVALID');
+  const registration = await topicRegistration(vaultRoot, operationId, trustAnchor);
+  verifyControllerGrant(cancellationGrant, registration.root, operationId, registration.anchor);
+  const expected = cancellationPayload(registration, operationId, candidateFingerprint);
+  if (!same(cancellationGrant.payload, expected)) fail('P24_CANCELLATION_INPUT_INVALID');
+  const ctx = runtime(registration.root, 'cancellation-' + randomUUID());
+  let lock;
+  try {
+    try { lock = await acquireLock(ctx, hash(cancellationGrant)); }
+    catch (error) { if (error.code === 'P22_VAULT_LOCKED') fail('P24_OPERATION_IN_PROGRESS', error.details); throw error; }
+    const again = await topicRegistration(vaultRoot, operationId, registration.anchor);
+    if (!same(again.pointer, registration.pointer)) fail('P22_REGISTERED_RECORD_CHANGED');
+    const path = CONTROL + '/runs/' + operationId + '/TOPIC-CANCELLED.json';
+    const prior = await observe(registration.root, path);
+    if (prior.exists) {
+      const value = JSON.parse(prior.bytes);
+      verifyControllerGrant(value.cancellation_grant, registration.root, operationId, registration.anchor);
+      if (!same(value.cancellation_grant.payload, expected)) fail('P24_CANCELLATION_INPUT_INVALID');
+      return { ok: true, status: 'cancelled', operation_id: operationId, candidate_fingerprint: candidateFingerprint, business_writes: 0 };
+    }
+    const committed = await observe(registration.root, PHASE22_COMMIT_PATH);
+    if (committed.exists && JSON.parse(committed.bytes).generation_id === registration.bundle.plan.generation) fail('P24_ALREADY_COMMITTED');
+    const journal = await observe(registration.root, CONTROL + '/transactions/' + registration.bundle.transaction_id + '/journal.json');
+    if (journal.exists) {
+      const value = JSON.parse(journal.bytes); checkJournal(value);
+      if (value.state === 'committed') fail('P24_ALREADY_COMMITTED');
+      if (value.events.some(row => row.type === 'promotion_intent') || !['prepared', 'staged', 'rolled_back'].includes(value.state)) fail('P24_OPERATION_IN_PROGRESS');
+    }
+    await assertLock(ctx, lock);
+    await writeRegisteredRecord(ctx, path, jsonBytes({ schema_version: 'phase24-topic-cancellation-1.0', cancellation_grant: cancellationGrant }));
+    return { ok: true, status: 'cancelled', operation_id: operationId, candidate_fingerprint: candidateFingerprint, business_writes: 0 };
+  } finally { if (lock) await releaseLock(ctx, lock); }
+}
+
 /** Controller-only persistence bridge. JSON source text cannot create its live inputs. */
 export async function registerBilingualPublication(args = {}) {
   const { plan, sourceInputs } = args, record = await currentPlan(plan);
   if (!record.review || args.run !== plan.run_id || resolve(args.vaultRoot ?? '') !== plan.vault_root) fail('P22_REGISTERED_LIVE_REVIEW_REQUIRED');
   await checkPreimages(plan.vault_root, plan);
-  const captured = record.review.reviewManifest.profile === 'reading-first-obsidian-1.0'
+  const captured = record.review.reviewManifest.profile === 'phase24-topic-1.0'
+    ? await captureTopicPublicationRegistration({ sourceInputs, review: record.review })
+    : record.review.reviewManifest.profile === 'reading-first-obsidian-1.0'
     ? await captureReadingFirstPublicationRegistration({ sourceInputs, review: record.review })
     : record.review.reviewManifest.profile === 'phase22-reader-note-1.0'
       ? await captureReaderBindings(sourceInputs, record.review) : captureSourceBindings(sourceInputs, record.review);
@@ -1167,7 +1328,7 @@ export async function registerBilingualPublication(args = {}) {
   const controllerGrant = signControllerGrant({ schema_version: 'phase22-controller-grant-1.0', kind: 'registration',
     vault_root: plan.vault_root, run_id: plan.run_id, registration_hash: hash(pointer) });
   await writeRegisteredRecord(ctx, registrationPath, jsonBytes({ ...pointer, controller_grant: controllerGrant }), { replace: true });
-  if (captured.reader_recipe || captured.reading_first_recipe) {
+  if (captured.reader_recipe || captured.reading_first_recipe || captured.topic_recipe) {
     const ownBindings = [registrationPath, bundlePath, ...(authorityRef ? [authorityRef.path] : [])].map(path => fileBinding(join(plan.vault_root, path)));
     record.validatePromotion = () => { assertFileBindings(ownBindings); assertFileBindings(captured.source_bindings); assertFileBindings(captured.tool_bindings); };
   }
@@ -1186,6 +1347,7 @@ export async function loadBilingualPublication({ vaultRoot, run, requireApproval
     || pointer.schema_version !== 'phase22-publication-registration-1.0' || pointer.run_id !== run || pointer.vault_root !== root
     || typeof pointer.bundle?.path !== 'string' || !pointer.bundle.path.startsWith(CONTROL + '/runs/' + run + '/')) fail('P22_REGISTRATION_INVALID');
   const trustedAnchor = verifyControllerGrant(pointer.controller_grant, root, run, trustAnchor);
+  await assertTopicOperationNotCancelled({ vaultRoot: root, operationId: run, trustAnchor: trustedAnchor });
   const { controller_grant: registrationGrant, ...pointerBody } = pointer;
   if (registrationGrant.payload.kind !== 'registration' || registrationGrant.payload.registration_hash !== hash(pointerBody)) fail('P22_CONTROLLER_GRANT_INVALID');
   const stored = await observe(root, pointer.bundle.path);
@@ -1220,8 +1382,12 @@ export async function loadBilingualPublication({ vaultRoot, run, requireApproval
     control = { dispatchContext: broker.dispatchContext, runId: run };
   } else if (requireApproval) fail('P22_PUBLICATION_CONTROL_REQUIRED');
   let rebuiltReview = null;
-  if (['phase22-reader-note-1.0', 'reading-first-obsidian-1.0'].includes(bundle.reviewManifest.profile)) {
-    if (bundle.reviewManifest.profile === 'reading-first-obsidian-1.0') {
+  if (['phase24-topic-1.0', 'phase22-reader-note-1.0', 'reading-first-obsidian-1.0'].includes(bundle.reviewManifest.profile)) {
+    if (bundle.reviewManifest.profile === 'phase24-topic-1.0') {
+      if (!bundle.topic_recipe) fail('P24_RECIPE_REQUIRED');
+      rebuiltReview = await rebuildRegisteredTopicReview(bundle.topic_recipe, { registration: pointer,
+        bundleBytes: stored.bytes, trustAnchor: trustedAnchor });
+    } else if (bundle.reviewManifest.profile === 'reading-first-obsidian-1.0') {
       if (!bundle.reading_first_recipe) fail('RF_PUBLICATION_RECIPE_REQUIRED');
       rebuiltReview = await rebuildRegisteredReadingFirstReview(bundle.reading_first_recipe, { registration: pointer,
         bundleBytes: stored.bytes, trustAnchor: trustedAnchor });
@@ -1241,5 +1407,5 @@ export async function loadBilingualPublication({ vaultRoot, run, requireApproval
   const validatePromotion = rebuiltReview ? () => { assertFileBindings(ownBindings); assertFileBindings(bundle.source_bindings); assertFileBindings(bundle.tool_bindings); } : null;
   plans.set(plan, { stamp: planStamp(plan), review: rebuiltReview, validate, validatePromotion, controllerGrant, trustAnchor: trustedAnchor, transactionId: bundle.transaction_id });
   await validate();
-  return { plan, reviewManifest: bundle.reviewManifest, authority, control };
+  return { plan, reviewManifest: bundle.reviewManifest, ...(rebuiltReview ? { review: rebuiltReview } : {}), authority, control };
 }

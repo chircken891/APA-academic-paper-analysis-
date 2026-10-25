@@ -1,6 +1,6 @@
 # Bounded execution and recovery
 
-For new unbound `reading-first-1.0`, follow the [Controller call chain below](#controller-call-chain-for-a-new-authorized-run): create/freeze run control, use six actual science artifacts, accept source-first Writers and, when configured, the bound Reading Editor, render and sample native behavior when available, then one overall review with at most one material local recheck. Independent source-first/scientific-audit/pre-render parity and per-fragment auditing are historical bound-contract behavior only. Use the current checked-out repository root; preserve historical registered paths and original budget/handles.
+For new unbound `reading-first-1.0`, follow the [Controller call chain below](#controller-call-chain-for-a-new-authorized-run): create/freeze run control, use six actual science artifacts, accept source-first Writers and, when configured, the bound Reading Editor, render, then one overall review with at most one material local recheck. Independent source-first/scientific-audit/pre-render parity and per-fragment auditing are historical bound-contract behavior only. Use the current checked-out repository root; preserve historical registered paths and original budget/handles.
 
 Use the current package's existing RUN, authorization, checkpoint, and results files. Do not introduce another mandatory ledger or duplicate the source bundle just to follow this guide.
 
@@ -89,10 +89,13 @@ import {
 const prepared = prepareConfiguredReading({
   repoRoot,
   runId, scientificInput, mainSession, authorizationId, deadline,
+  sourceLanguage: 'en', // Actual primary paper language; determine from its source.
   maxCalls, taskBindings, controllerActorId,
   // Only for a new run with explicitly approved enrichment scope:
   enrichmentPolicy, maxTotalCalls,
 });
+// The saved reading.source_language separately selects the first Writer;
+// it does not change the actual source language or note-directory routing.
 const control = prepared.runControl;
 const artifactRoot = prepared.paths.runRoot;
 const broker = createOwnedArtifactBroker({
@@ -157,8 +160,6 @@ const savedCandidate = await materializeConfiguredReadingCandidate({
   prepared, controller, handoff, resources, targetRegistry, existingTargets,
   presentationOptions: { knowledgeRegistry },
 });
-// Before the one overall review, perform available, authorized native sampling
-// on the saved candidate and record the exact scope and revision (see below).
 const request = createReadingFirstReviewRequest({ controller, presentation });
 // Execute this one overall request and accept its real native/owned result
 // with acceptReadingFirstResult, exactly as for Writers.
@@ -184,6 +185,3 @@ The configured factory freezes the selected local choices and resolves follow-ma
 The old C-path junction preserves file access, not seamless runtime recovery: historical Phase22 checkpoints bound physical `artifact_root` to C while the current real path is D, so restore may reject the original binding. Preserve historical source bytes/results and expired budget; any future continuation must use the existing explicit recovery/rebinding approval path, never edit history to manufacture a pass.
 
 
-### Native observations before the overall review
-
-Save the final candidate and, when authorized and available, sample actual Obsidian behavior before issuing the one overall review: paper-to-knowledge language jumps, overview/back-links, important image crops and full-size links, table orientation/continuations, and formulas. Use the affected subset; do not click every link by default. Record actual candidate paths/revision, observed actions/results and unobserved scope in the existing task record. Let the Verifier reference those observations through the existing supported review-material path; do not invent a runtime field or alter an emitted request. The Verifier attributes Controller observations instead of claiming personal GUI inspection. If native access is unavailable, record `not_run` or `partial` and preserve that limit. See [presentation-and-reading-review.md](presentation-and-reading-review.md).

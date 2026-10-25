@@ -30,12 +30,13 @@ export function resolveReadingWorkflowProfile({existingBinding, newRun = false} 
 }
 
 /** Controller proposal factory. Freeze this returned control in the existing broker. */
-export function createReadingFirstRunControl({runId, scientificInput, mainSession, authorizationId, deadline, maxCalls = 6, taskBindings, enrichmentPolicy, maxTotalCalls, priorCalls = 0, hostResultAgentIdPath = ['agent_id'], existingBinding, controllerActorId = 'controller', presentationRequired = true, writingMode = 'independent', sourceLanguage = 'en', presentationMode = 'writer', configuredSetup} = {}) {
+export function createReadingFirstRunControl({runId, scientificInput, mainSession, authorizationId, deadline, maxCalls = 6, taskBindings, enrichmentPolicy, maxTotalCalls, priorCalls = 0, hostResultAgentIdPath = ['agent_id'], existingBinding, controllerActorId = 'controller', presentationRequired = true, writingMode = 'independent', sourceLanguage = 'en', firstWritingLanguage, presentationMode = 'writer', noteLayout = 'source-language-1.0', configuredSetup} = {}) {
   if (existingBinding !== undefined) fail('READING_FIRST_EXISTING_BINDING_PRESERVED');
   if (!text(runId) || scientificInput?.identity?.run_id !== runId || !text(authorizationId)
     || !Number.isFinite(Date.parse(deadline)) || !Number.isInteger(maxCalls) || maxCalls < (presentationMode === 'reading-editor' ? 4 : 3) || maxCalls > (presentationMode === 'reading-editor' ? 7 : 6)) fail('READING_FIRST_CONTROL_INVALID');
   if (!['writer','reading-editor'].includes(presentationMode)) fail('READING_FIRST_PRESENTATION_MODE_INVALID');
-  if (!['independent','source-first'].includes(writingMode) || !languages.includes(sourceLanguage)) fail('READING_FIRST_WRITING_MODE_INVALID');
+  if (!['source-language-1.0','legacy-flat-1.0'].includes(noteLayout)) fail('READING_FIRST_NOTE_LAYOUT_INVALID');
+  if (!['independent','source-first'].includes(writingMode) || !languages.includes(sourceLanguage) || firstWritingLanguage !== undefined && !languages.includes(firstWritingLanguage)) fail('READING_FIRST_WRITING_MODE_INVALID');
   if (!Array.isArray(hostResultAgentIdPath) || !hostResultAgentIdPath.length || !hostResultAgentIdPath.every(text)) fail('READING_FIRST_HOST_RESULT_PATH_INVALID');
   if (!Number.isInteger(priorCalls) || priorCalls < 0 || (maxTotalCalls !== undefined && (!Number.isInteger(maxTotalCalls) || maxTotalCalls < maxCalls + priorCalls)) || priorCalls > 0 && maxTotalCalls === undefined) fail('READING_FIRST_CALL_BUDGET_INVALID');
   if (enrichmentPolicy && (!Array.isArray(enrichmentPolicy.sources) || !Number.isInteger(maxTotalCalls) || maxTotalCalls < maxCalls || enrichmentPolicy.sources.some(source => !text(source.id) || !['original_page','cited_method','authoritative_method','official_method'].includes(source.kind) || !text(source.version) || !text(source.scope)))) fail('READING_FIRST_ENRICHMENT_POLICY_INVALID');
@@ -46,7 +47,7 @@ export function createReadingFirstRunControl({runId, scientificInput, mainSessio
     sourceCurrent(enrichmentPolicy.sources);
   }
   const input = {...copy(scientificInput), profile: resolveReadingWorkflowProfile({newRun:true})};
-  return freeze({run_id:runId, reading_first_binding:{profile:input.profile, ...(presentationMode === 'reading-editor' ? {presentation_mode:presentationMode} : {}), presentation_required:presentationRequired, writing_mode:writingMode, source_language:sourceLanguage, input_fingerprint:fingerprintV3Json(input),
+  return freeze({run_id:runId, reading_first_binding:{profile:input.profile, ...(presentationMode === 'reading-editor' ? {presentation_mode:presentationMode} : {}), presentation_required:presentationRequired, writing_mode:writingMode, source_language:sourceLanguage, ...(firstWritingLanguage !== undefined ? {first_writing_language:firstWritingLanguage} : {}), note_layout:noteLayout, input_fingerprint:fingerprintV3Json(input),
     role_model_policy:configuredSetup?.role_model_policy ?? createApaRoleModelPolicy(mainSession), ...(configuredSetup ? {configured_setup:copy(configuredSetup)} : {}), authorization_id:authorizationId, controller_actor_id:controllerActorId, host_result_agent_id_path:copy(hostResultAgentIdPath), deadline, max_calls:maxCalls, task_bindings:copy(taskBindings), ...(priorCalls ? {prior_calls:priorCalls} : {}), ...(maxTotalCalls !== undefined ? {max_total_calls:maxTotalCalls} : {}), ...(enrichmentPolicy ? {enrichment_policy:copy(enrichmentPolicy)} : {})}});
 }
 
@@ -299,7 +300,7 @@ export async function acceptReadingFirstResult({controller, request, observation
     const material = value.issues.some(issue=>issue.severity==='material') || ['complete','coherent','bilingual_consistent'].some(key=>value.overall[key]===false);
     const affected = new Set(value.issues.filter(issue=>issue.severity==='material').flatMap(issue=>issue.affected_languages?.length?issue.affected_languages:languages));
     if (material && !affected.size) languages.forEach(lang=>affected.add(lang));
-    if (state.binding.writing_mode==='source-first' && affected.has(state.binding.source_language)) languages.forEach(lang=>affected.add(lang));
+    if (state.binding.writing_mode==='source-first' && affected.has(firstWritingLanguageOf(state.binding))) languages.forEach(lang=>affected.add(lang));
     const editorOnly = state.binding.presentation_mode === 'reading-editor' && value.issues.some(issue=>issue.severity==='material') && value.issues.filter(issue=>issue.severity==='material').every(issue=>['presentation','layout','navigation','emphasis','method-inventory'].includes(issue.kind));
     const repairCalls=editorOnly ? 2 : affected.size + (state.binding.presentation_mode === 'reading-editor' ? 2 : 1);
     const canRevise = state.reviews < 2 && state.requestLog.filter(item=>!['evidence','methods','results'].includes(item.role)).length + repairCalls <= state.binding.max_calls && state.callsUsed + repairCalls <= (state.binding.max_total_calls ?? state.binding.max_calls)
@@ -325,6 +326,7 @@ export function renderReadingFirstNotes({controller, targetRegistry, existingTar
   if (state.binding.presentation_required && !state.handoff.presentation) fail('READING_FIRST_PRESENTATION_REQUIRED');
   const output = state.handoff.presentation ? renderReadingFirstObsidian({
     identity:state.handoff.identity, views:languages.map(language=>state.views[language].value),
+    noteLayout:state.binding.note_layout, sourceLanguage:state.binding.source_language,
     presentation:state.handoff.presentation, ...(state.readingEditor ? {readingEditor:state.readingEditor.value} : {}), targetRegistry, existingTargets, knowledgeRegistry,
   }) : {notes:languages.map(language => ({language, content:state.views[language].value.sections.map(section=>'## '+section.heading+'\n\n'+section.paragraphs.join('\n\n')).join('\n\n')}))};
   // Bytes remain in the file exporter; the controlled review consumes complete text and resource paths.
@@ -355,12 +357,12 @@ export function createReadingFirstRevisionRequests({controller} = {}) {
   if (!state.pendingRevisions) {
     const affected=new Set(material.flatMap(issue=>issue.affected_languages?.length?issue.affected_languages:languages));
     if (['complete','coherent','bilingual_consistent'].some(key=>state.review.overall[key]===false)&&!affected.size) languages.forEach(lang=>affected.add(lang));
-    if (state.binding.writing_mode==='source-first' && affected.has(state.binding.source_language)) languages.forEach(lang=>affected.add(lang));
+    if (state.binding.writing_mode==='source-first' && affected.has(firstWritingLanguageOf(state.binding))) languages.forEach(lang=>affected.add(lang));
     state.pendingRevisions=[...affected].map(language=>language+'-r2'); state.revisionRequests=[];
   }
   let keys=state.pendingRevisions.filter(key=>!state.issued.has(key));
   if (state.binding.writing_mode==='source-first') {
-    const sourceKey=state.binding.source_language+'-r2';
+    const sourceKey=firstWritingLanguageOf(state.binding)+'-r2';
     if (keys.includes(sourceKey)) keys=[sourceKey];
     else if (state.pendingRevisions.includes(sourceKey) && !requests.get(state.requestEntries.get(sourceKey))?.consumed) fail('READING_FIRST_SOURCE_DRAFT_PENDING');
   }
@@ -444,7 +446,8 @@ function decodePublicationRendering(rendering) {
 }
 function renderedPublicationContent(state, rendering) {
   const output=renderReadingFirstObsidian({identity:state.handoff.identity,views:languages.map(language=>state.views[language].value),
-    presentation:state.handoff.presentation,...(state.readingEditor ? {readingEditor:state.readingEditor.value} : {}),...rendering});
+    presentation:state.handoff.presentation,...(state.readingEditor ? {readingEditor:state.readingEditor.value} : {}),...rendering,
+    noteLayout:state.binding.note_layout,sourceLanguage:state.binding.source_language});
   const {notes,supportNotes,...rest}=output;
   return {...rest,notes:notes.map(({bytes,...note})=>({...note,draft_receipt:state.views[note.language].receipt})),
     ...(supportNotes ? {supportNotes:supportNotes.map(({bytes,...note})=>note)} : {})};
@@ -547,7 +550,7 @@ export async function inspectReadingFirstPublicationSource(source) {
     review:copy(state.review),reading_review_fingerprint:fingerprintV3Json({review:state.review,receipt:record.reviewReceipt,presentation:state.reviewedPresentationFingerprint}),
     review_receipt:copy(record.reviewReceipt),view_receipts:Object.fromEntries(languages.map(language=>[language,copy(state.views[language].receipt)])),
     ...(state.readingEditor ? {reading_editor_receipt:copy(state.readingEditor.receipt)} : {}),source_bindings:recipe.source_bindings,tool_bindings:recipe.tool_bindings,
-    sources:copy(state.handoff.sources),presentation_assets:copy(state.handoff.presentation_assets ?? []),
+    sources:copy(state.handoff.sources),presentation:copy(state.handoff.presentation),presentation_assets:copy(state.handoff.presentation_assets ?? []),
     enrichment_sources:copy([...(state.binding.enrichment_policy?.sources ?? []),...(state.enrichmentSources ?? [])]),
     native_presentation:{status:'not_run'},calls_used:state.callsUsed});
 }
@@ -642,16 +645,17 @@ function enrichmentContext(state) {
 function enrichmentPending(state) {
   return state.enrichmentGaps.some(gap=>!state.enrichmentRecords.some(item=>item.round===state.enrichmentRound && item.value.resolutions.some(answer=>answer.gap_id===gap.id)));
 }
+function firstWritingLanguageOf(binding) { return binding.first_writing_language ?? binding.source_language; }
 function sourceViewPayload(state,language) {
-  if (state.binding.writing_mode!=='source-first' || language===state.binding.source_language) return {};
-  const source=state.views[state.binding.source_language];
+  if (state.binding.writing_mode!=='source-first' || language===firstWritingLanguageOf(state.binding)) return {};
+  const source=state.views[firstWritingLanguageOf(state.binding)];
   if (!source) fail('READING_FIRST_SOURCE_DRAFT_PENDING');
   return {source_view:source.value,source_view_receipt:source.receipt};
 }
 function draftRequests(state) {
   let eligible=languages.filter(language=>!state.issued.has(language));
   if (state.binding.writing_mode==='source-first') {
-    const source=state.binding.source_language;
+    const source=firstWritingLanguageOf(state.binding);
     if (!state.views[source]) eligible=eligible.filter(language=>language===source);
   }
   return eligible.map(language=>describe(state,language,{handoff:state.handoff,language,...sourceViewPayload(state,language),...(state.binding.enrichment_policy?{enrichment_context:enrichmentContext(state)}:{})}));

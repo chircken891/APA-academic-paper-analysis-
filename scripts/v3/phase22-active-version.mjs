@@ -1,6 +1,7 @@
 import Ajv2020 from 'ajv/dist/2020.js';
 import YAML from 'yaml';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual as same } from 'node:util';
 import { readFileSync, lstatSync, realpathSync } from 'node:fs';
 import { resolve, relative, sep } from 'node:path';
 import { fingerprintV3Json as hash } from './semantic-package-validator.mjs';
@@ -15,6 +16,7 @@ import { INDEX_READING_FIRST_PROFILE, READING_FIRST_INDEX_REGIONS, getReadingFir
 export { INDEX_READING_FIRST_PROFILE, verifyReadingFirstPresentation, readingFirstIndexDocuments };
 
 export const INDEX_READER_PROFILE = 'phase22-reader-note-1.0';
+export const INDEX_TOPIC_PROFILE = 'phase24-topic-1.0';
 const readerValidator = await createPhase22ContractValidator();
 
 export const PHASE22_COMMIT_PATH = '.apa-v3/phase22/COMMITTED.json';
@@ -53,7 +55,7 @@ export function getIndexManagedBinding(bytes, { pipelineVersion = '3.0', profile
   if (!(bytes instanceof Uint8Array)) fail('P22_NOTE_BYTES_REQUIRED');
   if (pipelineVersion !== '3.0') fail('P22_NOTE_PROFILE_INVALID');
   if (profile === INDEX_READING_FIRST_PROFILE) return getReadingFirstManagedBinding(bytes);
-  if (profile === INDEX_READER_PROFILE) {
+  if (profile === INDEX_READER_PROFILE || profile === INDEX_TOPIC_PROFILE) {
     const inspected = inspectManagedNote(bytes);
     if (inspected.frontmatter.rendering_profile !== profile || pipelineVersion !== '3.0') fail('P22_NOTE_PROFILE_INVALID');
     return { ...inspected, regions: inspected.regions.map(region => ({ ...region, text: region.bytes.toString('utf8'),
@@ -120,6 +122,8 @@ function unique(values, code) {
 export function assertActiveGeneration(generation) {
   assertActiveIndexContract(generation, 'active');
   unique(generation.papers.map(p => p.paper_id), 'P22_ACTIVE_PAPER_DUPLICATE');
+  unique((generation.topics ?? []).map(row => row.topic_id), 'P24_TOPIC_DUPLICATE');
+  unique((generation.source_events ?? []).map(row => row.event_id), 'P24_SOURCE_EVENT_DUPLICATE');
   unique(generation.objects.map(o => normalizeIndexPath(o.path).normalize('NFC').toLowerCase()), 'P22_ACTIVE_PATH_COLLISION');
   unique(generation.shared_nodes.map(o => o.entity_id), 'P22_SHARED_ENTITY_DUPLICATE');
   unique(generation.shared_nodes.map(o => normalizeIndexPath(o.path)), 'P22_SHARED_PATH_DUPLICATE');
@@ -132,12 +136,22 @@ export function assertActiveGeneration(generation) {
         || generation.papers.filter(row => row.reader_presentation?.path === reference.path).length !== 1) fail('P221_READER_PRESENTATION_BINDING');
     }
     for (const path of Object.values(paper.paths)) {
-      if (!/^Wiki\/sources\/[^/]+\.md$/.test(path) || normalizeIndexPath(path) !== path
+      const notePath = paper.profile === INDEX_READING_FIRST_PROFILE
+        ? /^Wiki\/(sources|translations)\/[^/]+\.md$/ : /^Wiki\/sources\/[^/]+\.md$/;
+      if (!notePath.test(path) || normalizeIndexPath(path) !== path
         || objects.get(path)?.kind !== 'v3-note') fail('P22_ACTIVE_MEMBER_MISSING', { path });
       selected.push(path);
     }
   }
   unique(selected, 'P22_ACTIVE_PATH_COLLISION');
+  for (const topic of generation.topics ?? []) {
+    if (topic.path !== 'Wiki/topics/' + topic.topic_id + '.md' || objects.get(topic.path)?.kind !== 'topic'
+      || objects.get(topic.path).sha256 !== topic.managed_hash
+      || (topic.revision === 1 ? topic.previous_revision !== null : topic.previous_revision !== topic.revision - 1)) fail('P24_TOPIC_BINDING_INVALID');
+    const ids = topic.resolved_event_ids ?? [], resolutions = topic.event_resolutions ?? [];
+    if (new Set(ids).size !== ids.length || !same([...ids].sort(), resolutions.map(r => r.event_id).sort())
+      || resolutions.some(r => !(generation.source_events ?? []).some(e => e.event_id === r.event_id))) fail('P24_EVENT_RESOLUTION_INVALID');
+  }
   for (const node of generation.shared_nodes) {
     if (!/^Wiki\/(methods|concepts)\/[^/]+\.md$/.test(node.path) || objects.get(node.path)?.kind !== 'support') fail('P22_SHARED_MEMBER_INVALID', { path: node.path });
   }
@@ -149,6 +163,7 @@ export function assertActiveGeneration(generation) {
             : item.kind === 'asset' ? /^(Raw|Figures)\//.test(item.path) : /^(Wiki|Figures)\//.test(item.path);
     if (normalizeIndexPath(item.path) !== item.path || !allowed) fail('P22_INDEX_PATH_INVALID', { path: item.path });
     if (item.kind === 'reader-presentation' && !generation.papers.some(p => p.reader_presentation?.path === item.path)) fail('P221_READER_PRESENTATION_BINDING');
+    if (item.kind === 'topic' && !(generation.topics ?? []).some(topic => topic.path === item.path)) fail('P24_TOPIC_BINDING_INVALID');
     if (item.kind === 'v3-note' && !selected.includes(item.path)) fail('P22_UNSELECTED_NOTE', { path: item.path });
     if (item.kind === 'support' && !generation.shared_nodes.some(n => n.path === item.path)) fail('P22_SHARED_MEMBER_INVALID', { path: item.path });
   }
@@ -320,8 +335,29 @@ function readRegular(root, path) {
   return readFileSync(actual);
 }
 
+/** Derive searchable topic content solely from its managed byte regions. */
+export function topicIndexDocuments({ topic, bytes, generation }) {
+  const binding = getIndexManagedBinding(bytes, { profile: INDEX_TOPIC_PROFILE });
+  const expected = { type: 'topic', pipeline_version: '3.0', rendering_profile: INDEX_TOPIC_PROFILE,
+    topic_id: topic.topic_id, revision: topic.revision, language: topic.language, title: topic.title, graph_scope: 'v3-candidate' };
+  if (Object.entries(expected).some(([key, value]) => binding.frontmatter[key] !== value)
+    || !Array.isArray(binding.frontmatter.aliases) || binding.frontmatter.aliases.some(value => typeof value !== 'string')
+    || binding.managedHash !== topic.managed_hash
+    || generation.objects.find(row => row.path === topic.path)?.sha256 !== topic.managed_hash) fail('P24_TOPIC_MANAGED_BINDING_INVALID');
+  return binding.regions.map(region => ({ id: hash({ topic_id: topic.topic_id, revision: topic.revision, section_id: region.id }),
+    entity_type: 'topic', topic_id: topic.topic_id, revision: topic.revision, language: topic.language,
+    path: topic.path, managed_hash: topic.managed_hash, section_id: region.id, span_id: 'section:' + region.id,
+    anchor: null, unit_ids: [], content: region.content, aliases: binding.frontmatter.aliases.join(' '), title: topic.title }));
+}
+
 function verifyObjects(root, generation, index) {
   const readerPaths = new Set();
+  for (const topic of generation.topics ?? []) {
+    const expected = topicIndexDocuments({ topic, bytes: readRegular(root, topic.path), generation }).sort((a, b) => a.id.localeCompare(b.id));
+    const actual = index.documents.filter(row => row.entity_type === 'topic' && row.topic_id === topic.topic_id).sort((a, b) => a.id.localeCompare(b.id));
+    if (hash(expected) !== hash(actual)) fail('P24_TOPIC_INDEX_MAPPING_MISMATCH');
+    readerPaths.add(topic.path);
+  }
   for (const paper of generation.papers.filter(row => row.profile === INDEX_READING_FIRST_PROFILE)) {
     const presentation = verifyReadingFirstPresentation(paper, readRegular(root, paper.reader_presentation.path), generation);
     const notes = Object.fromEntries(Object.entries(paper.paths).map(([language, path]) => [language, readRegular(root, path)]));
@@ -368,6 +404,13 @@ export function assertIndexGeneration(index, generation) {
   const papers = new Map(generation.papers.map(p => [p.paper_id, p]));
   const represented = new Set();
   for (const doc of index.documents) {
+    if (doc.entity_type === 'topic') {
+      const topic = (generation.topics ?? []).find(row => row.topic_id === doc.topic_id);
+      if (!topic || ['revision', 'language', 'path', 'managed_hash'].some(key => doc[key] !== topic[key])
+        || doc.span_id !== 'section:' + doc.section_id) fail('P24_TOPIC_INDEX_STALE');
+      represented.add(doc.path);
+      continue;
+    }
     const p = papers.get(doc.paper_id), language = doc.language;
     const readingFirst = p?.profile === INDEX_READING_FIRST_PROFILE;
     const support = readingFirst && doc.entity_id !== undefined;
@@ -379,6 +422,7 @@ export function assertIndexGeneration(index, generation) {
   }
   if (generation.papers.some(p => Object.values(p.paths).some(path => !represented.has(path)
     || (p.profile === INDEX_READING_FIRST_PROFILE ? READING_FIRST_INDEX_REGIONS : PHASE22_REGIONS).some(id => !index.documents.some(d => d.path === path && d.section_id === id && d.span_id === 'section:' + id))))) fail('P22_INDEX_INCOMPLETE');
+  if ((generation.topics ?? []).some(topic => ['topic', 'sources'].some(id => !index.documents.some(doc => doc.entity_type === 'topic' && doc.topic_id === topic.topic_id && doc.section_id === id)))) fail('P24_TOPIC_INDEX_INCOMPLETE');
   return index;
 }
 
@@ -450,6 +494,20 @@ export function readCommittedReadingFirstPresentations(snapshot) {
     presentation: verifyReadingFirstPresentation(paper, readRegular(observed.root, paper.reader_presentation.path), snapshot.generation) }));
   assertCommittedSnapshot(snapshot);
   return freezePhase22Value(rows);
+}
+
+/** Resolve only the explicitly named archival snapshot, with its original committed pair and objects. */
+export async function readRegisteredGeneration({ vaultRoot, generationId, currentSnapshot } = {}) {
+  phase22GenerationPaths(generationId);
+  const current = currentSnapshot ?? await readCommittedGeneration({ vaultRoot });
+  if (!current.ok) fail('P24_COMMITTED_REQUIRED');
+  assertCommittedSnapshot(current);
+  if (current.generation_id === generationId) return { snapshot: current, physical_root: resolve(vaultRoot), historical: false };
+  const physicalRoot = resolve(vaultRoot, '.apa-v3/phase22/history', generationId, 'snapshot');
+  const snapshot = await readCommittedGeneration({ vaultRoot: physicalRoot });
+  if (!snapshot.ok || snapshot.generation_id !== generationId) fail('P24_REGISTERED_HISTORY_UNAVAILABLE', { generation_id: generationId, errors: snapshot.errors });
+  assertCommittedSnapshot(current);
+  return { snapshot, physical_root: physicalRoot, historical: true };
 }
 
 export function resolveActivePaper({ generation, paperId } = {}) {

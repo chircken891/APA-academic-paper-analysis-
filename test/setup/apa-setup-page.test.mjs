@@ -5,10 +5,39 @@ import os from 'node:os';
 import path from 'node:path';
 import { renderApaSetupPage } from '../../scripts/setup/apa-setup-page.mjs';
 import { configDifferences, copySetupPayload, createOperation, createSetupNavigator, createSetupResults, describeChanges, describeValue, fieldValue, flattenConfig, serializePayload, setupPages } from '../../Templates/apa-setup/page.js';
-import { loadApaConfig, applyApaConfigOperation } from '../../scripts/lib/apa-config.mjs';
+import { loadApaConfig, applyApaConfigOperation, exportApaConfig, inspectApaConfig } from '../../scripts/lib/apa-config.mjs';
+import { fields, readinessMessages } from '../../Templates/apa-setup/page.js';
 
 const config = { schema_version: 'apa-local-config-1.0', paths: { runs: '.tmp/old', parse: '.tmp/parse' }, reading: { source_language: 'en' } };
 const snapshot = { config, fingerprint: 'fingerprint', exists: true, path: 'config/apa.local.json' };
+test('query selection uses existing patch, export, import difference and removal boundaries', t => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-page-query-'));
+  t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+  assert.equal(fields.find(field => field.key === 'models.query').type, 'model');
+  const initial = applyApaConfigOperation({ repoRoot, operation: createOperation(loadApaConfig({ repoRoot }), { set: { 'paths.runs': '.tmp/runs', 'models.science': { mode: 'follow-main' } } }) });
+  const choice = fieldValue({ type: 'model' }, { mode: 'explicit', model: 'query-model', effort: 'high' });
+  const payload = createOperation(initial, { set: { 'models.query': choice } });
+  const saved = applyApaConfigOperation({ repoRoot, operation: JSON.parse(serializePayload(payload)) });
+  assert.deepEqual(saved.config, { ...initial.config, models: { ...initial.config.models, query: choice } });
+  assert.throws(() => applyApaConfigOperation({ repoRoot, operation: payload }), /STALE/);
+  const backup = exportApaConfig(saved.config);
+  assert.deepEqual(backup.answers.models.query, choice);
+  assert.deepEqual(configDifferences(initial.config, backup.answers), [{ key: 'models.query', before: undefined, after: choice }]);
+  const imported = applyApaConfigOperation({ repoRoot, operation: createOperation(saved, { set: { 'models.query': { mode: 'follow-main' } } }) });
+  assert.deepEqual(imported.config.models.query, { mode: 'follow-main' });
+  const removed = applyApaConfigOperation({ repoRoot, operation: createOperation(imported, { action: 'remove', remove: ['models.query'] }) });
+  assert.deepEqual(removed.config, initial.config);
+  const messages = readinessMessages(inspectApaConfig({ repoRoot }), inspectApaConfig({ repoRoot, capability: 'query' }));
+  assert.match(messages.query, /查询配置已就绪/);
+  assert.match(messages.query, /未检查.*模型/);
+  assert.match(messages.reading, /还需填写/);
+  const html = renderApaSetupPage({ snapshot: saved, inspection: inspectApaConfig({ repoRoot }), queryInspection: inspectApaConfig({ repoRoot, capability: 'query' }), repoRoot });
+  assert.match(html, /id="query-readiness"/);
+  const data = JSON.parse(html.match(/<script id="apa-setup-data" type="application\/json">(.*?)<\/script>/s)[1]);
+  assert.equal(data.queryInspection.ready, true);
+  assert.equal(data.inspection.ready, false);
+  assert.match(html, /data\.snapshot, data\.inspection, data\.queryInspection/);
+});
 
 test('clipboard copy uses the same serialized payload and reports when fallback is needed', async () => {
   const payload = createOperation(snapshot, { set: { 'paths.runs': '.tmp/new' } }); let written;
@@ -16,6 +45,39 @@ test('clipboard copy uses the same serialized payload and reports when fallback 
   assert.equal(written, serializePayload(payload));
   assert.equal(await copySetupPayload(payload, {}), false);
   assert.equal(await copySetupPayload(payload, { writeText: async () => { throw new Error('denied'); } }), false);
+});
+
+test('query preferences roundtrip through selected patches, backup differences and removal without changing reading', t => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-page-query-preferences-'));
+  t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+  const initial = applyApaConfigOperation({ repoRoot, operation: createOperation(loadApaConfig({ repoRoot }), { set: { 'reading.source_language': 'en', 'paths.candidates': '.tmp/candidates', 'writing_skills.humanizer': { enabled: false } } }) });
+  const preferences = { 'query.answer_language': 'zh-CN', 'query.detail': 'detailed', 'query.audience': 'beginner' };
+  const set = Object.fromEntries(Object.entries(preferences).map(([key, value]) => [key, fieldValue(fields.find(field => field.key === key), { value })]));
+  const saved = applyApaConfigOperation({ repoRoot, operation: createOperation(initial, { set }) });
+  const backup = exportApaConfig(saved.config);
+  assert.deepEqual(backup.answers.query, { answer_language: 'zh-CN', detail: 'detailed', audience: 'beginner' });
+  assert.deepEqual(configDifferences(initial.config, backup.answers), Object.entries(preferences).map(([key, after]) => ({ key, before: undefined, after })));
+  const changed = applyApaConfigOperation({ repoRoot, operation: createOperation(saved, { set: { 'query.detail': 'concise' } }) });
+  const changes = configDifferences(changed.config, backup.answers);
+  assert.deepEqual(changes, [{ key: 'query.detail', before: 'concise', after: 'detailed' }]);
+  const imported = applyApaConfigOperation({ repoRoot, operation: createOperation(changed, { set: Object.fromEntries(changes.map(item => [item.key, item.after])) }) });
+  assert.deepEqual(imported.config.query, saved.config.query);
+  const removed = applyApaConfigOperation({ repoRoot, operation: createOperation(imported, { action: 'remove', remove: Object.keys(preferences) }) });
+  assert.deepEqual(removed.config.query, {});
+  for (const key of ['reading', 'paths', 'writing_skills']) assert.deepEqual(removed.config[key], initial.config[key]);
+});
+
+test('query defaults are described without replacing reading language labels or selecting unsaved values', () => {
+  assert.equal(fields.find(field => field.key === 'models.query').group, 'query');
+  assert.equal(setupPages.find(page => page.id === 'query').flow, 'edit');
+  assert.equal(describeValue(undefined, 'query.answer_language'), '未配置；默认跟随问题语言');
+  assert.equal(describeValue(undefined, 'query.detail'), '未配置；默认按问题决定');
+  assert.equal(describeValue(undefined, 'query.audience'), '未配置；默认按问题决定');
+  assert.equal(describeValue('en', 'query.answer_language'), '英文');
+  assert.equal(describeValue('zh-CN', 'query.answer_language'), '中文');
+  assert.equal(describeValue('en', 'reading.source_language'), '先写英文，再写中文');
+  assert.deepEqual(createOperation(snapshot).set, {});
+  assert.deepEqual(fields.filter(field => field.group === 'query').map(field => field.key), ['models.query', 'query.answer_language', 'query.detail', 'query.audience']);
 });
 
 test('each function has its own navigation and returning home preserves form nodes', () => {
@@ -26,17 +88,17 @@ test('each function has its own navigation and returning home preserves form nod
   const navigator = createSetupNavigator({ pages, buttons, status, previous, next, onChange: page => observed.push(page.id) });
   const assertSingle = id => assert.deepEqual(pages.filter(page => !page.element.hidden).map(page => page.id), [id]);
   assertSingle('overview'); assert.equal(previous.disabled, true); assert.equal(next.disabled, true);
-  navigator.enter('edit'); assertSingle('science');
-  const scienceForm = pages[1].element.form; scienceForm.value = 'retained-model'; scienceForm.checked = true;
+  navigator.enter('edit'); assertSingle('query');
+  const queryForm = pages[1].element.form; queryForm.value = 'retained-model'; queryForm.checked = true;
   buttons[setupPages.findIndex(page => page.id === 'paths')].listeners.click(); assertSingle('paths');
-  navigator.show('science'); assertSingle('science'); assert.equal(pages[1].element.form, scienceForm); assert.equal(scienceForm.value, 'retained-model'); assert.equal(scienceForm.checked, true);
-  navigator.show('edit-result'); assertSingle('edit-result'); assert.equal(next.disabled, true); assert.match(status.textContent, /完善配置.*第 8 \/ 8 页/);
+  navigator.show('query'); assertSingle('query'); assert.equal(pages[1].element.form, queryForm); assert.equal(queryForm.value, 'retained-model'); assert.equal(queryForm.checked, true);
+  navigator.show('edit-result'); assertSingle('edit-result'); assert.equal(next.disabled, true); assert.match(status.textContent, /完善配置.*第 9 \/ 9 页/);
   assert.throws(() => navigator.show('remove'), /当前功能/); assertSingle('edit-result');
   navigator.home(); assertSingle('overview');
   navigator.enter('remove'); assertSingle('remove'); next.listeners.click(); assertSingle('remove-result'); assert.equal(next.disabled, true);
   previous.listeners.click(); assertSingle('remove');
   navigator.home(); navigator.enter('export'); assertSingle('export-section'); next.listeners.click(); assertSingle('export-result'); assert.equal(next.disabled, true);
-  navigator.home(); navigator.enter('edit'); assertSingle('science'); assert.equal(pages[1].element.form.value, 'retained-model');
+  navigator.home(); navigator.enter('edit'); assertSingle('query'); assert.equal(pages[1].element.form.value, 'retained-model');
   assert.throws(() => navigator.show('missing'), /未知/);
   assert.ok(observed.includes('remove-result')); assert.ok(observed.includes('export-result'));
 });

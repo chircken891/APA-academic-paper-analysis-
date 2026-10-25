@@ -9,7 +9,10 @@ export const APA_SCIENCE_ROLES = Object.freeze(['evidence', 'methods', 'results'
 export const APA_CONFIG_ROLES = Object.freeze(['english-writer', 'chinese-writer', 'reading-editor', 'independent-verifier']);
 export const APA_WRITING_SKILLS = Object.freeze(['nature-writing', 'nature-polishing', 'nature-shared', 'humanizer', 'humanizer-zh', 'stss']);
 const schemaPath = fileURLToPath(new URL('../../Schema/config/apa-config.schema.json', import.meta.url));
-const checkSchema = new Ajv({ allErrors: true }).compile(JSON.parse(fs.readFileSync(schemaPath, 'utf8')));
+const configSchema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
+const checkSchema = new Ajv({ allErrors: true }).compile(configSchema);
+const checkQueryPreferences = new Ajv({ allErrors: true }).compile(configSchema.properties.query);
+export const APA_QUERY_DEFAULTS = Object.freeze({ answer_language: 'question', detail: 'adaptive', audience: 'adaptive' });
 const clone = value => structuredClone(value);
 const blank = () => ({ schema_version: APA_CONFIG_VERSION });
 const absolute = (root, value) => path.resolve(root, value);
@@ -20,13 +23,20 @@ function contained(root, target) {
 const digest = text => crypto.createHash('sha256').update(text).digest('hex');
 const error = (code, details) => Object.assign(new Error(`${code}${details ? `: ${details}` : ''}`), { code });
 
-export function validateApaConfig(config, { repoRoot = process.cwd(), complete = false } = {}) {
+export function resolveQueryPreferences(configured = {}, overrides = {}) {
+  if (!checkQueryPreferences(configured) || !checkQueryPreferences(overrides)) throw error('APA_QUERY_PREFERENCES_INVALID');
+  return { ...APA_QUERY_DEFAULTS, ...configured, ...overrides };
+}
+
+export function validateApaConfig(config, { repoRoot = process.cwd(), complete = false, capability = 'reading' } = {}) {
+  if (!['reading', 'query'].includes(capability)) throw error('APA_CONFIG_CAPABILITY_INVALID', 'use reading or query');
   const validShape = checkSchema(config);
   const errors = validShape ? [] : checkSchema.errors.map(item => `${item.instancePath || '/'} ${item.message}`);
   for (const [key, value] of Object.entries(config?.paths ?? {})) {
     if (typeof value === 'string' && !contained(repoRoot, absolute(repoRoot, value))) errors.push(`paths.${key} must be inside repository`);
   }
   const missing = [];
+  if (capability === 'query') return { valid: errors.length === 0, complete: errors.length === 0, errors, missing };
   for (const key of ['models.science', ...APA_CONFIG_ROLES.map(role => `models.roles.${role}`), 'paths.runs', 'paths.parse', 'paths.candidates', 'parser.runtime_home', 'reading.source_language', 'reading.presentation_mode', ...APA_WRITING_SKILLS.map(skill => `writing_skills.${skill}.enabled`)]) {
     if (get(config, key) === undefined) missing.push(key);
   }
@@ -102,8 +112,10 @@ export function exportApaConfig(config) {
   return { schema_version: 'apa-config-export-1.0', answers: clone(config) };
 }
 
-export function inspectApaConfig({ repoRoot = process.cwd() } = {}) {
+export function inspectApaConfig({ repoRoot = process.cwd(), capability = 'reading' } = {}) {
   const snapshot = loadApaConfig({ repoRoot });
+  const validation = validateApaConfig(snapshot.config, { repoRoot, capability });
+  if (capability === 'query') return { ...snapshot, capability, validation, dependencies: [], ready: validation.complete, model_availability: 'not_checked' };
   const dependencies = [];
   const inspect = (key, value, kind) => {
     if (!value) return;
@@ -117,20 +129,25 @@ export function inspectApaConfig({ repoRoot = process.cwd() } = {}) {
   const parserDefaults = runtimeHome ? { python: path.join(runtimeHome, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'), config_path: path.join(runtimeHome, 'config.yaml') } : {};
   for (const key of ['python', 'config_path']) inspect(`parser.${key}`, snapshot.config.parser?.[key] ?? parserDefaults[key], 'file');
   for (const key of APA_WRITING_SKILLS) if (snapshot.config.writing_skills?.[key]?.enabled) inspect(`writing_skills.${key}`, snapshot.config.writing_skills[key].path, 'file');
-  const validation = validateApaConfig(snapshot.config, { repoRoot });
-  return { ...snapshot, validation, dependencies, ready: validation.complete && dependencies.every(item => item.status === 'available') };
+  return { ...snapshot, capability, validation, dependencies, ready: validation.complete && dependencies.every(item => item.status === 'available'), model_availability: 'not_checked' };
 }
 
-export function resolveApaConfig({ config, repoRoot = process.cwd(), mainSession, supportedModelPairs } = {}) {
-  const validation = validateApaConfig(config, { repoRoot, complete: true });
+export function resolveApaConfig({ config, repoRoot = process.cwd(), mainSession, supportedModelPairs, capability = 'reading' } = {}) {
+  const validation = validateApaConfig(config, { repoRoot, complete: true, capability });
   if (!validation.valid) throw error('APA_CONFIG_INCOMPLETE', [...validation.errors, ...validation.missing].join('; '));
   const resolveChoice = choice => {
     const pair = choice.mode === 'follow-main' ? mainSession : choice;
-    if (!pair || typeof pair.model !== 'string' || !['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(pair.reasoning_effort)) throw error('APA_MAIN_SESSION_INVALID');
+    if (!pair || typeof pair.model !== 'string' || !pair.model.trim() || !['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(pair.reasoning_effort)) throw error('APA_MAIN_SESSION_INVALID');
     const resolved = { model: pair.model, reasoning_effort: pair.reasoning_effort };
     if (supportedModelPairs && !supportedModelPairs.some(item => item.model === resolved.model && item.reasoning_effort === resolved.reasoning_effort)) throw error('APA_MODEL_UNSUPPORTED', `${resolved.model}/${resolved.reasoning_effort}`);
     return resolved;
   };
+  if (capability === 'query') {
+    const choice = config.models?.query ?? { mode: 'follow-main' };
+    if (choice.mode === 'explicit' && !Array.isArray(supportedModelPairs)) throw error('APA_MODEL_AVAILABILITY_UNKNOWN', 'provide current host supportedModelPairs to confirm the explicit query model');
+    if (supportedModelPairs !== undefined && !Array.isArray(supportedModelPairs)) throw error('APA_MODEL_AVAILABILITY_UNKNOWN', 'supportedModelPairs must be a current host capability list');
+    return { query: resolveChoice(choice), queryMode: choice.mode, queryPreferences: resolveQueryPreferences(config.query) };
+  }
   const roles = {};
   for (const role of APA_SCIENCE_ROLES) roles[role] = resolveChoice(config.models.overrides?.[role] ?? config.models.science);
   for (const role of APA_CONFIG_ROLES) roles[role] = resolveChoice(config.models.roles[role]);

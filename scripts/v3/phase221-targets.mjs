@@ -21,9 +21,9 @@ function safePart(value, preserveCase = false) {
 /** Retain P22 filename safety while limiting reader pages to their own directory. */
 export function validateReaderTargetPath(path) {
   if (typeof path !== 'string' || !path.isWellFormed() || path.length > READER_TARGET_MAX_UTF16
-    || !/^Wiki\/sources\/[^/]+\.(?:en|zh-CN)\.md$/.test(path)) fail('P221_TARGET_PATH_INVALID', { path });
+    || !/^Wiki\/(?:sources|translations)\/[^/]+\.(?:en|zh-CN)\.md$/.test(path)) fail('P221_TARGET_PATH_INVALID', { path });
   try {
-    validatePhase22TargetPath('Wiki/concepts/' + path.slice('Wiki/sources/'.length));
+    validatePhase22TargetPath('Wiki/concepts/' + path.split('/').at(-1));
   } catch (error) {
     if (error.code !== 'P22_TARGET_PATH_INVALID') throw error;
     fail('P221_TARGET_PATH_INVALID', { path });
@@ -35,6 +35,13 @@ function freezeRegistry(value) {
   return Object.freeze({ ...value, paper_targets: Object.freeze({ ...value.paper_targets }) });
 }
 
+function validateLayout(noteLayout, sourceLanguage) {
+  if (noteLayout !== undefined && !['legacy-flat-1.0', 'source-language-1.0'].includes(noteLayout)
+    || noteLayout === 'source-language-1.0' && !languages.includes(sourceLanguage)) fail('P221_TARGET_LAYOUT_INVALID');
+}
+
+const targetDirectory = (noteLayout, sourceLanguage, language) => noteLayout === 'source-language-1.0' && language !== sourceLanguage ? 'translations' : 'sources';
+
 function checkRegistry(value) {
   if (!value || value.schema_version !== schemaVersion || !/^pap_[0-9a-f]{32}$/.test(value.paper_id)
     || value.identity_fingerprint !== identityFingerprint(value.paper_id)
@@ -42,9 +49,10 @@ function checkRegistry(value) {
     || typeof value.human_slug !== 'string' || !value.human_slug.length
     || [...value.human_slug].length > READER_HUMAN_SLUG_MAX_CODEPOINTS
     || !value.paper_targets || Object.keys(value.paper_targets).length !== 2) fail('P221_TARGET_REGISTRY_INVALID');
+  validateLayout(value.note_layout, value.source_language);
   for (const language of languages) {
     validateReaderTargetPath(value.paper_targets[language]);
-    if (value.paper_targets[language] !== `Wiki/sources/${value.human_slug}--${value.discriminator}.${language}.md`) fail('P221_TARGET_REGISTRY_INVALID');
+    if (value.paper_targets[language] !== `Wiki/${targetDirectory(value.note_layout, value.source_language, language)}/${value.human_slug}--${value.discriminator}.${language}.md`) fail('P221_TARGET_REGISTRY_INVALID');
   }
   const { registry_fingerprint, ...body } = value;
   if (hash(body) !== registry_fingerprint) fail('P221_TARGET_REGISTRY_INVALID');
@@ -57,7 +65,8 @@ function checkRegistry(value) {
  * an array of actual relative path strings; only exact previously registered paths
  * for this paper may already be occupied. A display-title/revision edit never rekeys.
  */
-export function registerReaderTargets({ identity, registeredBibliography, existingRegistry = [], occupiedPaths = [], namingStyle = 'lowercase' } = {}) {
+export function registerReaderTargets({ identity, registeredBibliography, existingRegistry = [], occupiedPaths = [], namingStyle = 'lowercase', noteLayout, sourceLanguage } = {}) {
+  validateLayout(noteLayout, sourceLanguage);
   if (!['lowercase', 'bibliographic'].includes(namingStyle)) fail('P221_TARGET_BIBLIOGRAPHY_INVALID');
   if (!identity || !/^pap_[0-9a-f]{32}$/.test(identity.paper_id)) fail('P221_TARGET_IDENTITY_INVALID');
   if (!Array.isArray(occupiedPaths) || occupiedPaths.some(path => typeof path !== 'string' || !path.isWellFormed())) fail('P221_TARGET_PATH_INVALID');
@@ -88,7 +97,8 @@ export function registerReaderTargets({ identity, registeredBibliography, existi
     const identity_fingerprint = identityFingerprint(identity.paper_id), discriminator = identity_fingerprint.slice(7, 19);
     if (discriminators.has(discriminator)) fail('P221_TARGET_COLLISION');
     const body = { schema_version: schemaVersion, paper_id: identity.paper_id, identity_fingerprint, human_slug, discriminator,
-      paper_targets: Object.fromEntries(languages.map(language => [language, `Wiki/sources/${human_slug}--${discriminator}.${language}.md`])) };
+      ...(noteLayout === 'source-language-1.0' ? { note_layout: noteLayout, source_language: sourceLanguage } : {}),
+      paper_targets: Object.fromEntries(languages.map(language => [language, `Wiki/${targetDirectory(noteLayout, sourceLanguage, language)}/${human_slug}--${discriminator}.${language}.md`])) };
     registry = { ...body, registry_fingerprint: hash(body) };
   }
   const occupied = new Set(occupiedPaths.map(collisionKey));

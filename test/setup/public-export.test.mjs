@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { exportPublicApa, checkPublicApa } from '../../scripts/setup/export-public-apa.mjs';
 
 async function fixture(t, files = { 'entry.mjs': 'export const ready = true;\n' }) {
@@ -87,4 +89,60 @@ test('export package runs only the declared synthetic suites and leaves source p
   assert.equal(projected.scripts.test, 'node --test test/v3/synthetic.test.mjs');
   assert.equal(projected.scripts.apa, 'node entry.mjs');
   assert.equal(await readFile(join(f.sourceRoot, 'package.json'), 'utf8'), original);
+});
+
+test('current public export includes query and topic entries with their regression suites without personal answers', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'apa-public-query-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sourceRoot = fileURLToPath(new URL('../../', import.meta.url));
+  const outputRoot = join(root, 'public');
+  await exportPublicApa({ sourceRoot, outputRoot });
+  const manifest = JSON.parse(await readFile(join(outputRoot, 'apa-public-manifest.json'), 'utf8'));
+  const paths = new Set(manifest.files.map(row => row.path));
+  for (const path of ['.gitattributes', 'Templates/apa-public/.gitattributes', '.agents/skills/apa-query/SKILL.md', '.agents/skills/apa-query/agents/openai.yaml',
+    '.agents/skills/apa-query/references/query.md', '.agents/skills/apa-query/references/topics.md',
+    '.agents/skills/apa-query/references/contracts-and-tools.md', '.agents/skills/apa-query/references/writing.md',
+    '.agents/skills/apa-query/references/configuration.md',
+    'scripts/apa-query.mjs', 'scripts/v3/library-query.mjs',
+    'test/v3/library-query.test.mjs', 'test/v3/library-query-cli.test.mjs',
+    'test/v3/library-query-request.test.mjs', 'test/v3/library-query-request-cli.test.mjs',
+    'scripts/v3/topic-library.mjs', 'scripts/v3/topic-publication.mjs', 'Schema/phase24/topic.schema.json',
+    'test/v3/helpers/topic-fixtures.mjs', 'test/v3/topic-saving.test.mjs', 'test/v3/topic-publication.test.mjs',
+    'test/v3/topic-update.test.mjs', 'test/v3/topic-cancellation.test.mjs']) {
+    assert.ok(paths.has(path), 'Export is missing query dependency: ' + path);
+  }
+  const pkg = JSON.parse(await readFile(join(outputRoot, 'package.json'), 'utf8'));
+  assert.match(pkg.scripts.test, /test\/v3\/library-query\.test\.mjs/);
+  assert.match(pkg.scripts.test, /test\/v3\/library-query-cli\.test\.mjs/);
+  assert.match(pkg.scripts.test, /test\/v3\/library-query-request\.test\.mjs/);
+  assert.match(pkg.scripts.test, /test\/v3\/library-query-request-cli\.test\.mjs/);
+  assert.match(pkg.scripts.test, /test\/v3\/topic-saving\.test\.mjs/);
+  assert.match(pkg.scripts.test, /test\/v3\/topic-publication\.test\.mjs/);
+  assert.match(pkg.scripts.test, /test\/v3\/topic-update\.test\.mjs/);
+  assert.match(pkg.scripts.test, /test\/v3\/topic-cancellation\.test\.mjs/);
+  assert.equal(paths.has('config/apa.local.json'), false);
+  assert.equal([...paths].some(path => /^(?:Eval\/|\.planning\/|\.apa-v3\/)/.test(path)), false);
+  for (const path of [...paths].filter(path => path.startsWith('Wiki/'))) {
+    assert.match(path, /\/\.gitkeep$/);
+    assert.equal((await readFile(join(outputRoot, path))).length, 0, 'Only empty directory placeholders may be exported from Wiki');
+  }
+  assert.equal((await checkPublicApa({ root: outputRoot })).ok, true);
+});
+
+test('public Git checkout preserves manifest-bound LF and CRLF bytes with autocrlf enabled', async t => {
+  const f = await fixture(t, { 'README.md': 'Synthetic public guide.\n', 'config/environment.json': '{"version":1}\r\n' });
+  const template = await readFile(new URL('../../Templates/apa-public/.gitattributes', import.meta.url));
+  await writeFile(join(f.sourceRoot, 'attributes.template'), template);
+  f.allowlist.templates.push({ source: 'attributes.template', path: '.gitattributes' });
+  await exportPublicApa(f);
+  const git = (...args) => execFileSync('git', ['-c', 'core.autocrlf=true', '-c', 'core.safecrlf=false', ...args], { cwd: f.outputRoot, stdio: 'pipe' });
+  git('init', '--quiet');
+  git('add', '--all');
+  const checkoutRoot = join(f.root, 'checkout');
+  await mkdir(checkoutRoot);
+  git('checkout-index', '--all', '--prefix=' + checkoutRoot.replaceAll('\\', '/') + '/');
+  for (const name of ['README.md', 'config/environment.json', 'apa-public-manifest.json']) {
+    assert.deepEqual(await readFile(join(checkoutRoot, name)), await readFile(join(f.outputRoot, name)), name);
+  }
+  assert.equal((await checkPublicApa({ root: checkoutRoot })).ok, true);
 });

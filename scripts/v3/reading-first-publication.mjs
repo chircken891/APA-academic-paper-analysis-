@@ -111,6 +111,26 @@ function requireV3Knowledge(bytes, path) {
   const front = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(bytes.toString('utf8'));
   if (!front || YAML.parse(front[1])?.pipeline_version !== '3.0') fail('RF_PUBLICATION_SUPPORT_VERSION_INVALID', { path });
 }
+function metadataMigrations(rows, candidate) {
+  if (!Array.isArray(rows)) fail('RF_PUBLICATION_METADATA_MIGRATION_INVALID');
+  const result = new Map();
+  for (const row of rows) {
+    if (!row || !same(Object.keys(row).sort(), ['candidate_sha256', 'before_sha256', 'output_sha256', 'path'].sort())
+      || !candidate.supportNotes?.some(note => note.path === row.path) || result.has(row.path)
+      || ['before_sha256', 'candidate_sha256', 'output_sha256'].some(key => !/^sha256:[a-f0-9]{64}$/.test(row[key]))) fail('RF_PUBLICATION_METADATA_MIGRATION_INVALID');
+    result.set(row.path, clone(row));
+  }
+  return result;
+}
+function migrateKnowledgeMetadata(bytes, path) {
+  const text = bytes.toString('utf8'), front = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
+  const metadata = front && YAML.parse(front[1]);
+  if (!metadata || metadata.pipeline_version !== '2.0.0' || metadata.graph_scope !== 'v2-canonical'
+    || !/^pipeline_version: 2\.0\.0\r?$/m.test(front[0]) || !/^graph_scope: v2-canonical\r?$/m.test(front[0])) fail('RF_PUBLICATION_METADATA_MIGRATION_INVALID', { path });
+  const header = front[0].replace(/^pipeline_version: 2\.0\.0\r?$/m, 'pipeline_version: "3.0"')
+    .replace(/^graph_scope: v2-canonical\r?$/m, 'graph_scope: v3-candidate');
+  return Buffer.from(header + text.slice(front[0].length));
+}
 async function baseFor(root) {
   if (regularBytes(root, '.apa-v3/phase22/COMMITTED.json', { missing: true }) === null) return { snapshot: null, generation: null, index: null, files: new Map() };
   const snapshot = await readCommittedGeneration({ vaultRoot: root });
@@ -128,7 +148,18 @@ function resourceBindings(data, resources) {
     paths.add(resource.path);
     const found = registered.find(row => resolve(row.path) === resolve(resource.source_path)
       && row.sha256 === resource.sha256 && row.byte_length === resource.byte_length);
-    if (!found) fail('RF_PUBLICATION_RESOURCE_UNREGISTERED', { path: resource.path });
+    if (!found) {
+      // Integrator-owned visual metadata is also frozen into the reviewed candidate.
+      // It binds the image bytes and the exact registered PDF from which they came.
+      const visuals = (data.candidate.visual_resources ?? []).filter(row => row.path === resource.path
+        && row.sha256 === resource.sha256 && row.byte_length === resource.byte_length);
+      const visual = visuals.length === 1 ? visuals[0] : null;
+      const parent = visual && data.sources.find(row => row.id === visual.source_id && row.sha256 === visual.source_sha256);
+      const parentResource = parent && resources.find(row => row.path === visual.source_path
+        && typeof row.source_path === 'string' && resolve(row.source_path) === resolve(parent.path)
+        && row.sha256 === parent.sha256 && row.byte_length === parent.byte_length);
+      if (!parentResource) fail('RF_PUBLICATION_RESOURCE_UNREGISTERED', { path: resource.path });
+    }
     const current = binding(resource.source_path);
     if (current.sha256 !== resource.sha256 || current.byte_length !== resource.byte_length) fail('RF_PUBLICATION_RESOURCE_CHANGED', { path: resource.path });
     result.push({ ...clone(resource), source_path: current.path });
@@ -137,13 +168,25 @@ function resourceBindings(data, resources) {
   if (!same([...paths].sort(), expected)) fail('RF_PUBLICATION_RESOURCE_INVENTORY_INCOMPLETE');
   return result;
 }
+function publicationCitation(data, resources) {
+  const catalog = data.presentation;
+  if (!catalog) return undefined;
+  const resource = resources.find(row => row.path === catalog.source_pdf);
+  const source = resource && data.sources.find(row => resolve(row.path) === resource.source_path
+    && row.sha256 === resource.sha256 && row.byte_length === resource.byte_length);
+  if (!source) fail('RF_PUBLICATION_CITATION_SOURCE_UNREGISTERED');
+  return { bibliography: clone(catalog.bibliography), sources: [{ source_id: source.id, path: resource.path,
+    sha256: resource.sha256, byte_length: resource.byte_length, source_version: typeof source.version === 'string' ? source.version : null,
+    locators: (catalog.visuals ?? []).map(row => ({ kind: row.kind, id: row.id, page: row.page, label: clone(row.label) })) }] };
+}
 
 /** Prepare the exact accepted reading output for the existing V3 publication transaction. */
-export async function buildReadingFirstPublicationReview({ source, vaultRoot, generation, evidenceMode = 'actual', resources } = {}) {
+export async function buildReadingFirstPublicationReview({ source, vaultRoot, generation, evidenceMode = 'actual', resources, knowledgeMetadataMigrations } = {}) {
   const data = await inspectReadingFirstPublicationSource(source);
   if (data.origin !== 'live') fail('RF_PUBLICATION_LIVE_SOURCE_REQUIRED');
   const root = rootPath(vaultRoot), base = await baseFor(root);
-  const options = { vaultRoot: root, generation, evidenceMode, resources: resourceBindings(data, resources) };
+  const options = { vaultRoot: root, generation, evidenceMode, resources: resourceBindings(data, resources),
+    ...(knowledgeMetadataMigrations === undefined ? {} : { knowledgeMetadataMigrations: clone(knowledgeMetadataMigrations) }) };
   return buildReview({ source, data, options, base, preimages: null });
 }
 
@@ -183,7 +226,7 @@ async function buildReview({ source, data, options, base, preimages }) {
     const matches = candidate.notes.filter(row => row.language === language);
     if (matches.length !== 1 || typeof matches[0].content !== 'string') fail('RF_PUBLICATION_NOTES_REQUIRED');
     const note = matches[0], path = safePath(note.path), bytes = Buffer.from(note.content), original = before(path);
-    if (!/^Wiki\/sources\/[^/]+\.md$/.test(path)) fail('RF_PUBLICATION_NOTE_PATH_INVALID');
+    if (!/^Wiki\/(sources|translations)\/[^/]+\.md$/.test(path)) fail('RF_PUBLICATION_NOTE_PATH_INVALID');
     const inspected = inspectManagedNote(bytes);
     if (inspected.frontmatter.paper_id !== identity.paper_id || inspected.frontmatter.language !== language
       || inspected.frontmatter.rendering_profile !== profile || inspected.frontmatter.pipeline_version !== '3.0') fail('RF_PUBLICATION_NOTE_IDENTITY_MISMATCH');
@@ -202,13 +245,22 @@ async function buildReview({ source, data, options, base, preimages }) {
   }
   const shared = new Map((base.generation?.shared_nodes ?? []).map(row => [row.path, clone(row)]));
   const supportTargets = [];
+  const migrations = metadataMigrations(options.knowledgeMetadataMigrations ?? [], candidate);
   for (const note of candidate.supportNotes ?? []) {
-    const path = safePath(note.path), bytes = Buffer.from(note.content), original = before(path);
+    const path = safePath(note.path), reviewed = Buffer.from(note.content), original = before(path), migration = migrations.get(path);
     if (!/^Wiki\/(methods|concepts)\/[^/]+\.md$/.test(path)) fail('RF_PUBLICATION_SUPPORT_PATH_INVALID');
+    let bytes = reviewed, comparison = original;
+    if (migration) {
+      if (original === null || sha(original) !== migration.before_sha256 || sha(reviewed) !== migration.candidate_sha256) fail('RF_PUBLICATION_METADATA_MIGRATION_MISMATCH', { path });
+      bytes = migrateKnowledgeMetadata(reviewed, path);
+      comparison = migrateKnowledgeMetadata(original, path);
+      if (sha(bytes) !== migration.output_sha256) fail('RF_PUBLICATION_METADATA_MIGRATION_MISMATCH', { path });
+    }
     requireV3Knowledge(bytes, path);
-    if (original !== null && !original.equals(bytes)) { requireV3Knowledge(original, path); sameHumanKnowledge(original, bytes); }
+    if (comparison !== null && !comparison.equals(bytes)) { requireV3Knowledge(comparison, path); sameHumanKnowledge(comparison, bytes); }
     const entityId = shared.get(path)?.entity_id ?? 'rf_' + hash({ path }).slice(7, 39);
-    shared.set(path, { entity_id: entityId, path }); supportTargets.push({ entity_id: entityId, path });
+    shared.set(path, { entity_id: entityId, path });
+    supportTargets.push({ entity_id: entityId, path });
     add(path, 'support', bytes, { entity_id: entityId });
   }
   for (const resource of options.resources) {
@@ -225,6 +277,8 @@ async function buildReview({ source, data, options, base, preimages }) {
     presentation_fingerprint: candidate.presentation_fingerprint, scientific_input_fingerprint: data.scientific_input_fingerprint,
     evidence_mode: options.evidenceMode, dependencies, qualification: { reading_status: 'reading_complete', native_status: data.native_presentation.status },
     targets: { presentation: manifestPath, notes: noteTargets, support: supportTargets, assets: options.resources.map(row => row.path) }, navigation: [] };
+  const citation = publicationCitation(data, options.resources);
+  if (citation) presentation.citation = citation;
   assertReadingFirstPublicationManifest(presentation);
   const manifestBytes = jsonBytes(presentation);
   add(manifestPath, 'reader-presentation', manifestBytes);
@@ -237,6 +291,8 @@ async function buildReview({ source, data, options, base, preimages }) {
   for (const resource of options.resources) if (!objects.has(resource.path)) objects.set(resource.path, { path: resource.path, kind: 'asset', sha256: resource.sha256 });
   const active = { schema_version: 'phase22/active-index-1.0', kind: 'active', generation_id: generation, evidence_mode: options.evidenceMode,
     papers: [...(base.generation?.papers ?? []).filter(row => row.paper_id !== identity.paper_id), paper],
+    ...(base.generation?.topics ? { topics: clone(base.generation.topics) } : {}),
+    ...(base.generation?.source_events ? { source_events: clone(base.generation.source_events) } : {}),
     objects: [...objects.values()].sort((a, b) => a.path.localeCompare(b.path)), shared_nodes: [...shared.values()].sort((a, b) => a.path.localeCompare(b.path)) };
   assertActiveGeneration(active);
   const finalFiles = [...files].map(([path, bytes]) => ({ path, bytes }));
@@ -263,7 +319,8 @@ async function buildReview({ source, data, options, base, preimages }) {
     evidence_mode: options.evidenceMode, review_ready: options.evidenceMode === 'actual', publishable: false,
     reading_accepted: true, native_presentation: clone(data.native_presentation), scientific_review_hash: scientificReviewHash,
     generation, previous_generation: base.generation?.generation_id ?? null, previews,
-    support_notes: supportTargets, assets: options.resources.map(({ path, sha256, byte_length }) => ({ path, byte_sha256: sha256, byte_length })),
+    support_notes: supportTargets.map(row => ({ ...row, ...(migrations.has(row.path) ? { metadata_migration: migrations.get(row.path) } : {}) })),
+    assets: options.resources.map(({ path, sha256, byte_length }) => ({ path, byte_sha256: sha256, byte_length })),
     read_dependencies: readDependencies, dependencies, tools: Object.fromEntries(toolBindings.map(row => [row.path, row.sha256])),
     index: { path: pairPaths.index, byte_sha256: built.sha256 }, active: { path: pairPaths.active, byte_sha256: sha(jsonBytes(built.generation)) },
     write_set: output.map(({ bytes, ...row }) => row), diagnostics: [],

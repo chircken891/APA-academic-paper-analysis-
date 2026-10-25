@@ -156,7 +156,8 @@
               "index",
               "manifest",
               "history",
-              "commit"
+              "commit",
+              "topic"
             ]
           },
           "byte_sha256": {
@@ -504,7 +505,8 @@
               "index",
               "manifest",
               "history",
-              "commit"
+              "commit",
+              "topic"
             ]
           },
           "language": {

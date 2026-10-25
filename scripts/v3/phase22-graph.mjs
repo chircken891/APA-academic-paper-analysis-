@@ -14,9 +14,14 @@ export function buildGraphProposal({ activeSnapshot, entityInventory } = {}) {
   const paths = entityInventory.map(entry => normalizeIndexPath(entry?.path));
   if (new Set(paths.map(path => path.normalize('NFC').toLowerCase())).size !== paths.length) fail('P22_GRAPH_PATH_COLLISION');
   const { generation } = activeSnapshot;
+  const topics = generation.topics ?? [];
   const expectedNodes = [
-    ...generation.papers.map(paper => paper.paths['zh-CN']),
+    ...generation.papers.map(paper => {
+      const sourcePaths = Object.values(paper.paths).filter(path => path.startsWith('Wiki/sources/'));
+      return sourcePaths.length === 1 ? sourcePaths[0] : paper.paths['zh-CN'];
+    }),
     ...generation.shared_nodes.map(node => node.path),
+    ...topics.map(topic => topic.path),
   ].sort();
   const inventory = new Set(paths), expected = new Set(expectedNodes);
   const missing = expectedNodes.filter(path => !inventory.has(path));
@@ -41,7 +46,7 @@ export function buildGraphProposal({ activeSnapshot, entityInventory } = {}) {
     ...(readingFirst.length ? { reading_first_support_paths: [...new Set(readingFirst.flatMap(row => row.presentation.targets.support.map(node => node.path)))].sort(),
       reading_first_native_presentation: 'not_run' } : {}),
     showOrphans: true, hideUnresolved: true,
-    logicalPaperCount: generation.papers.length, nativeNodeCount: expectedNodes.length,
+    logicalPaperCount: generation.papers.length, logicalTopicCount: topics.length, nativeNodeCount: expectedNodes.length,
     native_gui: 'not_run', production_config: 'not_switched',
   };
 }

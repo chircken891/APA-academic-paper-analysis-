@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { prepareConfiguredReading, createConfiguredScienceRequest, materializeConfiguredReadingCandidate } from '../../scripts/v3/configured-reading.mjs';
 import { reviewedReadingFirstFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
 import { commitOwnedArtifact } from '../../scripts/v3/owned-artifact-store.mjs';
-import { restoreReadingFirstRuntime, snapshotReadingFirstRuntime, getReadingFirstState } from '../../scripts/v3/reading-first-runtime.mjs';
+import { createReadingFirstRevisionRequests, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, getReadingFirstState } from '../../scripts/v3/reading-first-runtime.mjs';
 import { readingFirstPublicationFixture, applyReadingFirstFixture } from './helpers/reading-first-publication-fixtures.mjs';
 import { applyBilingualPublication, loadBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
 import { readCommittedGeneration } from '../../scripts/v3/phase22-active-version.mjs';
@@ -45,6 +45,61 @@ test('new configured reading stops before science when selected runtime or parse
   assert.throws(() => prepareConfiguredReading({ repoRoot: root }), /APA_CONFIG_DEPENDENCIES_UNAVAILABLE.*parser.config_path/);
 });
 
+test('new configured reading requires the actual paper language instead of inferring it from writing preferences', async t => {
+  const { root } = await configuredRepo(t);
+  for (const sourceLanguage of [undefined, null, '', 'fr']) {
+    assert.throws(() => prepareConfiguredReading({ repoRoot: root, runId: 'source_language_required',
+      mainSession: { model: 'gpt-6-astra', reasoning_effort: 'high' }, sourceLanguage }), /APA_CONFIGURED_SOURCE_LANGUAGE_REQUIRED/);
+  }
+});
+
+for (const [sourceLanguage, firstWritingLanguage, digit] of [['en', 'zh-CN', '7'], ['zh-CN', 'en', '8']]) {
+  test(`${sourceLanguage} original keeps source-note routing when ${firstWritingLanguage} is written first`, async t => {
+    const { root, config } = await configuredRepo(t);
+    config.reading.source_language = firstWritingLanguage;
+    await writeFile(join(root, 'config/apa.local.json'), JSON.stringify(config));
+    let prepared;
+    const runId = 'run_' + digit.repeat(32);
+    const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId,
+      createRunControl: options => {
+        prepared = prepareConfiguredReading({ ...options, repoRoot: root, sourceLanguage });
+        return prepared.runControl;
+      } });
+    assert.equal(fixture.created.requests[0].language, firstWritingLanguage);
+    const checkpoint = snapshotReadingFirstRuntime(fixture.controller);
+    const counterpart = checkpoint.state.request_entries.find(entry => ['en', 'zh-CN'].includes(entry.key) && entry.key !== firstWritingLanguage);
+    assert.equal(counterpart.payload.source_view.language, firstWritingLanguage);
+    for (const note of fixture.candidate.notes) {
+      assert.ok(note.path.startsWith(note.language === sourceLanguage ? 'Wiki/sources/' : 'Wiki/translations/'), note.path);
+    }
+    const saved = await materializeConfiguredReadingCandidate({ prepared, controller: fixture.controller, handoff: fixture.handoff,
+      resources: fixture.resources, targetRegistry: undefined });
+    assert.deepEqual(saved.exported.notes.map(note => note.path), fixture.candidate.notes.map(note => note.path));
+    assert.equal(saved.exported.validation.status, 'passed');
+  });
+}
+
+test('local repair follows the first-written view even when the paper source language differs', async t => {
+  const { root, config } = await configuredRepo(t);
+  config.reading.presentation_mode = 'writer';
+  await writeFile(join(root, 'config/apa.local.json'), JSON.stringify(config));
+  const runId = 'run_' + '9'.repeat(32);
+  const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId,
+    createRunControl: options => prepareConfiguredReading({ ...options, repoRoot: root, sourceLanguage: 'en', maxCalls: 6,
+      taskBindings: Object.fromEntries(Object.entries(options.taskBindings).filter(([key]) => !key.startsWith('presentation'))) }).runControl,
+    review: { overall: { complete: true, coherent: true, bilingual_consistent: true }, key_nodes: [
+      { kind: 'main_conclusion', location: 'findings', finding: 'A supported finding.' },
+      { kind: 'key_design', location: 'design', finding: 'A supported design.' },
+    ], issues: [{ severity: 'material', kind: 'content', affected_languages: ['zh-CN'], detail: 'Clarify the method in the first-written account.' }], scope: 'Synthetic local repair routing.' },
+  });
+  const first = createReadingFirstRevisionRequests({ controller: fixture.controller });
+  assert.deepEqual(first.map(request => request.language), ['zh-CN']);
+  await fixture.complete(first[0], fixture.views.find(view => view.language === 'zh-CN'));
+  const counterpart = createReadingFirstRevisionRequests({ controller: fixture.controller });
+  assert.deepEqual(counterpart.map(request => request.language), ['en']);
+  assert.equal(JSON.parse(counterpart[0].emittedStep.arguments.message.split('\n\n').at(-1)).source_view.language, 'zh-CN');
+});
+
 test('configured source-first Writer, Editor and science requests consume resolved settings, then owned restore ignores changed local answers', async t => {
   const { root, config } = await configuredRepo(t);
   let prepared;
@@ -81,6 +136,8 @@ test('configured source-first Writer, Editor and science requests consume resolv
   const restored = await restoreReadingFirstRuntime({ handoff: fixture.handoff, runControl: fixture.runControl, checkpointReceipt: receipt });
   assert.equal(restored.ok, true, JSON.stringify(restored.errors));
   assert.equal(getReadingFirstState(restored.controller).status, 'reading_complete');
+  assert.equal(prepared.runControl.reading_first_binding.source_language, 'en');
+  assert.equal(prepared.runControl.reading_first_binding.first_writing_language, 'zh-CN');
   assert.equal(snapshotReadingFirstRuntime(restored.controller).control_fingerprint, checkpoint.control_fingerprint);
 });
 

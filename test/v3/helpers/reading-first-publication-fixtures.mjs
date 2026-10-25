@@ -18,7 +18,7 @@ export async function readingFirstPublicationFixture(t, options = {}) {
   }
   const source = await captureReadingFirstPublicationSource({ controller: f.controller, presentation: f.candidate });
   const prepared = await prepareReadingFirstPublication({ source, vaultRoot, generation: options.generation ?? 'reading-generation-1',
-    evidenceMode: 'synthetic', resources: f.resources });
+    evidenceMode: options.evidenceMode ?? 'synthetic', resources: f.resources });
   const authority = await readingFirstPublicationAuthority({ ...f, vaultRoot }, prepared.plan);
   const registration = options.register === false ? null : await registerBilingualPublication({ vaultRoot, run: f.runId,
     plan: prepared.plan, sourceInputs: prepared.sourceInputs, ...authority });
@@ -27,12 +27,12 @@ export async function readingFirstPublicationFixture(t, options = {}) {
 
 export async function readingFirstPublicationAuthority(f, plan) {
   const approvalRecord = join(f.root, 'publication-approval.json'), maintenanceWindowRecord = join(f.root, 'publication-window.json');
-  const approval = { schema_version: 'phase22-publication-approval-1.0', authority: 'synthetic-fixture', authorization_id: 'synthetic-reading-publication',
-    vault_root: f.vaultRoot, run_id: f.runId, analysis_revision: plan.analysis_revision, evidence_mode: 'synthetic', scope: 'temporary-fixture',
+  const approval = { schema_version: 'phase22-publication-approval-1.0', authority: plan.evidence_mode === 'actual' ? 'user' : 'synthetic-fixture', authorization_id: 'synthetic-reading-publication',
+    vault_root: f.vaultRoot, run_id: f.runId, analysis_revision: plan.analysis_revision, evidence_mode: plan.evidence_mode, scope: plan.evidence_mode === 'actual' ? 'production' : 'temporary-fixture',
     allowed_actions: ['apply', 'recover'], review_hash: plan.hashes.review_hash, output_inventory_hash: plan.hashes.output_inventory_hash,
     inventory_paths: plan.inventory.map(row => row.path) };
   const window = { schema_version: 'phase22-maintenance-window-1.0', authorization_id: approval.authorization_id,
-    vault_root: f.vaultRoot, run_id: f.runId, analysis_revision: plan.analysis_revision, scope: 'temporary-fixture',
+    vault_root: f.vaultRoot, run_id: f.runId, analysis_revision: plan.analysis_revision, scope: approval.scope,
     starts_at: new Date(Date.now() - 60000).toISOString(), ends_at: new Date(Date.now() + 3600000).toISOString(), external_readers_acknowledged: true };
   const approvalBytes = Buffer.from(JSON.stringify(approval)), windowBytes = Buffer.from(JSON.stringify(window));
   await writeFile(approvalRecord, approvalBytes); await writeFile(maintenanceWindowRecord, windowBytes);

@@ -1,7 +1,7 @@
 import { constants } from 'node:fs';
 import { access, copyFile, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runManagedProcess } from './managed-process.mjs';
 import { mineruExecutableVersion, mineruPackageVersion } from './mineru-runtime.mjs';
@@ -48,7 +48,13 @@ export async function withShortMineruRuntime(vaultRoot, operation, runtimeHome) 
 
 export async function runMineru({ vaultRoot, sourcePath, outputPath, signal, runtimeHome, python, configPath, resolveCommand = mineruCommand, runChild = runManagedProcess, readVersion = mineruPackageVersion, readExecutableVersion = mineruExecutableVersion } = {}) {
   return withShortMineruRuntime(vaultRoot, async runtimeRoot => {
-    const command = python ? { executable: python, python } : await resolveCommand(runtimeRoot);
+    // An explicit interpreter must not bypass the runtime's Unicode-safe alias.
+    // Rebase only paths within this runtime; keep external selections unchanged.
+    const relativePython = python ? relative(await realpath(runtimeRoot), resolve(python)) : null;
+    const selectedPython = relativePython && relativePython !== '..'
+      && !relativePython.startsWith(`..${sep}`) && !isAbsolute(relativePython)
+      ? join(runtimeRoot, relativePython) : python;
+    const command = selectedPython ? { executable: selectedPython, python: selectedPython } : await resolveCommand(runtimeRoot);
     const parserVersion = command.python
       ? await readVersion({ python: command.python })
       : await readExecutableVersion({ executable: command.executable });

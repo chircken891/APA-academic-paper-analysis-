@@ -27,7 +27,7 @@ function validateContract(contract) {
     && Array.isArray(pluginIds)
     && pluginIds.length === 4
     && new Set(pluginIds).size === pluginIds.length;
-  if (!valid) throw new Error('config/environment.json does not satisfy the v2.2 environment contract.');
+  if (!valid) throw new Error('config/environment.json does not satisfy the current environment contract.');
   return contract;
 }
 

@@ -26,7 +26,7 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
   const runId = options.runId ?? 'run_' + 'a'.repeat(32);
   const paperId = options.paperId ?? 'pap_' + 'a'.repeat(32);
   await mkdir(root, { recursive: true });
-  const pdf = Buffer.from('Synthetic original source: supported design, finding and limitation.');
+  const pdf = Buffer.from(options.sourceText ?? 'Synthetic original source: supported design, finding and limitation.');
   const image = Buffer.from('Synthetic registered figure bytes.');
   await writeFile(join(root, 'source.pdf'), pdf);
   await writeFile(join(root, 'figure.png'), image);
@@ -42,6 +42,10 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
     knowledge: [{ id: 'method', canonical_key: 'synthetic-method', kind: 'method', source_kind: 'method-background', title: { en: 'Synthetic method', 'zh-CN': '合成方法' }, aliases: ['SyntheticMethodAlias'], paragraphs: { en: ['An independent reusable explanation with supportonlytoken.'], 'zh-CN': ['可独立理解的通用解释，包含仅知识页词。'] } }],
     map: { steps: [{ id: 'design-step', section_id: 'design', label: { en: 'Design', 'zh-CN': '设计' } }], findings: [{ id: 'main-finding', section_id: 'findings', label: { en: 'Finding', 'zh-CN': '发现' } }], relations: [{ step_id: 'design-step', finding_id: 'main-finding' }] },
   };
+  if (options.visualProvenance) Object.assign(presentation.visuals[0], {
+    source_id: source.id, source_path: presentation.source_pdf, source_sha256: source.sha256,
+    sha256: figure.sha256, byte_length: figure.byte_length,
+  });
   const tasks = Object.fromEntries(['en', 'zh-CN', 'presentation', 'review', 'en-r2', 'zh-CN-r2', 'presentation-r2', 'review-r2'].map(key => [key, {
     task_id: key, task_name: 'publication_' + key.replaceAll('-', '_').toLowerCase(), owner_actor_id: key,
     role: key.startsWith('presentation') ? 'reading-editor' : key.startsWith('en') ? 'english-writer' : key.startsWith('zh') ? 'chinese-writer' : 'independent-verifier',
@@ -50,7 +54,8 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
   }]));
   const input = {
     identity: { paper_id: paperId, run_id: runId, ...(options.analysisRevision ? { analysis_revision: options.analysisRevision } : {}) },
-    sources: [source], presentation_assets: [figure], context: 'Explain the registered source as one connected scientific account.', role_artifacts: roles,
+    sources: [source], ...(options.omitPresentationAssets ? {} : { presentation_assets: [figure] }),
+    context: 'Explain the registered source as one connected scientific account.', role_artifacts: roles,
   };
   const runBinding = (options.createRunControl ?? createReadingFirstRunControl)({ runId, scientificInput: input, mainSession: { model: 'gpt-6-astra', reasoning_effort: 'high' },
     authorizationId: 'synthetic-publication-source-only', deadline: options.deadline ?? '2099-01-01T00:00:00Z', maxCalls: 7,
@@ -82,7 +87,7 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
     }, capability: broker.issueCapability({ runId, actorId: request.task.owner_actor_id, role: request.task.role, artifactPath: request.task.artifact_path, revision: request.task.revision }) });
   };
   const views = languages.map(language => ({ language,
-    sections: modules.map((id, index) => ({ id, module_id: id, heading: titles[language][index], paragraphs: [language === 'en' ? 'The supported ' + id + ' explains the synthetic result and its limits.' : '有依据的' + titles[language][index] + '说明合成研究结果及其限制。'] })),
+    sections: modules.map((id, index) => ({ id, module_id: id, heading: titles[language][index], paragraphs: [options.findingText ?? (language === 'en' ? 'The supported ' + id + ' explains the synthetic result and its limits.' : '有依据的' + titles[language][index] + '说明合成研究结果及其限制。')] })),
     placements: { visuals: [{ id: 'fig-one', section_id: 'findings', after_paragraph: 0 }], knowledge: [{ id: 'method', section_id: 'methods', after_paragraph: 0 }] },
   }));
   for (const request of created.requests) await complete(request, views.find(view => view.language === request.language));
