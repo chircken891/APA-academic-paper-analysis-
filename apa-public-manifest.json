@@ -63,7 +63,7 @@
     },
     {
       "path": ".agents/skills/apa-setup/SKILL.md",
-      "sha256": "d1287ceb9f231a46c7c59c0e41ef79d7d50047c33e9687bf7bfda88c84b7fd71"
+      "sha256": "ca78b48d7558ea8e5e21e65be8b91ab81d0962c6562be8255a3240b7bfb9a969"
     },
     {
       "path": ".gitattributes",
@@ -71,7 +71,7 @@
     },
     {
       "path": ".gitignore",
-      "sha256": "2af58b2491b07234c41c980df0f2aa264ea65203c53a679f3c83cbdd09f401f2"
+      "sha256": "d9cf405b305851c9f47f11f088496b8cbc08a3e723a2cf8bf11e37f1433f3e41"
     },
     {
       "path": "AGENTS.md",

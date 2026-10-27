@@ -38,6 +38,7 @@ __pycache__/
 
 # Per-vault APA answers
 config/apa.local.json
+config/backups/
 
 # PDF sources (large, user-managed locally)
 Clippings/
