@@ -275,6 +275,51 @@ test('source-first repairs source then counterpart before the sole local review 
   assert.equal(getReadingFirstState(controller).status,'reading_complete');
 });
 
+for (const maxCalls of [7,8]) test(`source-first Reading Editor respects a frozen ${maxCalls}-call budget for bilingual repair`,async t=>{
+  const s=await setup(t,{writingMode:'source-first',presentationMode:'reading-editor',priorCalls:6,maxTotalCalls:14,maxCalls}),controller=s.created.controller;
+  const views=['en','zh-CN'].map(language=>({...s.view(language),sections:[{id:'design',heading:'Design',paragraphs:['The main finding follows the design.']}]}));
+  const editorFor=()=>({schema_version:'reading-editor-1.0',views_fingerprint:fingerprintReadingFirst(views),languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'design-method',title:'Design method',explanation:'Design explains inference.',application:'Used in this design.',section_ids:['design']}]}]))});
+  await s.complete(s.created.requests[0],views[0]);
+  await s.complete(createReadingFirstDraftRequests({controller})[0],views[1]);
+  await s.complete(createReadingFirstPresentationRequest({controller}),editorFor());
+  let rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
+  await s.complete(createReadingFirstReviewRequest({controller,presentation:rendered}),{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[{severity:'material',kind:'omission',detail:'Design explanation missing',affected_languages:['en']}],scope:'overall'});
+  if(maxCalls===7){
+    assert.equal(getReadingFirstState(controller).status,'completed_with_limits');
+    assert.throws(()=>createReadingFirstRevisionRequests({controller}),/REVISION_UNAVAILABLE/);
+    assert.equal(getReadingFirstState(controller).calls_used,10);
+    return;
+  }
+  assert.equal(getReadingFirstState(controller).status,'revision_required');
+  const [source]=createReadingFirstRevisionRequests({controller});
+  assert.equal(source.language,'en');
+  await s.complete(source,views[0]);
+  const [counterpart]=createReadingFirstRevisionRequests({controller});
+  assert.equal(counterpart.language,'zh-CN');
+  await s.complete(counterpart,views[1]);
+  const editor=createReadingFirstPresentationRequest({controller});
+  assert.equal(editor.task.artifact_id,'presentation-r2');
+  await s.complete(editor,editorFor());
+  rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
+  const local=createReadingFirstReviewRequest({controller,presentation:rendered});
+  assert.equal(local.review_scope,'local');
+  await s.complete(local,{overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[{kind:'main_conclusion',location:'source',finding:'supported'},{kind:'key_design',location:'source',finding:'supported'}],issues:[],scope:'local'});
+  const state=getReadingFirstState(controller);
+  assert.equal(state.calls_used,14);
+  assert.equal(state.requests.length,8);
+  assert.equal(state.review_rounds,2);
+  assert.equal(state.status,'reading_complete');
+  assert.throws(()=>createReadingFirstReviewRequest({controller,presentation:rendered}),/REVIEW_ALREADY_REQUESTED/);
+});
+
+test('eight-call editor binding retains the independent total cap and writer limit',()=>{
+  const args={runId:'test',scientificInput:{identity:{run_id:'test'}},mainSession:{model:'gpt-6-astra',reasoning_effort:'high'},authorizationId:'test',deadline:'2099-01-01T00:00:00Z',taskBindings:{},presentationMode:'reading-editor',maxCalls:8,priorCalls:6};
+  assert.throws(()=>createReadingFirstRunControl({...args,maxTotalCalls:13}),/CALL_BUDGET_INVALID/);
+  assert.throws(()=>createReadingFirstRunControl({...args,maxTotalCalls:14,presentationMode:'writer'}),/CONTROL_INVALID/);
+  assert.throws(()=>createReadingFirstRunControl({...args,maxCalls:9,maxTotalCalls:15}),/CONTROL_INVALID/);
+  assert.throws(()=>createReadingFirstRunControl({...args,maxTotalCalls:14,existingBinding:{max_calls:7}}),/EXISTING_BINDING_PRESERVED/);
+});
+
 test('adopted scientific receipts retain original run/root and reject altered receipts or mixed inputs',async t=>{
   const s=await setup(t);
   const make=async(change={})=>{

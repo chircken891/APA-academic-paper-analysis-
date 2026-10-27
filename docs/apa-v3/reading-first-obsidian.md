@@ -14,7 +14,7 @@
 
 新功能性交付建议在新控制绑定中显式设 `presentationMode:'reading-editor'`。顺序为科学整合 → 首先写作语言的 Writer → 另一语言 Writer → 一次双语 Reading Editor → 渲染 → 原有一次整体审查。Writer 保留完整讲解和资源落点；Reading Editor 为这些真实 accepted views 添加呈现信息，不改写科学段落，不增加科学核对或润色调用。旧绑定和默认 `presentationMode:'writer'` 保持兼容，不自动升级。
 
-两语 Writer 接收后调用 `createReadingFirstPresentationRequest({controller})`。请求包含 `views`、原 `view_receipts`、登记的 `presentation`、`output_schema:'reading-editor-1.0'`；局部修订附 `issues`。按既有真实 host/native/owned 流程接收编辑输出后再渲染。编辑角色沿用冻结的主会话模型及推理强度。新模式控制器允许总上限4–7次，并不自动授予这些调用；具体授权可更小，复用已接收两语稿的窗口无需重跑 Writer。恢复不重置额度和期限。
+两语 Writer 接收后调用 `createReadingFirstPresentationRequest({controller})`。请求包含 `views`、原 `view_receipts`、登记的 `presentation`、`output_schema:'reading-editor-1.0'`；局部修订附 `issues`。按既有真实 host/native/owned 流程接收编辑输出后再渲染。编辑角色使用本次冻结的角色模型及推理强度，配置为follow-main时才采用冻结主会话设置。新模式控制器允许后续调用上限4–8次，并不自动授予这些调用：两语Writer、Editor、整体审查共4次；两语修正、Editor更新和一次局部复核还需4次。若授权包含完整修复链，须在冻结前预留8次，并把先行科学调用计入独立总上限。具体授权可更小，复用已接收两语稿的窗口无需重跑Writer。恢复不重置额度和期限，也不扩大旧绑定。
 
 编辑输出绑定 `readingFirstViewsFingerprint(views)`，格式及校验见 [编辑接口](../../scripts/v3/reading-first-editor.mjs) 和 [Reading Editor 合同](../../prompts/v3/reading-first-contracts.md#reading-editor)：
 

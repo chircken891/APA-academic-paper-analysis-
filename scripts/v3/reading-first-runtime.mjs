@@ -33,7 +33,7 @@ export function resolveReadingWorkflowProfile({existingBinding, newRun = false} 
 export function createReadingFirstRunControl({runId, scientificInput, mainSession, authorizationId, deadline, maxCalls = 6, taskBindings, enrichmentPolicy, maxTotalCalls, priorCalls = 0, hostResultAgentIdPath = ['agent_id'], existingBinding, controllerActorId = 'controller', presentationRequired = true, writingMode = 'independent', sourceLanguage = 'en', firstWritingLanguage, presentationMode = 'writer', noteLayout = 'source-language-1.0', configuredSetup} = {}) {
   if (existingBinding !== undefined) fail('READING_FIRST_EXISTING_BINDING_PRESERVED');
   if (!text(runId) || scientificInput?.identity?.run_id !== runId || !text(authorizationId)
-    || !Number.isFinite(Date.parse(deadline)) || !Number.isInteger(maxCalls) || maxCalls < (presentationMode === 'reading-editor' ? 4 : 3) || maxCalls > (presentationMode === 'reading-editor' ? 7 : 6)) fail('READING_FIRST_CONTROL_INVALID');
+    || !Number.isFinite(Date.parse(deadline)) || !Number.isInteger(maxCalls) || maxCalls < (presentationMode === 'reading-editor' ? 4 : 3) || maxCalls > (presentationMode === 'reading-editor' ? 8 : 6)) fail('READING_FIRST_CONTROL_INVALID');
   if (!['writer','reading-editor'].includes(presentationMode)) fail('READING_FIRST_PRESENTATION_MODE_INVALID');
   if (!['source-language-1.0','legacy-flat-1.0'].includes(noteLayout)) fail('READING_FIRST_NOTE_LAYOUT_INVALID');
   if (!['independent','source-first'].includes(writingMode) || !languages.includes(sourceLanguage) || firstWritingLanguage !== undefined && !languages.includes(firstWritingLanguage)) fail('READING_FIRST_WRITING_MODE_INVALID');
@@ -210,7 +210,7 @@ export function createReadingFirstRequests({handoff, runControl} = {}) {
     const binding = controlFor(runControl);
     if (initializedRuns.get(runControl.dispatchContext)?.has(runControl.runId)) fail('READING_FIRST_RUNTIME_ALREADY_INITIALIZED');
     if (binding.input_fingerprint !== handoff.input_fingerprint || handoff.identity.run_id !== runControl.runId) fail('READING_FIRST_INPUT_BINDING_INVALID');
-    if (!text(binding.authorization_id) || !Number.isInteger(binding.max_calls) || binding.max_calls < (binding.presentation_mode === 'reading-editor' ? 4 : 3) || binding.max_calls > (binding.presentation_mode === 'reading-editor' ? 7 : 6) || !Number.isFinite(Date.parse(binding.deadline))) fail('READING_FIRST_BUDGET_REQUIRED');
+    if (!text(binding.authorization_id) || !Number.isInteger(binding.max_calls) || binding.max_calls < (binding.presentation_mode === 'reading-editor' ? 4 : 3) || binding.max_calls > (binding.presentation_mode === 'reading-editor' ? 8 : 6) || !Number.isFinite(Date.parse(binding.deadline))) fail('READING_FIRST_BUDGET_REQUIRED');
     const prompt = readFileSync(new URL('../../prompts/v3/reading-first-contracts.md', import.meta.url));
     const sections = binding.configured_setup?.sections ?? Object.fromEntries([...prompt.toString('utf8').matchAll(/^## (.+)\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/gm)].map(m => [m[1],m[2].trim()]));
     if (['Common data contract','English Writer','Chinese Writer','Overall Verifier'].some(key => !text(sections[key]))) fail('READING_FIRST_PROMPT_SECTION_REQUIRED');

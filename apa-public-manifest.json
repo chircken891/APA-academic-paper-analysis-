@@ -15,7 +15,7 @@
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/execution-and-recovery.md",
-      "sha256": "276b3f1365d4344936317dfd91d90762c943e5b161bdd9845223b54b18eb7bef"
+      "sha256": "142a4cd19786318a0c5028984f073bc1896e118f25a77bac83a39cceb1669260"
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/presentation-and-reading-review.md",
@@ -87,7 +87,7 @@
     },
     {
       "path": "config/apa-public-files.json",
-      "sha256": "97f731ad4b48412dc95f9767021ba0452a9a904cbc0b0a1a012d878bbedc5c39"
+      "sha256": "140ff4d3bc0cbd5d9e0f8e296b76f5f8249e7d14faa467fd8485c9875e032c7a"
     },
     {
       "path": "config/environment.json",
@@ -103,7 +103,7 @@
     },
     {
       "path": "docs/apa-v3/reading-first-obsidian.md",
-      "sha256": "d112ab5cfd280cd4527ebbd1100b1bec6c838cdd260a998b3a0f984944d852a7"
+      "sha256": "d6564c268a2f4981b6be4e6e980c1f45d47ea24988309424241cbf58a9aec9cb"
     },
     {
       "path": "docs/apa-v3/reading-first-publication.md",
@@ -143,11 +143,11 @@
     },
     {
       "path": "package.json",
-      "sha256": "5e60c6639bef98f8def78c275eeee3b0a263a06f541609d7ad96bbf6da1f0694"
+      "sha256": "a5496899ccda2191d2b2beaab26b08ecb5c42694a3eb4ed4973ff42e08600223"
     },
     {
       "path": "prompts/v3/phase21-scientific-contracts.md",
-      "sha256": "43be32335c2421588348d47f32fbef7dacddf8eb8e4064a7987c5f6b7c2c7d35"
+      "sha256": "4a3d889f01b44671a089479a36ab0f49a034aa81fe2853003f92497656428ef9"
     },
     {
       "path": "prompts/v3/phase22-language-contracts.md",
@@ -159,7 +159,7 @@
     },
     {
       "path": "prompts/v3/reading-first-contracts.md",
-      "sha256": "2071f937207bd18a5a15d74c6a50ce777315bdc99b0bab8ff1f9b58093818623"
+      "sha256": "c1e3c526664df4e37d750e9727efc2c936236f99ed1c2c3bef004db9c83b88b8"
     },
     {
       "path": "Raw/.gitkeep",
@@ -563,15 +563,15 @@
     },
     {
       "path": "scripts/v3/reading-first-knowledge.mjs",
-      "sha256": "62439e5936a99b507d30290741e1f0112c92ef69eb8530e9a12619ae555d9af0"
+      "sha256": "20312e9a4164c10d82a6c1bf72cb41e7de54ec497342bb0d46f846f49f80a72d"
     },
     {
       "path": "scripts/v3/reading-first-obsidian.mjs",
-      "sha256": "427c22227a2fa9e224213c5943d2e1eb377cf0475a57575a308f036db4c9d0d9"
+      "sha256": "5d7589ff0fe181bdaa7f82110ab2494ca9b61cf7a6152c7410903d3122e467f7"
     },
     {
       "path": "scripts/v3/reading-first-preview.mjs",
-      "sha256": "ed24833bf9233cacf9265bb98e89be2ec330ab54724967882f40008cb27a0069"
+      "sha256": "ad4cb1bdc955e0a96f26bc02d14d98dece53fda4ddd2f1bf99ab2da2e675a38f"
     },
     {
       "path": "scripts/v3/reading-first-publication.mjs",
@@ -579,7 +579,7 @@
     },
     {
       "path": "scripts/v3/reading-first-runtime.mjs",
-      "sha256": "b0cdae1745419ffc611816f36717b41f7d8ebf1ffc53867dd7b054b2b24c0b2e"
+      "sha256": "2629a4d06633a134807166840d5fd0ace7626bb457da28367869ea33574f8139"
     },
     {
       "path": "scripts/v3/render-pdf-regions.py",
@@ -790,6 +790,10 @@
       "sha256": "cb166ed0799e63d4298e5efd2558606e93c236eff4bcdbd1325f98a3def7d7c6"
     },
     {
+      "path": "test/v3/reading-first-knowledge.test.mjs",
+      "sha256": "d959fa6323c125aebe302be2352684338c5af5358aec237f6f0880cb86d8685e"
+    },
+    {
       "path": "test/v3/reading-first-metadata-migration.test.mjs",
       "sha256": "0afc2a3ccfb4c3ff853ec819e5b8d53474fe89a75dbc0ae8a2095ce99a8cc945"
     },
@@ -799,7 +803,7 @@
     },
     {
       "path": "test/v3/reading-first-obsidian.test.mjs",
-      "sha256": "ed7e6a5fb12fff44af79cc5aca3486977ac35b4af78a4b69533e7755c1b0cc73"
+      "sha256": "4e2a0eb3c6275a69bdb40da7ee60b69c564a8d38b0d1b5db88196ef8fe6752b7"
     },
     {
       "path": "test/v3/reading-first-publication.test.mjs",
@@ -807,7 +811,7 @@
     },
     {
       "path": "test/v3/reading-first-runtime.test.mjs",
-      "sha256": "b97d120c9d782c82a5ce418804eeb9cbe15f2b23bbb4ee74956e6fdb8d76d0b3"
+      "sha256": "e5d6bcaee1fd57af2d197e9075d5aa186d6cf54352d31b4a3f959e3a96f1bc34"
     },
     {
       "path": "test/v3/reading-first-visual-provenance.test.mjs",

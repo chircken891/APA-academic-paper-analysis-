@@ -232,6 +232,43 @@ function writerInput() {
   return data;
 }
 
+test('visual page links use registered main and supplement sources in both languages', () => {
+  const data = writerInput();
+  data.presentation.sources.push({ id: 'supplement', path: 'Raw/supplement.pdf' });
+  const main = data.presentation.visuals[0];
+  const byId = { ...structuredClone(main), id: 'fig-2', page: 4, source_id: 'supplement' };
+  const byPath = { ...structuredClone(main), id: 'fig-3', page: 5, source_path: 'Raw/supplement.pdf' };
+  const byBoth = { ...structuredClone(main), id: 'fig-4', page: 6, source_id: 'supplement', source_path: 'Raw/supplement.pdf' };
+  data.presentation.visuals.push(byId, byPath, byBoth);
+  data.views.forEach(view => view.placements.visuals.push(...[byId, byPath, byBoth].map(visual => ({ id: visual.id, section_id: 'findings', after_paragraph: 0 }))));
+  const result = renderReadingFirstObsidian(data);
+  for (const note of result.notes) {
+    assert.ok(note.content.includes('Raw/paper.pdf#page=2'));
+    for (const page of [4, 5, 6]) assert.ok(note.content.includes('Raw/supplement.pdf#page=' + page));
+  }
+});
+
+for (const [name, source] of [
+  ['unknown source id', { source_id: 'missing' }],
+  ['unregistered source path', { source_path: 'Raw/unregistered.pdf' }],
+  ['conflicting source id and path', { source_id: 'paper', source_path: 'Raw/supplement.pdf' }],
+]) test('visual page link rejects ' + name, () => {
+  const data = writerInput();
+  data.presentation.sources.push({ id: 'supplement', path: 'Raw/supplement.pdf' });
+  Object.assign(data.presentation.visuals[0], source);
+  assert.throws(() => renderReadingFirstObsidian(data), { code: 'RF_OBSIDIAN_SOURCE_INVALID' });
+});
+
+test('visual provenance accepts the original scientific source id with an explicitly bound main PDF and no presentation source map', () => {
+  const data = writerInput();
+  delete data.presentation.sources;
+  data.views.forEach(view => { view.sections[2].paragraphs[1] = 'Figure and method.'; });
+  Object.assign(data.presentation.visuals[0], { source_id: 'scientific-source', source_path: 'Raw/paper.pdf', source_sha256: 'sha256:' + 'a'.repeat(64) });
+  for (const note of renderReadingFirstObsidian(data).notes) assert.ok(note.content.includes('Raw/paper.pdf#page=2'));
+  data.presentation.visuals[0].source_path = 'Raw/supplement.pdf';
+  assert.throws(() => renderReadingFirstObsidian(data), { code: 'RF_OBSIDIAN_SOURCE_INVALID' });
+});
+
 test('Writer modules produce hierarchy, full DOI and resolved references while preserving Markdown', () => {
   const result = renderReadingFirstObsidian(writerInput());
   const note = result.notes[0].content;

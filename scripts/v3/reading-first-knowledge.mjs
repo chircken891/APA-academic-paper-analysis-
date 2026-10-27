@@ -1,3 +1,5 @@
+import path from 'node:path';
+import MarkdownIt from 'markdown-it';
 import YAML from 'yaml';
 
 const languages = ['zh-CN', 'en'];
@@ -28,6 +30,48 @@ export function applyReadingFirstKnowledgeContent({ presentation, views }) {
 }
 
 const names = value => typeof value === 'string' ? [value] : Object.values(value ?? {});
+const markdown = new MarkdownIt();
+const applicationLabel = (application, language) => {
+  const name = typeof application.title === 'string' ? application.title : application.title?.[language];
+  return name ? `${name.replace(/[\[\]\r\n]/g, ' ')} · ${language === 'en' ? 'English' : '中文'}` : language === 'en' ? 'Paper application (English)' : '本文中的应用（中文）';
+};
+
+// Relocation can update visible links without rewriting the historical state.
+function priorVisibleTargets(region, target, applications) {
+  const tokens = markdown.parse(region, {});
+  const headings = tokens.flatMap((token, index) => token.type === 'heading_open' && token.tag === 'h2' && tokens[index + 1]?.content === '论文应用 / Paper applications' ? [index] : []);
+  if (headings.length !== 1) return applications;
+  const links = [];
+  for (let i = headings[0] + 3; i < tokens.length; i++) {
+    if (tokens[i].type === 'heading_open' && ['h1', 'h2'].includes(tokens[i].tag)) break;
+    const children = tokens[i].type === 'inline' ? tokens[i].children ?? [] : [];
+    for (let j = 0; j < children.length; j++) {
+      if (children[j].type !== 'link_open') continue;
+      const close = children.findIndex((child, index) => index > j && child.type === 'link_close');
+      if (close < 0) continue;
+      const label = children.slice(j + 1, close).map(child => child.content).join('');
+      const destination = children[j].attrGet('href');
+      if (!destination || /^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(destination) || /[?#]/.test(destination)) continue;
+      let decoded;
+      try { decoded = decodeURIComponent(destination); } catch { continue; }
+      const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(target), decoded));
+      if (/^Wiki\/(sources|translations)\/[^/]+\.md$/.test(resolved)) links.push({ label, target: resolved });
+      j = close;
+    }
+  }
+  return applications.map(application => {
+    const targets = { ...application.targets };
+    for (const language of languages) {
+      const previous = application.targets?.[language];
+      if (typeof previous !== 'string') continue;
+      const label = applicationLabel(application, language);
+      const matches = links.filter(link => link.label === label && path.posix.basename(link.target) === path.posix.basename(previous));
+      const owners = applications.filter(row => applicationLabel(row, language) === label && path.posix.basename(row.targets?.[language] ?? '') === path.posix.basename(previous));
+      if (matches.length === 1 && owners.length === 1) targets[language] = matches[0].target;
+    }
+    return { ...application, targets };
+  });
+}
 
 /** Names discover candidates; only registry identity keys confirm a reusable path. */
 export function matchReadingFirstKnowledgeIdentity({ item, knowledgeRegistry, vaultPath }) {
@@ -63,7 +107,8 @@ export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, p
     try { prior = JSON.parse(Buffer.from(state?.[1] ?? '', 'base64').toString('utf8')); } catch { fail('RF_OBSIDIAN_KNOWLEDGE_REGION_INVALID'); }
     if (!prior?.item || !Array.isArray(prior.applications)) fail('RF_OBSIDIAN_KNOWLEDGE_REGION_INVALID');
   }
-  const applications = [...new Map([...(prior?.applications ?? []), { paper_id: paperId, targets: paperTargets, title: paperTitle }].map(row => [row.paper_id, row])).values()];
+  const previousApplications = prior ? priorVisibleTargets(original.slice(from, to), target, prior.applications) : [];
+  const applications = [...new Map([...previousApplications, { paper_id: paperId, targets: paperTargets, title: paperTitle }].map(row => [row.paper_id, row])).values()];
   let body = ['[中文](#%E4%B8%AD%E6%96%87)', '[English](#English)', ...(item.formulas?.length ? ['[公式 / Formulas](#%E5%85%AC%E5%BC%8F%20/%20Formulas)'] : []), ...(item.sources?.length ? ['[来源 / Sources](#%E6%9D%A5%E6%BA%90%20/%20Sources)'] : [])].join(' · ') + '\n\n';
   for (const language of languages) {
     const paragraphs = values => values.map(value => resolveReferences(value, language, target)).join('\n\n');
@@ -86,9 +131,7 @@ export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, p
     body += `- [${source.title.replace(/[\[\]\r\n]/g, ' ')}](${source.url.replace(/\(/g, '%28').replace(/\)/g, '%29')})\n`;
   }
   body += '\n## 论文应用 / Paper applications\n\n' + applications.flatMap(application => languages.map(language => {
-    const name = typeof application.title === 'string' ? application.title : application.title?.[language];
-    const label = name ? `${name.replace(/[\[\]\r\n]/g, ' ')} · ${language === 'en' ? 'English' : '中文'}` : language === 'en' ? 'Paper application (English)' : '本文中的应用（中文）';
-    return `- [${label}](${href(target, application.targets[language])})`;
+    return `- [${applicationLabel(application, language)}](${href(target, application.targets[language])})`;
   })).join('\n') + '\n';
   const state = Buffer.from(JSON.stringify({ item, applications })).toString('base64');
   const addition = `${start}\n<!-- KNOWLEDGE_STATE ${state} -->\n${body}${end}\n`;
