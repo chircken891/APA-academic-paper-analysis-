@@ -2,11 +2,11 @@
 
 APA 是一套可配置的论文阅读与 Obsidian 知识库工作流，输出可直接使用的中英文笔记、图表、方法与概念链接。通过 apa-setup 选择角色模型和推理强度，或让角色跟随当前会话；模型名称不限定 GPT。当前安装脚本的环境基线是 Windows x64、Node.js 24、npm 11，以及 MinerU 本地解析路线。
 
-新论文由六个科学角色整合研究问题、设计、方法、结果与局限，再由双语 Writer 成稿。可选 Reading Editor 整理层级、重点和目录。完整候选经过一次整体审查，至多一次实质问题局部复核。正式入库需要对精确候选单独批准，只有已提交的 V3 代次进入默认图谱和检索。
+新论文由六个科学角色整合研究问题、设计、方法、结果与局限，再由双语 Writer 成稿，设计部分以一段研究设计概览开头。可选 Reading Editor 补充重点概览、段首加粗小标题、方法/概念目录和分阶段研究导图；模块大标题固定，正文最多三级标题，目录、方法条目和原图注默认收起，读图说明紧随对应图表。完整候选经过一次整体审查，至多一次实质问题局部复核。正式入库需要对精确候选单独批准，只有已提交的 V3 代次进入默认图谱和检索。
 
 ## 安装与首次使用
 
-配置页面和本地命令可独立使用。当前自动角色派发对接 Codex 的协作接口，其他 AI 助手宿主需要相应的调用与回执适配；填写模型名不会安装模型或接入服务商。以下操作中的“助手”须具备相应的本地工具和模型调用能力，配置成功不等于任意宿主均已兼容。
+配置页面和本地命令可独立使用。角色派发方式由 apa-setup 检测当前宿主后保存：例如 Claude Code 使用 `Agent` 工具，Codex 使用协作接口；未保存时按 Codex 方式派发。派发工具不能选择模型的宿主，各角色只能“跟随主会话”。填写模型名不会安装模型或接入服务商。以下操作中的“助手”须具备能启动独立子代理的工具和相应模型调用能力；检测与配置成功不证明派发或模型实际可用，以真实运行的返回为准。
 
 ### 1. 获取工程，确认命令运行位置
 
@@ -74,12 +74,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-wind
 
 ### 4. 生成分页向导，填写本库设置
 
-向助手说“使用 apa-setup 配置当前知识库”，或手动运行：
+推荐向助手说“使用 apa-setup 配置当前知识库”。助手先只读检测自身环境（宿主、当前会话、派发工具及参数名、派发工具可接受的模型与推理强度），写入 `.tmp/apa-setup/host-profile.json`，再带上这份档案检查并生成页面：
 
 ```powershell
-npm.cmd run apa:setup -- inspect
-npm.cmd run apa:setup -- page
+npm.cmd run apa:setup -- inspect --host-profile .tmp/apa-setup/host-profile.json
+npm.cmd run apa:setup -- page --host-profile .tmp/apa-setup/host-profile.json
 ```
+
+带档案时，页面增加“运行宿主与派发”一页，可采用检测到的派发方式，模型和推理强度改为从检测结果中选择；`inspect` 的 `host_check` 报告已保存设置与本宿主是否相符。没有档案时也可手动运行不带 `--host-profile` 的同两条命令，此时只能手动填写模型，无法设置派发方式。档案是助手的自我报告，不证明派发或模型实际可用。
 
 首次 `inspect` 显示 `exists: false`、`ready: false` 是正常的：公开工程没有任何人的配置答案。`page` 返回 HTML 的完整路径；用浏览器打开 `.tmp/apa-setup/index.html`。首页有“完善配置”“去除配置”“导出配置”三个独立入口，各自拥有分页、预览和输出，可返回首页切换。
 
@@ -122,11 +124,12 @@ node scripts/apa-setup.mjs inspect
 
 | 配置 | 作用 |
 | --- | --- |
+| 运行宿主与派发 | 新运行冻结的子代理派发工具和参数名；只能采用 apa-setup 检测结果，换宿主后重新检测 |
 | 科学角色默认模型及单角色覆盖 | 控制六个科学角色的实际模型与推理强度 |
 | Writer、Editor、Verifier 模型 | 分别指定参数，或在新运行创建时跟随主会话并冻结 |
 | 运行、解析、候选目录 | 当前库内的三个输出根目录，每次使用独立 run ID 子目录 |
 | MinerU | 选择已有运行环境、Python 和配置文件 |
-| 首先写作的语言、呈现方式 | 先接受一种语言再写另一种；选择 Writer 直接呈现或增加 Reading Editor |
+| 首先写作的语言、呈现方式 | 先接受一种语言再写另一种；选择 Writer 直接呈现或增加 Reading Editor（新运行采用 reading-editor-1.1 版式，旧运行保持原版式） |
 | Nature、Humanizer、stss | 分别启用已有技能，填写其 SKILL.md 路径；仅在既有 Writer 内使用 |
 
 阅读和查询共用本库忽略提交的 `config/apa.local.json`，无需分别配置两套文件，无跨库全局层。公开包不含个人答案；已有运行继续使用原冻结绑定。详见 [配置说明](docs/CONFIGURATION.md)。
@@ -195,7 +198,7 @@ APA 配置页设有独立的“知识库查询”页，可设置模型、默认�
 
 `npm test` 运行工程附带测试；`npm run index:check` 检查现有提交索引，`npm run obsidian:graph:check` 检查图谱政策。空库没有已发表论文是正常状态。合成测试不能替代真实 PDF 解析、实际模型执行或 Obsidian 原生观察。
 
-配置页过期时重新生成；缺文件时修正路径或按需安装；模型不可用时在派发前选择宿主支持的组合。全局 APA 与工程不同步时可直接使用本库技能。排障见 [SETUP](SETUP.md)，科学要求见 [当前合同](docs/apa-v3/current-contracts.md)。
+配置页过期时重新生成；缺文件时修正路径或按需安装；模型不可用时在派发前选择宿主支持的组合；换用其他 AI 助手宿主后重新运行 apa-setup 检测并更新派发方式，已开始的运行沿用原冻结设置。全局 APA 与工程不同步时可直接使用本库技能。排障见 [SETUP](SETUP.md)，科学要求见 [当前合同](docs/apa-v3/current-contracts.md)。
 
 ## 导出独立公开工程
 
