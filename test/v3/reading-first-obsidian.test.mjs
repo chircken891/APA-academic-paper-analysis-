@@ -319,6 +319,49 @@ function editedInput() {
   return data;
 }
 
+function compactInput() {
+  const data = editedInput();
+  data.views.forEach(view => { view.sections[3].paragraphs.push('Read the bars as counts, not rates.'); });
+  data.presentation.visuals[0].chart_types = [{ knowledge_id: 'rate', label: { en: 'Rate plot', 'zh-CN': '率图' } }];
+  data.readingEditor.schema_version = 'reading-editor-1.1';
+  data.readingEditor.views_fingerprint = readingFirstViewsFingerprint(data.views);
+  data.readingEditor.map = { nodes: [{ id: 'estimate', stage: 'measurement' }, { id: 'burden', stage: 'finding', primary: true }] };
+  Object.values(data.readingEditor.languages).forEach(language => { language.visuals = [{ id: 'fig-1', title: 'Figure 1 Burden', notes: [{ section_id: 'findings', paragraph_index: 2 }] }]; });
+  return data;
+}
+
+test('reading editor 1.1 keeps three heading levels and puts figure notes, folded captions and a staged map in place', () => {
+  const content = renderReadingFirstObsidian(compactInput()).notes.find(note => note.language === 'en').content;
+  assert.doesNotMatch(content, /^#### /m);
+  assert.doesNotMatch(content, /^## Contents/m);
+  assert.match(content, /^> \[!note\]- Contents$/m);
+  assert.match(content, /^> \[!info\]- Standardisation$/m);
+  assert.match(content, /\*\*Population and rate\.\*\* Rates and counts/);
+  const punctuated = compactInput();
+  punctuated.readingEditor.languages.en.sections[0].subheadings[0].heading = 'Population and rate:';
+  assert.match(renderReadingFirstObsidian(punctuated).notes.find(note => note.language === 'en').content, /\*\*Population and rate\.\*\* Rates/);
+  assert.match(content, /\*\*Figure 1 Burden\*\* · \[Original p\. 2\]\([^)]+\) \^rf-visual-fig-1/);
+  const image = content.indexOf('![Figure 1]'), note = content.indexOf('Read the bars as counts'), caption = content.indexOf('> [!quote]- Original caption');
+  assert.ok(image > 0 && image < note && note < caption);
+  assert.equal(content.split('Read the bars as counts').length, 2);
+  assert.doesNotMatch(content, /Method background: \[Rate/);
+  assert.doesNotMatch(content, /Research map/);
+  const map = content.indexOf('```mermaid\nflowchart LR');
+  assert.ok(map > content.indexOf('### 2.1 design details') && map < content.indexOf('## 3. Methods, concepts and measurement'));
+  assert.match(content, /^## 4\. Findings$/m);
+  assert.doesNotMatch(content, /^## \d\. (METHODS|FINDINGS)/m);
+  assert.match(content, /subgraph stage_measurement\["Measurement and analysis"\]/);
+  assert.match(content, /^  class burden primary$/m);
+  assert.match(content, /^  estimate --> burden$/m);
+});
+
+test('reading editor 1.0 output keeps the original numbered layout', () => {
+  const content = renderReadingFirstObsidian(editedInput()).notes.find(note => note.language === 'en').content;
+  assert.match(content, /^## Contents/m);
+  assert.match(content, /^#### 3\.1\.1 Counts/m);
+  assert.match(content, /^### 2\.1 Research map/m);
+});
+
 for (const coverage of ['inventory', 'chart', 'inline']) test(`shared knowledge ${coverage} covers a node without repetitive body placements`, () => {
   const data = coverage === 'inventory' ? editedInput() : writerInput();
   data.presentation.knowledge_layout = 'shared-bilingual-1.0';

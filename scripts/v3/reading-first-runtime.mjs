@@ -1,17 +1,21 @@
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { validateReadingFirstEditor, readingFirstViewsFingerprint } from './reading-first-editor.mjs';
+// New editor bindings freeze the compact presentation; bindings without a profile keep reading-editor-1.0.
+const READING_EDITOR_PROFILE = 'reading-editor-1.1';
+const editorSchema = binding => binding.presentation_profile ?? 'reading-editor-1.0';
 import { renderReadingFirstObsidian } from './reading-first-obsidian.mjs';
 import { applyReadingFirstKnowledgeContent } from './reading-first-knowledge.mjs';
 import { readFileSync, realpathSync, lstatSync, mkdirSync, writeFileSync } from 'node:fs';
 import { resolve, relative, isAbsolute, sep, dirname } from 'node:path';
 import { fingerprintV3Json } from './semantic-package-validator.mjs';
-import { createApaRoleModelPolicy, validateApaRoleModelPolicy, resolveApaRoleModel } from '../apa-model-policy.mjs';
+import { createApaRoleModelPolicy, validateApaRoleModelPolicy, resolveApaRoleModel, buildHostDispatchArguments, validHostDispatch } from '../apa-model-policy.mjs';
 import { getRunControlForDispatch, readOwnedArtifact, commitOwnedArtifact, createOwnedArtifactBroker } from './owned-artifact-store.mjs';
 import { emitApprovedRunStep, ingestObservedRunStep } from './phase21-runner.mjs';
 
 export const READING_FIRST_PROFILE = 'reading-first-1.0';
 export const fingerprintReadingFirst = fingerprintV3Json;
+const externalPublicationRecipeSchema = 'external-reviewed-reading-first-publication-source-1.0';
 const initializedRuns = new WeakMap();
 const states = new WeakMap(), requests = new WeakMap(), presentations = new WeakMap(), handoffs = new WeakSet();
 const handoffInputs = new WeakMap(), publicationSources = new WeakMap();
@@ -30,8 +34,9 @@ export function resolveReadingWorkflowProfile({existingBinding, newRun = false} 
 }
 
 /** Controller proposal factory. Freeze this returned control in the existing broker. */
-export function createReadingFirstRunControl({runId, scientificInput, mainSession, authorizationId, deadline, maxCalls = 6, taskBindings, enrichmentPolicy, maxTotalCalls, priorCalls = 0, hostResultAgentIdPath = ['agent_id'], existingBinding, controllerActorId = 'controller', presentationRequired = true, writingMode = 'independent', sourceLanguage = 'en', firstWritingLanguage, presentationMode = 'writer', noteLayout = 'source-language-1.0', configuredSetup} = {}) {
+export function createReadingFirstRunControl({runId, scientificInput, mainSession, authorizationId, deadline, maxCalls = 6, taskBindings, enrichmentPolicy, maxTotalCalls, priorCalls = 0, hostResultAgentIdPath = ['agent_id'], existingBinding, controllerActorId = 'controller', presentationRequired = true, writingMode = 'independent', sourceLanguage = 'en', firstWritingLanguage, presentationMode = 'writer', noteLayout = 'source-language-1.0', configuredSetup, host} = {}) {
   if (existingBinding !== undefined) fail('READING_FIRST_EXISTING_BINDING_PRESERVED');
+  if (host !== undefined && (!host || Object.keys(host).sort().join() !== 'dispatch,name' || !text(host.name) || !validHostDispatch(host.dispatch))) fail('READING_FIRST_HOST_INVALID');
   if (!text(runId) || scientificInput?.identity?.run_id !== runId || !text(authorizationId)
     || !Number.isFinite(Date.parse(deadline)) || !Number.isInteger(maxCalls) || maxCalls < (presentationMode === 'reading-editor' ? 4 : 3) || maxCalls > (presentationMode === 'reading-editor' ? 8 : 6)) fail('READING_FIRST_CONTROL_INVALID');
   if (!['writer','reading-editor'].includes(presentationMode)) fail('READING_FIRST_PRESENTATION_MODE_INVALID');
@@ -47,8 +52,8 @@ export function createReadingFirstRunControl({runId, scientificInput, mainSessio
     sourceCurrent(enrichmentPolicy.sources);
   }
   const input = {...copy(scientificInput), profile: resolveReadingWorkflowProfile({newRun:true})};
-  return freeze({run_id:runId, reading_first_binding:{profile:input.profile, ...(presentationMode === 'reading-editor' ? {presentation_mode:presentationMode} : {}), presentation_required:presentationRequired, writing_mode:writingMode, source_language:sourceLanguage, ...(firstWritingLanguage !== undefined ? {first_writing_language:firstWritingLanguage} : {}), note_layout:noteLayout, input_fingerprint:fingerprintV3Json(input),
-    role_model_policy:configuredSetup?.role_model_policy ?? createApaRoleModelPolicy(mainSession), ...(configuredSetup ? {configured_setup:copy(configuredSetup)} : {}), authorization_id:authorizationId, controller_actor_id:controllerActorId, host_result_agent_id_path:copy(hostResultAgentIdPath), deadline, max_calls:maxCalls, task_bindings:copy(taskBindings), ...(priorCalls ? {prior_calls:priorCalls} : {}), ...(maxTotalCalls !== undefined ? {max_total_calls:maxTotalCalls} : {}), ...(enrichmentPolicy ? {enrichment_policy:copy(enrichmentPolicy)} : {})}});
+  return freeze({run_id:runId, reading_first_binding:{profile:input.profile, ...(presentationMode === 'reading-editor' ? {presentation_mode:presentationMode, presentation_profile:READING_EDITOR_PROFILE} : {}), presentation_required:presentationRequired, writing_mode:writingMode, source_language:sourceLanguage, ...(firstWritingLanguage !== undefined ? {first_writing_language:firstWritingLanguage} : {}), note_layout:noteLayout, input_fingerprint:fingerprintV3Json(input),
+    role_model_policy:configuredSetup?.role_model_policy ?? createApaRoleModelPolicy(mainSession), ...(configuredSetup ? {configured_setup:copy(configuredSetup)} : {}), authorization_id:authorizationId, controller_actor_id:controllerActorId, host_result_agent_id_path:copy(hostResultAgentIdPath), deadline, max_calls:maxCalls, task_bindings:copy(taskBindings), ...(priorCalls ? {prior_calls:priorCalls} : {}), ...(maxTotalCalls !== undefined ? {max_total_calls:maxTotalCalls} : {}), ...(enrichmentPolicy ? {enrichment_policy:copy(enrichmentPolicy)} : {}), ...(host !== undefined ? {host:copy(host)} : {})}});
 }
 
 function sourceCurrent(sources) {
@@ -194,7 +199,9 @@ function describe(state, key, payload) {
     intended_evidence_tier:'local_dispatch', source:Object.fromEntries(['path','sha256','byte_length'].map(key=>[key,state.handoff.sources[0][key]])), instruction_fingerprint:sha(Buffer.from(message)), configuration_fingerprint:fingerprintV3Json(configuration),
     allowed_output_root:resolve(state.runControl.artifactRoot), backend:{identity:'current-collaboration', version:'native-collaboration', runtime_configuration_version:READING_FIRST_PROFILE, configuration},
     endpoint:{value:'current-session', egress:'approved', retention:'approved'},
-    host_action_scope:{action:'collaboration.spawn_agent', role, output_path:nativePath(state.runControl.artifactRoot, task.native_path), arguments:{task_name:task.task_name, message, model:model.model, reasoning_effort:model.reasoning_effort, fork_turns:'none'}, result_bindings:{agent_id:binding.host_result_agent_id_path ?? ['agent_id']}, permitted_result_fields:['raw_result_text','agent_id']},
+    host_action_scope:binding.host
+      ? {action:binding.host.dispatch.tool, dispatch:copy(binding.host.dispatch), role, output_path:nativePath(state.runControl.artifactRoot, task.native_path), arguments:buildHostDispatchArguments(binding.host.dispatch, {taskName:task.task_name, message, model}), result_bindings:{agent_id:null}, permitted_result_fields:['raw_result_text','agent_id']}
+      : {action:'collaboration.spawn_agent', role, output_path:nativePath(state.runControl.artifactRoot, task.native_path), arguments:{task_name:task.task_name, message, model:model.model, reasoning_effort:model.reasoning_effort, fork_turns:'none'}, result_bindings:{agent_id:binding.host_result_agent_id_path ?? ['agent_id']}, permitted_result_fields:['raw_result_text','agent_id']},
     role_model_policy:binding.role_model_policy, expected_resource_fields:['elapsed_ms'], requested_model:model.model, observed_model:'unknown', estimate:{value:1, unit:'tool_calls'}, approved_budget_cap:{value:1, unit:'tool_calls'}, retry_allowance:0};
   const controls = {packet, run:{run_id:state.runControl.runId}, dispatchContext:state.runControl.dispatchContext, approvedBudget:packet.approved_budget_cap, retryPolicy:{max_retries:0}};
   const emittedStep = emitApprovedRunStep(controls);
@@ -280,6 +287,7 @@ export async function acceptReadingFirstResult({controller, request, observation
   if (!stat.isFile() || stat.isSymbolicLink() || realpathSync(path) !== path || stat.nlink !== 1) fail('READING_FIRST_NATIVE_FILE_INVALID');
   const bytes = readFileSync(path), value = JSON.parse(bytes.toString('utf8'));
   if (record.key.startsWith('enrich-')) validateEnrichment(state,request.task.role,record.payload.gaps,value);
+  else if (request.task.role === 'reading-editor' && value?.schema_version !== editorSchema(state.binding)) fail('READING_FIRST_EDITOR_SCHEMA_INVALID');
   else if (request.task.role === 'reading-editor') validateReadingFirstEditor({editor:value,views:languages.map(language=>state.views[language].value),presentation:state.handoff.presentation});
   else if (request.language) { validateView(value,request.language); validateLayoutView(state,value); validateConsumption(state,value); applyReadingFirstKnowledgeContent({presentation:state.handoff.presentation,views:[value]}); } else validateReview(value);
   const receipt = await commitOwnedArtifact({artifactRoot:state.runControl.artifactRoot,dispatchContext:state.runControl.dispatchContext,capability,artifact:{artifact_id:request.task.artifact_id,path:request.task.artifact_path,content:bytes},expectedRevision:request.task.revision});
@@ -380,7 +388,7 @@ export function createReadingFirstPresentationRequest({controller} = {}) {
   if (state.readingEditor && state.status !== 'revision_required' || ['reading_complete','completed_with_limits'].includes(state.status)) fail('READING_FIRST_EDITOR_UNAVAILABLE');
   if (state.readingEditor && state.review.issues.filter(issue=>issue.severity==='material').some(issue=>!['presentation','layout','navigation','emphasis','method-inventory'].includes(issue.kind))) fail('READING_FIRST_REVISION_PENDING');
   const key=state.reviews ? 'presentation-r2' : 'presentation';
-  const result=describe(state,key,{views:languages.map(language=>state.views[language].value),views_fingerprint:readingFirstViewsFingerprint(languages.map(language=>state.views[language].value)),view_receipts:languages.map(language=>state.views[language].receipt),context:state.handoff.context,sources:state.handoff.sources,...(state.handoff.presentation ? {presentation:applyReadingFirstKnowledgeContent({presentation:state.handoff.presentation,views:languages.map(language=>state.views[language].value)})} : {}),output_schema:'reading-editor-1.0',...(state.reviews ? {issues:state.review.issues.filter(issue=>issue.severity==='material')} : {})});
+  const result=describe(state,key,{views:languages.map(language=>state.views[language].value),views_fingerprint:readingFirstViewsFingerprint(languages.map(language=>state.views[language].value)),view_receipts:languages.map(language=>state.views[language].receipt),context:state.handoff.context,sources:state.handoff.sources,...(state.handoff.presentation ? {presentation:applyReadingFirstKnowledgeContent({presentation:state.handoff.presentation,views:languages.map(language=>state.views[language].value)})} : {}),output_schema:editorSchema(state.binding),...(state.reviews ? {issues:state.review.issues.filter(issue=>issue.severity==='material')} : {})});
   if (state.reviews) { state.readingEditor=null; state.pendingRevisions=[key]; state.revisionRequests=[result]; }
   state.status='presenting'; return result;
 }
@@ -428,6 +436,10 @@ function assertPublicationFiles(bindings) {
 }
 function publicationToolBindings() {
   return publicationTools.map(path=>publicationFileBinding(fileURLToPath(new URL(path,import.meta.url))));
+}
+/** Runtime-owned dependencies required when re-inspecting an external publication source. */
+export function getReadingFirstRuntimePublicationToolBindings() {
+  return publicationToolBindings();
 }
 function encodePublicationRendering(rendering) {
   return {...copy(rendering),existingTargets:rendering.existingTargets.map(({bytes,...entry})=>({
@@ -537,10 +549,39 @@ function publicationSource(state,recipe,reviewReceipt,origin='live') {
   publicationSources.set(source,{state,recipe,reviewReceipt,origin,stateStamp:publicationStateStamp(state)});
   return source;
 }
+function externalPublicationData(recipe) {
+  const {recipe_fingerprint,...body}=recipe??{};
+  if(recipe?.schema_version!==externalPublicationRecipeSchema||recipe_fingerprint!==fingerprintV3Json(body)
+    ||recipe.run_id!==recipe.scientific_input?.identity?.run_id||!recipe.candidate||!recipe.review
+    ||!recipe.review_receipt||!recipe.view_receipts?.en||!recipe.view_receipts?.['zh-CN']
+    ||!recipe.reading_editor_receipt) fail('READING_FIRST_EXTERNAL_PUBLICATION_RECIPE_INVALID');
+  assertPublicationFiles(recipe.source_bindings);
+  assertPublicationFiles(recipe.tool_bindings);
+  const currentTools=new Map(publicationToolBindings().map(row=>[row.path,row]));
+  const registeredTools=new Map(recipe.tool_bindings.map(row=>[row.path,row]));
+  for(const [path,row] of currentTools){if(!registeredTools.has(path)||fingerprintV3Json(registeredTools.get(path))!==fingerprintV3Json(row))fail('READING_FIRST_PUBLICATION_TOOL_CHANGED');}
+  return {origin:'live',recipe:copy(recipe),candidate:copy(recipe.candidate),identity:copy(recipe.scientific_input.identity),
+    scientific_input_fingerprint:recipe.identity_fingerprint,review:copy(recipe.review),
+    reading_review_fingerprint:recipe.reading_review_fingerprint,review_receipt:copy(recipe.review_receipt),
+    view_receipts:copy(recipe.view_receipts),reading_editor_receipt:copy(recipe.reading_editor_receipt),
+    source_bindings:copy(recipe.source_bindings),tool_bindings:copy(recipe.tool_bindings),
+    sources:copy(recipe.scientific_input.sources),presentation:copy(recipe.presentation),
+    presentation_assets:copy(recipe.presentation_assets??[]),enrichment_sources:[],
+    native_presentation:{status:'not_run'},calls_used:recipe.calls_used??0};
+}
+/** Controller-only token for a candidate whose roles were completed by an external host transport. */
+export function createExternalReadingFirstPublicationSource(recipe) {
+  const data=externalPublicationData(recipe);
+  const source=Object.freeze({profile:READING_FIRST_PROFILE});
+  publicationSources.set(source,{external:true,recipe:copy(recipe),reviewReceipt:copy(recipe.review_receipt),
+    sourceBindings:copy(recipe.source_bindings),toolBindings:copy(recipe.tool_bindings),data,origin:'live'});
+  return source;
+}
 /** This read is repeated by review/registration so changed originals cannot retain an old approval. */
 export async function inspectReadingFirstPublicationSource(source) {
   const record=publicationSources.get(source);
   if (!record) fail('READING_FIRST_PUBLICATION_SOURCE_REQUIRED');
+  if (record.external) return freeze(copy(externalPublicationData(record.recipe)));
   const {state,recipe}=record;
   if (publicationStateStamp(state)!==record.stateStamp) fail('READING_FIRST_PUBLICATION_SOURCE_CHANGED');
   current(state,{completedPublication:true});
@@ -556,6 +597,10 @@ export async function inspectReadingFirstPublicationSource(source) {
 }
 /** Rebuilds a Controller-signed registration recipe from original owned bytes; no model step is emitted. */
 export async function restoreReadingFirstPublicationSource(recipe) {
+  if(recipe?.schema_version===externalPublicationRecipeSchema){
+    externalPublicationData(recipe);
+    return createExternalReadingFirstPublicationSource(recipe);
+  }
   const {recipe_fingerprint,...body}=recipe ?? {};
   if (recipe?.schema_version!=='reading-first-publication-source-1.0' || recipe_fingerprint!==fingerprintV3Json(body)
     || recipe.run_id!==recipe.scientific_input?.identity?.run_id) fail('READING_FIRST_PUBLICATION_RECIPE_INVALID');

@@ -252,3 +252,22 @@ test('a dispatched task can consume its generation-bound registered source witho
   assert.equal(result.results[0].citation.claim_verification, 'not_performed');
   assert.equal(result.results[0].citation.sources[0].locator_status, 'unknown');
 });
+
+test('a delegated query carries the exact host call: saved host names, or the Codex shape without a host', async t => {
+  const { prepareLibraryQuery } = await library();
+  const codex = await fixture(t, { models: { query: { mode: 'explicit', ...alternate } } });
+  const plain = (await prepareLibraryQuery({ ...inputs(codex.vaultRoot), supportedModelPairs: [mainSession, alternate] })).task;
+  assert.equal(plain.dispatch.tool, 'collaboration.spawn_agent');
+  assert.deepEqual(Object.keys(plain.dispatch.arguments), ['task_name', 'message', 'model', 'reasoning_effort', 'fork_turns']);
+  assert.match(plain.dispatch.arguments.task_name, /^apa_query_[0-9a-f]{12}$/);
+  assert.deepEqual([plain.dispatch.arguments.message, plain.dispatch.arguments.model, plain.dispatch.arguments.reasoning_effort, plain.dispatch.arguments.fork_turns], [plain.prompt, alternate.model, alternate.reasoning_effort, 'none']);
+  const host = { name: 'claude-code', dispatch: { tool: 'Agent', model_argument: 'model', effort_argument: 'effort', instruction_argument: 'prompt', task_name_argument: 'description', fresh_context: null } };
+  const hosted = await fixture(t, { host, models: { query: { mode: 'explicit', ...alternate } } });
+  const task = (await prepareLibraryQuery({ ...inputs(hosted.vaultRoot), supportedModelPairs: [mainSession, alternate] })).task;
+  assert.equal(task.dispatch.tool, 'Agent');
+  assert.deepEqual(Object.keys(task.dispatch.arguments), ['description', 'prompt', 'model', 'effort']);
+  assert.match(task.dispatch.arguments.description, /^apa_query_[0-9a-f]{12}$/);
+  assert.deepEqual([task.dispatch.arguments.prompt, task.dispatch.arguments.model, task.dispatch.arguments.effort], [task.prompt, alternate.model, alternate.reasoning_effort]);
+  const same = await fixture(t, { host });
+  assert.equal((await prepareLibraryQuery({ ...inputs(same.vaultRoot), supportedModelPairs: [mainSession] })).task.dispatch, undefined);
+});

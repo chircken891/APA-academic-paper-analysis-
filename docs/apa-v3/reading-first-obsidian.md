@@ -14,7 +14,7 @@
 
 新功能性交付建议在新控制绑定中显式设 `presentationMode:'reading-editor'`。顺序为科学整合 → 首先写作语言的 Writer → 另一语言 Writer → 一次双语 Reading Editor → 渲染 → 原有一次整体审查。Writer 保留完整讲解和资源落点；Reading Editor 为这些真实 accepted views 添加呈现信息，不改写科学段落，不增加科学核对或润色调用。旧绑定和默认 `presentationMode:'writer'` 保持兼容，不自动升级。
 
-两语 Writer 接收后调用 `createReadingFirstPresentationRequest({controller})`。请求包含 `views`、原 `view_receipts`、登记的 `presentation`、`output_schema:'reading-editor-1.0'`；局部修订附 `issues`。按既有真实 host/native/owned 流程接收编辑输出后再渲染。编辑角色使用本次冻结的角色模型及推理强度，配置为follow-main时才采用冻结主会话设置。新模式控制器允许后续调用上限4–8次，并不自动授予这些调用：两语Writer、Editor、整体审查共4次；两语修正、Editor更新和一次局部复核还需4次。若授权包含完整修复链，须在冻结前预留8次，并把先行科学调用计入独立总上限。具体授权可更小，复用已接收两语稿的窗口无需重跑Writer。恢复不重置额度和期限，也不扩大旧绑定。
+两语 Writer 接收后调用 `createReadingFirstPresentationRequest({controller})`。请求包含 `views`、原 `view_receipts`、登记的 `presentation`、`output_schema`（新绑定为 `reading-editor-1.1`，旧绑定为 `reading-editor-1.0`，见下文）；局部修订附 `issues`。按既有真实 host/native/owned 流程接收编辑输出后再渲染。编辑角色使用本次冻结的角色模型及推理强度，配置为follow-main时才采用冻结主会话设置。新模式控制器允许后续调用上限4–8次，并不自动授予这些调用：两语Writer、Editor、整体审查共4次；两语修正、Editor更新和一次局部复核还需4次。若授权包含完整修复链，须在冻结前预留8次，并把先行科学调用计入独立总上限。具体授权可更小，复用已接收两语稿的窗口无需重跑Writer。恢复不重置额度和期限，也不扩大旧绑定。
 
 编辑输出绑定 `readingFirstViewsFingerprint(views)`，格式及校验见 [编辑接口](../../scripts/v3/reading-first-editor.mjs) 和 [Reading Editor 合同](../../prompts/v3/reading-first-contracts.md#reading-editor)：
 
@@ -22,11 +22,18 @@
 - `sections`：按稳定 `section_id` 添加可选 `takeaway`、原段落精确引文 `emphasis` 和按 `before_paragraph` 放置的 `subheadings`。强调仅落在未加粗的纯文本，不进入公式、链接或代码，不交叠。渲染器负责编号和锚点。
 - `methods`：独立逐项列出方法、测量与必要概念，包含 `id,title,explanation,application,section_ids` 和登记过的 `knowledge_ids` 数组；兼容旧 `knowledge_id`。没有已确立通用知识身份的条目可省略关联或使用空 `knowledge_ids`；非空关联须属于登记目录，两语每项的知识身份集合（含空集合）一致。原理与本文应用分别充分说明，不只提一嘴。
 
+2026-10-28 起，新 reading-editor 绑定冻结 `presentation_profile:'reading-editor-1.1'`，请求的 `output_schema` 随之为 1.1；绑定中没有该字段的旧运行仍按 1.0 校验和渲染。1.1 在上述字段外增加：
+
+- `languages[language].visuals:[{id,title?,notes?:[{section_id,paragraph_index}]}]`：图表的简短显示标题（含原编号）以及读图说明段落。说明段落须是该图放置小节中的非首段且没有小标题，渲染时移到图片之后，不改写文字。
+- 顶层 `map.nodes:[{id,stage,primary?}]`：步骤分为 `design`/`measurement`，发现分为 `finding`/`limit`，主要发现标 `primary`。两种语言共用一套选择；未列出的节点不画，只画已登记关系中两端都保留的连线。
+
+1.1 渲染：模块大标题固定为“摘要 / 研究问题与设计 / 方法、概念与测量 / 主要发现 / 讨论 / 局限 / 结论与实践含义”（英文 Abstract / Research question and design / Methods, concepts and measurement / Findings / Discussion / Limitations / Conclusions and implications），不显示 Integrator 按论文拟定的模块标签，论文特定措辞只出现在小节标题；正文只用模块和小节两级编号标题（含文档标题共三级），编辑小标题渲染为段首加粗短语；目录和原图注放进默认收起的 callout；方法目录每条是一个收起的 callout，读图条目不进目录；图表以“标题 · 原文页”行承载 `^rf-visual-<id>` 锚点，其后依次为图型、图片、读图说明和原图注，已在图型行链接的图型节点不再重复显示“方法背景”行；研究导图改为分阶段的从左到右流程图，主要发现深色粗框显示，嵌在 Writer 写的研究设计概览小节之后，不再单设导图小节和链接列表。
+
 Nature/Humanizer 用于专业、自然的表达，不限制有效的重点加粗、编号、分层目录、简表、列表或 callout。读者可先浏览重点再读连续解释，不能只把原文按顺序复述。重要条件、结果与局限保持直接可见。
 
 `presentation.schema_version` 保持 `reading-first-obsidian-1.0`。新布局指定 `layout:'writer-modules-1.0'`，与没有 layout 的历史呈现合同区分。
 
-- `modules:[{id,label:{en,"zh-CN"}}]`：按 abstract、design、methods、findings、discussion、limitations、conclusion 排序，对应原始摘要、研究问题与设计、方法概念与测量、主要发现、讨论、局限、结论与实践含义。Writer 在模块内组织子节；渲染器生成模块及子节两级目录，研究导图放在详细设计之前。
+- `modules:[{id,label:{en,"zh-CN"}}]`：按 abstract、design、methods、findings、discussion、limitations、conclusion 排序，对应原始摘要、研究问题与设计、方法概念与测量、主要发现、讨论、局限、结论与实践含义。Writer 在模块内组织子节；渲染器生成模块及子节两级目录，研究导图放在详细设计之前（reading-editor-1.1 中嵌在设计模块首个小节“研究设计概览”之后）。
 - `bibliography`：题名、首位作者、年份，可选 citation/doi；title 可为两语对象。完整 DOI 编号作为可点击文本显示。新论文文件名保留规范大小写、首字母和缩写；既有登记路径保持稳定，明确获准的候选改名须同步登记与引用。
 - `source_pdf`：`Raw/` 内的相对 PDF 路径；`sources:[{id,path}]` 登记正文和获准方法背景的可链接来源，不扩大原来源许可。
 - `sections`：已有资源或研究导图引用的稳定 `id`。Writer 沿用这些标识，并可组织其他必要子节。`indices:{en:0,"zh-CN":0}` 只供历史样例适配，不能替代新 Writer 输出。
@@ -69,7 +76,7 @@ Writer 输出：
 
 Writer 可通过其正常 view 的 `knowledge_content:[{id,paragraphs,sections?}]` 提交自己语言的节点内容；新共享布局请求要求覆盖所有已登记知识 ID。ID 不得重复或新建，段落非空；只覆盖自身语言，公用来源、公式和身份保持原目录。接收前校验，阅读呈现编辑请求及最终渲染消费合并后的目录。旧布局不消费该扩展。
 
-中断后的显式获批续接可通过 `adopted_views` 复用一份或两份真实 Writer 回执。一份已接受源语言稿只触发缺失的另一语言 Writer；两份齐备时直接进入呈现编辑。原运行、失败调用和截止时间保留，新窗口单独绑定；不能把复用视为新写作，也不能通过恢复重置额度。
+中断后的显式获批续接可通过 `adopted_views` 复用一份或两份真实 Writer 回执。已接受先写语言的那一份时，只触发缺失的另一语言 Writer；两份齐备时直接进入呈现编辑。原运行、失败调用和截止时间保留，新窗口单独绑定；不能把复用视为新写作，也不能通过恢复重置额度。
 
 若同一新任务窗口已经实际执行科学调用，控制绑定用 `priorCalls` 计入已用量，`maxCalls` 限制后续 Writer/Editor/Verifier 调用，`maxTotalCalls` 独立限制总调用。`priorCalls` 为非负整数且须有足够总上限，非零值冻结为 `prior_calls`；恢复时已用量等于此前实际调用加本窗口请求数，不重置截止时间。第06篇本轮使用3次先行科学调用、后续最多7次、总计最多10次；该授权不是其他运行的默认预算。
 

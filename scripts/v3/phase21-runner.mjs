@@ -7,7 +7,7 @@ import { checkMineruRuntime as publicCheckMineruRuntime } from '../lib/mineru-ru
 import { advanceRun as controlledAdvanceRun, resumeRun as controlledResumeRun } from './workflow-orchestrator.mjs';
 import { getRunControlForDispatch } from './owned-artifact-store.mjs';
 import { recordEvidenceCase, validateEvaluationApprovalPacket } from './phase21-evaluation-driver.mjs';
-import { DEFAULT_APA_REASONING_EFFORT, APA_VERIFIER_ROLES, resolveApaRoleModel, validateApaRoleModelPolicy } from '../apa-model-policy.mjs';
+import { DEFAULT_APA_REASONING_EFFORT, APA_VERIFIER_ROLES, resolveApaRoleModel, validateApaRoleModelPolicy, hostDispatchArgumentsMatch, validHostDispatch } from '../apa-model-policy.mjs';
 
 const READING_FIRST_ROLE_ORDER = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'];
 const READING_FIRST_HOST_ROLES = [...READING_FIRST_ROLE_ORDER, 'comparison', 'ledger', 'english-writer', 'chinese-writer', 'reading-editor', 'independent-verifier'];
@@ -95,8 +95,37 @@ function validatedPacket(packet, { mineruOnly = false } = {}) {
   return validation.packet;
 }
 
+// A packet carrying the run's saved host dispatch is checked against that shape; packets without it keep the Codex rules below.
+function validateDispatchedHostScope(packet) {
+  const scope = packet.host_action_scope, dispatch = scope.dispatch, args = scope.arguments, rolePolicy = packet.role_model_policy;
+  if (!validHostDispatch(dispatch)) fail('HOST_DISPATCH_INVALID');
+  if (scope.action !== dispatch.tool) fail('HOST_ACTION_UNSUPPORTED');
+  if (packet.workflow_profile !== 'reading-first-1.0' || !READING_FIRST_HOST_ROLES.includes(scope.role)) fail('HOST_READING_FIRST_ROLE_REQUIRED');
+  if (!validateApaRoleModelPolicy(rolePolicy)) fail('HOST_ROLE_MODEL_POLICY_INVALID');
+  const profile = resolveApaRoleModel(scope.role, rolePolicy.main_session, rolePolicy);
+  if (packet.requested_model !== profile.model) fail('HOST_ROLE_MODEL_POLICY_MISMATCH');
+  const message = args?.[dispatch.instruction_argument];
+  if (typeof message !== 'string' || !message.trim() || !hostDispatchArgumentsMatch(dispatch, args, profile)
+    || dispatch.task_name_argument && (typeof args[dispatch.task_name_argument] !== 'string' || !/^[a-z0-9_]+$/.test(args[dispatch.task_name_argument]))) fail('HOST_ARGUMENTS_INVALID');
+  if (hash(Buffer.from(message)) !== packet.instruction_fingerprint) fail('HOST_INSTRUCTION_FINGERPRINT_MISMATCH');
+  validateHostScopeLimits(packet);
+  if (scope.result_bindings?.agent_id !== null) fail('HOST_RESULT_BINDING_REQUIRED');
+}
+
+function validateHostScopeLimits(packet) {
+  const scope = packet.host_action_scope;
+  if (typeof scope.output_path !== 'string' || !scope.output_path || !contained(resolve(packet.allowed_output_root), resolve(scope.output_path))
+    || resolve(scope.output_path) === resolve(packet.allowed_output_root)) fail('HOST_OUTPUT_SCOPE_MISMATCH');
+  if (packet.endpoint.value !== 'current-session' || packet.endpoint.egress !== 'approved' || packet.endpoint.retention !== 'approved') fail('HOST_EGRESS_SCOPE_REQUIRED');
+  if (!['local_dispatch', 'host_observation'].includes(packet.intended_evidence_tier)) fail('HOST_EVIDENCE_TIER_INVALID');
+  if (packet.approved_budget_cap.unit !== 'tool_calls' || !Number.isInteger(packet.approved_budget_cap.value)
+    || packet.approved_budget_cap.value < 1 + packet.retry_allowance) fail('HOST_CALL_BUDGET_INVALID');
+  if (!same([...scope.permitted_result_fields].sort(), ['agent_id', 'raw_result_text'])) fail('HOST_RESULT_FIELDS_INVALID');
+}
+
 function validateHostScope(packet) {
   const scope = packet.host_action_scope;
+  if (scope.dispatch !== undefined) return validateDispatchedHostScope(packet);
   const spawn = scope.action === 'collaboration.spawn_agent';
   if (!spawn && scope.action !== 'collaboration.followup_task') fail('HOST_ACTION_UNSUPPORTED');
   const args = scope.arguments;
@@ -242,11 +271,13 @@ export function ingestObservedRunStep({ packet, emittedStep, observation, store,
       && observation?.input_fingerprint === expectedFingerprint && observation?.port === approved.backend.identity
       && same(observation?.tool_call, { name: emittedStep.action, arguments: emittedStep.arguments });
     const raw = typeof observation?.raw_result_text === 'string' ? observation.raw_result_text : null;
-    const returnedId = raw ? observedAgentId(raw, approved.host_action_scope.result_bindings.agent_id) : null;
+    const idPath = approved.host_action_scope.result_bindings.agent_id;
+    const returnedId = raw && idPath ? observedAgentId(raw, idPath) : null;
     const continuation = approved.host_action_scope.action === 'collaboration.followup_task';
     // A returned empty string is observable; an absent return is not. Spawn still needs an identity.
     const hasReturn = raw !== null && (continuation || raw.trim().length > 0);
-    const agentId = continuation ? previousObservation.agent_id : returnedId;
+    // Hosts whose return carries no parseable id are correlated by the Controller's own action id.
+    const agentId = continuation ? previousObservation.agent_id : idPath ? returnedId : hasReturn ? emittedStep?.action_id ?? null : null;
     const reason = !matching ? 'EMITTED_STEP_PACKET_SCOPE_MISMATCH' : !correlated ? 'OBSERVATION_CORRELATION_MISMATCH'
       : !hasReturn ? 'HOST_RAW_RESULT_REQUIRED' : !agentId ? 'HOST_AGENT_ID_UNAVAILABLE'
         : continuation && returnedId && returnedId !== agentId ? 'HOST_AGENT_ID_MISMATCH' : null;

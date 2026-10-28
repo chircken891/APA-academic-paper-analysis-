@@ -48,7 +48,7 @@ Save the compact gap batch, accepted source identities/versions, scientific owne
 
 Never manufacture review/decision/validation files to fill an interrupted sequence. Do not start another model or data source in response to quota or network failure. Do not keep an automation watching capacity unless the user requests it.
 
-An explicitly authorized reading-first continuation may adopt one or both compatible reading-first Writer receipts through `adopted_views`; the runtime validates the original owned bytes, view format and receipt. With one source-language view, dispatch only the missing counterpart and keep the original receipt in the source-first payload. With both views, proceed to the Reading Editor. Preserve the failed predecessor call and old deadline; freeze the new authorization separately, without re-running completed scientific roles or Writers.
+An explicitly authorized reading-first continuation may adopt one or both compatible reading-first Writer receipts through `adopted_views`; the runtime validates the original owned bytes, view format and receipt. With one adopted view in the first writing language, dispatch only the missing counterpart and keep the original receipt in the source-first payload. With both views, proceed to the Reading Editor. Preserve the failed predecessor call and old deadline; freeze the new authorization separately, without re-running completed scientific roles or Writers.
 
 Legacy P22 `phase22-adopted-views-1.0` uses its saved binding and the distinct adoption interface in `scripts/v3/phase22-language.mjs`, including its required pair of checkpoint-bound Writer views. That interface and reading-first `adopted_views` are not interchangeable; do not cast or relabel old view bytes to satisfy the new format.
 
@@ -85,19 +85,23 @@ import {
 } from './scripts/v3/reading-first-runtime.mjs';
 
 import {
-  prepareConfiguredReading, createConfiguredScienceRequest,
+  prepareConfiguredReading, createConfiguredScienceRequest, getConfiguredReadingDispatchArguments,
   configuredMineruConfiguration, createConfiguredMineruPort,
   materializeConfiguredReadingCandidate,
 } from './scripts/v3/configured-reading.mjs';
 
 const prepared = prepareConfiguredReading({
   repoRoot,
-  runId, scientificInput, mainSession, authorizationId, deadline,
+  runId, scientificInput, sessionContext: hostSessionContext, authorizationId, deadline,
   sourceLanguage: 'en', // Actual primary paper language; determine from its source.
   maxCalls, taskBindings, controllerActorId,
   // Only for a new run with explicitly approved enrichment scope:
   enrichmentPolicy, maxTotalCalls,
 });
+// hostSessionContext comes from the actual current host turn: {model, effort}
+// (or {model, reasoning_effort}). Do not derive it from the science config or
+// copy a model/effort pair from a previous run. If also supplied, mainSession
+// must match this context. Existing bound runs continue their own saved policy.
 // The saved reading.source_language separately selects the first Writer;
 // it does not change the actual source language or note-directory routing.
 const control = prepared.runControl;
@@ -112,7 +116,11 @@ const broker = createOwnedArtifactBroker({
 const scienceRequest = createConfiguredScienceRequest({
   prepared, role, task, dispatchContext: broker.dispatchContext, payload,
 });
-// Execute scienceRequest.emittedStep through the real host and commit the actual
+const scienceArguments = getConfiguredReadingDispatchArguments({ prepared, request: scienceRequest });
+// Pass scienceArguments unchanged to the tool in scienceRequest.packet.host_action_scope.action
+// (the saved host's dispatch tool, or collaboration.spawn_agent without one) through the real host.
+// Do not reconstruct the object, omit model/effort, or switch to a context-inheriting call.
+// Commit the actual
 // native return through its owned broker capability. Repeat only authorized roles.
 // Each scientificInput.role_artifacts ID must resolve to its actual owned receipt.
 // For an authorized parser packet, bind packet.backend.configuration to
@@ -129,7 +137,7 @@ if (!created.ok) throw new Error(JSON.stringify(created.errors));
 const { controller, requests } = created;
 ```
 
-In source-first mode `requests` initially contains only the source-language Writer. Accept its genuine result, then call `createReadingFirstDraftRequests({controller})` for the other language; its payload binds the accepted `source_view` and receipt. A source-language local repair similarly precedes the counterpart repair through another `createReadingFirstRevisionRequests` call. Do not render or review while either required repair is pending. The configured factory binds `source-first` and reads source language/presentation mode from the saved local choices; low-level compatibility defaults are not new-paper configuration.
+In source-first mode `requests` initially contains only the Writer for the bound first writing language (`first_writing_language`, or `source_language` in older bindings); the paper's actual source language only routes notes to sources or translations. Accept its genuine result, then call `createReadingFirstDraftRequests({controller})` for the other language; its payload binds the accepted `source_view` and receipt. A first-written-language local repair similarly precedes the counterpart repair through another `createReadingFirstRevisionRequests` call. Do not render or review while either required repair is pending. The configured factory binds `source-first` and reads source language/presentation mode from the saved local choices; low-level compatibility defaults are not new-paper configuration.
 
 An explicitly authorized saved-science revision can provide `scientificInput.adopted_science: [{artifact_root,artifact_id,receipt}]` instead of `role_artifacts`. The handoff reads and verifies the original owned bytes and exact receipts without reissuing scientific roles or minting new science ownership. In that path, `scientificInput.presentation` binds the current layout/resource adaptation separately; it is not a new Integrator scientific result. Use a new finite budget and preserve the closed source run.
 
@@ -143,9 +151,17 @@ Both Writers must put the useful explanation or concrete limitation into actual 
 
 The control factory above binds the reading-first Writer/review stage. Six scientific outputs may be committed through their predeclared broker capabilities after actual role returns. When using `runFiniteRoleSequence` with the existing orchestrator, also merge the approved scientific-stage `approved_fingerprints`, `required_artifacts` and `integration_prerequisites` into the same broker run control and matching science run. Keep its legacy chain `pending_resolver`; unused legacy review/approval slots remain unfulfilled, never alias a science artifact as a source-check/approval or request legacy delivery. The new handoff reads the six actual owned receipts directly.
 
-For each returned Writer request, execute exactly its `emittedStep` through the approved host and retain the real task/call/return observation; the emission itself is not execution. After the task has written its assigned native output, call `acceptReadingFirstResult({controller,request,observation,capability})`, where capability is issued by this broker for that request's exact owner/role/owned path/revision. Do not synthesize an observation from the expected arguments or write another role's return. Both accepted Writer outputs are required before rendering:
+For each returned Writer, Editor or Verifier request, obtain `getConfiguredReadingDispatchArguments({prepared,request})` and pass that complete object to the approved host unchanged. Retain the real task/call/return observation and host-selected settings; the emission itself is not execution, and the requested pair is not an observation of the actual model. After the assigned native output is available, call `acceptReadingFirstResult({controller,request,observation,capability})`, where capability is issued by this broker for that request's exact owner/role/owned path/revision. Do not synthesize an observation from the expected arguments or manufacture another role's return. Both accepted Writer outputs are required before rendering:
 
 When the actual host returns its task identity under `task_name`, freeze `hostResultAgentIdPath: ['task_name']` in the control factory before dispatch. The default remains `['agent_id']` for compatible hosts and old bindings. Preserve the raw host return unchanged; this explicit path selects the real returned identity and does not authorize a fabricated identity or relaxed tool-argument correlation.
+
+Instruction files are immutable request inputs. Re-emitting the same science instruction at the same path may reuse it only when the complete bytes match; a changed instruction must use a new registered attempt path. Keep each retry's native staging output separate too, and accept it only after matching the actual role, request and owned binding. A shared workspace plus a prompted file restriction is not host filesystem isolation. Do not overwrite another role's native file or an accepted artifact to recover from a misrouted task.
+
+Create the parent of a new standalone preview output before `exportReadingFirstPreview`; keep the output root itself new so its no-overwrite check remains effective. `materializeConfiguredReadingCandidate` already creates its configured parent. Preserve the distinction between a self-contained candidate's link inventory and the full committed library when reusing shared pages.
+
+Historical `.tmp/<run>/driver.mjs` files are troubleshooting evidence for their original run, not maintained templates or an entry point for a new paper. Use the maintained configured entry above; do not copy a previous driver's hardcoded model pair, field names, stage status or publication approval into another run.
+
+For a read-only review task, the reviewer may return its complete authored JSON and Controller may materialize those exact bytes into the assigned native path before acceptance, retaining the actual host return and provenance. Do not add scientific judgments while saving. If the chosen transport requires the child to write a staging file, declare that exact file as a change task rather than using a review-only Guard contract. Allow hashes only when the existing integrity comparison requires them. A child CLI route or external adoption still requires its approved transport scope and cannot be relabelled as native dispatch.
 
 ```js
 // In reading-editor mode, after both accepted views:
@@ -174,7 +190,7 @@ let state = getReadingFirstState(controller);
 
 ### Route a repair to its owner
 
-- Material science/content issue: if `scientific_gap` requires authorized recovery, emit/accept the late enrichment batch first. Call `createReadingFirstRevisionRequests({controller})` for affected Writers, accepting source-language repair before its counterpart. In Editor mode, create/accept `createReadingFirstPresentationRequest({controller})` again after repaired Writer views; the runtime uses `presentation-r2`. Then render the new candidate and issue the one local review.
+- Material science/content issue: if `scientific_gap` requires authorized recovery, emit/accept the late enrichment batch first. Call `createReadingFirstRevisionRequests({controller})` for affected Writers, accepting the first-written-language repair before its counterpart. In Editor mode, create/accept `createReadingFirstPresentationRequest({controller})` again after repaired Writer views; the runtime uses `presentation-r2`. Then render the new candidate and issue the one local review.
 - Material presentation-only issue: when every material issue is `presentation`, `layout`, `navigation`, `emphasis` or `method-inventory`, use `createReadingFirstPresentationRequest({controller})` directly for the predeclared Editor repair, preserving Writer bytes. Accept, render and locally review.
 - Renderer-only correction: the existing `renderRepair:true` branch is available only in Editor mode after exactly one overall review, while state is `reading_complete`, with previously reported minor `layout`, `navigation` or `presentation` issues and a changed rendered fingerprint. Preserve accepted Writers and Editor; render the corrected candidate, then call `createReadingFirstReviewRequest({controller,presentation,renderRepair:true})`. It consumes the same one local review slot, `review-r2` binding, remaining calls and original deadline. An unreported defect or an exhausted slot does not satisfy this branch. Ordinary minor issues do not require a call merely to eliminate them.
 

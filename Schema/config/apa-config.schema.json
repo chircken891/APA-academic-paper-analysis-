@@ -112,6 +112,15 @@
         }
       }
     },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "dispatch"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "dispatch": { "$ref": "#/definitions/hostDispatch" }
+      }
+    },
     "reading": {
       "type": "object",
       "additionalProperties": false,
@@ -262,8 +271,7 @@
           "additionalProperties": false,
           "required": [
             "mode",
-            "model",
-            "reasoning_effort"
+            "model"
           ],
           "properties": {
             "mode": {
@@ -275,20 +283,97 @@
               "pattern": "\\S"
             },
             "reasoning_effort": {
-              "enum": [
-                "none",
-                "minimal",
-                "low",
-                "medium",
-                "high",
-                "xhigh",
-                "max",
-                "ultra"
-              ]
+              "$ref": "#/definitions/reasoningEffort"
             }
           }
         }
       ]
+    },
+    "reasoningEffort": {
+      "enum": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ]
+    },
+    "hostDispatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "model_argument", "effort_argument", "instruction_argument", "task_name_argument", "fresh_context"],
+      "properties": {
+        "tool": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "model_argument": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1, "pattern": "\\S" }] },
+        "effort_argument": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1, "pattern": "\\S" }] },
+        "instruction_argument": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "task_name_argument": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1, "pattern": "\\S" }] },
+        "fresh_context": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["argument", "value"],
+              "properties": {
+                "argument": { "type": "string", "minLength": 1, "pattern": "\\S" },
+                "value": {}
+              }
+            }
+          ]
+        }
+      },
+      "if": { "properties": { "model_argument": { "type": "null" } } },
+      "then": { "properties": { "effort_argument": { "type": "null" } } }
+    },
+    "hostProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "host", "detected_at", "session", "models", "dispatch", "sources"],
+      "properties": {
+        "schema_version": { "const": "apa-host-profile-1.0" },
+        "host": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "detected_at": { "type": "string", "minLength": 1 },
+        "session": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["model", "reasoning_effort"],
+          "properties": {
+            "model": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1, "pattern": "\\S" }] },
+            "reasoning_effort": { "oneOf": [{ "type": "null" }, { "$ref": "#/definitions/reasoningEffort" }] }
+          }
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["model", "reasoning_efforts"],
+            "properties": {
+              "model": { "type": "string", "minLength": 1, "pattern": "\\S" },
+              "reasoning_efforts": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/definitions/reasoningEffort" } }
+            }
+          }
+        },
+        "dispatch": { "oneOf": [{ "type": "null" }, { "$ref": "#/definitions/hostDispatch" }] },
+        "sources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["session", "models", "dispatch"],
+          "properties": {
+            "session": { "$ref": "#/definitions/hostEvidenceSource" },
+            "models": { "$ref": "#/definitions/hostEvidenceSource" },
+            "dispatch": { "$ref": "#/definitions/hostEvidenceSource" }
+          }
+        },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "hostEvidenceSource": {
+      "enum": ["tool-schema", "system-context", "host-config", "host-docs", "unverified", "unavailable"]
     }
   }
 }

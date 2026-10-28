@@ -278,7 +278,7 @@ test('source-first repairs source then counterpart before the sole local review 
 for (const maxCalls of [7,8]) test(`source-first Reading Editor respects a frozen ${maxCalls}-call budget for bilingual repair`,async t=>{
   const s=await setup(t,{writingMode:'source-first',presentationMode:'reading-editor',priorCalls:6,maxTotalCalls:14,maxCalls}),controller=s.created.controller;
   const views=['en','zh-CN'].map(language=>({...s.view(language),sections:[{id:'design',heading:'Design',paragraphs:['The main finding follows the design.']}]}));
-  const editorFor=()=>({schema_version:'reading-editor-1.0',views_fingerprint:fingerprintReadingFirst(views),languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'design-method',title:'Design method',explanation:'Design explains inference.',application:'Used in this design.',section_ids:['design']}]}]))});
+  const editorFor=()=>({schema_version:'reading-editor-1.1',views_fingerprint:fingerprintReadingFirst(views),map:{nodes:[]},languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'design-method',title:'Design method',explanation:'Design explains inference.',application:'Used in this design.',section_ids:['design']}],visuals:[]}]))});
   await s.complete(s.created.requests[0],views[0]);
   await s.complete(createReadingFirstDraftRequests({controller})[0],views[1]);
   await s.complete(createReadingFirstPresentationRequest({controller}),editorFor());
@@ -357,7 +357,7 @@ test('dedicated reading editor owns its output and must refresh after a Writer c
   const views=['en','zh-CN'].map(language=>({...s.view(language),sections:[{id:'design',heading:'Design',paragraphs:['The main finding follows the design.']}]}));
   for(const request of s.created.requests) await s.complete(request,views.find(view=>view.language===request.language));
   await assert.rejects(()=>renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}}),/EDITOR_REQUIRED/);
-  const editorFor=values=>({schema_version:'reading-editor-1.0',views_fingerprint:fingerprintReadingFirst(values),languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'design-method',title:'Design method',explanation:'Design explains inference.',application:'Used in this design.',section_ids:['design']}]}]))});
+  const editorFor=values=>({schema_version:'reading-editor-1.1',views_fingerprint:fingerprintReadingFirst(values),map:{nodes:[]},languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'design-method',title:'Design method',explanation:'Design explains inference.',application:'Used in this design.',section_ids:['design']}],visuals:[]}]))});
   const first=createReadingFirstPresentationRequest({controller});
   assert.equal(first.task.role,'reading-editor');
   assert.equal(first.emittedStep.arguments.model,'gpt-6-astra');
@@ -409,7 +409,7 @@ test('presentation-only run adopts authentic Writer receipts and restores pendin
     const step=request.emittedStep;
     return acceptReadingFirstResult({controller:recovered.controller,request,observation:{action_id:step.action_id,run_id:'presentation-only',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:JSON.stringify({agent_id:'synthetic-editor-'+request.task.task_id})},capability:broker.issueCapability({runId:'presentation-only',actorId:request.task.owner_actor_id,role:request.task.role,artifactPath:request.task.artifact_path,revision:'1'})});
   };
-  const editor={schema_version:'reading-editor-1.0',views_fingerprint:fingerprintReadingFirst(['en','zh-CN'].map(language=>handoff.adopted_views.find(item=>item.content.language===language).content)),languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'design-method',title:'Design method',explanation:'Design explains inference.',application:'Used in this design.',section_ids:['design']}]}]))};
+  const editor={schema_version:'reading-editor-1.1',views_fingerprint:fingerprintReadingFirst(['en','zh-CN'].map(language=>handoff.adopted_views.find(item=>item.content.language===language).content)),map:{nodes:[]},languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'design-method',title:'Design method',explanation:'Design explains inference.',application:'Used in this design.',section_ids:['design']}],visuals:[]}]))};
   await complete(recovered.requests[0],editor);
   let rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller:recovered.controller}});
   await complete(createReadingFirstReviewRequest({controller:recovered.controller,presentation:rendered}),{overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[{severity:'material',kind:'presentation',detail:'Reading emphasis needs repair'}],scope:'overall'});
@@ -451,7 +451,7 @@ for (const issueKind of ['layout', 'presentation']) test(`renderer-only minor ${
   const s=await setup(t,{presentation,presentationMode:'reading-editor'}),controller=s.created.controller;
   const views=['en','zh-CN'].map(language=>({language,sections:presentation.modules.map(module=>({id:module.id,module_id:module.id,heading:module.id,paragraphs:['Design explains the main finding.']})),placements:{visuals:[],knowledge:[]}}));
   for(const request of s.created.requests) await s.complete(request,views.find(view=>view.language===request.language));
-  const editor={schema_version:'reading-editor-1.0',views_fingerprint:fingerprintReadingFirst(views),languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'method',title:'Method',explanation:'Study design.',application:'Used in the study.',section_ids:['design']}]}]))};
+  const editor={schema_version:'reading-editor-1.1',views_fingerprint:fingerprintReadingFirst(views),map:{nodes:[]},languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'method',title:'Method',explanation:'Study design.',application:'Used in the study.',section_ids:['design']}],visuals:[]}]))};
   await s.complete(createReadingFirstPresentationRequest({controller}),editor);
   const rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
   const verdict={overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[{kind:'main_conclusion',location:'p1',finding:'supported'},{kind:'key_design',location:'p1',finding:'supported'}],issues:[{severity:'minor',kind:issueKind,detail:'Directory is too deep'}],scope:'overall'};

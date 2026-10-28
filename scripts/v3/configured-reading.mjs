@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, join } from 'node:path';
 import { inspectApaConfig, resolveApaConfig } from '../lib/apa-config.mjs';
-import { createConfiguredApaRoleModelPolicy, resolveApaRoleModel } from '../apa-model-policy.mjs';
+import { createConfiguredApaRoleModelPolicy, resolveApaRoleModel, buildHostDispatchArguments } from '../apa-model-policy.mjs';
 import { createReadingFirstRunControl, fingerprintReadingFirst, renderReadingFirstNotes, snapshotReadingFirstRuntime } from './reading-first-runtime.mjs';
 import { exportReadingFirstPreview } from './reading-first-preview.mjs';
 import { emitApprovedRunStep, createCurrentMineruBaselinePort } from './phase21-runner.mjs';
@@ -30,7 +30,15 @@ export function buildConfiguredReadingInstructions(writingSkills = {}) {
 }
 
 /** Required entry for NEW configured readings. Reopening a run uses its owned binding, never this factory. */
-export function prepareConfiguredReading({ repoRoot, mainSession, supportedModelPairs, ...options } = {}) {
+export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext, supportedModelPairs, ...options } = {}) {
+  if (sessionContext !== undefined) {
+    if (!sessionContext || typeof sessionContext !== 'object' || Array.isArray(sessionContext)
+      || sessionContext.effort !== undefined && sessionContext.reasoning_effort !== undefined && sessionContext.effort !== sessionContext.reasoning_effort) throw new Error('APA_CONFIGURED_SESSION_CONTEXT_INVALID');
+    const effort = sessionContext.effort ?? sessionContext.reasoning_effort;
+    const derived = { model: sessionContext.model, ...(effort === undefined ? {} : { reasoning_effort: effort }) };
+    if (mainSession !== undefined && (mainSession?.model !== derived.model || mainSession?.reasoning_effort !== derived.reasoning_effort)) throw new Error('APA_CONFIGURED_MAIN_SESSION_MISMATCH');
+    mainSession = derived;
+  }
   const loaded = inspectApaConfig({ repoRoot });
   if (!loaded.exists) throw new Error('APA_LOCAL_CONFIG_REQUIRED');
   const resolvedConfig = resolveApaConfig({ config: loaded.config, repoRoot, mainSession, supportedModelPairs });
@@ -44,7 +52,7 @@ export function prepareConfiguredReading({ repoRoot, mainSession, supportedModel
   const configuredSetup = { schema_version: 'apa-configured-reading-1.0', config_fingerprint: loaded.fingerprint, paths, parser: parserOptions,
     role_model_policy: createConfiguredApaRoleModelPolicy(mainSession, resolvedConfig.roles),
     ...buildConfiguredReadingInstructions(resolvedConfig.writingSkills) };
-  const runControl = createReadingFirstRunControl({ ...options, mainSession, configuredSetup, writingMode: 'source-first',
+  const runControl = createReadingFirstRunControl({ ...options, ...(loaded.config.host ? { host: loaded.config.host } : {}), mainSession, configuredSetup, writingMode: 'source-first',
     firstWritingLanguage: resolvedConfig.reading.source_language, presentationMode: resolvedConfig.reading.presentation_mode });
   return freeze({ resolvedConfig, scientificInput: structuredClone(options.scientificInput), configurationFingerprint: loaded.fingerprint, paths, parserOptions, runControl });
 }
@@ -66,7 +74,11 @@ export function createConfiguredScienceRequest({ prepared, role, task, dispatchC
   let instructionFile;
   if (task.instruction_path) {
     const path = ownedPath(prepared.paths.runRoot, task.instruction_path);
-    mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, message, { flag: 'wx' });
+    mkdirSync(dirname(path), { recursive: true });
+    try { writeFileSync(path, message, { flag: 'wx' }); } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (!readFileSync(path).equals(Buffer.from(message))) throw new Error('APA_CONFIGURED_INSTRUCTION_CONFLICT');
+    }
     instructionFile = { path, sha256: sha(Buffer.from(message)), byte_length: Buffer.byteLength(message) };
     message = 'Read the complete instruction file: ' + path + '\nVerify SHA-256 before following it: ' + instructionFile.sha256 + '\nWrite only to: ' + outputPath;
   }
@@ -75,12 +87,43 @@ export function createConfiguredScienceRequest({ prepared, role, task, dispatchC
   const packet = { workflow_profile: 'reading-first-1.0', run_id: prepared.runControl.run_id, user_approval_id: binding.authorization_id,
     intended_evidence_tier: 'local_dispatch', source, instruction_fingerprint: sha(Buffer.from(message)), configuration_fingerprint: fingerprintReadingFirst(configuration),
     allowed_output_root: prepared.paths.runRoot, backend: { identity: 'current-collaboration', version: 'native-collaboration', runtime_configuration_version: 'reading-first-1.0', configuration },
-    endpoint: { value: 'current-session', egress: 'approved', retention: 'approved' }, host_action_scope: { action: 'collaboration.spawn_agent', role, output_path: outputPath,
-      arguments: { task_name: task.task_name, message, ...model, fork_turns: 'none' }, result_bindings: { agent_id: binding.host_result_agent_id_path }, permitted_result_fields: ['raw_result_text', 'agent_id'] },
+    endpoint: { value: 'current-session', egress: 'approved', retention: 'approved' }, host_action_scope: binding.host
+      ? { action: binding.host.dispatch.tool, dispatch: structuredClone(binding.host.dispatch), role, output_path: outputPath,
+        arguments: buildHostDispatchArguments(binding.host.dispatch, { taskName: task.task_name, message, model }), result_bindings: { agent_id: null }, permitted_result_fields: ['raw_result_text', 'agent_id'] }
+      : { action: 'collaboration.spawn_agent', role, output_path: outputPath,
+        arguments: { task_name: task.task_name, message, ...model, fork_turns: 'none' }, result_bindings: { agent_id: binding.host_result_agent_id_path }, permitted_result_fields: ['raw_result_text', 'agent_id'] },
     role_model_policy: binding.role_model_policy, expected_resource_fields: ['elapsed_ms'], requested_model: model.model, observed_model: 'unknown',
     estimate: { value: 1, unit: 'tool_calls' }, approved_budget_cap: { value: 1, unit: 'tool_calls' }, retry_allowance: 0 };
   const emittedStep = emitApprovedRunStep({ packet, run: { run_id: packet.run_id }, dispatchContext, approvedBudget: packet.approved_budget_cap, retryPolicy: { max_retries: 0 } });
   return freeze({ packet, emittedStep, ...(instructionFile ? { instruction_file: instructionFile } : {}) });
+}
+
+/** Return only the approved, correlated spawn arguments; this does not invoke the host tool. */
+export function getConfiguredReadingDispatchArguments({ prepared, request } = {}) {
+  const binding = prepared?.runControl?.reading_first_binding, packet = request?.packet, step = request?.emittedStep;
+  if (!binding || !packet || !step || packet.run_id !== prepared.runControl.run_id
+    || packet.user_approval_id !== binding.authorization_id || packet.workflow_profile !== binding.profile
+    || packet.allowed_output_root !== prepared.paths.runRoot
+    || packet.backend?.configuration?.config_fingerprint !== undefined && packet.backend.configuration.config_fingerprint !== prepared.configurationFingerprint
+    || fingerprintReadingFirst(packet.role_model_policy) !== fingerprintReadingFirst(binding.role_model_policy)
+    || packet.host_action_scope?.action !== (binding.host?.dispatch.tool ?? 'collaboration.spawn_agent')
+    || fingerprintReadingFirst(packet.host_action_scope?.dispatch ?? null) !== fingerprintReadingFirst(binding.host?.dispatch ?? null)) throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH');
+  let expected;
+  try { expected = emitApprovedRunStep({ packet, run: { run_id: prepared.runControl.run_id }, dispatchContext: {},
+    approvedBudget: packet.approved_budget_cap, retryPolicy: { max_retries: packet.retry_allowance } }); }
+  catch { throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH'); }
+  const { action_id: actualId, ...actualStep } = step;
+  const { action_id: expectedId, ...expectedStep } = expected;
+  if (typeof actualId !== 'string' || !actualId.trim() || !expectedId
+    || fingerprintReadingFirst(actualStep) !== fingerprintReadingFirst(expectedStep)) throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH');
+  if (request.instruction_file) {
+    const file = request.instruction_file;
+    let bytes;
+    try { bytes = readFileSync(file.path); } catch { throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH'); }
+    if (fingerprintReadingFirst(file) !== fingerprintReadingFirst(packet.backend.configuration.instruction_file)
+      || sha(bytes) !== file.sha256 || bytes.length !== file.byte_length) throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH');
+  } else if (packet.backend.configuration.instruction_file) throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH');
+  return structuredClone(step.arguments);
 }
 
 /** Parser packet configuration is fingerprinted by the existing approval gate. */

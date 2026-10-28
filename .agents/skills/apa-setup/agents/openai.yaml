@@ -1,4 +1,4 @@
 interface:
   display_name: "APA 本地配置"
-  short_description: "查看、完善、去除和导出当前仓库的个人 APA 配置，审阅导入差异后应用操作"
-  default_prompt: "使用 $apa-setup 查看此仓库的 APA 配置并打开本地配置页面。"
+  short_description: "检测当前宿主的派发工具与可用模型，查看、完善、去除和导出个人 APA 配置"
+  default_prompt: "使用 $apa-setup 检测当前环境，查看此仓库的 APA 配置并打开本地配置页面。"

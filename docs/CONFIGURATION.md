@@ -8,6 +8,10 @@ README 负责安装、使用和更新说明；`academic-paper-analysis` 负责�
 
 新运行冻结配置指纹、模型/强度、路径、解析器选择及写作指导内容/哈希。“跟随主会话”取创建时设置，不在运行中动态切换。旧任务从原检查点恢复，不重读个人配置替换绑定。
 
+Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: {model, effort}`（也接受 `reasoning_effort`），由 `prepareConfiguredReading` 冻结主会话。若同时提供 `mainSession` 且两者不一致，入口拒绝；保留原显式 `mainSession` API 的兼容性。科学角色显式选择 medium 并不表示主会话也是 medium。例如主会话 xhigh、科学角色显式 medium、Writer follow-main 时，Writer 应解析为 xhigh。
+
+派遣前使用 `getConfiguredReadingDispatchArguments({prepared,request})`，将返回参数原样传给 `host_action_scope.action` 指定的工具。配置含 `host` 段时，新运行冻结该段，派发工具和参数名按其生成（例如 Claude Code 的 `Agent` 用 `model`、`effort`、`prompt`、`description`）；没有 `host` 段时保持 Codex 的 `collaboration.spawn_agent`，参数为 model、reasoning_effort、`fork_turns:'none'` 和任务正文。任务未收到正文时，先保留失败并定位传输，不改成全上下文继承，也不通过省略参数使用宿主默认值。
+
 ## 字段
 
 | 字段 | 含义 |
@@ -16,6 +20,7 @@ README 负责安装、使用和更新说明；`academic-paper-analysis` 负责�
 | query.answer_language | 默认回答语言：question（跟随问题）、zh-CN（中文）、en（英文）；未配置为 question |
 | query.detail | 默认详略：adaptive（按问题需要）、concise（简明）、detailed（详细）；未配置为 adaptive |
 | query.audience | 默认讲解对象：adaptive（按问题需要）、beginner（初学者）、researcher（研究人员）；未配置为 adaptive |
+| host | 子代理派发方式：`{name, dispatch:{tool, model_argument, effort_argument, instruction_argument, task_name_argument, fresh_context}}`。只能采用 apa-setup 宿主档案中的检测结果；新运行冻结此段并按它生成派发参数。`model_argument` 为 null 表示派发工具不能选模型、子代理沿用主会话（此时 `effort_argument` 也为 null），各角色须为 follow-main，否则 `validation.conflicts` 列出冲突并阻止新运行 |
 | models.science | 六科学角色共同模型/强度或 follow-main |
 | models.overrides | 可覆盖 evidence、methods、results、interpretation、scientific-reading、integration |
 | models.roles | english-writer、chinese-writer、reading-editor、independent-verifier 分别选择；暂不用 Editor 也保留设置 |
@@ -28,7 +33,9 @@ README 负责安装、使用和更新说明；`academic-paper-analysis` 负责�
 
 新配置阅读调用必须按实际主论文向 `prepareConfiguredReading` 显式传入 `sourceLanguage`（`en` 或 `zh-CN`）；原文语言属于每篇文献的事实，不从个人偏好推定。运行将其冻结为 `binding.source_language`，决定 `Wiki/sources/` 与 `Wiki/translations/` 的归属；配置的 `reading.source_language` 则冻结为 `first_writing_language`，只决定顺序和另一语言消费的 `source_view`。旧绑定缺少后者时沿用其原有顺序，不修改旧记录。
 
-显式模型对象为 `{mode:'explicit',model,reasoning_effort}`，跟随主会话为 `{mode:'follow-main'}`。配置接受非空模型标识，不限定 GPT；实际派发须符合当前宿主支持的模型和参数组合。现有自动派发对接 Codex，其他宿主需要对应调用与回执适配。配置不是用量、来源或执行授权。
+宿主档案 `apa-host-profile-1.0`（结构见 `Schema/config/apa-config.schema.json` 的 `hostProfile`）由助手检测自身环境后写入 `.tmp/apa-setup/host-profile.json`，记录宿主名、当前会话、派发工具及参数名、派发工具可接受的模型与各自的推理强度档位，以及每项的来源。`inspect`/`page` 加 `--host-profile <file>` 时，检查结果增加 `host_check`（派发方式是否一致、模型或强度是否与本宿主不符），页面的模型与强度选项也来自档案。档案是助手的自我报告，不证明派发或模型实际可用。
+
+显式模型对象为 `{mode:'explicit',model,reasoning_effort}`，所选模型在宿主上没有推理强度参数时省略 `reasoning_effort`；跟随主会话为 `{mode:'follow-main'}`。配置接受非空模型标识，不限定 GPT；实际派发须符合当前宿主支持的模型和参数组合。现有自动派发对接 Codex，其他宿主需要对应调用与回执适配。配置不是用量、来源或执行授权。
 
 查询配置检查与 CLI 任务准备解析 `models.query` 和可选 `query` 回答偏好，不要求阅读角色、工作目录、MinerU 或写作指导，也不读取写作文件。`apa-query` 技能可按需要在同一回答任务中引用本库已启用且可读的写作指导，不增加模型调用；具体规则见[查询写作指导](../.agents/skills/apa-query/references/writing.md)。空答案仍可检索；未保存查询选择时按 follow-main 解析，不把默认值写入个人文件。显式查询组合必须由当前宿主提供 `supportedModelPairs` 确认；未知能力报 `APA_MODEL_AVAILABILITY_UNKNOWN`，不支持报 `APA_MODEL_UNSUPPORTED`，均不自动更换模型。follow-main 要求有效的当前会话组合；提供宿主能力列表时同样检查支持情况。配置结构错误仍会拒绝。新论文阅读继续要求原有完整配置和依赖，旧冻结绑定不变。
 
@@ -103,3 +110,13 @@ node scripts/v3/bilingual.mjs dry-run --vault-root <vault-root> --run <run> --pr
 ```
 
 显式全局修复时，技能恢复点在用户目录 `.agents/backups/skills/academic-paper-analysis/<UTC timestamp>`；命令启动器备份在原文件旁，后缀为 `.backup-<timestamp>`。本库配置保存不创建这些全局备份。
+
+## Windows 运行错误的处理
+
+- Python 能读文件但打印元数据时报 `UnicodeEncodeError: gbk` 时，只为该命令使用既有解释器的 `-X utf8`，不改 PDF 或全局编码。`EPERM realpath` / `WinError 5` 则先核对同一进程对具体输入、runtime 和输出的访问权限，不能按编码错误处理；保留既有 MinerU 路径映射。
+- `codex exec` 的 `--sandbox workspace-write` 与 `--approve-for-me` 互斥；按已批准的模式选择一种。额外暂存目录使用明确的 `--add-dir`，不因此关闭沙箱或扩大真实论文的模型、来源和预算。
+- 测试若在宿主 AppContainer Temp 下 `realpath` 失败，可仅对当前测试命令将 `TEMP` / `TMP` 指向已核对的 `.tmp/<任务>/test-temp/`。不改全局环境，不将临时根设为知识库根目录，不为权限错误放宽发布路径校验。
+- PowerShell 中对文件类型使用 `rg -g '*.md' <pattern> <目录>` 等过滤方式，不将 `目录/*.md` 当 Windows 字面路径。区分无命中的退出码 1 与执行失败，避免用不匹配当前 shell 的尾随命令统一吞错。
+- review-only Guard 不允许审查者写入文件；可由 Controller 保存完整审查返回。需要子进程落盘时，将精确暂存文件声明为 change 范围；hash 权限仅用于已需要的完整性核验。
+
+源码更新不刷新旧运行的工具指纹、批准或回执。旧发布登记在工具变化后拒绝重建是有效保护；当前库状态通过已提交索引及对象校验确认，不用重新执行提交前的 dry-run 计划代替发布后核验。图谱配置若落后于新代次，先生成并审阅 `obsidian:graph:proposal`，再按精确授权更新；发布命令不自动改写 `.obsidian`。

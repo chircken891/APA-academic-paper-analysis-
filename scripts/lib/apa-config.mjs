@@ -12,6 +12,8 @@ const schemaPath = fileURLToPath(new URL('../../Schema/config/apa-config.schema.
 const configSchema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
 const checkSchema = new Ajv({ allErrors: true }).compile(configSchema);
 const checkQueryPreferences = new Ajv({ allErrors: true }).compile(configSchema.properties.query);
+const checkHostProfileShape = new Ajv({ allErrors: true }).addSchema(configSchema, 'apa-config').getSchema('apa-config#/definitions/hostProfile');
+export const APA_REASONING_EFFORTS = Object.freeze([...configSchema.definitions.reasoningEffort.enum]);
 export const APA_QUERY_DEFAULTS = Object.freeze({ answer_language: 'question', detail: 'adaptive', audience: 'adaptive' });
 const clone = value => structuredClone(value);
 const blank = () => ({ schema_version: APA_CONFIG_VERSION });
@@ -36,13 +38,23 @@ export function validateApaConfig(config, { repoRoot = process.cwd(), complete =
     if (typeof value === 'string' && !contained(repoRoot, absolute(repoRoot, value))) errors.push(`paths.${key} must be inside repository`);
   }
   const missing = [];
-  if (capability === 'query') return { valid: errors.length === 0, complete: errors.length === 0, errors, missing };
+  // A saved host that cannot choose the model leaves explicit choices unenforceable; report them instead of refusing to load.
+  const conflicts = config?.host?.dispatch?.model_argument === null
+    ? modelChoiceEntries(config).filter(([key, choice]) => choice?.mode === 'explicit' && (capability === 'reading' || key === 'models.query')).map(([key]) => `${key} requires follow-main: host ${config.host.name} cannot select the model`)
+    : [];
+  if (capability === 'query') return { valid: errors.length === 0, complete: errors.length === 0 && conflicts.length === 0, errors, missing, conflicts };
   for (const key of ['models.science', ...APA_CONFIG_ROLES.map(role => `models.roles.${role}`), 'paths.runs', 'paths.parse', 'paths.candidates', 'parser.runtime_home', 'reading.source_language', 'reading.presentation_mode', ...APA_WRITING_SKILLS.map(skill => `writing_skills.${skill}.enabled`)]) {
     if (get(config, key) === undefined) missing.push(key);
   }
   for (const key of APA_WRITING_SKILLS) if (config?.writing_skills?.[key]?.enabled && !config.writing_skills[key].path) missing.push(`writing_skills.${key}.path`);
   if (['nature-writing', 'nature-polishing'].some(key => config?.writing_skills?.[key]?.enabled) && !config?.writing_skills?.['nature-shared']?.enabled) missing.push('writing_skills.nature-shared.enabled');
-  return { valid: errors.length === 0 && (!complete || missing.length === 0), complete: errors.length === 0 && missing.length === 0, errors, missing: [...new Set(missing)] };
+  return { valid: errors.length === 0 && (!complete || missing.length === 0 && conflicts.length === 0), complete: errors.length === 0 && missing.length === 0 && conflicts.length === 0, errors, missing: [...new Set(missing)], conflicts };
+}
+
+function modelChoiceEntries(config) {
+  return [['models.query', config?.models?.query], ['models.science', config?.models?.science],
+    ...APA_SCIENCE_ROLES.map(role => [`models.overrides.${role}`, config?.models?.overrides?.[role]]),
+    ...APA_CONFIG_ROLES.map(role => [`models.roles.${role}`, config?.models?.roles?.[role]])];
 }
 
 export function loadApaConfig({ repoRoot = process.cwd() } = {}) {
@@ -112,10 +124,37 @@ export function exportApaConfig(config) {
   return { schema_version: 'apa-config-export-1.0', answers: clone(config) };
 }
 
-export function inspectApaConfig({ repoRoot = process.cwd(), capability = 'reading' } = {}) {
+// A host profile is the agent's own report of what it can dispatch; it is evidence for setup, not a saved answer.
+export function loadHostProfile(file) {
+  let profile;
+  try { profile = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { throw error('APA_HOST_PROFILE_INVALID', 'unreadable JSON'); }
+  if (!checkHostProfileShape(profile)) throw error('APA_HOST_PROFILE_INVALID', checkHostProfileShape.errors.map(item => `${item.instancePath || '/'} ${item.message}`).join('; '));
+  if (new Set(profile.models.map(item => item.model)).size !== profile.models.length) throw error('APA_HOST_PROFILE_INVALID', 'duplicate model');
+  return profile;
+}
+
+export function checkHostProfile(config, profile, capability = 'reading') {
+  const issues = [];
+  for (const [key, choice] of modelChoiceEntries(config)) {
+    if (choice?.mode !== 'explicit' || capability === 'query' && key !== 'models.query') continue;
+    if (profile.dispatch?.model_argument === null) { issues.push({ key, issue: 'model-selection-unavailable', model: choice.model }); continue; }
+    const detected = profile.models.find(item => item.model === choice.model);
+    if (!detected) { if (profile.models.length) issues.push({ key, issue: 'model-not-detected', model: choice.model }); continue; }
+    if (choice.reasoning_effort === undefined) { if (detected.reasoning_efforts.length) issues.push({ key, issue: 'effort-missing', model: choice.model }); }
+    else if (!detected.reasoning_efforts.includes(choice.reasoning_effort)) issues.push({ key, issue: 'effort-not-supported', model: choice.model, reasoning_effort: choice.reasoning_effort });
+  }
+  if (!profile.dispatch) issues.push({ key: 'host', issue: 'dispatch-unavailable' });
+  const detectedHost = profile.dispatch ? { name: profile.host, dispatch: profile.dispatch } : null;
+  const canonical = value => JSON.stringify(value, (key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+  const host = !config.host ? 'not-saved' : detectedHost && canonical(config.host) === canonical(detectedHost) ? 'match' : 'differs';
+  return { host, detected_host: profile.host, issues };
+}
+
+export function inspectApaConfig({ repoRoot = process.cwd(), capability = 'reading', hostProfile } = {}) {
   const snapshot = loadApaConfig({ repoRoot });
   const validation = validateApaConfig(snapshot.config, { repoRoot, capability });
-  if (capability === 'query') return { ...snapshot, capability, validation, dependencies: [], ready: validation.complete, model_availability: 'not_checked' };
+  const hostCheck = hostProfile ? { host_check: checkHostProfile(snapshot.config, hostProfile, capability) } : {};
+  if (capability === 'query') return { ...snapshot, capability, validation, dependencies: [], ready: validation.complete, model_availability: 'not_checked', ...hostCheck };
   const dependencies = [];
   const inspect = (key, value, kind) => {
     if (!value) return;
@@ -129,16 +168,17 @@ export function inspectApaConfig({ repoRoot = process.cwd(), capability = 'readi
   const parserDefaults = runtimeHome ? { python: path.join(runtimeHome, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'), config_path: path.join(runtimeHome, 'config.yaml') } : {};
   for (const key of ['python', 'config_path']) inspect(`parser.${key}`, snapshot.config.parser?.[key] ?? parserDefaults[key], 'file');
   for (const key of APA_WRITING_SKILLS) if (snapshot.config.writing_skills?.[key]?.enabled) inspect(`writing_skills.${key}`, snapshot.config.writing_skills[key].path, 'file');
-  return { ...snapshot, capability, validation, dependencies, ready: validation.complete && dependencies.every(item => item.status === 'available'), model_availability: 'not_checked' };
+  return { ...snapshot, capability, validation, dependencies, ready: validation.complete && dependencies.every(item => item.status === 'available'), model_availability: 'not_checked', ...hostCheck };
 }
 
 export function resolveApaConfig({ config, repoRoot = process.cwd(), mainSession, supportedModelPairs, capability = 'reading' } = {}) {
   const validation = validateApaConfig(config, { repoRoot, complete: true, capability });
-  if (!validation.valid) throw error('APA_CONFIG_INCOMPLETE', [...validation.errors, ...validation.missing].join('; '));
+  if (!validation.valid) throw error('APA_CONFIG_INCOMPLETE', [...validation.errors, ...validation.missing, ...validation.conflicts].join('; '));
   const resolveChoice = choice => {
     const pair = choice.mode === 'follow-main' ? mainSession : choice;
-    if (!pair || typeof pair.model !== 'string' || !pair.model.trim() || !['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(pair.reasoning_effort)) throw error('APA_MAIN_SESSION_INVALID');
-    const resolved = { model: pair.model, reasoning_effort: pair.reasoning_effort };
+    // A host without a reasoning parameter saves no effort; the absence is kept rather than filled with a default.
+    if (!pair || typeof pair.model !== 'string' || !pair.model.trim() || pair.reasoning_effort !== undefined && !APA_REASONING_EFFORTS.includes(pair.reasoning_effort)) throw error('APA_MAIN_SESSION_INVALID');
+    const resolved = { model: pair.model, ...(pair.reasoning_effort === undefined ? {} : { reasoning_effort: pair.reasoning_effort }) };
     if (supportedModelPairs && !supportedModelPairs.some(item => item.model === resolved.model && item.reasoning_effort === resolved.reasoning_effort)) throw error('APA_MODEL_UNSUPPORTED', `${resolved.model}/${resolved.reasoning_effort}`);
     return resolved;
   };

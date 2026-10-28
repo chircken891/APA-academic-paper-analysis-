@@ -5,6 +5,7 @@ import { readCommittedGeneration, readCommittedReadingFirstPresentations, assert
   normalizeIndexPath } from './phase22-active-version.mjs';
 import { queryBilingualIndex } from './phase22-search.mjs';
 import { loadApaConfig, resolveApaConfig, resolveQueryPreferences } from '../lib/apa-config.mjs';
+import { hostDispatchCall } from '../apa-model-policy.mjs';
 import { validateTopicAdoptedSources, topicReviewState } from './topic-library.mjs';
 
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
@@ -121,6 +122,8 @@ export async function prepareLibraryQuery({ repoRoot, question, searchQuery, pre
   const evidence = { repoRoot: root, question, retrieval_query: retrievalQuery, preferences: queryPreferences, generation_id: found.generation_id, evidence_mode: found.evidence_mode, results: found.results };
   const task = { execution, ...pair, fork_turns: 'none', tools: 'read-only', question, evidence,
     prompt: queryTaskContract + '\n' + JSON.stringify(evidence) };
+  // A delegated answer is called exactly as the saved host dispatch says; without a host the call keeps the Codex shape.
+  if (!sameSession) task.dispatch = hostDispatchCall(snapshot.config.host, { taskName: 'apa_query_' + sha(task.prompt).slice(7, 19), message: task.prompt, model: pair });
   return { ...found, status: 'prepared', question, retrieval_query: retrievalQuery, config_fingerprint: snapshot.fingerprint,
     query_mode: resolved.queryMode, input_fingerprint: sha(JSON.stringify(evidence)), requested_identity: { ...pair }, task };
 }

@@ -59,7 +59,9 @@ test('explicit query requires host confirmation and never substitutes unsupporte
   assert.equal(api.inspectApaConfig({ repoRoot, capability: 'query' }).ready, true);
   assert.equal(api.inspectApaConfig({ repoRoot }).ready, false);
   assert.throws(() => api.resolveApaConfig({ config: { schema_version: 'apa-local-config-1.0' }, repoRoot, capability: 'query', mainSession: { model: ' ', reasoning_effort: 'high' } }), /APA_MAIN_SESSION_INVALID/);
-  assert.equal(api.validateApaConfig({ ...config, models: { query: { mode: 'explicit', model: 'q' } } }, { repoRoot, capability: 'query' }).valid, false);
+  // A host without a reasoning parameter saves the model alone; an unknown effort word is still rejected.
+  assert.equal(api.validateApaConfig({ ...config, models: { query: { mode: 'explicit', model: 'q' } } }, { repoRoot, capability: 'query' }).valid, true);
+  assert.equal(api.validateApaConfig({ ...config, models: { query: { mode: 'explicit', model: 'q', reasoning_effort: 'deep' } } }, { repoRoot, capability: 'query' }).valid, false);
 });
 test('CLI query inspection distinguishes configuration from live model availability', t => {
   const repoRoot = temporary(t);

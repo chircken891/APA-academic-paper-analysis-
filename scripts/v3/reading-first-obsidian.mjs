@@ -9,6 +9,16 @@ import { applyReadingFirstKnowledgeContent, matchReadingFirstKnowledgeIdentity, 
 const languages = ['en', 'zh-CN'];
 export const READING_FIRST_OBSIDIAN_SCHEMA = 'reading-first-obsidian-1.0';
 const fail = code => { throw Object.assign(new Error(code), { code }); };
+// Editor 1.1 shows fixed module titles so every note shares one recognizable outline.
+const FIXED_MODULE_LABELS = Object.freeze({
+  abstract: { en: 'Abstract', 'zh-CN': '摘要' },
+  design: { en: 'Research question and design', 'zh-CN': '研究问题与设计' },
+  methods: { en: 'Methods, concepts and measurement', 'zh-CN': '方法、概念与测量' },
+  findings: { en: 'Findings', 'zh-CN': '主要发现' },
+  discussion: { en: 'Discussion', 'zh-CN': '讨论' },
+  limitations: { en: 'Limitations', 'zh-CN': '局限' },
+  conclusion: { en: 'Conclusions and implications', 'zh-CN': '结论与实践含义' },
+});
 const local = (value, language) => typeof value === 'string' ? value : value?.[language];
 const label = value => String(value).replace(/[\[\]\r\n]/g, ' ');
 const key = value => typeof value === 'string' ? value.normalize('NFC').trim().toLowerCase() : '';
@@ -38,6 +48,8 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
   const sharedKnowledge = p.knowledge_layout === 'shared-bilingual-1.0';
   if (p.knowledge_layout && !sharedKnowledge) fail('RF_OBSIDIAN_KNOWLEDGE_LAYOUT_INVALID');
   const editor = readingEditor === undefined ? undefined : validateReadingFirstEditor({ editor: readingEditor, views, presentation });
+  // Editor 1.1: three heading levels, folded catalogues/captions, figure notes beside figures and a staged map.
+  const compact = editor?.schema_version === 'reading-editor-1.1';
   const writerLayout = p.layout === 'writer-modules-1.0';
   if (editor && !writerLayout) fail('RF_OBSIDIAN_EDITOR_LAYOUT_INVALID');
   if (p.layout && !writerLayout) fail('RF_OBSIDIAN_LAYOUT_INVALID');
@@ -176,29 +188,30 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     const edits = editor?.languages[language];
     const headingHref = heading => '#' + encodeMarkdownComponent(heading).replace(/%2F/g, '/');
     const knowledgeHref = id => href(target, destinations.get(`${id}:${language}`)) + (sharedKnowledge ? headingHref(en ? 'English' : '中文') : '');
-    const moduleHeadings = new Map(modules.map((module, index) => [module.id, `${index + 1}. ${local(module.label, language)}`]));
+    const moduleHeadings = new Map(modules.map((module, index) => [module.id, `${index + 1}. ${local(compact ? FIXED_MODULE_LABELS[module.id] : module.label, language)}`]));
     const mapHeading = en ? '2.1 Research map' : '2.1 研究导图';
     const inventoryHeading = en ? '3.1 Methods and concepts at a glance' : '3.1 方法与概念索引';
     const overviewHeading = en ? 'Reading overview' : '阅读提要';
     const sectionHeadings = new Map();
     for (const module of modules) {
-      const offset = (module.id === 'design' && nodes.length || module.id === 'methods') ? 1 : 0;
+      const offset = (module.id === 'design' && nodes.length && !compact || module.id === 'methods') ? 1 : 0;
       view.sections.filter(section => section.module_id === module.id).forEach((section, index) => sectionHeadings.set(section.id, `${modules.indexOf(module) + 1}.${index + 1 + offset} ${section.heading}`));
     }
     const methodHeading = (method, index) => `3.1.${index + 1} ${method.title}`;
     const subheadingTitle = (section, item, edit) => `${sectionHeadings.get(section.id).split(' ')[0]}.${edit.subheadings.filter(heading => heading.before_paragraph <= item.before_paragraph).length} ${item.heading}`;
     const visualHeadings = new Map(visuals.map(visual => [visual.id, `${local(visual.label, language)} · ${en ? 'Source p.' : '原文页'} ${visual.page}`]));
-    const visualLink = id => editor ? headingHref(visualHeadings.get(id)) : '#^rf-visual-' + id;
+    const visualLink = id => editor && !compact ? headingHref(visualHeadings.get(id)) : '#^rf-visual-' + id;
     const sectionLink = (id, text) => md(text, editor ? headingHref(sectionHeadings.get(id)) : `#^${anchor(id)}`);
     const sectionLinks = ids => ids.map(id => sectionLink(id, view.sections.find(section => section.id === id).heading)).join(' · ');
-    const callout = (kind, title, text) => `> [!${kind}] ${title}\n` + text.split('\n').map(line => '> ' + line).join('\n') + '\n\n';
+    const callout = (kind, title, text, folded = false) => `> [!${kind}]${folded ? '-' : ''} ${title}\n` + text.split('\n').map(line => '> ' + line).join('\n') + '\n\n';
     const methodInventory = () => `### ${inventoryHeading}\n\n` + edits.methods.map((method, index) => {
       const ids = [...new Set([...(method.knowledge_ids ?? []), ...(method.knowledge_id ? [method.knowledge_id] : [])])];
       const shared = ids.map(id => {
         if (!destinations.has(`${id}:${language}`)) fail('RF_OBSIDIAN_REFERENCE_INVALID');
         return md(sharedKnowledge ? local(knowledge.find(item => item.id === id).title, language) : en ? 'Shared explanation' : '通用解释', knowledgeHref(id));
       });
-      return `#### ${methodHeading(method, index)}\n\n**${en ? 'Principle' : '原理'}**${en ? ': ' : '：'}${resolveReferences(method.explanation)}\n\n**${en ? 'Use in this study' : '本文中的作用'}**${en ? ': ' : '：'}${resolveReferences(method.application)}\n\n${sectionLinks(method.section_ids)}${shared.length ? ' · ' + shared.join(' · ') : ''}\n\n`;
+      const body = `**${en ? 'Principle' : '原理'}**${en ? ': ' : '：'}${resolveReferences(method.explanation)}\n\n**${en ? 'Use in this study' : '本文中的作用'}**${en ? ': ' : '：'}${resolveReferences(method.application)}\n\n${sectionLinks(method.section_ids)}${shared.length ? ' · ' + shared.join(' · ') : ''}`;
+      return compact ? callout('info', label(method.title), body, true) : `#### ${methodHeading(method, index)}\n\n${body}\n\n`;
     }).join('');
     const resolveReferences = text => text.replace(/\[([^\]\n]+)\]\((apa-[^)]+)\)/g, (_, text, reference) => {
       let destination;
@@ -222,15 +235,31 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
       source += `## ${overviewHeading}\n\n` + callout('abstract', en ? 'Key findings and interpretation' : '核心发现与解读', edits.overview.map(item => `- ${resolveReferences(item.text)} ${sectionLinks(item.section_ids)}`).join('\n'));
       contents = [`- **${md(overviewHeading, headingHref(overviewHeading))}**`, ...modules.flatMap(module => [
         `- **${md(moduleHeadings.get(module.id), headingHref(moduleHeadings.get(module.id)))}**`,
-        ...(module.id === 'design' && nodes.length ? [`  - ${md(mapHeading, headingHref(mapHeading))}`] : []),
+        ...(module.id === 'design' && nodes.length && !compact ? [`  - ${md(mapHeading, headingHref(mapHeading))}`] : []),
         ...(module.id === 'methods' ? [`  - ${md(inventoryHeading, headingHref(inventoryHeading))}`] : []),
         ...view.sections.filter(section => section.module_id === module.id).map(section => `  - ${sectionLink(section.id, sectionHeadings.get(section.id))}`),
       ])];
     }
     if (writerLayout) for (const heading of [en ? 'Figures and tables' : '图表导航', en ? 'Personal Notes' : '个人笔记']) contents.push(`- ${md(heading, '#' + encodeURIComponent(heading))}`);
-    source += `## ${en ? 'Contents' : '目录'}\n\n` + contents.join('\n') + '\n';
+    source += compact ? callout('note', en ? 'Contents' : '目录', contents.join('\n'), true).trimEnd() + '\n' : `## ${en ? 'Contents' : '目录'}\n\n` + contents.join('\n') + '\n';
     let reading = '', researchMap = '';
-    if (nodes.length) {
+    if (compact && nodes.length) {
+      // Left-to-right stages keep wide maps readable; only editor-selected nodes and their own edges are drawn.
+      const selected = editor.map.nodes, ids = new Set(selected.map(node => node.id)), mermaidId = id => id.replaceAll('-', '_');
+      const stages = [['design', en ? 'Study design' : '研究设计'], ['measurement', en ? 'Measurement and analysis' : '测量与分析'], ['finding', en ? 'Findings' : '主要发现'], ['limit', en ? 'Limits' : '限制']];
+      researchMap += '```mermaid\nflowchart LR\n';
+      for (const [stage, title] of stages) {
+        const rows = selected.filter(node => node.stage === stage);
+        if (!rows.length) continue;
+        researchMap += `  subgraph stage_${stage}["${title}"]\n    direction TB\n`;
+        for (const row of rows) researchMap += `    ${mermaidId(row.id)}["${local(nodes.find(node => node.id === row.id).label, language).replace(/["\r\n<>]/g, ' ')}"]\n`;
+        researchMap += '  end\n';
+      }
+      for (const relation of map.relations) if (ids.has(relation.step_id) && ids.has(relation.finding_id)) researchMap += `  ${mermaidId(relation.step_id)} --> ${mermaidId(relation.finding_id)}\n`;
+      researchMap += '  classDef primary fill:#1d4ed8,stroke:#1e3a8a,stroke-width:3px,color:#ffffff\n  classDef secondary fill:#f1f5f9,stroke:#94a3b8,color:#1e293b\n';
+      for (const [kind, rows] of [['primary', selected.filter(node => node.primary)], ['secondary', selected.filter(node => !node.primary)]]) if (rows.length) researchMap += `  class ${rows.map(node => mermaidId(node.id)).join(',')} ${kind}\n`;
+      researchMap += '```\n\n';
+    } else if (nodes.length) {
       researchMap += `${writerLayout ? '###' : '##'} ${editor ? mapHeading : en ? 'Research map' : '研究导图'}\n\n\`\`\`mermaid\nflowchart TD\n`;
       for (const node of nodes) researchMap += `  ${node.id.replaceAll('-', '_')}["${local(node.label, language).replace(/["\r\n<>]/g, ' ')}"]\n`;
       for (const relation of map.relations) researchMap += `  ${relation.step_id.replaceAll('-', '_')} --> ${relation.finding_id.replaceAll('-', '_')}\n`;
@@ -243,15 +272,14 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
         const module = modules.find(item => item.id === section.module_id);
         reading += `## ${editor ? moduleHeadings.get(module.id) : local(module.label, language)}\n\n`;
         if (editor && module.id === 'methods') reading += methodInventory();
-        if (module.id === 'design') reading += researchMap;
+        if (module.id === 'design' && !compact) reading += researchMap;
       }
       if (!writerLayout && spec.id === (map.steps[0]?.section_id ?? nodes[0]?.section_id)) reading += researchMap;
       reading += `${writerLayout ? '###' : '##'} ${editor ? sectionHeadings.get(section.id) : section.heading}\n\n`;
       const edit = edits?.sections.find(item => item.section_id === section.id);
       if (edit?.takeaway) reading += callout('summary', en ? 'Key point' : '要点', resolveReferences(edit.takeaway));
-      section.paragraphs.forEach((paragraph, paragraphIndex) => {
-        const subheading = edit?.subheadings.find(item => item.before_paragraph === paragraphIndex);
-        if (subheading) reading += `#### ${subheadingTitle(section, subheading, edit)}\n\n`;
+      const notes = new Map((compact ? edits.visuals : []).flatMap(item => (item.notes ?? []).filter(note => note.section_id === section.id).map(note => [note.paragraph_index, item.id])));
+      const renderParagraph = (paragraph, paragraphIndex) => {
         let emphasized = paragraph;
         const spans = (edit?.emphasis ?? []).filter(item => item.paragraph_index === paragraphIndex);
         // Apply exact spans against original offsets so inserted Markdown never changes later matches.
@@ -260,8 +288,16 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
         for (const range of ranges) emphasized = emphasized.slice(0, range.start) + '**' + emphasized.slice(range.start, range.end) + '**' + emphasized.slice(range.end);
         const renderedParagraph = writerLayout ? resolveReferences(emphasized) : emphasized;
         if (writerLayout && /apa-(?:source|visual|knowledge):/.test(renderedParagraph)) fail('RF_OBSIDIAN_REFERENCE_INVALID');
+        return renderedParagraph;
+      };
+      section.paragraphs.forEach((paragraph, paragraphIndex) => {
+        const subheading = edit?.subheadings.find(item => item.before_paragraph === paragraphIndex);
+        let renderedParagraph = renderParagraph(paragraph, paragraphIndex);
         const structured = writerLayout && /(?:^|\n)(?:\s*>|\s*[-*+] |\s*\d+[.)] |\s*\||\s*```)/.test(renderedParagraph);
-        reading += renderedParagraph + (paragraphIndex === 0 ? `${structured ? '\n\n' : ' '}^${anchor(spec.id)}` : '') + '\n\n';
+        // Compact layout keeps three heading levels: editor subheadings become bold lead-ins.
+        if (subheading && compact) renderedParagraph = `**${subheading.heading.replace(/[.。:：;；!！?？]+$/u, '')}${en ? '.' : '。'}**${structured ? '\n\n' : en ? ' ' : ''}` + renderedParagraph;
+        else if (subheading) reading += `#### ${subheadingTitle(section, subheading, edit)}\n\n`;
+        if (!notes.has(paragraphIndex)) reading += renderedParagraph + (paragraphIndex === 0 ? `${structured ? '\n\n' : ' '}^${anchor(spec.id)}` : '') + '\n\n';
         const placed = value => value.section_id === spec.id && (value.after_paragraph ?? section.paragraphs.length - 1) === paragraphIndex;
         const placements = placementSets.get(language);
         for (const visual of visuals.filter(value => writerLayout ? placements.visuals.some(row => row.id === value.id && placed(row)) : placed(value))) {
@@ -273,6 +309,13 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
           const chartTypes = samePanels
             ? (en ? 'Each panel: ' : '各面板：') + panelTypes[0].map(type => md(local(type.label, language), knowledgeHref(type.knowledge_id))).join(' · ')
             : types.map(type => `${type.panel ? label(type.panel) + ': ' : ''}${md(local(type.label, language), knowledgeHref(type.knowledge_id))}`).join(' · ');
+          if (compact) {
+            const entry = edits.visuals.find(item => item.id === visual.id), source = md(en ? `Original p. ${visual.page}` : `原文第${visual.page}页`, href(target, visualSources.get(visual.id)) + '#page=' + visual.page);
+            const notesText = (entry?.notes ?? []).map(note => renderParagraph(section.paragraphs[note.paragraph_index], note.paragraph_index) + '\n\n').join('');
+            reading += `**${label(entry?.title ?? local(visual.label, language))}** · ${source} ^rf-visual-${visual.id}\n\n${chartTypes ? `**${en ? 'Chart type' : '图型'}**${en ? ': ' : '：'}${chartTypes}\n\n` : ''}![${label(local(visual.label, language))}](${href(target, visual.path)})\n\n${notesText}`
+              + callout('quote', en ? 'Original caption' : '原图注', `**${local(visual.label, language)}.** ${local(visual.caption, language)}\n\n${md(en ? 'Open full-size image' : '查看大图', href(target, visual.path))}`, true);
+            continue;
+          }
           reading += `${editor ? '#### ' + visualHeadings.get(visual.id) + '\n\n' : ''}${chartTypes ? `**${en ? 'Chart type' : '图型'}**${en ? ': ' : '：'}${chartTypes}\n\n` : ''}![${label(local(visual.label, language))}](${href(target, visual.path)})\n\n**${local(visual.label, language)}.** ${local(visual.caption, language)} ${md(en ? `Original p. ${visual.page}` : `原文第${visual.page}页`, href(target, visualSources.get(visual.id)) + '#page=' + visual.page)}${writerLayout ? ' · ' + md(en ? 'Open full-size image' : '查看大图', href(target, visual.path)) : ''} ^rf-visual-${visual.id}\n\n`;
         }
         for (const item of knowledge.filter(value => (writerLayout ? placements.knowledge.filter(row => row.id === value.id) : value.placements).some(placed))) {
@@ -280,10 +323,13 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
             for (const text of item.paragraphs[language]) if (!appendedFacts.has(text)) { reading += text + '\n\n'; appendedFacts.add(text); }
             continue;
           }
+          // Chart-type nodes are already linked from the figure's chart-type line.
+          if (compact && visuals.some(visual => visual.chart_types?.some(type => type.knowledge_id === item.id))) continue;
           const provenance = item.source_kind === 'method-background' ? (en ? 'Method background' : '方法背景') : (en ? 'Study facts' : '本文事实');
           reading += `${provenance}: ${md(local(item.title, language), knowledgeHref(item.id))}\n\n`;
         }
       });
+      if (compact && section.id === view.sections.find(row => row.module_id === 'design')?.id) reading += researchMap;
       const related = map.relations.flatMap(relation => {
         const step = map.steps.find(node => node.id === relation.step_id), finding = map.findings.find(node => node.id === relation.finding_id);
         return step.section_id === spec.id ? [finding] : finding.section_id === spec.id ? [step] : [];

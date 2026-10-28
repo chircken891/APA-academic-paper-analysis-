@@ -92,9 +92,10 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
   }));
   for (const request of created.requests) await complete(request, views.find(view => view.language === request.language));
   for (const request of createReadingFirstDraftRequests({ controller })) await complete(request, views.find(view => view.language === request.language));
-  const editor = { schema_version: 'reading-editor-1.0', views_fingerprint: fingerprintReadingFirst(views), languages: Object.fromEntries(languages.map(language => [language, {
+  const editor = { schema_version: binding.presentation_profile ?? 'reading-editor-1.0', views_fingerprint: fingerprintReadingFirst(views), map: { nodes: [...(presentation.map?.steps ?? []).map(node => ({ id: node.id, stage: 'design' })), ...(presentation.map?.findings ?? []).map(node => ({ id: node.id, stage: 'finding', primary: true }))] }, languages: Object.fromEntries(languages.map(language => [language, {
     overview: [{ text: language === 'en' ? 'Supported finding and its limits.' : '有依据的发现及其限制。', section_ids: ['findings'] }], sections: [],
     methods: [{ id: 'method', knowledge_id: 'method', title: language === 'en' ? 'Method' : '方法', explanation: language === 'en' ? 'A known method.' : '已知方法。', application: language === 'en' ? 'Used in the study.' : '用于本研究。', section_ids: ['methods'] }],
+    visuals: [],
   }])) };
   if (binding.presentation_mode === 'reading-editor') await complete(createReadingFirstPresentationRequest({ controller }), editor);
   const renderOptions = { ...(options.targetRegistry ? { targetRegistry: options.targetRegistry } : {}), existingTargets: options.existingTargets ?? [], knowledgeRegistry: options.knowledgeRegistry ?? [] };

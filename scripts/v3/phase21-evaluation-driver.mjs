@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { FORMAL_APA_MODELS, APA_VERIFIER_ROLES, resolveApaRoleModel, validateApaRoleModelPolicy } from '../apa-model-policy.mjs';
+import { FORMAL_APA_MODELS, APA_VERIFIER_ROLES, resolveApaRoleModel, validateApaRoleModelPolicy, hostDispatchArgumentsMatch } from '../apa-model-policy.mjs';
 
 const CASE_ID = /^P21-E(0[1-9]|1[0-2])$/;
 const STATUSES = new Set(['pass', 'fail', 'not_run', 'blocked']);
@@ -157,13 +157,14 @@ export function validateEvaluationApprovalPacket(packet) {
   if (!Array.isArray(packet?.expected_resource_fields)) errors.push('RESOURCE_FIELDS_REQUIRED');
   if (packet?.role_model_policy !== undefined) {
     const policy = packet.role_model_policy, scope = packet.host_action_scope;
+    const dispatched = scope?.dispatch !== undefined;
     if (!validateApaRoleModelPolicy(policy) || packet.backend?.identity !== 'current-collaboration'
-      || !['collaboration.spawn_agent', 'collaboration.followup_task'].includes(scope?.action)
+      || !(dispatched ? scope.action === scope.dispatch?.tool : ['collaboration.spawn_agent', 'collaboration.followup_task'].includes(scope?.action))
       || !(APA_VERIFIER_ROLES.includes(scope?.role) || packet.workflow_profile === 'reading-first-1.0' && ['evidence','methods','results','interpretation','scientific-reading','integration','comparison','ledger','english-writer','chinese-writer','reading-editor','independent-verifier'].includes(scope?.role))) errors.push('ROLE_MODEL_POLICY_INVALID');
     else {
       const profile = resolveApaRoleModel(scope.role, policy.main_session, policy);
-      if (packet.requested_model !== profile.model || scope.action === 'collaboration.spawn_agent'
-        && (scope.arguments?.model !== profile.model || scope.arguments?.reasoning_effort !== profile.reasoning_effort)) errors.push('ROLE_MODEL_POLICY_MISMATCH');
+      if (packet.requested_model !== profile.model || (dispatched ? !hostDispatchArgumentsMatch(scope.dispatch, scope.arguments, profile) : scope.action === 'collaboration.spawn_agent'
+        && (scope.arguments?.model !== profile.model || scope.arguments?.reasoning_effort !== profile.reasoning_effort))) errors.push('ROLE_MODEL_POLICY_MISMATCH');
     }
   } else if (!FORMAL_APA_MODELS.includes(packet?.requested_model)) errors.push('FORMAL_MODEL_POLICY_REQUIRED');
   if (packet?.observed_model !== 'unknown') errors.push('OBSERVED_MODEL_MUST_REMAIN_UNKNOWN');

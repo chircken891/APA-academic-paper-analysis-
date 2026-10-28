@@ -10,7 +10,8 @@ import { readCommittedGeneration, assertActiveGeneration, assertIndexGeneration,
   INDEX_READING_FIRST_PROFILE } from './phase22-active-version.mjs';
 import { buildBilingualIndex } from './phase22-search.mjs';
 import { assertReadingFirstPublicationManifest } from './reading-first-index.mjs';
-import { captureReadingFirstPublicationSource, inspectReadingFirstPublicationSource,
+import { captureReadingFirstPublicationSource, createExternalReadingFirstPublicationSource,
+  getReadingFirstRuntimePublicationToolBindings, inspectReadingFirstPublicationSource,
   restoreReadingFirstPublicationSource } from './reading-first-runtime.mjs';
 import { createPhase22ContractValidator } from './phase22-contract-loader.mjs';
 
@@ -401,4 +402,85 @@ export async function prepareReadingFirstPublication(args = {}) {
   const { dryRunBilingualPublication } = await import('./phase22-publication.mjs');
   const dry = await dryRunBilingualPublication({ vaultRoot: args.vaultRoot, run: review.reviewManifest.identity.run_id, review });
   return { ...dry, review, sourceInputs: { readingFirst: { source } } };
+}
+
+/** Prepare a reviewed candidate completed by an external host transport without claiming native dispatch. */
+export async function prepareExternalReviewedReadingFirstPublication({
+  vaultRoot, generation, evidenceMode = 'actual', resources, runRoot, candidateRoot,
+  scientificInput, candidate, presentation, review, reviewReceipt, viewReceipts, readingEditorReceipt, callsUsed = 0,
+} = {}) {
+  const receiptValid = receipt => typeof receipt?.path === 'string' && receipt.path.length > 0
+    && typeof receipt?.artifact_id === 'string' && receipt.artifact_id.length > 0;
+  if (!scientificInput?.identity?.run_id || !Array.isArray(scientificInput.sources)
+    || scientificInput.sources.some(row => typeof row?.path !== 'string' || !row.path)
+    || !Array.isArray(candidate?.notes) || candidate.notes.length !== 2 || !Array.isArray(candidate.supportNotes)
+    || [...candidate.notes, ...candidate.supportNotes].some(note => typeof note?.path !== 'string' || typeof note.content !== 'string')
+    || !Array.isArray(candidate.assetPaths) || !Array.isArray(resources)
+    || resources.some(row => typeof row?.source_path !== 'string' || !row.source_path)
+    || typeof candidateRoot !== 'string' || !candidateRoot || typeof runRoot !== 'string' || !runRoot
+    || !presentation || !review || !receiptValid(reviewReceipt) || !receiptValid(viewReceipts?.en)
+    || !receiptValid(viewReceipts?.['zh-CN']) || !receiptValid(readingEditorReceipt)) {
+    fail('RF_PUBLICATION_EXTERNAL_INPUT_INVALID');
+  }
+  const root = rootPath(vaultRoot);
+  const candidateRootAbs = resolve(candidateRoot);
+  for (const note of [...candidate.notes, ...candidate.supportNotes]) {
+    const bytes = regularBytes(candidateRootAbs, note.path);
+    if (!bytes.equals(Buffer.from(note.content))) fail('RF_PUBLICATION_EXTERNAL_CANDIDATE_CHANGED', { path: note.path });
+  }
+  const sourceBindings = [...new Map([
+    ...scientificInput.sources.map(row => binding(row.path)),
+    ...resources.map(row => binding(row.source_path)),
+    ...[...candidate.notes, ...candidate.supportNotes].map(row => binding(join(candidateRootAbs, row.path))),
+    ...[viewReceipts.en, viewReceipts['zh-CN'], readingEditorReceipt, reviewReceipt].flatMap(receipt => [
+      binding(join(runRoot, receipt.path)),
+      binding(join(runRoot, '.phase21-receipts', encodeURIComponent(receipt.artifact_id) + '.json')),
+    ]),
+  ].map(row => [row.path, row])).values()];
+  const sourceRecipe = {
+    schema_version: 'external-reviewed-reading-first-publication-source-1.0',
+    run_id: scientificInput.identity.run_id,
+    identity_fingerprint: hash(scientificInput),
+    reading_review_fingerprint: hash({ review, receipt: reviewReceipt, presentation: candidate.presentation_fingerprint }),
+    scientific_input: clone(scientificInput),
+    candidate: clone(candidate),
+    review: clone(review),
+    review_receipt: clone(reviewReceipt),
+    view_receipts: clone(viewReceipts),
+    reading_editor_receipt: clone(readingEditorReceipt),
+    presentation: clone(presentation),
+    presentation_assets: clone(candidate.presentation_assets ?? []),
+    calls_used: callsUsed,
+    source_bindings: sourceBindings,
+    tool_bindings: [...new Map([...tools(), ...getReadingFirstRuntimePublicationToolBindings()]
+      .map(row => [row.path, row])).values()],
+  };
+  sourceRecipe.recipe_fingerprint = hash(sourceRecipe);
+  let source = createExternalReadingFirstPublicationSource(sourceRecipe);
+  let data = await inspectReadingFirstPublicationSource(source);
+  const base = await baseFor(root);
+  const options = { vaultRoot: root, generation, evidenceMode, resources: resourceBindings(data, resources) };
+  const resultReview = await buildReview({ source, data, options, base, preimages: null });
+  const preimages = new Map();
+  for (const row of resultReview.outputInventory) preimages.set(row.path, regularBytes(root, row.path, { missing: true }));
+  const recipe = {
+    schema_version: 'reading-first-publication-registration-1.0',
+    source: sourceRecipe,
+    options: clone(options),
+    preimages: encodeFiles(preimages),
+    base: { generation: clone(base.generation), index: clone(base.index), files: encodeFiles(base.files) },
+  };
+  source = createExternalReadingFirstPublicationSource(sourceRecipe);
+  data = await inspectReadingFirstPublicationSource(source);
+  const record = records.get(resultReview);
+  record.recipe = clone(recipe);
+  record.source = source;
+  record.sourceBindings = [...new Map([...sourceBindings, ...options.resources.map(row => binding(row.source_path))]
+    .map(row => [row.path, row])).values()];
+  record.toolBindings = [...new Map([...tools(), ...getReadingFirstRuntimePublicationToolBindings()]
+    .map(row => [row.path, row])).values()];
+  record.stamp = hash({ manifest: resultReview.reviewManifest, output: inventoryStamp(resultReview.outputInventory), hashes: resultReview.hashes });
+  const { dryRunBilingualPublication } = await import('./phase22-publication.mjs');
+  const dry = await dryRunBilingualPublication({ vaultRoot: root, run: resultReview.reviewManifest.identity.run_id, review: resultReview });
+  return { ...dry, review: resultReview, sourceInputs: { readingFirst: { source } }, external_source_recipe: sourceRecipe };
 }
