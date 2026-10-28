@@ -13,7 +13,7 @@ APA 是一套可配置的论文阅读与 Obsidian 知识库工作流，输出可
 准备一个独立文件夹，在 Windows PowerShell 中操作。已有 Git 时可运行：
 
 ```powershell
-git clone https://github.com/chircken891/APA.git
+git clone https://github.com/chircken891/APA-academic-paper-analysis-.git APA
 cd APA
 ```
 
