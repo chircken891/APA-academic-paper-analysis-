@@ -196,6 +196,43 @@ export function readinessMessages(inspection, queryInspection, hostProfile = nul
   };
 }
 
+// Reported capabilities are informational; they never enter the user's configuration operation.
+export function renderCapabilityCheck(document, container, report) {
+  const make = (tag, text) => {
+    const element = document.createElement(tag);
+    if (text !== undefined) element.textContent = text;
+    return element;
+  };
+  if (!report || !Array.isArray(report.checks) || report.checks.length === 0) {
+    container.append(make('p', '尚未检测宿主能力。请让助手检测当前宿主并重新生成本页。'));
+    return;
+  }
+  const statusNames = { detected: '已发现实现方式', conditional: '方式已发现，条件待核实', blocked: '当前方式受阻', unsupported: '不支持', unknown: '尚不明确' };
+  const scopeNames = { 'current-session': '当前会话', 'new-session': '新启动的会话', instance: '宿主实例', unknown: '范围尚不明确' };
+  const thresholdNames = { candidate_tokens: '候选 token 数', candidate_value: '计算出的候选参数值', unit: '参数单位', setting: '配置入口', formula: '触发公式', setting_min: '参数下限', setting_max: '参数上限', effective_target_verified: '已确认作用于有效后端', context_window_tokens: '上下文窗口 token 数', output_reserve_tokens: '输出预留 token 数', headroom_tokens: '安全余量 token 数', retained_tokens: '保留内容 token 数', measurement: '计量口径', effective_trigger_tokens: '公式推算触发 token 数', feasibility: '约束检查' };
+  const thresholdValues = { tokens: 'token 数', ratio: '比例', percent: '百分比', absolute: '绝对 token 阈值', 'window-ratio-bounded': '窗口比例并受容量约束', unknown: '未知', 'within-reported-limits': '符合报告的数值约束', incompatible: '不符合约束' };
+  container.append(make('p', `宿主：${report.host || '未确定'}；检测时间：${report.detected_at || '未记录'}。实际运行验证：${report.runtime_validation === 'not_run' ? '未运行' : report.runtime_validation || '未知'}。`));
+  for (const check of report.checks) {
+    const item = make('article');
+    item.append(make('h3', `${check.label}：${statusNames[check.status] || check.status}`));
+    item.append(make('p', `检测到的方式：${check.method || '尚未确定'}。影响范围：${scopeNames[check.scope] || check.scope || '尚不明确'}。`));
+    if (check.threshold && typeof check.threshold === 'object') {
+      const details = Object.entries(check.threshold).map(([key, value]) => `${thresholdNames[key] || key}：${value === null ? '未知' : typeof value === 'boolean' ? value ? '是' : '否' : typeof value === 'object' ? JSON.stringify(value) : thresholdValues[value] || value}`).join('；');
+      if (details) item.append(make('p', `阈值信息：${details}。`));
+    }
+    if (check.limitations?.length) item.append(make('p', `限制：${check.limitations.join('；')}。`));
+    if (check.next_check) item.append(make('p', `下一步：${check.next_check}`));
+    if (check.evidence?.length) {
+      const details = make('details');
+      details.append(make('summary', '查看检测依据'));
+      const list = make('ul');
+      for (const evidence of check.evidence) list.append(make('li', `${evidence.source}：${evidence.reference}`));
+      details.append(list); item.append(details);
+    }
+    container.append(item);
+  }
+}
+
 export function mountApaSetup(document, snapshot, inspection, queryInspection, hostProfile = null) {
   const byId = id => document.getElementById(id);
   const make = (tag, text, className) => {
@@ -223,6 +260,7 @@ export function mountApaSetup(document, snapshot, inspection, queryInspection, h
   byId('host-readiness').textContent = readiness.host;
   byId('readiness').textContent = readiness.reading;
   byId('query-readiness').textContent = readiness.query;
+  renderCapabilityCheck(document, byId('capability-check'), inspection?.capability_check);
   const dependencies = inspection?.dependencies || [];
   const dependencyStatus = { available: '文件或目录可找到', missing: '未找到，请检查路径或安装情况', 'wrong-type': '路径类型不符，请检查填的是文件还是目录', unavailable: '暂时无法读取' };
   byId('dependencies').textContent = dependencies.length ? dependencies.map(item => `${fieldLabel(item.key)}：${dependencyStatus[item.status] || item.status}\n${item.path || ''}`).join('\n\n') : '尚无可检查的依赖路径。填写解析器和已启用技能的位置后，由助手回读检查。';

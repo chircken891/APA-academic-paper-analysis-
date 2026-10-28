@@ -9,19 +9,23 @@ import { createPhase21ContractValidator } from '../../scripts/v3/phase21-contrac
 import { buildPreRenderHandoff } from '../../scripts/v3/workflow-composer.mjs';
 import { createLanguageRequests } from '../../scripts/v3/phase22-language.mjs';
 import { renderReaderNotes } from '../../scripts/v3/phase221-presentation.mjs';
-import { READING_FIRST_PROFILE, fingerprintReadingFirst, resolveReadingWorkflowProfile, acceptReadingFirstResult, createReadingFirstReviewRequest, getReadingFirstState, createReadingFirstRevisionRequests, createReadingFirstRunControl, snapshotReadingFirstRuntime, restoreReadingFirstRuntime, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, buildReadingFirstHandoff } from '../../scripts/v3/reading-first-runtime.mjs';
+import { getRoleReplyContract, loadRoleReplyContract } from '../../scripts/v3/role-reply-contract.mjs';
+import { READING_FIRST_PROFILE, fingerprintReadingFirst, resolveReadingWorkflowProfile, acceptReadingFirstResult, createReadingFirstReviewRequest, getReadingFirstState, createReadingFirstRevisionRequests, createReadingFirstRunControl, snapshotReadingFirstRuntime, restoreReadingFirstRuntime, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstEnrichmentRequests, buildReadingFirstHandoff } from '../../scripts/v3/reading-first-runtime.mjs';
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const roles = ['evidence','methods','results','interpretation','scientific-reading','integration'];
-async function setup(t, { presentation, presentationRequired = false, writingMode = 'independent', sourceLanguage = 'en', presentationMode = 'writer', priorCalls = 0, maxTotalCalls, maxCalls = presentationMode==='reading-editor'?7:6 } = {}) {
+async function setup(t, { presentation, presentationRequired = false, writingMode = 'independent', sourceLanguage = 'en', presentationMode = 'writer', priorCalls = 0, maxTotalCalls, roleReplyContract, enrichmentPolicy, legacyRepairRouting = false, invalidRepairRouting = false, maxCalls = presentationMode==='reading-editor'?7:6 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'reading-first-'));
   t.after(() => rm(root, {recursive:true,force:true}));
   const sourceBytes=Buffer.from('Synthetic original source: design, result and limitation.');
   await writeFile(join(root,'source.pdf'),sourceBytes);
   const tasks=Object.fromEntries(['en','zh-CN','review','en-r2','zh-CN-r2','review-r2',...(presentationMode==='reading-editor'?['presentation','presentation-r2']:[])].map(key=>[key,{task_id:key,task_name:'reading_'+key.replaceAll('-','_').toLowerCase(),owner_actor_id:key,role:key.startsWith('presentation')?'reading-editor':key.startsWith('en')?'english-writer':key.startsWith('zh')?'chinese-writer':'independent-verifier',artifact_id:key,artifact_path:key+'.json',native_path:'native/'+key+'.json',revision:'1'}]));
+  if(enrichmentPolicy) tasks['enrich-late-evidence']={task_id:'enrich-late-evidence',task_name:'enrich_late_evidence',owner_actor_id:'enrich-late-evidence',role:'evidence',source_root:'sources/enrich-late-evidence',artifact_id:'enrich-late-evidence',artifact_path:'enrich-late-evidence.json',native_path:'native/enrich-late-evidence.json',revision:'1'};
   const bindings=[...roles.map(role=>({run_id:'run',actor_id:role,role,artifact_path:'science/'+role+'.json',revision:'1'})),...Object.values(tasks).map(task=>({run_id:'run',actor_id:task.owner_actor_id,role:task.role,artifact_path:task.artifact_path,revision:task.revision}))];
-  const input={identity:{paper_id:presentation ? 'pap_'+'a'.repeat(32) : 'synthetic',run_id:'run'},sources:[{path:join(root,'source.pdf'),sha256:sha(sourceBytes),byte_length:sourceBytes.length}],context:'Read all existing material as a connected account.',role_artifacts:roles};
-  const runBinding=createReadingFirstRunControl({presentationMode,writingMode,sourceLanguage,presentationRequired,priorCalls,maxTotalCalls,runId:'run',scientificInput:input,mainSession:{model:'gpt-6-astra',reasoning_effort:'high'},authorizationId:'synthetic-only',maxCalls,deadline:'2099-01-01T00:00:00Z',taskBindings:tasks});
-  const binding=runBinding.reading_first_binding;
+  const input={identity:{paper_id:presentation ? 'pap_'+'a'.repeat(32) : 'synthetic',run_id:'run'},sources:[{...(enrichmentPolicy ? {id:'main'} : {}),path:join(root,'source.pdf'),sha256:sha(sourceBytes),byte_length:sourceBytes.length}],context:'Read all existing material as a connected account.',role_artifacts:roles};
+  const runBinding=createReadingFirstRunControl({presentationMode,writingMode,sourceLanguage,presentationRequired,priorCalls,maxTotalCalls,roleReplyContract,enrichmentPolicy,runId:'run',scientificInput:input,mainSession:{model:'gpt-6-astra',reasoning_effort:'high'},authorizationId:'synthetic-only',maxCalls,deadline:'2099-01-01T00:00:00Z',taskBindings:tasks});
+  const binding=structuredClone(runBinding.reading_first_binding);
+  if (legacyRepairRouting) delete binding.repair_routing;
+  if (invalidRepairRouting) binding.repair_routing='unknown-routing';
   bindings.push({run_id:'run',actor_id:'controller',role:'control',artifact_path:'checkpoint.json',revision:'1'});
   const fingerprints=Object.fromEntries(['source','parser_tool','permission','parent_revision','policy','authorization'].map(key=>[key,sha(Buffer.from(key))]));
   const required=roles.map(role=>({artifact_id:role,owner_actor_id:role,path:'science/'+role+'.json'}));
@@ -52,6 +56,49 @@ test('new runs default to reading first while existing legacy binding is preserv
   assert.equal(resolveReadingWorkflowProfile({newRun:true}),READING_FIRST_PROFILE);
   assert.equal(resolveReadingWorkflowProfile({existingBinding:{}}),'legacy');
   assert.equal(resolveReadingWorkflowProfile({existingBinding:{profile:READING_FIRST_PROFILE}}),READING_FIRST_PROFILE);
+});
+
+for (const enabled of [false, true]) test(`${enabled ? 'new' : 'legacy'} reply binding restores pending actions and preserves future requests, counts and deadline`, async t => {
+  const roleReplyContract = enabled ? getRoleReplyContract() : undefined;
+  const rule = loadRoleReplyContract(getRoleReplyContract());
+  const s = await setup(t, { writingMode: 'source-first', priorCalls: 6, maxTotalCalls: 12, roleReplyContract });
+  const [pending] = s.created.requests;
+  const saved = snapshotReadingFirstRuntime(s.created.controller);
+  const receipt = await commitOwnedArtifact({ artifactRoot: s.root, dispatchContext: s.broker.dispatchContext,
+    capability: s.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: 'checkpoint.json', revision: '1' }),
+    artifact: { artifact_id: 'checkpoint', content: JSON.stringify(saved) }, expectedRevision: '1' });
+  const recovered = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: receipt });
+  assert.equal(recovered.ok, true, JSON.stringify(recovered.errors));
+  assert.deepEqual(recovered.requests, [pending]);
+  assert.deepEqual(snapshotReadingFirstRuntime(recovered.controller), saved);
+  assert.equal(getReadingFirstState(recovered.controller).calls_used, 7);
+  await mkdir(join(s.root, 'native'), { recursive: true });
+  await writeFile(join(s.root, pending.task.native_path), JSON.stringify(s.view('en')));
+  const step = pending.emittedStep;
+  await acceptReadingFirstResult({ controller: recovered.controller, request: recovered.requests[0], observation: {
+    action_id: step.action_id, run_id: 'run', input_fingerprint: step.input_fingerprint, port: 'current-collaboration',
+    tool_call: { name: step.action, arguments: step.arguments }, raw_result_text: JSON.stringify({ agent_id: 'synthetic-restored', reply: 'en: written\nnative/en.json' }),
+  }, capability: s.broker.issueCapability({ runId: 'run', actorId: pending.task.owner_actor_id, role: pending.task.role, artifactPath: pending.task.artifact_path, revision: pending.task.revision }) });
+  const [counterpart] = createReadingFirstDraftRequests({ controller: recovered.controller });
+  assert.equal(counterpart.language, 'zh-CN');
+  for (const request of [pending, counterpart]) {
+    assert.equal(request.emittedStep.arguments.message.includes(rule), enabled);
+    assert.deepEqual(request.packet.backend.configuration.role_reply_contract, roleReplyContract);
+  }
+  assert.equal(getReadingFirstState(recovered.controller).calls_used, 8);
+  t.mock.method(Date, 'now', () => Date.parse('2100-01-01T00:00:00Z'));
+  assert.throws(() => snapshotReadingFirstRuntime(recovered.controller), /READING_FIRST_DEADLINE_EXPIRED/);
+});
+
+test('reply contract rejects malformed metadata and only accepts its fixed profile and exact bytes', () => {
+  const contract = getRoleReplyContract();
+  assert.equal(loadRoleReplyContract(undefined), '');
+  for (const invalid of [null, {}, { ...contract, profile: 'other' }, { ...contract, path: '../other.md' }, { ...contract, byte_length: 0 }]) {
+    assert.throws(() => loadRoleReplyContract(invalid), /APA_ROLE_REPLY_CONTRACT_INVALID/);
+  }
+  for (const changed of [{ ...contract, sha256: 'sha256:' + '0'.repeat(64) }, { ...contract, byte_length: contract.byte_length + 1 }]) {
+    assert.throws(() => loadRoleReplyContract(changed), /APA_ROLE_REPLY_CONTRACT_CHANGED/);
+  }
 });
 test('prior actual calls remain charged through checkpoint restoration and exhaust the total budget',async t=>{
   const s=await setup(t,{priorCalls:3,maxCalls:3,maxTotalCalls:6});
@@ -471,4 +518,193 @@ for (const issueKind of ['layout', 'presentation']) test(`renderer-only minor ${
   const recovered=await restoreReadingFirstRuntime({handoff:s.handoff,runControl:s.runControl,checkpointReceipt:receipt});
   assert.equal(recovered.ok,true,JSON.stringify(recovered.errors));assert.equal(recovered.requests.length,1);assert.deepEqual(recovered.requests[0].emittedStep,local.emittedStep);
   assert.equal(getReadingFirstState(recovered.controller).calls_used,5);assert.equal(getReadingFirstState(recovered.controller).review_rounds,2);
+});
+
+test('a material renderer defect needs only the existing local reviewer after its affected file changes', async t => {
+  const presentation={schema_version:'reading-first-obsidian-1.0',bibliography:{title:'Synthetic study',first_author:'Tester',year:2026},source_pdf:'Raw/source.pdf',sections:[{id:'study',indices:{en:0,'zh-CN':0}}],visuals:[],knowledge:[],map:{steps:[],findings:[],relations:[]}};
+  const s=await setup(t,{presentation,maxCalls:4}), controller=s.created.controller;
+  for(const request of s.created.requests) await s.complete(request,s.view(request.language));
+  const first=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
+  const path=first.notes[0].path;
+  await s.complete(createReadingFirstReviewRequest({controller,presentation:first}),{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[{severity:'material',kind:'knowledge-accumulation',detail:'Renderer lost the committed content',repair_owner:'renderer',affected_paths:[path]}],scope:'overall'});
+  assert.equal(getReadingFirstState(controller).status,'revision_required');
+  assert.throws(()=>createReadingFirstRevisionRequests({controller}),/REVISION_UNAVAILABLE/);
+  assert.throws(()=>createReadingFirstReviewRequest({controller,presentation:first,renderRepair:true}),/RENDER_REPAIR_UNAVAILABLE/);
+  const existingTargets=first.notes.map(note=>({path:note.path,bytes:Buffer.from(note.content.replace('## Personal Notes','Corrected render.\n\n## Personal Notes')),managedHash:note.managedHash}));
+  const repaired=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller},targetRegistry:first.targetRegistry,existingTargets});
+  assert.throws(()=>createReadingFirstReviewRequest({controller,presentation:repaired}),/RENDER_REPAIR_REQUIRED/);
+  const local=createReadingFirstReviewRequest({controller,presentation:repaired,renderRepair:true});
+  assert.equal(local.review_scope,'local');
+  const payload=JSON.parse(local.emittedStep.arguments.message.split('\n\n').at(-1));
+  assert.equal(payload.issues[0].repair_owner,'renderer');
+  await s.complete(local,{overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[{kind:'main_conclusion',location:'p1',finding:'supported'},{kind:'key_design',location:'p1',finding:'supported'}],issues:[],scope:'local'});
+  assert.equal(getReadingFirstState(controller).calls_used,4);
+  assert.equal(getReadingFirstState(controller).status,'reading_complete');
+});
+
+for (const rendererLanguage of ['en', 'zh-CN']) test(`mixed Writer and renderer defects on ${rendererLanguage} keep their ownership through restoration`, async t => {
+  const presentation={schema_version:'reading-first-obsidian-1.0',bibliography:{title:'Synthetic study',first_author:'Tester',year:2026},source_pdf:'Raw/source.pdf',sections:[{id:'study',indices:{en:0,'zh-CN':0}}],visuals:[],knowledge:[],map:{steps:[],findings:[],relations:[]}};
+  const s=await setup(t,{presentation,maxCalls:6}), controller=s.created.controller;
+  for(const request of s.created.requests) await s.complete(request,s.view(request.language));
+  const first=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
+  const path=first.notes.find(note=>note.language===rendererLanguage).path;
+  await s.complete(createReadingFirstReviewRequest({controller,presentation:first}),{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[
+    {severity:'material',kind:'omission',detail:'Explain the design',repair_owner:'writer',affected_languages:['en']},
+    {severity:'material',kind:'knowledge-accumulation',detail:'Renderer lost the node',repair_owner:'renderer',affected_paths:[path],affected_languages:['en','zh-CN']},
+  ],scope:'overall'});
+  const [revision]=createReadingFirstRevisionRequests({controller});
+  assert.equal(revision.language,'en');
+  const payload=JSON.parse(revision.emittedStep.arguments.message.split('\n\n').at(-1));
+  assert.deepEqual(payload.issues.map(issue=>issue.repair_owner),['writer']);
+  await s.complete(revision,{...s.view('en'),sections:[{heading:'Study',paragraphs:['The corrected explanation follows the design.']}]});
+  const writerOnly=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller},targetRegistry:first.targetRegistry});
+  assert.throws(()=>createReadingFirstReviewRequest({controller,presentation:writerOnly}),/RENDER_REPAIR_REQUIRED/);
+  assert.throws(()=>createReadingFirstReviewRequest({controller,presentation:writerOnly,renderRepair:true}),/RENDER_REPAIR_UNAVAILABLE/);
+  const saved=snapshotReadingFirstRuntime(controller);
+  const receipt=await commitOwnedArtifact({artifactRoot:s.root,dispatchContext:s.broker.dispatchContext,capability:s.broker.issueCapability({runId:'run',actorId:'controller',role:'control',artifactPath:'checkpoint.json',revision:'1'}),artifact:{artifact_id:'checkpoint',content:JSON.stringify(saved)},expectedRevision:'1'});
+  const recovered=await restoreReadingFirstRuntime({handoff:s.handoff,runControl:s.runControl,checkpointReceipt:receipt});
+  assert.equal(recovered.ok,true,JSON.stringify(recovered.errors));
+  const heading=rendererLanguage==='en'?'## Personal Notes':'## 个人笔记';
+  const existingTargets=writerOnly.notes.map(note=>({path:note.path,bytes:Buffer.from(note.path===path?note.content.replace(heading,'Renderer correction.\n\n'+heading):note.content),managedHash:note.managedHash}));
+  const repaired=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller:recovered.controller},targetRegistry:first.targetRegistry,existingTargets});
+  const local=createReadingFirstReviewRequest({controller:recovered.controller,presentation:repaired,renderRepair:true});
+  assert.equal(local.review_scope,'local');
+  assert.equal(getReadingFirstState(recovered.controller).calls_used,5);
+});
+
+test('a science-owned material defect without authorized enrichment remains unresolved', async t => {
+  const s=await setup(t),controller=s.created.controller;
+  for(const request of s.created.requests) await s.complete(request,s.view(request.language));
+  const rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
+  await s.complete(createReadingFirstReviewRequest({controller,presentation:rendered}),{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[{severity:'material',kind:'scientific-gap',detail:'Missing study evidence',repair_owner:'science',affected_languages:['en']}],scope:'overall'});
+  assert.equal(getReadingFirstState(controller).status,'completed_with_limits');
+  assert.throws(()=>createReadingFirstRevisionRequests({controller}),/REVISION_UNAVAILABLE/);
+});
+
+test('explicit science ownership uses the existing approved enrichment before Writer repair', async t => {
+  const s=await setup(t,{enrichmentPolicy:{sources:[],allow_targeted_methods:true},maxCalls:6,maxTotalCalls:7}),controller=s.created.controller;
+  for(const request of s.created.requests) await s.complete(request,s.view(request.language));
+  const rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
+  const gap={id:'allocation',severity:'material',question:'How was allocation performed?',impact:'Changes design interpretation.',owner_role:'evidence',source_kind:'original_page',target_sections:['Study'],source_ids:['main']};
+  await s.complete(createReadingFirstReviewRequest({controller,presentation:rendered}),{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[{severity:'material',kind:'scientific-gap',detail:'Allocation unclear',repair_owner:'science',affected_languages:['en'],scientific_gap:gap}],scope:'overall'});
+  assert.throws(()=>createReadingFirstRevisionRequests({controller}),/ENRICHMENT_PENDING/);
+  const [science]=createReadingFirstEnrichmentRequests({controller});
+  assert.equal(science.task.role,'evidence');
+  await s.complete(science,{run_id:'run',role:'evidence',resolutions:[{gap_id:'allocation',classification:'paper_fact',explanation:'Allocation was randomized.',consequence:'Randomization supports the design.',status:'recovered',target_sections:['Study'],source_ids:['main']}]});
+  const [writer]=createReadingFirstRevisionRequests({controller});
+  const payload=JSON.parse(writer.emittedStep.arguments.message.split('\n\n').at(-1));
+  assert.match(JSON.stringify(payload.enrichment_context),/Allocation was randomized/);
+  const revised=s.view('en'); revised.enrichment_consumption=[{gap_id:'allocation',section_heading:'Study'}];
+  await s.complete(writer,revised);
+  const result=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
+  const local=createReadingFirstReviewRequest({controller,presentation:result});
+  await s.complete(local,{overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[{kind:'main_conclusion',location:'p1',finding:'supported'},{kind:'key_design',location:'p1',finding:'supported'}],issues:[],scope:'local'});
+  assert.equal(getReadingFirstState(controller).calls_used,6);
+  assert.equal(getReadingFirstState(controller).status,'reading_complete');
+});
+
+test('renderer issues must identify existing candidate paths before the review is accepted', async t => {
+  const presentation={schema_version:'reading-first-obsidian-1.0',bibliography:{title:'Synthetic study',first_author:'Tester',year:2026},source_pdf:'Raw/source.pdf',sections:[{id:'study',indices:{en:0,'zh-CN':0}}],visuals:[],knowledge:[],map:{steps:[],findings:[],relations:[]}};
+  const s=await setup(t,{presentation}),controller=s.created.controller;
+  for(const request of s.created.requests) await s.complete(request,s.view(request.language));
+  const rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
+  const request=createReadingFirstReviewRequest({controller,presentation:rendered});
+  const issue={severity:'material',kind:'knowledge-accumulation',detail:'Renderer lost the node',repair_owner:'renderer'};
+  const verdict=issue=>({overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[issue],scope:'overall'});
+  for(const invalid of [issue,{...issue,affected_paths:[]},{...issue,affected_paths:['Wiki/methods/not-in-candidate.md']},{...issue,repair_owner:'unknown'}]) {
+    await assert.rejects(()=>s.complete(request,verdict(invalid)),/REVIEW_INVALID/);
+  }
+  await assert.rejects(()=>readFile(join(s.root,'review.json')),/ENOENT/);
+  await s.complete(request,verdict({...issue,affected_paths:[rendered.notes[0].path]}));
+  assert.equal(getReadingFirstState(controller).status,'revision_required');
+});
+
+test('Editor and renderer material repairs share the original local review slot', async t => {
+  const presentation={schema_version:'reading-first-obsidian-1.0',bibliography:{title:'Synthetic study',first_author:'Tester',year:2026},source_pdf:'Raw/source.pdf',sections:[{id:'study',indices:{en:0,'zh-CN':0}}],visuals:[],knowledge:[],map:{steps:[],findings:[],relations:[]}};
+  presentation.layout='writer-modules-1.0';
+  presentation.modules=['abstract','design','methods','findings','discussion','limitations','conclusion'].map(id=>({id,label:{en:id,'zh-CN':id}}));
+  const s=await setup(t,{presentation,presentationMode:'reading-editor',maxCalls:6}),controller=s.created.controller;
+  const views=['en','zh-CN'].map(language=>({language,sections:presentation.modules.map(module=>({id:module.id,module_id:module.id,heading:module.id,paragraphs:['Design explains the main finding.']})),placements:{visuals:[],knowledge:[]}}));
+  for(const request of s.created.requests) await s.complete(request,views.find(view=>view.language===request.language));
+  const editor=overview=>({schema_version:'reading-editor-1.1',views_fingerprint:fingerprintReadingFirst(views),map:{nodes:[]},languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:overview,section_ids:['design']}],sections:[],methods:[{id:'method',title:'Method',explanation:'Study design.',application:'Used in the study.',section_ids:['design']}],visuals:[]}]))});
+  await s.complete(createReadingFirstPresentationRequest({controller}),editor('Initial finding'));
+  const first=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}}),path=first.notes[0].path;
+  await s.complete(createReadingFirstReviewRequest({controller,presentation:first}),{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[
+    {severity:'material',kind:'presentation',detail:'Fix the overview',repair_owner:'editor'},
+    {severity:'material',kind:'knowledge-accumulation',detail:'Fix the renderer',repair_owner:'renderer',affected_paths:[path]},
+  ],scope:'overall'});
+  assert.throws(()=>createReadingFirstRevisionRequests({controller}),/REVISION_UNAVAILABLE/);
+  const editorRevision=createReadingFirstPresentationRequest({controller});
+  const editorPayload=JSON.parse(editorRevision.emittedStep.arguments.message.split('\n\n').at(-1));
+  assert.deepEqual(editorPayload.issues.map(issue=>issue.repair_owner),['editor']);
+  await s.complete(editorRevision,editor('Corrected finding'));
+  const editorOnly=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller},targetRegistry:first.targetRegistry});
+  assert.throws(()=>createReadingFirstReviewRequest({controller,presentation:editorOnly,renderRepair:true}),/RENDER_REPAIR_UNAVAILABLE/);
+  const existingTargets=editorOnly.notes.map(note=>({path:note.path,bytes:Buffer.from(note.path===path?note.content.replace('## Personal Notes','Renderer correction.\n\n## Personal Notes'):note.content),managedHash:note.managedHash}));
+  const repaired=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller},targetRegistry:first.targetRegistry,existingTargets});
+  const local=createReadingFirstReviewRequest({controller,presentation:repaired,renderRepair:true});
+  await s.complete(local,{overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[{kind:'main_conclusion',location:'p1',finding:'supported'},{kind:'key_design',location:'p1',finding:'supported'}],issues:[],scope:'local'});
+  assert.equal(getReadingFirstState(controller).calls_used,6);
+  assert.equal(getReadingFirstState(controller).status,'reading_complete');
+});
+
+test('late science and renderer repairs reserve only the actual Writer calls', async t => {
+  const presentation={schema_version:'reading-first-obsidian-1.0',bibliography:{title:'Synthetic study',first_author:'Tester',year:2026},source_pdf:'Raw/source.pdf',sections:[{id:'study',indices:{en:0,'zh-CN':0}}],visuals:[],knowledge:[],map:{steps:[],findings:[],relations:[]}};
+  const s=await setup(t,{presentation,enrichmentPolicy:{sources:[],allow_targeted_methods:true},maxCalls:6,maxTotalCalls:6}),controller=s.created.controller;
+  for(const request of s.created.requests) await s.complete(request,s.view(request.language));
+  const first=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}}),path=first.notes.find(note=>note.language==='zh-CN').path;
+  const gap={id:'allocation',severity:'material',question:'How was allocation performed?',impact:'Changes design interpretation.',owner_role:'evidence',source_kind:'original_page',target_sections:['Study'],source_ids:['main']};
+  await s.complete(createReadingFirstReviewRequest({controller,presentation:first}),{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[
+    {severity:'material',kind:'scientific-gap',detail:'Allocation unclear',repair_owner:'science',affected_languages:['en'],scientific_gap:gap},
+    {severity:'material',kind:'knowledge-accumulation',detail:'Renderer lost the node',repair_owner:'renderer',affected_paths:[path],affected_languages:['en','zh-CN']},
+  ],scope:'overall'});
+  const [science]=createReadingFirstEnrichmentRequests({controller});
+  await s.complete(science,{run_id:'run',role:'evidence',resolutions:[{gap_id:'allocation',classification:'paper_fact',explanation:'Allocation was randomized.',consequence:'Randomization supports the design.',status:'recovered',target_sections:['Study'],source_ids:['main']}]});
+  const [writer]=createReadingFirstRevisionRequests({controller});
+  const revised=s.view('en'); revised.enrichment_consumption=[{gap_id:'allocation',section_heading:'Study'}];
+  await s.complete(writer,revised);
+  const writerOnly=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller},targetRegistry:first.targetRegistry});
+  const existingTargets=writerOnly.notes.map(note=>({path:note.path,bytes:Buffer.from(note.path===path?note.content.replace('## 个人笔记','Renderer correction.\n\n## 个人笔记'):note.content),managedHash:note.managedHash}));
+  const repaired=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller},targetRegistry:first.targetRegistry,existingTargets});
+  const local=createReadingFirstReviewRequest({controller,presentation:repaired,renderRepair:true});
+  await s.complete(local,{overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[{kind:'main_conclusion',location:'p1',finding:'supported'},{kind:'key_design',location:'p1',finding:'supported'}],issues:[],scope:'local'});
+  assert.equal(getReadingFirstState(controller).calls_used,6);
+  assert.equal(getReadingFirstState(controller).status,'reading_complete');
+});
+
+test('invalid scientific gap is rejected before the review artifact is committed', async t => {
+  const s=await setup(t,{enrichmentPolicy:{sources:[],allow_targeted_methods:true},maxCalls:6,maxTotalCalls:7}),controller=s.created.controller;
+  for(const request of s.created.requests) await s.complete(request,s.view(request.language));
+  const rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
+  const review=createReadingFirstReviewRequest({controller,presentation:rendered});
+  const issue={severity:'material',kind:'scientific-gap',detail:'Allocation unclear',repair_owner:'science',affected_languages:['en'],scientific_gap:{severity:'material',id:'incomplete'}};
+  await assert.rejects(()=>s.complete(review,{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[issue],scope:'overall'}),/GAP_INVALID/);
+  await assert.rejects(()=>readFile(join(s.root,'review.json')),/ENOENT/);
+});
+
+test('an existing binding without owner routing retains its original review contract', async t => {
+  const s=await setup(t,{legacyRepairRouting:true}),controller=s.created.controller;
+  for(const request of s.created.requests) await s.complete(request,s.view(request.language));
+  const rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
+  const issue={severity:'material',kind:'knowledge-accumulation',detail:'Review from old binding',repair_owner:'renderer',affected_languages:['en']};
+  await s.complete(createReadingFirstReviewRequest({controller,presentation:rendered}),{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[issue],scope:'overall'});
+  const [writer]=createReadingFirstRevisionRequests({controller});
+  assert.equal(writer.language,'en');
+});
+
+test('an unknown frozen repair routing cannot silently fall back to legacy behavior', async t => {
+  await assert.rejects(()=>setup(t,{invalidRepairRouting:true}),/CONTROL_REQUIRED/);
+});
+
+test('explicit science repair stays limited when its owner or full repair budget was not approved', async t => {
+  for (const missingOwner of [true,false]) {
+    const s=await setup(t,{writingMode:'source-first',enrichmentPolicy:{sources:[],allow_targeted_methods:true},maxCalls:6,maxTotalCalls:6}),controller=s.created.controller;
+    await s.complete(s.created.requests[0],s.view('en'));
+    await s.complete(createReadingFirstDraftRequests({controller})[0],s.view('zh-CN'));
+    const rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
+    const gap={id:'allocation',severity:'material',question:'How was allocation performed?',impact:'Changes design interpretation.',owner_role:missingOwner?'results':'evidence',source_kind:'original_page',target_sections:['Study'],source_ids:['main']};
+    await s.complete(createReadingFirstReviewRequest({controller,presentation:rendered}),{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[{severity:'material',kind:'scientific-gap',detail:'Allocation unclear',repair_owner:'science',affected_languages:['en'],scientific_gap:gap}],scope:'overall'});
+    assert.equal(getReadingFirstState(controller).status,'completed_with_limits');
+    assert.throws(()=>createReadingFirstEnrichmentRequests({controller}),/ENRICHMENT_UNAVAILABLE/);
+  }
 });

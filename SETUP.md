@@ -2,6 +2,12 @@
 
 当前安装脚本支持 Windows x64。版本基线见 [config/environment.json](config/environment.json)：Node.js 24、npm 11，MinerU 安装器使用 Python 3.12。模型通过 apa-setup 选择，不限定 GPT；现有自动派发对接 Codex，其他宿主需完成相应适配。命令从工程根目录运行。
 
+## 先由用户选择项目文件夹
+
+克隆、解压、安装和配置写入之前，必须由用户指定或明确确认项目文件夹的绝对路径；当前会话目录及其子目录均不能默认采用。已确认的同一目标不重复询问。获取工程的示例见 [README](README.md#1-用户选择项目文件夹再获取工程)。建议用户将所选项目文件夹设为 agent 工作目录；会话目录不同也不能改变已选目标。后文命令均在该项目根目录执行，支持根目录参数时显式传入用户确认的路径。
+
+**安装授权不等于配置选择授权。** “帮我配置”“你决定”“全部按推荐”不能授权助手代选；配置必须由用户自行填写页面，或由助手在会话内分组展示选项和影响、等待用户回答。不得根据安装结果、历史默认或唯一可用选项自主完成配置。
+
 ## 基础环境
 
 先按文末“安装前检测报告”执行只读检查。审阅报告并明确选择安装后，准备 Node.js/npm，再运行：
@@ -15,19 +21,27 @@ npm run setup:check
 
 ## 配置当前库
 
-```powershell
-npm run apa:setup -- inspect
-npm run apa:setup -- page
-```
-
-打开返回的 HTML，在首页选择“完善配置”“去除配置”或“导出配置”。三个功能分别操作、预览和输出；只有完善配置包含字段分页及备份导入，不必经过另外两个功能。下载完善或去除的操作 JSON 后，将路径交给助手并要求应用；也可复制该功能的同一 JSON 到对话。导出生成的是已保存答案的备份，用于以后导入。手动应用和回读：
+先按本库 [apa-setup 技能](.agents/skills/apa-setup/SKILL.md) 检测宿主能力；检测报告只提供事实，不是用户答案。下面的 `$apaProjectRoot` 须事先设为用户已明确确认的项目绝对路径，不得从当前目录自动取值：
 
 ```powershell
-node scripts/apa-setup.mjs apply --file "$env:USERPROFILE\Downloads\apa-config-operation.json"
-node scripts/apa-setup.mjs inspect
+npm run apa:setup -- inspect --repo-root "$apaProjectRoot"
+npm run apa:setup -- page --repo-root "$apaProjectRoot"
 ```
 
-示例假定文件在用户 Downloads 且未改名，请替换为实际下载路径；网页不会自动把文件放到工程内。页面不直接写配置。`apply` 比较原配置指纹，只更新本库答案。遇 `APA_CONFIG_STALE` 应重新生成页面。可以保存未填完的配置，但不能开始新论文；回读时需检查 `validation.complete`、依赖状态及 `ready`，正常退出不等于就绪。
+用户可以自行打开返回的 HTML，在首页选择“完善配置”“去除配置”或“导出配置”。三个功能分别操作、预览和输出；只有完善配置包含字段分页及备份导入，不必经过另外两个功能。助手不得代操作页面制造用户选择。
+
+也可以在会话内辅助配置：依次询问宿主派发方式、模型与推理强度、输出目录、解析器位置、写作顺序与呈现方式、写作指导；查询偏好单独成组，可由用户明确选择暂不配置。每组等待具体回答，未回答项保持未配置或原值，不为达到 `ready` 自主补齐。助手仅整理用户所选字段，展示目标目录及前后差异，等待明确应用确认后再保存。
+
+页面方式下载完善或去除的操作 JSON 后，将路径交给助手并明确要求应用；也可复制该功能的同一 JSON 到对话。用户提交完整操作且明确要求应用时，不重复询问已确定的目标与字段。导出生成的是已保存答案的备份，用于以后导入。手动应用和回读：
+
+```powershell
+node scripts/apa-setup.mjs apply --repo-root "$apaProjectRoot" --file "$env:USERPROFILE\Downloads\apa-config-operation.json"
+node scripts/apa-setup.mjs inspect --repo-root "$apaProjectRoot"
+```
+
+示例假定文件在用户 Downloads 且未改名，请替换为实际下载路径；网页不会自动把文件放到工程内。页面不直接写配置。`apply` 比较原配置指纹，只更新本库答案，但指纹校验不能证明用户选择或授权。遇 `APA_CONFIG_STALE` 应重新读取并展示更新后的差异，由用户确认后生成新操作；页面方式重新生成页面，不改旧操作指纹。用户可明确选择先保存已选部分配置，但配置不完整时不能开始新论文；回读需检查 `validation.complete`、依赖状态及 `ready`，正常退出不等于就绪。
+
+结束时分别报告工程已获取、依赖已安装、用户配置已保存、运行条件已就绪；不能因安装完成就自行保存配置，也不能把 `ready` 当成真实模型调用、PDF 解析或论文验收通过。
 
 ## MinerU
 

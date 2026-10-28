@@ -1,11 +1,13 @@
-import { createHash } from 'node:crypto';
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync, mkdirSync, writeFileSync, linkSync, unlinkSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, join } from 'node:path';
 import { inspectApaConfig, resolveApaConfig } from '../lib/apa-config.mjs';
 import { createConfiguredApaRoleModelPolicy, resolveApaRoleModel, buildHostDispatchArguments } from '../apa-model-policy.mjs';
 import { createReadingFirstRunControl, fingerprintReadingFirst, renderReadingFirstNotes, snapshotReadingFirstRuntime } from './reading-first-runtime.mjs';
 import { exportReadingFirstPreview } from './reading-first-preview.mjs';
 import { emitApprovedRunStep, createCurrentMineruBaselinePort } from './phase21-runner.mjs';
+import { getRoleReplyContract, loadRoleReplyContract } from './role-reply-contract.mjs';
+import { readCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
 
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
@@ -15,6 +17,9 @@ const scienceSections = { evidence: 'Evidence/Coverage Mapper', methods: 'Design
 /** Freeze selected guidance into the binding. Disabled skills contribute no optional instructions. */
 export function buildConfiguredReadingInstructions(writingSkills = {}) {
   const sections = sectionsOf(readFileSync(new URL('../../prompts/v3/reading-first-contracts.md', import.meta.url), 'utf8'));
+  const correctionsPath = new URL('../../prompts/v3/flow-corrections-1.0.md', import.meta.url);
+  const correctionBytes = readFileSync(correctionsPath), corrections = sectionsOf(correctionBytes);
+  sections['Overall Verifier'] += '\n\n' + corrections['Review ownership'];
   for (const languageSection of ['English Writer', 'Chinese Writer']) {
     sections[languageSection] = sections[languageSection].split(/\r?\n\r?\n/).filter(paragraph => !/Nature Skills|Apply Humanizer|Apply stss|采用 Humanizer-zh|用 stss/.test(paragraph)).join('\n\n');
     sections[languageSection] += '\n\nKeep all scientific information, attribution, conditions, quantities, units, formulas and uncertainty. Preserve registered Obsidian links, images, anchors and table data. Produce only the assigned JSON for the final Obsidian note. No extra polishing task, role, source search or review round is authorized.';
@@ -25,7 +30,8 @@ export function buildConfiguredReadingInstructions(writingSkills = {}) {
     .filter(([key]) => key !== (language === 'en' ? 'humanizer-zh' : 'humanizer'))
     .map(([key, guide]) => 'Selected optional writing guidance: ' + key + '\n' + JSON.stringify({ path: guide.path, sha256: sha(Buffer.from(guide.content)) })
       + '\nApply only guidance relevant to this language and the assigned article module, within the existing APA output contract. Do not run skill workflows, commands, extra roles or review loops.\n' + guide.content).join('\n\n')]));
-  return { sections, writing_instructions: writingInstructions,
+  return { sections, writing_instructions: writingInstructions, science_guidance: corrections['Scientific reuse'],
+    flow_corrections: { schema_version: 'flow-corrections-1.0', sha256: sha(correctionBytes), byte_length: correctionBytes.length },
     writing_guides: Object.fromEntries(Object.entries(writingSkills).map(([key, guide]) => [key, { path: guide.path, sha256: sha(Buffer.from(guide.content)), byte_length: Buffer.byteLength(guide.content) }])) };
 }
 
@@ -50,9 +56,11 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
     python: resolvedConfig.parser.python ?? join(resolvedConfig.parser.runtime_home, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
     configPath: resolvedConfig.parser.config_path ?? join(resolvedConfig.parser.runtime_home, 'config.yaml') };
   const configuredSetup = { schema_version: 'apa-configured-reading-1.0', config_fingerprint: loaded.fingerprint, paths, parser: parserOptions,
+    knowledge_registry: { policy: 'committed-generation-1.0', vault_root: resolve(repoRoot) },
     role_model_policy: createConfiguredApaRoleModelPolicy(mainSession, resolvedConfig.roles),
     ...buildConfiguredReadingInstructions(resolvedConfig.writingSkills) };
   const runControl = createReadingFirstRunControl({ ...options, ...(loaded.config.host ? { host: loaded.config.host } : {}), mainSession, configuredSetup, writingMode: 'source-first',
+    roleReplyContract: options.roleReplyContract === undefined ? getRoleReplyContract() : options.roleReplyContract,
     firstWritingLanguage: resolvedConfig.reading.source_language, presentationMode: resolvedConfig.reading.presentation_mode });
   return freeze({ resolvedConfig, scientificInput: structuredClone(options.scientificInput), configurationFingerprint: loaded.fingerprint, paths, parserOptions, runControl });
 }
@@ -68,21 +76,28 @@ export function createConfiguredScienceRequest({ prepared, role, task, dispatchC
   if (!scienceSections[role]) throw new Error('APA_CONFIGURED_SCIENCE_ROLE_INVALID');
   const binding = prepared.runControl.reading_first_binding, source = prepared.scientificInput?.sources?.[0] ?? payload.sources?.[0];
   if (!source) throw new Error('APA_CONFIGURED_SCIENCE_SOURCE_REQUIRED');
+  const reply = loadRoleReplyContract(binding.role_reply_contract);
   const sections = sectionsOf(readFileSync(new URL('../../prompts/v3/phase21-scientific-contracts.md', import.meta.url), 'utf8'));
   const outputPath = ownedPath(prepared.paths.runRoot, task.native_path);
-  let message = [sections['Common scientific contract'], sections[scienceSections[role]], JSON.stringify(payload), 'Write only the assigned complete JSON to: ' + outputPath].join('\n\n');
+  let message = [sections['Common scientific contract'], sections[scienceSections[role]],
+    ...(binding.configured_setup?.science_guidance ? [binding.configured_setup.science_guidance] : []),
+    ...(reply ? [reply] : []), JSON.stringify(payload), 'Write only the assigned complete JSON to: ' + outputPath].join('\n\n');
   let instructionFile;
   if (task.instruction_path) {
     const path = ownedPath(prepared.paths.runRoot, task.instruction_path);
     mkdirSync(dirname(path), { recursive: true });
-    try { writeFileSync(path, message, { flag: 'wx' }); } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      if (!readFileSync(path).equals(Buffer.from(message))) throw new Error('APA_CONFIGURED_INSTRUCTION_CONFLICT');
-    }
+    const temporary = path + '.' + randomUUID() + '.tmp';
+    try {
+      writeFileSync(temporary, message, { flag: 'wx' });
+      try { linkSync(temporary, path); } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        if (!readFileSync(path).equals(Buffer.from(message))) throw new Error('APA_CONFIGURED_INSTRUCTION_CONFLICT');
+      }
+    } finally { try { unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
     instructionFile = { path, sha256: sha(Buffer.from(message)), byte_length: Buffer.byteLength(message) };
     message = 'Read the complete instruction file: ' + path + '\nVerify SHA-256 before following it: ' + instructionFile.sha256 + '\nWrite only to: ' + outputPath;
   }
-  const configuration = { profile: 'reading-first-1.0', config_fingerprint: prepared.configurationFingerprint, role, ...(instructionFile ? { instruction_file: instructionFile } : {}) };
+  const configuration = { profile: 'reading-first-1.0', config_fingerprint: prepared.configurationFingerprint, role, ...(binding.role_reply_contract ? { role_reply_contract: structuredClone(binding.role_reply_contract) } : {}), ...(instructionFile ? { instruction_file: instructionFile } : {}) };
   const model = resolveApaRoleModel(role, binding.role_model_policy.main_session, binding.role_model_policy);
   const packet = { workflow_profile: 'reading-first-1.0', run_id: prepared.runControl.run_id, user_approval_id: binding.authorization_id,
     intended_evidence_tier: 'local_dispatch', source, instruction_fingerprint: sha(Buffer.from(message)), configuration_fingerprint: fingerprintReadingFirst(configuration),
@@ -108,6 +123,8 @@ export function getConfiguredReadingDispatchArguments({ prepared, request } = {}
     || fingerprintReadingFirst(packet.role_model_policy) !== fingerprintReadingFirst(binding.role_model_policy)
     || packet.host_action_scope?.action !== (binding.host?.dispatch.tool ?? 'collaboration.spawn_agent')
     || fingerprintReadingFirst(packet.host_action_scope?.dispatch ?? null) !== fingerprintReadingFirst(binding.host?.dispatch ?? null)) throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH');
+  loadRoleReplyContract(binding.role_reply_contract);
+  if (fingerprintReadingFirst(packet.backend?.configuration?.role_reply_contract ?? null) !== fingerprintReadingFirst(binding.role_reply_contract ?? null)) throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH');
   let expected;
   try { expected = emitApprovedRunStep({ packet, run: { run_id: prepared.runControl.run_id }, dispatchContext: {},
     approvedBudget: packet.approved_budget_cap, retryPolicy: { max_retries: packet.retry_allowance } }); }
@@ -142,15 +159,34 @@ export function createConfiguredMineruPort({ prepared, repoRoot, dependencies } 
 
 /** Save the same rendered Obsidian candidate through the existing self-contained exporter; grants no publication authority. */
 export async function materializeConfiguredReadingCandidate({ prepared, controller, handoff, resources, ...renderOptions } = {}) {
-  const candidate = renderReadingFirstNotes({ controller, ...renderOptions });
   const checkpoint = snapshotReadingFirstRuntime(controller);
   if (checkpoint.control_fingerprint !== fingerprintReadingFirst(prepared.runControl.reading_first_binding)
     || checkpoint.handoff_fingerprint !== handoff?.handoff_fingerprint) throw new Error('APA_CONFIGURED_CANDIDATE_BINDING_MISMATCH');
+  const policy = prepared.runControl.reading_first_binding.configured_setup?.knowledge_registry;
+  let trusted;
+  if (policy !== undefined) {
+    if (policy?.policy !== 'committed-generation-1.0' || typeof policy.vault_root !== 'string' || resolve(policy.vault_root) !== policy.vault_root) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_POLICY_INVALID');
+    trusted = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root });
+    if (renderOptions.knowledgeRegistry !== undefined) {
+      const supplied = renderOptions.knowledgeRegistry, byPath = new Map(trusted.map(row => [row.path, row]));
+      if (!Array.isArray(supplied) || new Set(supplied.map(row => row?.path)).size !== supplied.length
+        || supplied.some(row => !byPath.has(row?.path) || fingerprintReadingFirst(row) !== fingerprintReadingFirst(byPath.get(row.path)))) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_MISMATCH');
+    }
+    renderOptions.knowledgeRegistry = trusted;
+  }
+  const assertRegistryCurrent = async () => {
+    if (trusted && fingerprintReadingFirst(await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root })) !== fingerprintReadingFirst(trusted)) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_CHANGED');
+  };
+  const candidate = renderReadingFirstNotes({ controller, ...renderOptions });
+  await assertRegistryCurrent();
   mkdirSync(dirname(prepared.paths.candidateRoot), { recursive: true });
   const exported = await exportReadingFirstPreview({ outputRoot: prepared.paths.candidateRoot, identity: handoff.identity,
     views: ['en', 'zh-CN'].map(language => checkpoint.state.views[language].value), presentation: handoff.presentation, resources,
     ...(checkpoint.state.readingEditor ? { readingEditor: checkpoint.state.readingEditor.value } : {}), ...renderOptions,
     targetRegistry: candidate.targetRegistry });
-  if (candidate.notes.some(note => exported.notes.find(other => other.path === note.path)?.content !== note.content)) throw new Error('APA_CONFIGURED_CANDIDATE_RENDER_MISMATCH');
+  await assertRegistryCurrent();
+  if (candidate.notes.some(note => exported.notes.find(other => other.path === note.path)?.content !== note.content)
+    || (candidate.supportNotes?.length ?? 0) !== (exported.supportNotes?.length ?? 0)
+    || candidate.supportNotes?.some(note => exported.supportNotes.find(other => other.path === note.path)?.content !== note.content)) throw new Error('APA_CONFIGURED_CANDIDATE_RENDER_MISMATCH');
   return { candidate, exported };
 }

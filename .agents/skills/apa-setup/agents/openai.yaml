@@ -1,4 +1,4 @@
 interface:
   display_name: "APA 本地配置"
-  short_description: "检测当前宿主的派发工具与可用模型，查看、完善、去除和导出个人 APA 配置"
-  default_prompt: "使用 $apa-setup 检测当前环境，查看此仓库的 APA 配置并打开本地配置页面。"
+  short_description: "确认用户选择的项目目录，检测环境，通过用户页面填写或会话分组选项辅助配置"
+  default_prompt: "使用 $apa-setup，先确认我选择的项目文件夹，禁止默认采用当前会话目录。检测环境后，让我自行填写配置页或在会话内分组选择；不要代选。展示目标目录及修改前后差异，等我明确确认应用后再保存并回读。"

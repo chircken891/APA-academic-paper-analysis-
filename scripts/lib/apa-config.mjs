@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Ajv from 'ajv';
+import { inspectHostCapabilities } from './apa-host-capabilities.mjs';
 
 export const APA_CONFIG_VERSION = 'apa-local-config-1.0';
 export const APA_SCIENCE_ROLES = Object.freeze(['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration']);
@@ -128,9 +129,13 @@ export function exportApaConfig(config) {
 export function loadHostProfile(file) {
   let profile;
   try { profile = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { throw error('APA_HOST_PROFILE_INVALID', 'unreadable JSON'); }
+  validateHostProfile(profile);
+  return profile;
+}
+
+function validateHostProfile(profile) {
   if (!checkHostProfileShape(profile)) throw error('APA_HOST_PROFILE_INVALID', checkHostProfileShape.errors.map(item => `${item.instancePath || '/'} ${item.message}`).join('; '));
   if (new Set(profile.models.map(item => item.model)).size !== profile.models.length) throw error('APA_HOST_PROFILE_INVALID', 'duplicate model');
-  return profile;
 }
 
 export function checkHostProfile(config, profile, capability = 'reading') {
@@ -151,9 +156,10 @@ export function checkHostProfile(config, profile, capability = 'reading') {
 }
 
 export function inspectApaConfig({ repoRoot = process.cwd(), capability = 'reading', hostProfile } = {}) {
+  if (hostProfile) validateHostProfile(hostProfile);
   const snapshot = loadApaConfig({ repoRoot });
   const validation = validateApaConfig(snapshot.config, { repoRoot, capability });
-  const hostCheck = hostProfile ? { host_check: checkHostProfile(snapshot.config, hostProfile, capability) } : {};
+  const hostCheck = { capability_check: inspectHostCapabilities(snapshot.config, hostProfile), ...(hostProfile ? { host_check: checkHostProfile(snapshot.config, hostProfile, capability) } : {}) };
   if (capability === 'query') return { ...snapshot, capability, validation, dependencies: [], ready: validation.complete, model_availability: 'not_checked', ...hostCheck };
   const dependencies = [];
   const inspect = (key, value, kind) => {

@@ -82,7 +82,11 @@ Writer 可通过其正常 view 的 `knowledge_content:[{id,paragraphs,sections?}
 
 Methods 提供通用知识，Results 识别图型、子图和裁切区域，Integrator 合并身份并组织本文应用，两位 Writer 在既有任务内提供相应语言内容及受影响论文段落，Reading Editor 负责呈现。遇到缺口按原定向补缺接口交回内容所有者，不由编辑补造。允许的权威方法资料检索仍受本次来源范围、预算和截止时间约束。
 
-先由名称和别名发现候选，Methods 与 Integrator 比较定义、方法实质、适用条件和边界，确认稳定身份后再形成同一节点的增补候选；保留人工内容、原来源及不同论文的应用链接，避免重复定义。本轮预览只生成已有节点的合并候选，不写正式库；历史双语候选保留，新入口不再指向重复节点。图型节点沿用 `Wiki/methods/`，其他概念沿用既有分类，不建立平行目录。
+先由名称和别名发现候选，Methods 与 Integrator 比较定义、方法实质、适用条件和边界，确认稳定身份后再形成同一节点的增补候选；保留人工内容、原来源及不同论文的应用链接，避免重复定义。已有共享节点的 `KNOWLEDGE_STATE.item` 保留原 paragraphs/sections/sources/formulas，新论文内容存为按 paper_id 区分的 `paper_additions`；同一论文后续增补替换自己的增补段，来源按 URL 合并。该接口不授权改写基干定义、撤销旧来源或覆盖人工区；这类冲突须单独处理，不能伪装成增补。来源说明只限定其实际支持的新内容，不因本次未重复检索而否定旧来源。本轮预览只生成已有节点的合并候选，不写正式库；历史双语候选保留，新入口不再指向重复节点。图型节点沿用 `Wiki/methods/`，其他概念沿用既有分类，不建立平行目录。
+
+节点登记表由 `readCommittedReadingFirstKnowledgeRegistry({vaultRoot})` 读取当前校验通过的 `shared_nodes` 和对象字节；不扫描未登记的 Wiki 文件。新配置化候选物化自动消费此登记表；低层渲染调用由 Controller 显式提供同一已核验输入。旧绑定保留原记录，不补写策略字段。
+
+图表来源页显示从已登记 source 身份判断：`sources[].kind:'supplementary'` 或 source id 为 `supplementary`/`supplement` 时显示“补充材料第 N 页 / Supplementary p. N”；未知身份保留原标签，不猜文件名。`chart_types[].panel` 保留面板身份；可用 `panel_label:{en,'zh-CN'}` 提供显示名称，常见面板字符串按语言显示，字母编号保留。
 
 图片从原 PDF 派生裁切，必要时旋转与提高渲染清晰度，不重绘科学内容；记录原物理页、裁切区域、旋转和来源指纹。去掉无关正文、页眉页脚，保留坐标、图例、单位、面板标记、必要表头及脚注。标题、说明及原文定位在图片旁完整呈现。多图同页分别提取，跨页表保持连续；不能可靠裁切时保留较完整区域。原始 PDF 与原页图不变。
 

@@ -85,6 +85,35 @@ export function matchReadingFirstKnowledgeIdentity({ item, knowledgeRegistry, va
   return { matches, paths };
 }
 
+// A confirmed existing node keeps its committed content; each paper contributes one
+// replaceable addition, so a later paper cannot drop earlier text, examples or sources.
+function composeKnowledgeAddition(existing, item, paperId, paperTitle) {
+  const additions = (existing.paper_additions ?? []).filter(addition => addition.paper_id !== paperId);
+  const sources = [...(existing.sources ?? [])];
+  for (const source of item.sources ?? []) if (!sources.some(other => other.url === source.url)) sources.push(source);
+  const formulas = [...(existing.formulas ?? [])];
+  for (const formula of item.formulas ?? []) if (!formulas.some(other => other.latex === formula.latex)) formulas.push(formula);
+  const aliases = [...new Set([...(existing.aliases ?? []), ...(item.aliases ?? [])])];
+  // Paragraphs a later paper merely restates from the committed text are not repeated.
+  const known = Object.fromEntries(languages.map(language => [language, new Set([...(existing.paragraphs?.[language] ?? []),
+    ...(existing.sections?.[language] ?? []).flatMap(section => section.paragraphs), ...additions.flatMap(addition => [...(addition.paragraphs?.[language] ?? []),
+      ...(addition.sections?.[language] ?? []).flatMap(section => section.paragraphs)])].map(normalized))]));
+  const fresh = (values, language) => (values ?? []).filter(value => !known[language].has(normalized(value)));
+  const paragraphs = Object.fromEntries(languages.map(language => [language, fresh(item.paragraphs?.[language], language)]));
+  const sections = Object.fromEntries(languages.map(language => [language, (item.sections?.[language] ?? [])
+    .map(section => ({ heading: section.heading, paragraphs: fresh(section.paragraphs, language) })).filter(section => section.paragraphs.length)]));
+  const added = languages.some(language => paragraphs[language].length || sections[language].length);
+  return { ...existing, aliases, sources, ...(formulas.length ? { formulas } : {}),
+    paper_additions: [...additions, ...(added ? [{ paper_id: paperId, title: paperTitle, paragraphs, sections }] : [])] };
+}
+function additionSections(addition, language) {
+  const name = typeof addition.title === 'string' ? addition.title : addition.title?.[language] ?? addition.paper_id;
+  const label = (language === 'en' ? 'Addition from ' : '论文增补：') + name;
+  const own = addition.paragraphs?.[language] ?? [];
+  return [...(own.length ? [{ heading: label, paragraphs: own }] : []),
+    ...(addition.sections?.[language] ?? []).map(section => ({ heading: label + ' · ' + section.heading, paragraphs: section.paragraphs }))];
+}
+
 /** One generic identity produces one bilingual candidate; formal registry bytes are never mutated. */
 export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, paperId, paperTitle, vaultPath, href, resolveReferences = value => value }) {
   const { matches, paths } = matchReadingFirstKnowledgeIdentity({ item, knowledgeRegistry, vaultPath });
@@ -109,31 +138,32 @@ export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, p
   }
   const previousApplications = prior ? priorVisibleTargets(original.slice(from, to), target, prior.applications) : [];
   const applications = [...new Map([...previousApplications, { paper_id: paperId, targets: paperTargets, title: paperTitle }].map(row => [row.paper_id, row])).values()];
-  let body = ['[中文](#%E4%B8%AD%E6%96%87)', '[English](#English)', ...(item.formulas?.length ? ['[公式 / Formulas](#%E5%85%AC%E5%BC%8F%20/%20Formulas)'] : []), ...(item.sources?.length ? ['[来源 / Sources](#%E6%9D%A5%E6%BA%90%20/%20Sources)'] : [])].join(' · ') + '\n\n';
+  const node = prior ? composeKnowledgeAddition(prior.item, item, paperId, paperTitle) : item;
+  let body = ['[中文](#%E4%B8%AD%E6%96%87)', '[English](#English)', ...(node.formulas?.length ? ['[公式 / Formulas](#%E5%85%AC%E5%BC%8F%20/%20Formulas)'] : []), ...(node.sources?.length ? ['[来源 / Sources](#%E6%9D%A5%E6%BA%90%20/%20Sources)'] : [])].join(' · ') + '\n\n';
   for (const language of languages) {
     const paragraphs = values => values.map(value => resolveReferences(value, language, target)).join('\n\n');
-    body += `## ${language === 'en' ? 'English' : '中文'}\n\n` + paragraphs(item.paragraphs[language]) + '\n\n';
-    const sections = item.sections?.[language] ?? [];
+    body += `## ${language === 'en' ? 'English' : '中文'}\n\n` + paragraphs(node.paragraphs[language]) + '\n\n';
+    const sections = [...(node.sections?.[language] ?? []), ...(node.paper_additions ?? []).flatMap(addition => additionSections(addition, language))];
     if (!Array.isArray(sections)) fail('RF_OBSIDIAN_KNOWLEDGE_INVALID');
     for (const section of sections) {
       if (!text(section.heading) || !Array.isArray(section.paragraphs) || !section.paragraphs.length || section.paragraphs.some(value => !text(value))) fail('RF_OBSIDIAN_KNOWLEDGE_INVALID');
       body += `### ${heading(section.heading)}\n\n${paragraphs(section.paragraphs)}\n\n`;
     }
   }
-  if (item.formulas?.length) body += '## 公式 / Formulas\n\n';
-  for (const formula of item.formulas ?? []) {
+  if (node.formulas?.length) body += '## 公式 / Formulas\n\n';
+  for (const formula of node.formulas ?? []) {
     if (!text(formula.latex) || !languages.every(language => text(formula.description?.[language]))) fail('RF_OBSIDIAN_KNOWLEDGE_INVALID');
     body += `$$\n${formula.latex}\n$$\n\n${formula.description['zh-CN']} / ${formula.description.en}\n\n`;
   }
-  if (item.sources?.length) body += '## 来源 / Sources\n\n';
-  for (const source of item.sources ?? []) {
+  if (node.sources?.length) body += '## 来源 / Sources\n\n';
+  for (const source of node.sources ?? []) {
     if (!text(source.title) || !/^https?:\/\/[^\s<>]+$/.test(source.url ?? '')) fail('RF_OBSIDIAN_KNOWLEDGE_SOURCE_INVALID');
     body += `- [${source.title.replace(/[\[\]\r\n]/g, ' ')}](${source.url.replace(/\(/g, '%28').replace(/\)/g, '%29')})\n`;
   }
   body += '\n## 论文应用 / Paper applications\n\n' + applications.flatMap(application => languages.map(language => {
     return `- [${applicationLabel(application, language)}](${href(target, application.targets[language])})`;
   })).join('\n') + '\n';
-  const state = Buffer.from(JSON.stringify({ item, applications })).toString('base64');
+  const state = Buffer.from(JSON.stringify({ item: node, applications })).toString('base64');
   const addition = `${start}\n<!-- KNOWLEDGE_STATE ${state} -->\n${body}${end}\n`;
   let content;
   if (original !== undefined) {

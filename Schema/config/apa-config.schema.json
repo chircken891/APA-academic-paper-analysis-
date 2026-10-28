@@ -369,7 +369,69 @@
             "dispatch": { "$ref": "#/definitions/hostEvidenceSource" }
           }
         },
-        "notes": { "type": "array", "items": { "type": "string" } }
+        "notes": { "type": "array", "items": { "type": "string" } },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "on_demand_reading": { "$ref": "#/definitions/hostCapability" },
+            "delegated_diagnostics": { "$ref": "#/definitions/hostCapability" },
+            "manual_compaction": { "$ref": "#/definitions/hostCapability" },
+            "concise_replies": { "$ref": "#/definitions/hostCapability" },
+            "science_recovery": { "$ref": "#/definitions/hostCapability" },
+            "threshold_compaction": { "$ref": "#/definitions/hostCapability" }
+          }
+        }
+      }
+    },
+    "hostCapability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "method", "scope", "evidence", "limitations"],
+      "properties": {
+        "status": { "enum": ["detected", "blocked", "unsupported", "unknown"] },
+        "method": { "type": ["string", "null"] },
+        "scope": { "enum": ["current-session", "new-session", "instance", "unknown"] },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["source", "reference"],
+            "properties": {
+              "source": { "enum": ["tool-schema", "system-context", "host-config", "host-docs", "local-code"] },
+              "reference": { "type": "string", "minLength": 1, "pattern": "\\S" }
+            }
+          }
+        },
+        "limitations": { "type": "array", "items": { "type": "string" } },
+        "recovery": {
+          "type": "object", "additionalProperties": false,
+          "required": ["task_handle_path", "lookup_tool", "lookup_argument", "original_host_accessible"],
+          "properties": {
+            "task_handle_path": { "type": ["string", "null"] },
+            "lookup_tool": { "type": ["string", "null"] },
+            "lookup_argument": { "type": ["string", "null"] },
+            "original_host_accessible": { "type": ["boolean", "null"] }
+          }
+        },
+        "threshold": {
+          "type": "object", "additionalProperties": false,
+          "required": ["candidate_tokens", "unit", "setting", "formula", "setting_min", "setting_max", "effective_target_verified", "context_window_tokens", "output_reserve_tokens", "headroom_tokens", "retained_tokens", "measurement"],
+          "properties": {
+            "candidate_tokens": { "type": ["integer", "null"], "minimum": 1 },
+            "unit": { "enum": ["tokens", "ratio", "percent", "unknown"] },
+            "setting": { "type": ["string", "null"] },
+            "formula": { "enum": ["absolute", "window-ratio-bounded", "unknown"] },
+            "setting_min": { "type": ["number", "null"], "minimum": 0 },
+            "setting_max": { "type": ["number", "null"], "minimum": 0 },
+            "effective_target_verified": { "type": ["boolean", "null"] },
+            "context_window_tokens": { "type": ["integer", "null"], "minimum": 1 },
+            "output_reserve_tokens": { "type": ["integer", "null"], "minimum": 0 },
+            "headroom_tokens": { "type": ["integer", "null"], "minimum": 0 },
+            "retained_tokens": { "type": ["integer", "null"], "minimum": 0 },
+            "measurement": { "type": ["string", "null"] }
+          }
+        }
       }
     },
     "hostEvidenceSource": {

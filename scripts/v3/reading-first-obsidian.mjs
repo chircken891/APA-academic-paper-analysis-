@@ -21,6 +21,14 @@ const FIXED_MODULE_LABELS = Object.freeze({
 });
 const local = (value, language) => typeof value === 'string' ? value : value?.[language];
 const label = value => String(value).replace(/[\[\]\r\n]/g, ' ');
+const chinesePanelLabels = Object.freeze({ 'whole figure': '全图', 'whole table': '全表', 'upper row': '上排', 'lower row': '下排', 'bottom right': '右下' });
+function panelLabel(type, language) {
+  if (type.panel_label !== undefined) return local(type.panel_label, language);
+  if (language !== 'zh-CN') return type.panel;
+  const panel = type.panel;
+  const split = typeof panel === 'string' && /^([a-z]) (upper|lower)$/i.exec(panel);
+  return split ? `${split[1]} ${split[2].toLowerCase() === 'upper' ? '上部' : '下部'}` : chinesePanelLabels[typeof panel === 'string' ? panel.toLowerCase() : ''] ?? panel;
+}
 const key = value => typeof value === 'string' ? value.normalize('NFC').trim().toLowerCase() : '';
 const filenameLabel = value => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f<>:"/\\|?*#\[\]^]/g, ' ').replace(/\.{2,}/g, ' ').replace(/[. ]+$/g, '').trim() : value;
 function vaultPath(value) {
@@ -95,7 +103,10 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     if (!visual.path.startsWith('Figures/')) fail('RF_OBSIDIAN_PATH_INVALID');
     if (!['figure', 'table', ...(sharedKnowledge ? ['formula'] : [])].includes(visual.kind) || !Number.isInteger(visual.page) || visual.page < 1) fail('RF_OBSIDIAN_VISUAL_INVALID');
     if (visual.chart_types !== undefined && (!Array.isArray(visual.chart_types) || visual.chart_types.some(type => !knowledge.some(item => item.id === type.knowledge_id && item.source_kind === 'method-background')))) fail('RF_OBSIDIAN_VISUAL_INVALID');
-    for (const type of visual.chart_types ?? []) localized(type.label);
+    for (const type of visual.chart_types ?? []) {
+      localized(type.label);
+      if (type.panel_label !== undefined) localized(type.panel_label);
+    }
   }
   const placementSets = new Map();
   const knowledgeUsed = (item, view) => {
@@ -129,6 +140,16 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     if (visual.source_path !== undefined && visual.source_path !== p.source_pdf && ![...sources.values()].includes(visual.source_path)) fail('RF_OBSIDIAN_SOURCE_INVALID');
     if (byId && visual.source_path !== undefined && byId !== visual.source_path) fail('RF_OBSIDIAN_SOURCE_INVALID');
     visualSources.set(visual.id, byId ?? visual.source_path ?? p.source_pdf);
+  }
+  function visualSourcePage(visual, language) {
+    const sourcePath = visualSources.get(visual.id);
+    const sourceRows = (p.sources ?? []).filter(source => source.path === sourcePath);
+    const source = visual.source_id === undefined ? (sourceRows.length === 1 ? sourceRows[0] : undefined)
+      : sourceRows.find(row => row.id === visual.source_id);
+    const sourceKind = source?.kind ?? source?.source_kind ?? source?.id;
+    const supplementary = sourcePath !== p.source_pdf && ['supplement', 'supplementary', 'supplementary-material'].includes(sourceKind);
+    return supplementary ? (language === 'en' ? `Supplementary p. ${visual.page}` : `补充材料第${visual.page}页`)
+      : (language === 'en' ? `Original p. ${visual.page}` : `原文第${visual.page}页`);
   }
   const map = p.map ?? { steps: [], findings: [], relations: [] };
   const nodes = [...map.steps, ...map.findings];
@@ -308,15 +329,15 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
           const samePanels = panels.length > 1 && panels.every(Boolean) && panelTypes.every(rows => signature(rows) === signature(panelTypes[0]));
           const chartTypes = samePanels
             ? (en ? 'Each panel: ' : '各面板：') + panelTypes[0].map(type => md(local(type.label, language), knowledgeHref(type.knowledge_id))).join(' · ')
-            : types.map(type => `${type.panel ? label(type.panel) + ': ' : ''}${md(local(type.label, language), knowledgeHref(type.knowledge_id))}`).join(' · ');
+            : types.map(type => `${type.panel ? label(panelLabel(type, language)) + ': ' : ''}${md(local(type.label, language), knowledgeHref(type.knowledge_id))}`).join(' · ');
           if (compact) {
-            const entry = edits.visuals.find(item => item.id === visual.id), source = md(en ? `Original p. ${visual.page}` : `原文第${visual.page}页`, href(target, visualSources.get(visual.id)) + '#page=' + visual.page);
+            const entry = edits.visuals.find(item => item.id === visual.id), source = md(visualSourcePage(visual, language), href(target, visualSources.get(visual.id)) + '#page=' + visual.page);
             const notesText = (entry?.notes ?? []).map(note => renderParagraph(section.paragraphs[note.paragraph_index], note.paragraph_index) + '\n\n').join('');
             reading += `**${label(entry?.title ?? local(visual.label, language))}** · ${source} ^rf-visual-${visual.id}\n\n${chartTypes ? `**${en ? 'Chart type' : '图型'}**${en ? ': ' : '：'}${chartTypes}\n\n` : ''}![${label(local(visual.label, language))}](${href(target, visual.path)})\n\n${notesText}`
               + callout('quote', en ? 'Original caption' : '原图注', `**${local(visual.label, language)}.** ${local(visual.caption, language)}\n\n${md(en ? 'Open full-size image' : '查看大图', href(target, visual.path))}`, true);
             continue;
           }
-          reading += `${editor ? '#### ' + visualHeadings.get(visual.id) + '\n\n' : ''}${chartTypes ? `**${en ? 'Chart type' : '图型'}**${en ? ': ' : '：'}${chartTypes}\n\n` : ''}![${label(local(visual.label, language))}](${href(target, visual.path)})\n\n**${local(visual.label, language)}.** ${local(visual.caption, language)} ${md(en ? `Original p. ${visual.page}` : `原文第${visual.page}页`, href(target, visualSources.get(visual.id)) + '#page=' + visual.page)}${writerLayout ? ' · ' + md(en ? 'Open full-size image' : '查看大图', href(target, visual.path)) : ''} ^rf-visual-${visual.id}\n\n`;
+          reading += `${editor ? '#### ' + visualHeadings.get(visual.id) + '\n\n' : ''}${chartTypes ? `**${en ? 'Chart type' : '图型'}**${en ? ': ' : '：'}${chartTypes}\n\n` : ''}![${label(local(visual.label, language))}](${href(target, visual.path)})\n\n**${local(visual.label, language)}.** ${local(visual.caption, language)} ${md(visualSourcePage(visual, language), href(target, visualSources.get(visual.id)) + '#page=' + visual.page)}${writerLayout ? ' · ' + md(en ? 'Open full-size image' : '查看大图', href(target, visual.path)) : ''} ^rf-visual-${visual.id}\n\n`;
         }
         for (const item of knowledge.filter(value => (writerLayout ? placements.knowledge.filter(row => row.id === value.id) : value.placements).some(placed))) {
           if (item.source_kind === 'paper-fact') {

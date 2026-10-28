@@ -74,6 +74,31 @@ test('shared bilingual later papers enrich one managed explanation without dupli
   assert.match(result, /\[A study · 中文\]/); assert.match(result, /\[Another study · English\]/);
 });
 
+test('shared bilingual later paper adds to a committed node without dropping its sections or sources', () => {
+  const first = input(); first.presentation.knowledge_layout = 'shared-bilingual-1.0';
+  Object.assign(first.presentation.knowledge[0], {
+    sections: { en: [{ heading: 'Example', paragraphs: ['Synthetic committed example.'] }], 'zh-CN': [{ heading: '算例', paragraphs: ['已提交的合成算例。'] }] },
+    sources: [{ id: 'cdc', title: 'CDC committed source', url: 'https://example.org/cdc' }] });
+  const old = renderReadingFirstObsidian(first).supportNotes[0];
+  const later = () => {
+    const second = input(); second.presentation.knowledge_layout = 'shared-bilingual-1.0'; second.identity.paper_id = 'pap_' + 'c'.repeat(32);
+    second.presentation.bibliography.title = 'Later study';
+    Object.assign(second.presentation.knowledge[0], { paragraphs: { en: ['Later paper-specific reading lesson.'], 'zh-CN': ['后续论文的读表经验。'] },
+      sources: [{ title: 'Later study', url: 'https://doi.org/10.1/later' }] });
+    return second;
+  };
+  const second = later(); second.knowledgeRegistry = [{ canonical_key: 'age-standardisation', path: old.path, content: old.content }];
+  const merged = renderReadingFirstObsidian(second).supportNotes[0].content;
+  for (const kept of ['Background explanation.', 'Synthetic committed example.', '已提交的合成算例。', 'https://example.org/cdc']) assert.ok(merged.includes(kept), kept);
+  assert.match(merged, /### Addition from Later study\n\nLater paper-specific reading lesson\./);
+  assert.match(merged, /### 论文增补：Later study\n\n后续论文的读表经验。/);
+  assert.match(merged, /https:\/\/doi\.org\/10\.1\/later/);
+  const again = later(); again.knowledgeRegistry = [{ canonical_key: 'age-standardisation', path: old.path, content: merged }];
+  const rerendered = renderReadingFirstObsidian(again).supportNotes[0].content;
+  assert.equal((rerendered.match(/Later paper-specific reading lesson\./g) ?? []).length, 1);
+  assert.equal((rerendered.match(/Synthetic committed example\./g) ?? []).length, 1);
+});
+
 test('shared bilingual Writer knowledge overlay stays isolated to its language and leaves scientific catalog immutable', () => {
   const data = input(); data.presentation.knowledge_layout = 'shared-bilingual-1.0';
   const frozen = structuredClone(data.presentation);

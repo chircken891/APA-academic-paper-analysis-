@@ -11,6 +11,32 @@ import { fields, readinessMessages } from '../../Templates/apa-setup/page.js';
 
 const config = { schema_version: 'apa-local-config-1.0', paths: { runs: '.tmp/old', parse: '.tmp/parse' }, reading: { source_language: 'en' } };
 const snapshot = { config, fingerprint: 'fingerprint', exists: true, path: 'config/apa.local.json' };
+test('capability report shows host-specific methods, limits and evidence as text without changing setup answers', async () => {
+  const { renderCapabilityCheck } = await import('../../Templates/apa-setup/page.js');
+  const node = tag => ({ tag, textContent: '', children: [], append(...children) { this.children.push(...children); } });
+  const document = { createElement: node };
+  const missing = node('div');
+  renderCapabilityCheck(document, missing, null);
+  assert.match(missing.children[0].textContent, /未检测/);
+  const hostile = '<img src=x onerror=alert(1)>';
+  const checks = ['on_demand_reading', 'delegated_diagnostics', 'manual_compaction', 'concise_replies', 'science_recovery', 'threshold_compaction'].map((id, index) => ({
+    id, label: `能力 ${index + 1}`, status: ['detected', 'conditional', 'blocked', 'unsupported', 'unknown', 'conditional'][index],
+    method: index === 5 ? hostile : '按本宿主方式执行', scope: index === 5 ? 'new-session' : 'current-session',
+    evidence: [{ source: 'tool-schema', reference: '当前工具定义' }], limitations: ['实际行为待验证'], next_check: '后续核验',
+    ...(index === 5 ? { threshold: { target_tokens: 200000 } } : {})
+  }));
+  const report = { host: '示例宿主', detected_at: '2026-10-28T00:00:00Z', runtime_validation: 'not_run', checks };
+  const container = node('div');
+  renderCapabilityCheck(document, container, report);
+  const flatten = root => [root.textContent, ...root.children.flatMap(flatten)].join('\n');
+  const text = flatten(container);
+  for (const phrase of ['示例宿主', '实际行为待验证', '后续核验', '当前工具定义', '新启动的会话', '200000', hostile, '未运行']) assert.ok(text.includes(phrase), phrase);
+  assert.equal(container.children.filter(child => child.tag === 'article').length, 6);
+  assert.deepEqual(createOperation(snapshot).set, {});
+  const html = renderApaSetupPage({ snapshot, inspection: { capability_check: report } });
+  assert.match(html, /id="capability-check"/);
+  assert.ok(!html.includes(hostile));
+});
 test('query selection uses existing patch, export, import difference and removal boundaries', t => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-page-query-'));
   t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));

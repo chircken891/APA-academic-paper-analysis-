@@ -2,7 +2,7 @@
 
 For new unbound `reading-first-1.0`, follow the [Controller call chain below](#controller-call-chain-for-a-new-authorized-run): create/freeze run control, use six actual science artifacts, accept source-first Writers and, when configured, the bound Reading Editor, render, then one overall review with at most one material local recheck. Independent source-first/scientific-audit/pre-render parity and per-fragment auditing are historical bound-contract behavior only. Use the current checked-out repository root; preserve historical registered paths and original budget/handles.
 
-Use the current package's existing RUN, authorization, checkpoint, and results files. Do not introduce another mandatory ledger or duplicate the source bundle just to follow this guide.
+Use the current package's existing RUN, authorization, checkpoint, and results files. New configured runs also save the science Controller state described below. Do not introduce another ledger or duplicate the source bundle just to follow this guide.
 
 ## Before work
 
@@ -41,16 +41,51 @@ Save the compact gap batch, accepted source identities/versions, scientific owne
 
 ## On interruption or capacity failure
 
-1. Record the actual failure, completed outputs/receipts, active agent or command IDs, pending actions, original deadline/call usage, and the smallest remaining step in the existing checkpoint.
+1. Record the actual failure, completed outputs/receipts, active agent or command IDs, pending actions, original deadline/call usage, and the smallest remaining step in the applicable saved state. New configured runs use their durable science Controller state before the reading-first checkpoint exists; older runs preserve those facts in their actual records and state pointers. Never create a placeholder reading-first checkpoint.
 2. Reconcile any unknown write outcome using saved bytes and receipts before retrying. A missing acknowledgment is not proof that nothing was written; a draft is not a completed return.
 3. With a valid remaining budget, recover only the missing step using the same authorized model, service, source, route and criteria. Check current agent capacity; do not repeatedly spawn into a known limit or replace required independent work with parent-authored results.
-4. If the deadline expired or the package closed, preserve the checkpoint and prepare the exact continuation scope. Obtain a new explicit budget before budgeted execution; do not reset the old clock, reuse a closed balance, or count elapsed waiting as approval.
+4. If the deadline expired or the package closed, preserve the checkpoint if established and the actual run records, and prepare the exact continuation scope. Obtain a new explicit budget before budgeted execution; do not reset the old clock, reuse a closed balance, or count elapsed waiting as approval.
 
 Never manufacture review/decision/validation files to fill an interrupted sequence. Do not start another model or data source in response to quota or network failure. Do not keep an automation watching capacity unless the user requests it.
 
 An explicitly authorized reading-first continuation may adopt one or both compatible reading-first Writer receipts through `adopted_views`; the runtime validates the original owned bytes, view format and receipt. With one adopted view in the first writing language, dispatch only the missing counterpart and keep the original receipt in the source-first payload. With both views, proceed to the Reading Editor. Preserve the failed predecessor call and old deadline; freeze the new authorization separately, without re-running completed scientific roles or Writers.
 
 Legacy P22 `phase22-adopted-views-1.0` uses its saved binding and the distinct adoption interface in `scripts/v3/phase22-language.mjs`, including its required pair of checkpoint-bound Writer views. That interface and reading-first `adopted_views` are not interchangeable; do not cast or relabel old view bytes to satisfy the new format.
+
+## Controller context budget
+
+For new unbound reading-first runs, limit Controller context growth without changing existing bound contracts, model policy, source scope, budgets, deadlines or recovery semantics. Read the scheduling and acceptance contracts, this guide and the next required export signatures by targeted lookup. Runtime-provided role instructions carry the full applicable prompts. Do not load entire prompt/source files or parser output into the main conversation by default; inspect relevant excerpts for a concrete error.
+
+### Optional compaction boundaries
+
+Consider compaction only when the current group has no running task, at one of these four boundaries:
+
+1. Evidence has been accepted.
+2. Both Methods and Results have been accepted.
+3. All six scientific results have been accepted, before dispatching a Writer.
+4. The complete candidate has been rendered, before dispatching the overall review.
+
+At the first two science-stage boundaries, use compaction only if the actual results and their acceptance receipts are saved, the original Controller process can continue, and the run binding, task status, generated requests and next step can all be located. If any condition is unavailable, skip that boundary. The reading-first checkpoint has not yet been established: preserve the science Controller state, actual run records, receipts, process and request pointers instead, and never manufacture a placeholder snapshot. The handoff requires all six scientific artifacts; these boundaries do not change the role dependency order.
+
+At the later reading-first boundaries, the latest per-request owned checkpoint must already be saved under the rules below. A boundary adds no extra checkpoint and does not replace those saves. No running task does not mean no pending request: Controller creation can already emit the first Writer request, and a review request can exist before host dispatch. Preserve these generated requests, their locations (such as an outbox), dispatch status, Controller process/command handles and status-file pointers.
+
+Suggest compaction at most once per boundary, only when the context is already large, several main-session responses are still expected, and meaningful growth has occurred since the last manual or automatic compaction. About 150,000 tokens is an initial empirical reference, not a validated threshold; use host-observed context data, or record it as unknown when unavailable. Do not invent a precise size or treat unknown size as a met threshold. Remaining work and recent growth require judgment, not a fixed rule. If the user skips compaction, continue without prompting again at that boundary. Compaction has summary and cache-rebuilding costs, while stable system/project context may remain cached; net savings are not guaranteed.
+
+### Continue the same run after compaction
+
+Follow the actual Controller's state management; a conversation compaction alone is not a process interruption and is not a reason to restart or restore. First reconcile process status, status files, the run directory, `RUN.json`, the saved run binding, accepted outputs and receipts, and the latest checkpoint receipt if established. Continue using the existing process when it is alive. If the process actually exits while its original host remains accessible, restore the new configured run's durable science Controller state as described below; use the separate owned checkpoint procedure only when that checkpoint exists and is applicable. Older bindings keep their original recovery limits. Do not depend on a one-off driver as a maintained template.
+
+Keep these compact pointers across the conversation boundary: run ID, root and binding; accepted result and receipt locations; latest checkpoint path and receipt if established (explicitly record it as not established in the science stage); Controller process/command handles; generated request locations and dispatch status; actual host task handles for any previously dispatched work; status-file locations and the next step; remaining calls and original deadline; authorization scope, user-added constraints and unresolved decisions. Consume the original generated requests rather than creating replacements. Correlate uncertain task outcomes before any dispatch; never reissue an already dispatched unfinished task. If the actual driver cannot resume a pending request, preserve it and report that limitation rather than reset the run.
+
+Waiting for the user to compact still counts against the original deadline. Compaction grants no new calls, review rounds, source access or continuation authorization. Host-specific commands belong in the host adapter; these rules do not assume one host's command or process model.
+
+### Keep engineering assistance bounded
+
+Delegate only larger, independent environment, dependency or code investigations to a read-only engineering agent, asking for conclusions and evidence locations. Handle a problem that needs only one or two commands directly. Keep paper roles and their frozen model policy unchanged, and account for engineering assistance separately.
+
+After `reading_complete` or a user stop, suggest a separate conversation for separately scoped engineering maintenance. A defect that still prevents the current authorized delivery remains unfinished work in that run; changing conversations cannot mark it complete or extend its budget.
+
+For the next authorized observation, record Controller total input, mean input per response and peak context; uncached input, cache writes, cache reads and output across all agents; and the additional costs of compaction, recovery reads and engineering assistance. Retain unknown coverage. Check for duplicate dispatch, lost constraints and completion of the original reading delivery and overall review. A smaller Controller share alone is not success, and papers with different lengths or repair work support only observational comparisons. Actual host compaction continuity and savings remain `not_run` until observed in an authorized run.
 
 ## Storage and handoff
 
@@ -70,11 +105,15 @@ For example: if revision 1 is frozen and only review 2 was interrupted, resume r
 
 Work from the current checked-out repository root. First use `node scripts/apa-setup.mjs inspect`; missing/incomplete configuration or unavailable selected dependencies blocks new dispatch and routes to [apa-setup](../../apa-setup/SKILL.md). The [configuration guide](../../../../docs/CONFIGURATION.md) explains the local file. Existing bindings never reload this file on resume. The following uses values from the current approved proposal; it is not a command to dispatch a real paper. `scientificInput` contains `profile: 'reading-first-1.0'`, identity, exact source paths/hashes/byte lengths, the shared context and the six predeclared science artifact IDs. `taskBindings` declares `en`, `zh-CN`, `review`, and `presentation` in reading-editor mode. Predeclare only the authorized repair slots: `en-r2`, `zh-CN-r2`, `review-r2`, and `presentation-r2` for an Editor repair; each value has `task_id`, `task_name`, `owner_actor_id`, `role`, `artifact_id`, `artifact_path`, `native_path`, and `revision`. Declare unique relative native/owned paths and corresponding broker `authorized_bindings` before writing. Use real task/source identities, not placeholders carried into execution.
 
+For a new configured run, use the durable science Controller before the reading-first handoff. Its dependency order is Evidence, then Methods and Results in parallel, then Interpretation, scientific-reading and integration. Record dispatch intent before passing the saved native arguments to the original host. Keep the actual observation and host task handle; a request or intent is not evidence of a completed call. On process exit with the original host accessible, restore from the saved science state with the same frozen inputs and broker authority. An intent with unknown outcome must be correlated with the original host before doing anything else; wait on an existing running handle and never redispatch it. Do not infer completion from a native file or missing inbox, or rebuild call counters from the new process. Revalidate a saved actual response locally, skip verified receipts, and repair an orphaned owned body only with the original authority, a persisted validated actual observation and the same saved content bytes. Preserve the original deadline and call budget. The actual science count starts at zero; `priorCalls:6` in the downstream binding represents the six accepted science calls only after their receipts are verified, not another six charges.
+
 ```js
-import { createOwnedArtifactBroker } from './scripts/v3/owned-artifact-store.mjs';
-import { buildPreRenderHandoff } from './scripts/v3/workflow-composer.mjs';
-import { createLanguageRequests } from './scripts/v3/phase22-language.mjs';
 import { renderReaderNotes } from './scripts/v3/phase221-presentation.mjs';
+import {
+  createScienceController, prepareScienceRequests, recordScienceDispatchIntent,
+  recordScienceHostObservation, acceptScienceResult, restoreScienceController,
+  getScienceState, getScienceRequest, createScienceHandoff,
+} from './scripts/v3/science-controller.mjs';
 import {
   acceptReadingFirstResult,
   createReadingFirstEnrichmentRequests, createReadingFirstDraftRequests,
@@ -85,7 +124,7 @@ import {
 } from './scripts/v3/reading-first-runtime.mjs';
 
 import {
-  prepareConfiguredReading, createConfiguredScienceRequest, getConfiguredReadingDispatchArguments,
+  prepareConfiguredReading, getConfiguredReadingDispatchArguments,
   configuredMineruConfiguration, createConfiguredMineruPort,
   materializeConfiguredReadingCandidate,
 } from './scripts/v3/configured-reading.mjs';
@@ -94,9 +133,9 @@ const prepared = prepareConfiguredReading({
   repoRoot,
   runId, scientificInput, sessionContext: hostSessionContext, authorizationId, deadline,
   sourceLanguage: 'en', // Actual primary paper language; determine from its source.
-  maxCalls, taskBindings, controllerActorId,
+  maxCalls, maxTotalCalls, priorCalls: 6, taskBindings, controllerActorId,
   // Only for a new run with explicitly approved enrichment scope:
-  enrichmentPolicy, maxTotalCalls,
+  enrichmentPolicy,
 });
 // hostSessionContext comes from the actual current host turn: {model, effort}
 // (or {model, reasoning_effort}). Do not derive it from the science config or
@@ -106,38 +145,50 @@ const prepared = prepareConfiguredReading({
 // it does not change the actual source language or note-directory routing.
 const control = prepared.runControl;
 const artifactRoot = prepared.paths.runRoot;
-const broker = createOwnedArtifactBroker({
+const brokerConfig = {
   control_actor_id: controllerActorId,
   artifact_root: artifactRoot,
   authorized_bindings: authorizedBindings,
   run_controls: [control],
+};
+let science = await createScienceController({
+  prepared, tasks: scienceTasks, payloads: sciencePayloads, brokerConfig, statePath,
 });
-// For each authorized science role, emit the configured host request:
-const scienceRequest = createConfiguredScienceRequest({
-  prepared, role, task, dispatchContext: broker.dispatchContext, payload,
-});
-const scienceArguments = getConfiguredReadingDispatchArguments({ prepared, request: scienceRequest });
-// Pass scienceArguments unchanged to the tool in scienceRequest.packet.host_action_scope.action
-// (the saved host's dispatch tool, or collaboration.spawn_agent without one) through the real host.
-// Do not reconstruct the object, omit model/effort, or switch to a context-inheriting call.
-// Commit the actual
-// native return through its owned broker capability. Repeat only authorized roles.
-// Each scientificInput.role_artifacts ID must resolve to its actual owned receipt.
+// statePath is a unique path inside this run root. scienceTasks maps the six
+// role IDs to their predeclared tasks and owned/native paths; checkpointTask is
+// a predeclared control binding with artifact_id, artifact_path, revision,
+// owner_actor_id and role:'control'. Include it in authorizedBindings.
+// At each eligible stage, use the returned original requests:
+const eligible = await prepareScienceRequests({ controller: science });
+const { role, request: scienceRequest } = eligible[0];
+const intent = await recordScienceDispatchIntent({ controller: science, role });
+// Now pass intent.arguments unchanged to intent.action through the actual host.
+// Persist actual host observations/handles as they are obtained:
+await recordScienceHostObservation({ controller: science, role, observation });
+// After the actual native result is available and its observation validates:
+await acceptScienceResult({ controller: science, role });
+// Repeat only eligible roles, retaining original requests and actual observations.
+// On actual process exit, in the replacement process use this instead of create:
+// science = await restoreScienceController({statePath, prepared, tasks: scienceTasks,
+//   payloads: sciencePayloads, brokerConfig});
+// Inspect getScienceState(science) and getScienceRequest({controller: science, role});
+// correlate/wait at the original host, never redispatch an unknown intent.
+// The Controller records observations but does not query or wait on the host.
 // For an authorized parser packet, bind packet.backend.configuration to
 // configuredMineruConfiguration(prepared) and allowed_output_root to
 // prepared.paths.parseRoot; execute via createConfiguredMineruPort({prepared,repoRoot}).
-const handoff = await buildPreRenderHandoff({
-  run: { run_id: runId, workflow_profile: 'reading-first-1.0' },
-  dispatchContext: broker.dispatchContext, artifactRoot, scientificInput,
-});
-const created = createLanguageRequests({
-  handoff, runControl: { runId, artifactRoot, dispatchContext: broker.dispatchContext },
-});
-if (!created.ok) throw new Error(JSON.stringify(created.errors));
-const { controller, requests } = created;
+// Once all six receipts are verified, persist the first reading checkpoint and
+// its original requests before handing them to downstream execution:
+const created = await createScienceHandoff({ controller: science, checkpointTask });
+// A repeated call after transfer has no controller or requests. Stop here and
+// reconcile host tasks and the latest owned reading checkpoint as described below.
+if (!created.controller) throw new Error('READING_HANDOFF_ALREADY_TRANSFERRED');
+const { handoff, controller, requests, checkpointReceipt, runControl, broker } = created;
 ```
 
 In source-first mode `requests` initially contains only the Writer for the bound first writing language (`first_writing_language`, or `source_language` in older bindings); the paper's actual source language only routes notes to sources or translations. Accept its genuine result, then call `createReadingFirstDraftRequests({controller})` for the other language; its payload binds the accepted `source_view` and receipt. A first-written-language local repair similarly precedes the counterpart repair through another `createReadingFirstRevisionRequests` call. Do not render or review while either required repair is pending. The configured factory binds `source-first` and reads source language/presentation mode from the saved local choices; low-level compatibility defaults are not new-paper configuration.
+
+The science handoff saves its original generated requests and initial owned reading checkpoint before returning them. After interruption during that handoff, restore the science Controller and resume the same handoff with the same checkpoint binding. If transfer was already recorded, the repeated call returns only `status`, `handoff`, the initial `checkpointReceipt`, `runControl` and `broker`, without a Controller or Writer requests. Reconcile the original host tasks and the latest registered downstream owned checkpoint; restore that applicable checkpoint using `restoreReadingFirstRuntime({handoff,runControl,checkpointReceipt})`. The initial receipt alone does not establish that the Writer was never dispatched and does not authorize reissuing it. Do not roll back to the initial handoff or recreate a Writer request to recover downstream work. The science state is not a replacement for that checkpoint.
 
 An explicitly authorized saved-science revision can provide `scientificInput.adopted_science: [{artifact_root,artifact_id,receipt}]` instead of `role_artifacts`. The handoff reads and verifies the original owned bytes and exact receipts without reissuing scientific roles or minting new science ownership. In that path, `scientificInput.presentation` binds the current layout/resource adaptation separately; it is not a new Integrator scientific result. Use a new finite budget and preserve the closed source run.
 
@@ -153,11 +204,11 @@ The control factory above binds the reading-first Writer/review stage. Six scien
 
 For each returned Writer, Editor or Verifier request, obtain `getConfiguredReadingDispatchArguments({prepared,request})` and pass that complete object to the approved host unchanged. Retain the real task/call/return observation and host-selected settings; the emission itself is not execution, and the requested pair is not an observation of the actual model. After the assigned native output is available, call `acceptReadingFirstResult({controller,request,observation,capability})`, where capability is issued by this broker for that request's exact owner/role/owned path/revision. Do not synthesize an observation from the expected arguments or manufacture another role's return. Both accepted Writer outputs are required before rendering:
 
-When the actual host returns its task identity under `task_name`, freeze `hostResultAgentIdPath: ['task_name']` in the control factory before dispatch. The default remains `['agent_id']` for compatible hosts and old bindings. Preserve the raw host return unchanged; this explicit path selects the real returned identity and does not authorize a fabricated identity or relaxed tool-argument correlation.
+When the actual host returns its task identity under `task_name`, freeze `hostResultAgentIdPath: ['task_name']` in the control factory before dispatch. The default remains `['agent_id']` for compatible hosts and old bindings. Preserve the raw host return unchanged; this explicit path selects the real returned identity and does not authorize a fabricated identity or relaxed tool-argument correlation. Serialize envelopes with `JSON.stringify`, not hand-written JSON containing Windows paths. Keep a concise relay separately from the original return; never put a summary into a field claiming raw host bytes. Missing platform evidence remains unknown and cannot be manufactured from requested model, arguments or a locally generated action ID.
 
 Instruction files are immutable request inputs. Re-emitting the same science instruction at the same path may reuse it only when the complete bytes match; a changed instruction must use a new registered attempt path. Keep each retry's native staging output separate too, and accept it only after matching the actual role, request and owned binding. A shared workspace plus a prompted file restriction is not host filesystem isolation. Do not overwrite another role's native file or an accepted artifact to recover from a misrouted task.
 
-Create the parent of a new standalone preview output before `exportReadingFirstPreview`; keep the output root itself new so its no-overwrite check remains effective. `materializeConfiguredReadingCandidate` already creates its configured parent. Preserve the distinction between a self-contained candidate's link inventory and the full committed library when reusing shared pages.
+Create the parent of a new standalone preview output before `exportReadingFirstPreview`; keep the output root itself new so its no-overwrite check remains effective. `materializeConfiguredReadingCandidate` already creates its configured parent. New configured bindings freeze `knowledge_registry` with policy `committed-generation-1.0` and the selected vault root; materialization reads the verified committed registry itself and rejects conflicting supplied entries. For Methods/Integrator input and lower-level rendering, use `readCommittedReadingFirstKnowledgeRegistry({vaultRoot})` from `scripts/v3/reading-first-knowledge-registry.mjs`. Do not scan Wiki folders or accept orphan files as committed content; corruption is an error, not an empty-library fallback. A new library with no commit can return an empty registry. Preserve the distinction between a self-contained candidate's link inventory and the full committed library when reusing shared pages. Candidate-local stand-ins for older linked notes are preview resources only, not publication resources.
 
 Historical `.tmp/<run>/driver.mjs` files are troubleshooting evidence for their original run, not maintained templates or an entry point for a new paper. Use the maintained configured entry above; do not copy a previous driver's hardcoded model pair, field names, stage status or publication approval into another run.
 
@@ -170,16 +221,11 @@ const editing = prepared.resolvedConfig.reading.presentation_mode === 'reading-e
 // Execute and accept this one real native/owned editor output before rendering.
 // Its payload includes accepted views/receipts, context, sources and the merged
 // knowledge/resource presentation. Use that inventory instead of rebuilding it.
-let presentation = renderReaderNotes({
-  input: { profile: 'reading-first-1.0', controller },
-  targetRegistry, existingTargets,
-  presentationOptions: { knowledgeRegistry },
-});
-// Save the same candidate in prepared.paths.candidateRoot before review:
+// Save and review the SAME candidate using the verified committed registry:
 const savedCandidate = await materializeConfiguredReadingCandidate({
   prepared, controller, handoff, resources, targetRegistry, existingTargets,
-  presentationOptions: { knowledgeRegistry },
 });
+let presentation = savedCandidate.candidate;
 const request = createReadingFirstReviewRequest({ controller, presentation });
 // Execute this one overall request and accept its real native/owned result
 // with acceptReadingFirstResult, exactly as for Writers.
@@ -190,11 +236,17 @@ let state = getReadingFirstState(controller);
 
 ### Route a repair to its owner
 
+New controls freeze `repair_routing:'owner-routed-1.0'`; new configured instructions also freeze the separate `flow-corrections-1.0` text into the science guidance and Verifier section. Do not edit either historical base prompt to retrofit this guidance. New configured reviews mark each material issue with `repair_owner: writer|editor|renderer|science`; `affected_languages` describes impact, not repair authority. Split issues with different owners. Renderer issues list exact candidate-relative `affected_paths` from the reviewed notes/supportNotes. An explicit science issue needs the existing authorized `scientific_gap` recovery route; absent policy or budget remains a limit rather than a Writer task. Historical bindings lacking the new contracts retain their original routing; their prompt hashes and accepted outputs are not rewritten.
+
+For renderer-only material issues, retain accepted Writer/Editor bytes, fix the renderer or its verified inputs, materialize a new candidate, then call `createReadingFirstReviewRequest({controller,presentation,renderRepair:true})`. For mixed issues, finish the Writer/Editor/science repairs that are actually required AND the renderer corrections before that same local review. The runtime checks that the named rendered files changed independently of Writer-only edits; this is evidence of a changed artifact, not proof that its content is correct. The local Verifier still judges the named defects. Do not spend the review slot while a known repair owner has not acted.
+
 - Material science/content issue: if `scientific_gap` requires authorized recovery, emit/accept the late enrichment batch first. Call `createReadingFirstRevisionRequests({controller})` for affected Writers, accepting the first-written-language repair before its counterpart. In Editor mode, create/accept `createReadingFirstPresentationRequest({controller})` again after repaired Writer views; the runtime uses `presentation-r2`. Then render the new candidate and issue the one local review.
 - Material presentation-only issue: when every material issue is `presentation`, `layout`, `navigation`, `emphasis` or `method-inventory`, use `createReadingFirstPresentationRequest({controller})` directly for the predeclared Editor repair, preserving Writer bytes. Accept, render and locally review.
-- Renderer-only correction: the existing `renderRepair:true` branch is available only in Editor mode after exactly one overall review, while state is `reading_complete`, with previously reported minor `layout`, `navigation` or `presentation` issues and a changed rendered fingerprint. Preserve accepted Writers and Editor; render the corrected candidate, then call `createReadingFirstReviewRequest({controller,presentation,renderRepair:true})`. It consumes the same one local review slot, `review-r2` binding, remaining calls and original deadline. An unreported defect or an exhausted slot does not satisfy this branch. Ordinary minor issues do not require a call merely to eliminate them.
+- Legacy minor renderer correction: the original `renderRepair:true` branch remains available in Editor mode after exactly one overall review, while state is `reading_complete`, with previously reported minor `layout`, `navigation` or `presentation` issues and a changed rendered fingerprint. Explicit owner routing above additionally supports material renderer issues. Both routes consume the same one local review slot, `review-r2` binding, remaining calls and original deadline. An unreported defect or an exhausted slot does not satisfy either route. Ordinary minor issues do not require a call merely to eliminate them.
 
 After acceptance, read state and verify the actual final bytes against the reviewed candidate. Never loosen the runtime or copy an old verdict to make a second local recheck possible. A user-approved exceptional addendum must retain its own exact scope, real execution and budget; it does not change the default review limit.
+
+If a later authorized engineering task repairs an already closed run, retain its accepted role artifacts, old candidates, review receipts and terminal status. A newly rendered engineering candidate may demonstrate preservation/link fixes but is not a newly accepted scientific reading. Record any explicit correction input separately; do not silently reuse a known-error frozen scientific statement or rewrite its hash to make it current.
 
 Before each actual host call and after each accepted result, save `snapshotReadingFirstRuntime(controller)` through the existing `commitOwnedArtifact` under a predeclared Controller-owned `control` path/revision. Keep the resulting `checkpointReceipt`. On process interruption, recreate the original broker/run binding and handoff, then use `restoreReadingFirstRuntime({handoff,runControl,checkpointReceipt})` rather than initializing a fresh run. Adopt the saved accepted results, original call counters/deadline and already emitted unfinished host steps; correlate/wait for those actual tasks, never reissue them to reset budget. Check the live snapshot/restore exports and save only current owned checkpoint bytes. The receipt and sources must still match the original bindings.
 

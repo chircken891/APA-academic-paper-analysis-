@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createOwnedArtifactBroker, commitOwnedArtifact } from '../../../scripts/v3/owned-artifact-store.mjs';
+import { readCommittedReadingFirstKnowledgeRegistry } from '../../../scripts/v3/reading-first-knowledge-registry.mjs';
 import {
   acceptReadingFirstResult, buildReadingFirstHandoff, createReadingFirstDraftRequests,
   createReadingFirstPresentationRequest, createReadingFirstRequests, createReadingFirstReviewRequest,
@@ -98,7 +99,15 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
     visuals: [],
   }])) };
   if (binding.presentation_mode === 'reading-editor') await complete(createReadingFirstPresentationRequest({ controller }), editor);
-  const renderOptions = { ...(options.targetRegistry ? { targetRegistry: options.targetRegistry } : {}), existingTargets: options.existingTargets ?? [], knowledgeRegistry: options.knowledgeRegistry ?? [] };
+  const knowledgeRegistry = binding.configured_setup?.knowledge_registry
+    ? await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: binding.configured_setup.knowledge_registry.vault_root })
+    : options.knowledgeRegistry ?? [];
+  if (binding.configured_setup?.knowledge_registry && options.knowledgeRegistry !== undefined) {
+    const supplied = options.knowledgeRegistry, byPath = new Map(knowledgeRegistry.map(row => [row.path, row]));
+    assert.ok(Array.isArray(supplied) && new Set(supplied.map(row => row?.path)).size === supplied.length
+      && supplied.every(row => byPath.has(row?.path) && fingerprintReadingFirst(row) === fingerprintReadingFirst(byPath.get(row.path))));
+  }
+  const renderOptions = { ...(options.targetRegistry ? { targetRegistry: options.targetRegistry } : {}), existingTargets: options.existingTargets ?? [], knowledgeRegistry };
   const candidate = renderReadingFirstNotes({ controller, ...renderOptions });
   const reviewRequest = createReadingFirstReviewRequest({ controller, presentation: candidate });
   const review = options.review ?? { overall: { complete: true, coherent: true, bilingual_consistent: true }, key_nodes: [

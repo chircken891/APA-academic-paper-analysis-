@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, link, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 const capabilities = new WeakMap();
@@ -15,6 +15,12 @@ function fail(code) {
   const error = new Error(code);
   error.code = code;
   throw error;
+}
+
+async function publishExclusive(target, content) {
+  const temp = target + '.' + randomUUID() + '.tmp';
+  try { await writeFile(temp, content, { flag: 'wx' }); await link(temp, target); }
+  finally { try { await unlink(temp); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
 }
 
 function relativeOwnedPath(root, value) {
@@ -120,7 +126,7 @@ export async function commitOwnedArtifact({ artifactRoot, dispatchContext, capab
   state.consumed = true;
   try {
     await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, bytes, { flag: 'wx' });
+    await publishExclusive(target, bytes);
   } catch (error) {
     if (error?.code === 'EEXIST') fail('ARTIFACT_ALREADY_EXISTS');
     throw error;
@@ -128,7 +134,7 @@ export async function commitOwnedArtifact({ artifactRoot, dispatchContext, capab
   try {
     const targetReceipt = receiptPath(root, artifact.artifact_id);
     await mkdir(dirname(targetReceipt), { recursive: true });
-    await writeFile(targetReceipt, `${JSON.stringify(receipt)}\n`, { encoding: 'utf8', flag: 'wx' });
+    await publishExclusive(targetReceipt, `${JSON.stringify(receipt)}\n`);
   } catch (error) {
     if (error?.code === 'EEXIST') fail('RECEIPT_ALREADY_EXISTS');
     throw error;
@@ -147,4 +153,51 @@ export async function readOwnedArtifact({ artifactRoot, artifactId } = {}) {
   const bytes = await readFile(target);
   if (digest(bytes) !== receipt.sha256 || bytes.length !== receipt.byte_length) fail('RECEIPT_BYTE_BINDING_MISMATCH');
   return Object.freeze({ receipt: Object.freeze(receipt), bytes });
+}
+/** Reconcile a missing receipt only from a durable, validated Controller record. */
+export async function repairOwnedArtifactReceipt({ artifactRoot, dispatchContext, capability, artifact, expectedRevision, statePath, role } = {}) {
+  const context = contexts.get(dispatchContext), state = capabilities.get(capability);
+  if (!context || !state || context.issuerNonce !== state.issuerNonce) fail('CAPABILITY_FORGED_OR_WRONG_DISPATCH');
+  if (state.consumed) fail('CAPABILITY_ALREADY_CONSUMED');
+  if (resolve(artifactRoot) !== context.artifactRoot || expectedRevision !== state.revision || artifact?.path !== state.artifactPath) fail('CAPABILITY_PATH_MISMATCH');
+  const { fingerprintReadingFirst } = await import('./reading-first-runtime.mjs');
+  const record = JSON.parse(await readFile(statePath, 'utf8'));
+  if (record.schema_version !== 'science-controller-state-1.0' || !record.data || record.fingerprint !== fingerprintReadingFirst(record.data)) fail('RECOVERY_STATE_INVALID');
+  const data = record.data, runId = data.prepared?.runControl?.run_id;
+  const frozenControl = context.runControls.get(runId);
+  if (state.runId !== runId || !frozenControl || fingerprintReadingFirst(frozenControl) !== fingerprintReadingFirst(data.prepared.runControl)
+    || resolve(data.prepared.paths.runRoot) !== context.artifactRoot) fail('RECOVERY_AUTHORITY_MISMATCH');
+  let task, bytes;
+  if (role === 'checkpoint') {
+    task = data.handoff?.checkpointTask;
+    const snapshot = data.handoff?.snapshot;
+    const { checkpoint_fingerprint, ...body } = snapshot ?? {};
+    if (!snapshot || snapshot.schema_version !== 'reading-first-checkpoint-1.0' || checkpoint_fingerprint !== fingerprintReadingFirst(body)
+      || snapshot.control_fingerprint !== fingerprintReadingFirst(data.prepared.runControl.reading_first_binding)) fail('RECOVERY_CHECKPOINT_INVALID');
+    bytes = Buffer.from(JSON.stringify(snapshot));
+  } else {
+    task = data.tasks?.[role];
+    const entry = data.entries?.[role];
+    if (!entry?.intent || !entry.raw_observation || entry.observation?.status !== 'observed' || typeof entry.content_base64 !== 'string') fail('RECOVERY_OBSERVATION_REQUIRED');
+    const { ingestObservedRunStep } = await import('./phase21-runner.mjs');
+    const checked = ingestObservedRunStep({ packet: entry.request.packet, emittedStep: entry.request.emittedStep, observation: entry.raw_observation,
+      run: { run_id: runId }, now: entry.observation.observed_at });
+    if (checked.status !== 'observed' || fingerprintReadingFirst(checked) !== fingerprintReadingFirst(entry.observation)
+      || entry.intent.action_id !== entry.request.emittedStep.action_id) fail('RECOVERY_OBSERVATION_INVALID');
+    bytes = Buffer.from(entry.content_base64, 'base64');
+    if (digest(bytes) !== entry.content_sha256) fail('RECOVERY_CONTENT_INVALID');
+  }
+  if (!task || task.artifact_id !== artifact?.artifact_id || task.artifact_path !== state.artifactPath || task.owner_actor_id !== state.actorId
+    || task.role !== state.role || task.revision !== state.revision || !Buffer.from(artifact.content).equals(bytes)) fail('RECOVERY_AUTHORITY_MISMATCH');
+  const { target } = relativeOwnedPath(context.artifactRoot, state.artifactPath);
+  if (!(await readFile(target)).equals(bytes)) fail('RECOVERY_CONTENT_MISMATCH');
+  const receipt = { schema_version: 'phase21-owned-artifact-receipt-1.0', artifact_id: artifact.artifact_id, run_id: state.runId,
+    owner_actor_id: state.actorId, role: state.role, path: state.artifactPath, revision: state.revision,
+    sha256: digest(bytes), byte_length: bytes.length, local_enforcement_scope: 'artifact_root_only', host_filesystem_enforcement: 'unverified' };
+  state.consumed = true;
+  const targetReceipt = receiptPath(context.artifactRoot, artifact.artifact_id);
+  await mkdir(dirname(targetReceipt), { recursive: true });
+  try { await publishExclusive(targetReceipt, `${JSON.stringify(receipt)}\n`); }
+  catch (error) { if (error?.code === 'EEXIST') fail('RECEIPT_ALREADY_EXISTS'); throw error; }
+  return Object.freeze(receipt);
 }
