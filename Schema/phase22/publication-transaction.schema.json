@@ -120,7 +120,7 @@
     },
     "inventory": {
       "type": "array",
-      "minItems": 6,
+      "minItems": 4,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -380,7 +380,7 @@
       }
     },
     "prepared_inventory": {
-      "minItems": 6,
+      "minItems": 4,
       "items": {
         "required": [
           "path",

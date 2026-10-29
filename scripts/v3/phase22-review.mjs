@@ -422,3 +422,26 @@ async function assertReaderPackageCurrent(review, args) {
   if (!same(current.hashes, review.hashes)) fail('P22_REVIEW_DEPENDENCY_INVALIDATED');
   return review;
 }
+
+/** Return only the physical evidence bindings of an owned, current reader review. */
+export async function getReaderReviewSourceBindings(review, renderer, reader) {
+  const record = records.get(review);
+  if (!record?.reader) fail('P22_REVIEW_NOT_OWNED');
+  await assertReaderPackageCurrent(review, record.args);
+  const { assertReaderPresentationRenderer } = await import('./phase221-presentation.mjs');
+  const quantityProof = assertReaderPresentationRenderer(record.args.presentation, renderer);
+  const data = await getReaderPresentationContent(record.args.presentation);
+  const bindings = [...(data.source_bindings ?? [])];
+  if (data.reviewed_support) {
+    const { getReviewedSupportBindings } = await import('./phase221-reviewed-support.mjs');
+    bindings.push(...getReviewedSupportBindings(data.reviewed_support));
+  }
+  if (!Object.hasOwn(data, 'producer')) {
+    const { getAcceptedReaderLanguageRecord } = await import('./phase22-language.mjs');
+    for (const view of Object.values(data.views)) bindings.push(...(getAcceptedReaderLanguageRecord(view).physical_bindings ?? []));
+  }
+  const { getOwnedReaderReviewEvidence } = await import('./phase221-reading-review.mjs');
+  const evidence = await getOwnedReaderReviewEvidence({ ...record.args.readingReview, ownedReview: reader?.ownedReview,
+    runtime: reader?.runtime, nativeObservationReceipt: reader?.nativeObservationReceipt, preparation: reader?.preparation });
+  return { ...evidence, quantityProof, bindings: [...structuredClone(bindings), ...evidence.bindings] };
+}

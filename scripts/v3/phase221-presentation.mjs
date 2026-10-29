@@ -11,7 +11,7 @@ import { getReviewedSupportContent, resolveReviewedExpression } from './phase221
 import { inspectManagedNote, mergeManagedNote } from './phase22-managed-markdown.mjs';
 import { createPhase22ContractValidator } from './phase22-contract-loader.mjs';
 import { registerReaderTargets } from './phase221-targets.mjs';
-import { displayReaderSpan, readReaderQuantityEquivalence, readerQuantityBindings } from './phase221-display.mjs';
+import { displayReaderSpan, readReaderQuantityEquivalence, readerQuantityBindings, getReaderQuantityProofBinding } from './phase221-display.mjs';
 import { buildReaderVisuals } from './phase221-visuals.mjs';
 import { resolveReaderSourceAssets } from './phase221-source-assets.mjs';
 import { buildReaderResearchMap } from './phase221-research-map.mjs';
@@ -142,6 +142,16 @@ export async function getReaderPresentationContent(presentation) {
     if (sha(await readFile(new URL(name, import.meta.url))) !== expected) fail('P221_PRESENTATION_TOOL_CHANGED');
   }
   return data;
+}
+
+/** Bind registration metadata to the configuration used by this owned presentation. */
+export function assertReaderPresentationRenderer(presentation, renderer) {
+  const state = presentations.get(presentation);
+  if (!state) fail('P221_PRESENTATION_CAPABILITY_REQUIRED');
+  const { quantityEquivalence, ...presentationOptions } = renderer?.presentationOptions ?? {};
+  if (quantityEquivalence !== state.quantityEquivalence
+    || hash({ targetRegistry: renderer?.targetRegistry, presentationOptions }) !== state.rendererFingerprint) fail('P221_REGISTERED_REBUILD_MISMATCH');
+  return quantityEquivalence ? getReaderQuantityProofBinding(quantityEquivalence) : null;
 }
 
 /** Historical capabilities never enter current basis/view/parity WeakMaps. */
@@ -577,7 +587,9 @@ export async function renderReaderNotes({ input, targetRegistry, existingTargets
   validator.assert('phase22/reader-presentation-1.0', manifest);
   output.manifest = manifest;
   output.presentationBytes = Buffer.from(JSON.stringify(manifest, null, 2) + '\n');
+  const { quantityEquivalence: ignoredQuantityCapability, ...rendererOptions } = presentationOptions;
   presentations.set(output, { input, quantityEquivalence: presentationOptions.quantityEquivalence,
+    rendererFingerprint: hash({ targetRegistry, presentationOptions: rendererOptions }),
     dependencies: hash(data.dependencies), resources: resourceFingerprint(output), notes: { en: sha(output.en), 'zh-CN': sha(output.zhCN) }, sidecar: sha(output.presentationBytes),
     fingerprint: hash({ manifest, visualInput: output.visualInput, derivationRecords: output.derivationRecords, abstractContract }) });
   return freeze(output);

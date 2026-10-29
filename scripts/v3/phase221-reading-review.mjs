@@ -267,3 +267,31 @@ export async function assertReaderReviewCurrent({ review, prepared, finalNotes, 
   return { current: invalidated.size === 0, invalidated: [...invalidated], preimages, relocated_ranges,
     gates: Object.fromEntries(Object.entries(review.gates).map(([key, value]) => [key, invalidated.has(key) ? 'not_run' : value])), accepted: invalidated.size === 0 && review.accepted };
 }
+
+/** Return physical evidence for the owned assessment after checking supplied runtime inputs. */
+export async function getOwnedReaderReviewEvidence({ review, prepared, ownedReview, runtime, nativeObservationReceipt, preparation } = {}) {
+  const state = reviews.get(review);
+  if (!state || state.prepared !== prepared) fail('P221_REVIEW_CAPABILITY_REQUIRED');
+  await assertReaderReviewCurrent({ review, prepared });
+  const actual = state.ownedReview, actualReceipt = actual.receipt, runControl = runtime?.runControl;
+  if (ownedReview?.request !== actual.request || !same(ownedReview?.receipt, actualReceipt)
+    || hash(ownedReview?.value) !== hash(actual.value) || !same(ownedReview?.currentDependencies, actual.currentDependencies)
+    || resolve(runControl?.artifactRoot ?? '') !== resolve(actualReceipt.artifactRoot)
+    || runControl?.runId !== actualReceipt.runId) fail('P221_REVIEW_OWNED_EVIDENCE_CHANGED');
+  const originalControl = getRunControlForDispatch(actualReceipt)?.phase22_language_binding;
+  const suppliedControl = getRunControlForDispatch({ dispatchContext: runControl.dispatchContext, runId: runControl.runId })?.phase22_language_binding;
+  if (!originalControl || !same(originalControl, suppliedControl)) fail('P221_REVIEW_OWNED_EVIDENCE_CHANGED');
+  const preparedState = preparedStates.get(prepared);
+  if (!same(preparation?.sourceInventory ?? [], preparedState.payload.source_inventory.registered_sources)) fail('P221_REVIEW_OWNED_EVIDENCE_CHANGED');
+  const bindings = structuredClone(preparedState.extraBindings);
+  let nativeReceipt = null;
+  if (state.nativeObservation) {
+    const native = nativeStates.get(state.nativeObservation), receipt = native.observationReceipt;
+    if (!same(nativeObservationReceipt, receipt)) fail('P221_REVIEW_OWNED_EVIDENCE_CHANGED');
+    nativeReceipt = { artifactRoot: receipt.artifactRoot, artifactId: receipt.artifactId };
+    for (const observation of native.value.observations) for (const file of observation.evidence) {
+      bindings.push({ path: resolve(receipt.artifactRoot, file.path), sha256: file.sha256 });
+    }
+  } else if (nativeObservationReceipt) fail('P221_REVIEW_OWNED_EVIDENCE_CHANGED');
+  return { bindings, reviewReceipt: { artifactRoot: actualReceipt.artifactRoot, artifactId: actualReceipt.artifactId }, nativeReceipt };
+}

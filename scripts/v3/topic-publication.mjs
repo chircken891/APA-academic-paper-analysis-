@@ -25,7 +25,6 @@ topicValidator.addSchema(JSON.parse(readFileSync(new URL('../../Schema/phase24/t
 const checkCandidate = topicValidator.compile({ $ref: 'phase24/topic-1.0#/$defs/candidate' });
 const checkRecipe = topicValidator.compile({ $ref: 'phase24/topic-1.0#/$defs/registration' });
 const checkTopic = topicValidator.getSchema('phase24/topic-1.0');
-const encode = files => [...files].map(([path, bytes]) => ({ path, bytes_base64: bytes === null ? null : bytes.toString('base64') }));
 const decode = rows => new Map(rows.map(row => {
   const bytes = row.bytes_base64 === null ? null : Buffer.from(row.bytes_base64, 'base64');
   if (bytes !== null && bytes.toString('base64') !== row.bytes_base64) fail('P24_RECIPE_INVALID');
@@ -162,9 +161,8 @@ async function build({ options, base, preimages, restored = false }) {
     output_inventory_hash: hash({ generation, previous_generation: reviewManifest.previous_generation, output: stamp(output), read_dependencies: dependencies }) };
   const review = freeze({ ok: true, status, reviewManifest, outputInventory: output, hashes, diagnostics: [] });
   const source = {};
-  const recipe = { schema_version: 'phase24-topic-registration-1.0', options: clone(options),
-    base: { generation: base.generation, index: base.index, files: encode(base.files),
-      ...(base.currentContentPolicy ? { current_content_policy: 'registered-current-1.0' } : {}) }, preimages: encode(beforeFiles) };
+  const recipe = { options: clone(options),
+    base: { ...(base.currentContentPolicy ? { current_content_policy: 'registered-current-1.0' } : {}) } };
   records.set(review, { source, restored, recipe, sourceBindings, tools, stamp: hash({ reviewManifest, output: stamp(output), hashes }) });
   return { review, source };
 }
@@ -207,7 +205,7 @@ export async function captureTopicPublicationRegistration({ review, sourceInputs
   await assertTopicPublicationReviewLive(review);
   const r = records.get(review);
   if (sourceInputs?.topic?.source !== r.source) fail('P24_LIVE_SOURCE_REQUIRED');
-  return { topic_recipe: clone(r.recipe), source_bindings: clone(r.sourceBindings), tool_bindings: clone(r.tools),
+  return { topic_candidate_fingerprint: hash(r.recipe.options.candidate), source_bindings: clone(r.sourceBindings), tool_bindings: clone(r.tools),
     control_snapshot: { schema_version: 'phase24-topic-control-1.0', run_id: review.reviewManifest.identity.run_id,
       evidence_mode: review.reviewManifest.evidence_mode, source_fingerprint: hash(r.recipe) } };
 }

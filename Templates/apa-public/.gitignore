@@ -1,0 +1,53 @@
+# Obsidian
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/plugins/*/main.js
+.obsidian/plugins/*/styles.css
+.obsidian/plugins/*/hot-reload.json
+
+# Claude / Claude Code
+.claude/skills/cache/
+.claude/worktrees/
+.claude/settings.json
+
+# Claudian sessions (transient)
+.claudian/sessions/
+.claudian/claudian-settings.json
+
+# Local interface and conversation state
+.obsidian/graph.json
+.apa-v3/phase22/graph/
+.obsidian/plugins/realclaudian/data.json
+
+# OS files
+.DS_Store
+Thumbs.db
+*.tmp
+~$*.md
+
+# Node
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+.runtime/
+
+# Temp files
+/tmp/
+.tmp/
+
+# Per-vault APA answers
+config/apa.local.json
+config/backups/
+
+# PDF sources (large, user-managed locally)
+Clippings/
+
+# Extracted figures — committed with papers (part of vault)
+# Temp extraction directories only (not for git)
+.temp/
+_temp_figures/
+
+# Isolated Codex implementation worktrees
+.worktrees/

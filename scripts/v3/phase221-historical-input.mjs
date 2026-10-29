@@ -92,7 +92,8 @@ export async function readHistoricalReaderInput({ registration, trustAnchor, sou
   const stored = await capture(join(root, pointer.bundle.path));
   if (stored.sha256 !== pointer.bundle.sha256 || registration.bundle_sha256 && stored.sha256 !== registration.bundle_sha256) fail('P221_HISTORY_BUNDLE_CHANGED');
   const bundle = parse(stored.bytes, stored.path);
-  if (bundle.schema_version !== 'phase22-registered-publication-1.0' || !id(bundle.transaction_id)
+  const separateOutputs = bundle.schema_version === 'phase22-registered-publication-2.0';
+  if ((!separateOutputs && bundle.schema_version !== 'phase22-registered-publication-1.0') || !id(bundle.transaction_id)
     || bundle.run_id !== run || bundle.vault_root !== root || !bundle.source_bindings?.length || !bundle.tool_bindings?.length
     || !bundle.control_snapshot) fail('P221_HISTORY_BUNDLE_INVALID');
   for (const expected of bundle.source_bindings) {
@@ -124,13 +125,24 @@ export async function readHistoricalReaderInput({ registration, trustAnchor, sou
   const schemaDir = dirname(bundle.tool_bindings.find(row => basename(row.path) === 'reading-basis.schema.json').path);
   const validator = await createPhase22ContractValidator(schemaDir);
   validator.assert('phase22/review-manifest-1.0', bundle.reviewManifest);
-  const originalOutputs = [], inventory = bundle.plan.inventory.map(({ bytes_base64, ...row }) => {
+  const originalOutputs = [], inventory = [];
+  for (const { bytes_base64: encoded, output_path: outputPath, ...row } of bundle.plan.inventory) {
     safeRelative(row.path);
-    const bytes = Buffer.from(bytes_base64, 'base64');
-    if (bytes.toString('base64') !== bytes_base64 || digest(bytes) !== row.byte_sha256 || bytes.length !== row.byte_length) fail('P221_HISTORY_OUTPUT_CHANGED', { path: row.path });
-    originalOutputs.push({ ...row, ...(row.kind === 'paper' || row.kind === 'support' ? { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) } : {}), bytes_base64 });
-    return { ...row, observed_sha256: digest(bytes) };
-  });
+    let bytes;
+    if (separateOutputs) {
+      safeRelative(outputPath);
+      const outputPrefix = pointer.bundle.path.slice(0, pointer.bundle.path.lastIndexOf('/') + 1) + 'outputs/';
+      if (!outputPath.startsWith(outputPrefix)) fail('P221_HISTORY_OUTPUT_CHANGED', { path: row.path });
+      try { bytes = (await capture(join(root, outputPath))).bytes; }
+      catch { fail('P221_HISTORY_OUTPUT_CHANGED', { path: row.path }); }
+    } else {
+      bytes = Buffer.from(encoded, 'base64');
+      if (bytes.toString('base64') !== encoded) fail('P221_HISTORY_OUTPUT_CHANGED', { path: row.path });
+    }
+    if (digest(bytes) !== row.byte_sha256 || bytes.length !== row.byte_length) fail('P221_HISTORY_OUTPUT_CHANGED', { path: row.path });
+    originalOutputs.push({ ...row, ...(row.kind === 'paper' || row.kind === 'support' ? { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) } : {}), bytes_base64: bytes.toString('base64') });
+    inventory.push({ ...row, observed_sha256: digest(bytes) });
+  }
   if (bundle.plan.run_id !== run || bundle.plan.vault_root !== root || hash({ ...bundle.plan, inventory }) !== bundle.plan_fingerprint) fail('P221_HISTORY_PLAN_CHANGED');
   if (pointer.authority) {
     safeRelative(pointer.authority.path);

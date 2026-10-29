@@ -55,21 +55,34 @@ export function validateTopicAdoptedSources({ snapshot, adoptedSources, allowedP
 
 const tupleKey = row => [row.paper_id, row.analysis_revision, row.source_id, row.source_sha256].join('\0');
 const dependencyKey = row => tupleKey(row) + '\0' + row.adopted_generation_id;
+function matchesDependency(row, dependency) {
+  const source = row?.presentation.citation?.sources.find(s => s.source_id === dependency.source_id);
+  return source && row.paper.paper_id === dependency.paper_id && row.paper.analysis_revision === dependency.analysis_revision
+    && source.sha256 === dependency.source_sha256 && (source.source_version ?? null) === dependency.source_version
+    && Array.isArray(dependency.locators) && dependency.locators.every(l => source.locators.some(s => same(s, l))) ? source : null;
+}
 export async function readRegisteredTopicDependency({ vaultRoot, dependency, snapshot } = {}) {
   phase22GenerationPaths(dependency.adopted_generation_id);
   const current = snapshot ?? await readCurrentVaultContent({ vaultRoot });
   if (!current.ok) fail('P24_COMMITTED_REQUIRED', { errors: current.errors });
   assertSnapshot(current);
+  const currentRow = presentationsFor(current, dependency.paper_id)[0];
+  const currentSource = matchesDependency(currentRow, dependency);
+  if (currentSource) {
+    const bytes = currentSnapshot(current) ? readCurrentRegisteredBytes(current, currentSource.path).bytes : readFileSync(join(vaultRoot, currentSource.path));
+    if (sha(bytes) !== currentSource.sha256 || bytes.length !== currentSource.byte_length) fail('P24_ADOPTED_SOURCE_MISMATCH');
+    assertSnapshot(current);
+    return { snapshot: current, physical_root: resolve(vaultRoot), historical: false, paper: currentRow.paper, source: currentSource,
+      absolute_path: join(resolve(vaultRoot), currentSource.path) };
+  }
   const historical = current.generation_id !== dependency.adopted_generation_id;
   const physicalRoot = historical ? join(vaultRoot, '.apa-v3/phase22/history', dependency.adopted_generation_id, 'snapshot') : resolve(vaultRoot);
   const registeredSnapshot = historical ? await readCommittedGeneration({ vaultRoot: physicalRoot }) : current;
   if (!registeredSnapshot.ok || registeredSnapshot.generation_id !== dependency.adopted_generation_id) fail('P24_REGISTERED_HISTORY_UNAVAILABLE', { generation_id: dependency.adopted_generation_id });
   const registered = { snapshot: registeredSnapshot, physical_root: physicalRoot, historical };
   const row = presentationsFor(registered.snapshot, dependency.paper_id)[0];
-  const source = row?.presentation.citation?.sources.find(s => s.source_id === dependency.source_id);
-  if (!source || row.paper.analysis_revision !== dependency.analysis_revision || source.sha256 !== dependency.source_sha256
-    || (source.source_version ?? null) !== dependency.source_version
-    || !Array.isArray(dependency.locators) || dependency.locators.some(l => !source.locators.some(s => same(s, l)))) fail('P24_ADOPTED_SOURCE_MISMATCH');
+  const source = matchesDependency(row, dependency);
+  if (!source) fail('P24_ADOPTED_SOURCE_MISMATCH');
   const bytes = currentSnapshot(registered.snapshot) ? readCurrentRegisteredBytes(registered.snapshot, source.path).bytes : readFileSync(join(physicalRoot, source.path));
   if (sha(bytes) !== source.sha256 || bytes.length !== source.byte_length) fail('P24_ADOPTED_SOURCE_MISMATCH');
   assertSnapshot(current);
@@ -350,6 +363,12 @@ export async function validateSourceChangeEvent({ vaultRoot, snapshot, event }) 
   for (const [tuple, generation] of [[event.target, event.target_generation_id], ...(event.replacement ? [[event.replacement, event.replacement.generation_id]] : [])]) {
     phase22GenerationPaths(generation);
     if (tuple === event.replacement && (!same(Object.keys(tuple).sort(), [...tupleKeys, 'generation_id'].sort()) || generation !== snapshot.generation_id)) fail('P24_SOURCE_EVENT_INVALID');
+    const dependency = (snapshot.generation.topics ?? []).flatMap(topic => topic.dependencies)
+      .find(d => d.adopted_generation_id === generation && tupleKey(d) === tupleKey(tuple));
+    if (dependency) {
+      await readRegisteredTopicDependency({ vaultRoot, dependency, snapshot });
+      continue;
+    }
     const historical = snapshot.generation_id !== generation;
     const physicalRoot = historical ? join(vaultRoot, '.apa-v3/phase22/history', generation, 'snapshot') : resolve(vaultRoot);
     const registered = historical ? await readCommittedGeneration({ vaultRoot: physicalRoot }) : snapshot;

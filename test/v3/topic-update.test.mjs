@@ -151,7 +151,7 @@ test('source events require transactions and exact dependencies remain readable 
     const authority = await readingFirstPublicationAuthority({ root: f.root, vaultRoot: f.vaultRoot, runId: operationId }, prepared.plan);
     const registered = await registerBilingualPublication({ vaultRoot: f.vaultRoot, run: operationId, plan: prepared.plan, sourceInputs: prepared.sourceInputs, ...authority });
     const restored = await loadBilingualPublication({ vaultRoot: f.vaultRoot, run: operationId, trustAnchor: registered.trust_anchor });
-    assert.equal(restored.review.reviewManifest.operation, 'source-change');
+    assert.equal(restored.reviewManifest.operation, 'source-change');
     assert.equal((await applyBilingualPublication({ vaultRoot: f.vaultRoot, run: operationId, plan: restored.plan, ...authority })).status, 'committed');
     const snapshot = await readCommittedGeneration({ vaultRoot: f.vaultRoot });
     generation = snapshot.generation_id;
@@ -210,7 +210,7 @@ async function authorize(f, candidate) {
     plan: prepared.plan, sourceInputs: prepared.sourceInputs, ...authority });
   return { ...prepared, authority, registration, run: candidate.operation_id };
 }
-test('same base competing updates and human preimages preserve the complete prior topic history', async t => {
+test('same base competing updates preserve human preimages and back up the overwritten topic', async t => {
   const f = await committed(t), path = join(f.vaultRoot, f.topic.path), original = await readFile(path);
   const first = await updateCandidate(f, 'competing-one'), second = await updateCandidate(f, 'competing-two');
   const stale = await authorize(f, first);
@@ -218,14 +218,14 @@ test('same base competing updates and human preimages preserve the complete prio
   await writeFile(path, human);
   await assert.rejects(applyBilingualPublication({ vaultRoot: f.vaultRoot, run: stale.run, plan: stale.plan, ...stale.authority }), /P22_PUBLICATION_PREIMAGE_CHANGED/);
   const refreshed = await authorize(f, first), competitor = await authorize(f, second);
-  assert.equal((await applyBilingualPublication({ vaultRoot: f.vaultRoot, run: refreshed.run, plan: refreshed.plan, ...refreshed.authority })).status, 'committed');
+  const applied = await applyBilingualPublication({ vaultRoot: f.vaultRoot, run: refreshed.run, plan: refreshed.plan, ...refreshed.authority });
+  assert.equal(applied.status, 'committed');
   await assert.rejects(applyBilingualPublication({ vaultRoot: f.vaultRoot, run: competitor.run, plan: competitor.plan, ...competitor.authority }), /P22_PUBLICATION_PREIMAGE_CHANGED/);
   assert.match(await readFile(path, 'utf8'), /new human bytes/);
-  const archived = join(f.vaultRoot, '.apa-v3/phase22/history', f.snapshot.generation_id, 'snapshot');
-  assert.deepEqual(await readFile(join(archived, f.topic.path)), human);
-  const old = await readCommittedGeneration({ vaultRoot: archived });
-  assert.equal(old.ok, true, JSON.stringify(old.errors));
-  assert.equal(old.generation.topics[0].revision, 1);
+  const journal = JSON.parse(await readFile(join(f.vaultRoot, applied.journal_path)));
+  const topicRow = journal.inventory.find(row => row.path === f.topic.path);
+  assert.deepEqual(await readFile(join(f.vaultRoot, topicRow.backup_path)), human);
+  assert.equal(journal.inventory.some(row => row.kind === 'history'), false);
 });
 test('topic promotion interruption recovers the complete old generation in a fresh process', async t => {
   const f = await committed(t), candidate = await updateCandidate(f, 'interrupted-update'), prepared = await authorize(f, candidate);

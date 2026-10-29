@@ -8,28 +8,24 @@ import { join } from 'node:path';
 import { readTopicSources } from '../../scripts/v3/topic-library.mjs';
 import { readingFirstPublicationFixture, applyReadingFirstFixture, readingFirstPublicationAuthority } from './helpers/reading-first-publication-fixtures.mjs';
 import { applyBilingualPublication, registerBilingualPublication, loadBilingualPublication, dryRunBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
-import { rebuildRegisteredTopicReview } from '../../scripts/v3/topic-publication.mjs';
 import { spawnSync } from 'node:child_process';
 import { queryBilingualIndex } from '../../scripts/v3/phase22-search.mjs';
 
-test('fresh-process topic loading restores an owned review and refuses minting a live plan', async t => {
+test('fresh-process topic loading accepts only the signed plan', async t => {
   const f = await createTopicFixture(t);
   const publicationUrl = new URL('../../scripts/v3/phase22-publication.mjs', import.meta.url).href;
-  const topicUrl = new URL('../../scripts/v3/topic-publication.mjs', import.meta.url).href;
   const code = `import assert from 'node:assert/strict';
     import {loadBilingualPublication,dryRunBilingualPublication} from ${JSON.stringify(publicationUrl)};
-    import {assertTopicPublicationReviewCurrent} from ${JSON.stringify(topicUrl)};
     const [vaultRoot,run,anchor]=process.argv.slice(1);
     const loaded=await loadBilingualPublication({vaultRoot,run,trustAnchor:JSON.parse(anchor)});
-    assertTopicPublicationReviewCurrent(loaded.review);
-    assert.equal(loaded.review.reviewManifest.profile,'phase24-topic-1.0');
-    assert.deepEqual(loaded.review.reviewManifest,loaded.reviewManifest);
-    assert.equal(loaded.review.hashes.review_bundle_hash,loaded.plan.hashes.review_hash);
-    await assert.rejects(dryRunBilingualPublication({vaultRoot,run,review:loaded.review}),/P24_LIVE_SOURCE_REQUIRED/);
-    console.log('owned topic review rebuilt');`;
+    assert.equal(loaded.review,undefined);
+    assert.equal(loaded.reviewManifest.profile,'phase24-topic-1.0');
+    await assert.rejects(dryRunBilingualPublication({vaultRoot,run,review:{reviewManifest:loaded.reviewManifest}}),/P22_REVIEW_NOT_OWNED/);
+    assert.equal((await dryRunBilingualPublication({vaultRoot,run,plan:loaded.plan})).ok,true);
+    console.log('signed topic plan loaded');`;
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', code, f.vaultRoot, f.run, JSON.stringify(f.registration.trust_anchor)], { encoding: 'utf8', windowsHide: true });
   assert.equal(child.status, 0, child.stderr);
-  assert.match(child.stdout, /owned topic review rebuilt/);
+  assert.match(child.stdout, /signed topic plan loaded/);
 });
 
 test('temporary synthetic actual-mode topic hits do not inherit paper scientific approval', async t => {
@@ -93,7 +89,7 @@ test('topic registration rejects bare recipes, candidate edits, and adopted sour
   await assert.rejects(registerBilingualPublication({ vaultRoot: f.vaultRoot, run: f.run, plan: f.plan, sourceInputs: {} }), /P24_LIVE_SOURCE_REQUIRED/);
   const registration = await registerBilingualPublication({ vaultRoot: f.vaultRoot, run: f.run, plan: f.plan, sourceInputs: f.sourceInputs, ...f.authority });
   const bundle = JSON.parse(await readFile(join(f.vaultRoot, registration.bundle_path)));
-  await assert.rejects(rebuildRegisteredTopicReview(bundle.topic_recipe), /P24_REGISTERED_PROOF_REQUIRED/);
+  assert.equal(bundle.topic_recipe, undefined);
   const original = await readFile(f.candidate.note_path);
   await writeFile(f.candidate.note_path, Buffer.concat([original, Buffer.from('changed')]));
   await assert.rejects(loadBilingualPublication({ vaultRoot: f.vaultRoot, run: f.run, trustAnchor: registration.trust_anchor }), /P22_REGISTERED_DEPENDENCY_CHANGED/);
@@ -114,7 +110,7 @@ test('topic source expansion survives an unrelated managed note edit', async t =
   await writeFile(unrelatedSidecar, 'damaged unrelated presentation');
   const expanded = await readTopicSources({ vaultRoot: f.vaultRoot, topicId: topic.topic_id, generationId: snapshot.generation_id });
   assert.equal(expanded.ok, true);
-  assert.equal(expanded.sources[0].status, 'historical_reference');
+  assert.equal(expanded.sources[0].status, 'identity_verified');
 });
 
 test('new topic publication can be prepared while a registered paper contains user edits', async t => {

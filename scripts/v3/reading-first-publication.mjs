@@ -84,9 +84,6 @@ function decode(row) {
   if (bytes.toString('base64') !== row.bytes_base64) fail('RF_PUBLICATION_RECIPE_INVALID');
   return bytes;
 }
-function encodeFiles(files) {
-  return [...files].sort(([a], [b]) => a.localeCompare(b)).map(([path, bytes]) => ({ path, bytes_base64: bytes === null ? null : bytes.toString('base64') }));
-}
 function decodeFiles(rows) {
   if (!Array.isArray(rows)) fail('RF_PUBLICATION_RECIPE_INVALID');
   const result = new Map();
@@ -353,10 +350,7 @@ async function buildReview({ source, data, options, base, preimages }) {
     review_bundle_hash: hash({ reviewManifest, outputs: inventoryStamp(output), read_dependencies: readDependencies }),
     output_inventory_hash: hash({ generation, previous_generation: reviewManifest.previous_generation, output: inventoryStamp(output), read_dependencies: readDependencies }) };
   const result = freeze({ ok: true, status, reviewManifest, outputInventory: output, hashes, diagnostics: [] });
-  const recipe = { schema_version: 'reading-first-publication-registration-1.0', source: data.recipe,
-    options: clone(options), preimages: encodeFiles(beforeFiles),
-    base: { generation: base.generation, index: base.index, files: encodeFiles(base.files),
-      ...(base.carryHistoricalDocuments ? { carryHistoricalDocuments: true } : {}) } };
+  const recipe = { source: data.recipe };
   records.set(result, { source, recipe, sourceBindings, toolBindings,
     stamp: hash({ manifest: reviewManifest, output: inventoryStamp(output), hashes }) });
   return result;
@@ -389,7 +383,7 @@ export async function captureReadingFirstPublicationRegistration({ review, sourc
   await assertReadingFirstPublicationReviewCurrent(review);
   const record = records.get(review), data = await inspectReadingFirstPublicationSource(record.source);
   if (data.origin !== 'live' || sourceInputs?.readingFirst?.source !== record.source) fail('RF_PUBLICATION_LIVE_SOURCE_REQUIRED');
-  return { reading_first_recipe: clone(record.recipe), source_bindings: clone(record.sourceBindings),
+  return { source_bindings: clone(record.sourceBindings),
     tool_bindings: [...new Map([...data.tool_bindings, ...record.toolBindings].map(row => [row.path, row])).values()],
     control_snapshot: { schema_version: 'reading-first-publication-control-1.0', run_id: review.reviewManifest.identity.run_id,
       evidence_mode: review.reviewManifest.evidence_mode, source_fingerprint: hash(record.recipe.source) } };
@@ -487,19 +481,10 @@ export async function prepareExternalReviewedReadingFirstPublication({
   const base = await baseFor(root);
   const options = { vaultRoot: root, generation, evidenceMode, resources: resourceBindings(data, resources) };
   const resultReview = await buildReview({ source, data, options, base, preimages: null });
-  const preimages = new Map();
-  for (const row of resultReview.outputInventory) preimages.set(row.path, regularBytes(root, row.path, { missing: true }));
-  const recipe = {
-    schema_version: 'reading-first-publication-registration-1.0',
-    source: sourceRecipe,
-    options: clone(options),
-    preimages: encodeFiles(preimages),
-    base: { generation: clone(base.generation), index: clone(base.index), files: encodeFiles(base.files) },
-  };
   source = createExternalReadingFirstPublicationSource(sourceRecipe);
   data = await inspectReadingFirstPublicationSource(source);
   const record = records.get(resultReview);
-  record.recipe = clone(recipe);
+  record.recipe = { source: sourceRecipe };
   record.source = source;
   record.sourceBindings = [...new Map([...sourceBindings, ...options.resources.map(row => binding(row.source_path))]
     .map(row => [row.path, row])).values()];

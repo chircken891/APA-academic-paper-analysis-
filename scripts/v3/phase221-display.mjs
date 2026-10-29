@@ -85,7 +85,9 @@ export async function acceptReaderQuantityEquivalence({ input, integratorReceipt
     occupied.add(key);
   }
   const capability = Object.freeze({ schema_version: 'phase221-quantity-equivalence-capability-1.0', artifact_sha256: owned.receipt.sha256 });
-  proofs.set(capability, { payload, integratorReceipt, receipt: owned.receipt, spanFingerprints });
+  proofs.set(capability, { payload, integratorReceipt, receipt: owned.receipt, spanFingerprints,
+    proofBinding: { artifactRoot: integratorReceipt.artifactRoot, runId: integratorReceipt.runId,
+      artifactId: integratorReceipt.artifactId, sha256: owned.receipt.sha256 } });
   return capability;
 }
 
@@ -96,6 +98,13 @@ export async function readReaderQuantityEquivalence({ capability, input } = {}) 
   const fresh = await acceptReaderQuantityEquivalence({ input, integratorReceipt: state.integratorReceipt });
   if (fresh.artifact_sha256 !== capability.artifact_sha256) fail('P221_QUANTITY_PROOF_CHANGED');
   return fresh;
+}
+
+/** Return the owned proof location without exposing its capability state. */
+export function getReaderQuantityProofBinding(capability) {
+  const state = proofs.get(capability);
+  if (!state) fail('P221_QUANTITY_PROOF_CAPABILITY_REQUIRED');
+  return { ...state.proofBinding };
 }
 
 export function readerQuantityBindings({ capability, language, sectionId, paragraphId, span } = {}) {

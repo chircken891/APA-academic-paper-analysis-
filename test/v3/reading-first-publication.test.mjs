@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, readFile, writeFile, lstat } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, writeFile, lstat, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { spawnSync, spawn } from 'node:child_process';
@@ -10,6 +10,50 @@ import { buildBilingualReview } from '../../scripts/v3/phase22-review.mjs';
 import { captureReadingFirstPublicationSource } from '../../scripts/v3/reading-first-runtime.mjs';
 import { readingFirstPublicationFixture, applyReadingFirstFixture } from './helpers/reading-first-publication-fixtures.mjs';
 import { applyBilingualPublication, recoverBilingualPublication, loadBilingualPublication, registerBilingualPublication, dryRunBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
+
+test('new registrations store only signed output files and no historical snapshot', async t => {
+  const first = await readingFirstPublicationFixture(t);
+  await applyBilingualPublication(applyReadingFirstFixture(first));
+  const next = await readingFirstPublicationFixture(t, { vaultRoot: first.vaultRoot, generation: 'simple-generation-2',
+    runId: 'run_' + 'e'.repeat(32), paperId: 'pap_' + 'e'.repeat(32),
+    title: { en: 'Simple publication', 'zh-CN': '简化发布' } });
+  const manifest = JSON.parse(await readFile(join(next.vaultRoot, next.registration.bundle_path)));
+  assert.equal(manifest.schema_version, 'phase22-registered-publication-2.0');
+  assert.equal(next.plan.inventory.some(row => row.kind === 'history'), false);
+  assert.equal(manifest.reading_first_recipe, undefined);
+  for (const row of manifest.plan.inventory) {
+    assert.equal(row.bytes_base64, undefined);
+    assert.deepEqual(await readFile(join(next.vaultRoot, row.output_path)), next.plan.inventory.find(item => item.path === row.path).bytes);
+  }
+  const output = join(next.vaultRoot, manifest.plan.inventory[0].output_path);
+  await writeFile(output, 'tampered');
+  await assert.rejects(loadBilingualPublication({ vaultRoot: next.vaultRoot, run: next.run, trustAnchor: next.registration.trust_anchor }), /P22_REGISTERED_OUTPUT_CHANGED/);
+  await rm(output);
+  await assert.rejects(loadBilingualPublication({ vaultRoot: next.vaultRoot, run: next.run, trustAnchor: next.registration.trust_anchor }), /P22_REGISTERED_OUTPUT_CHANGED/);
+});
+
+test('publication retains backups only for overwritten targets', async t => {
+  const first = await readingFirstPublicationFixture(t);
+  await applyBilingualPublication(applyReadingFirstFixture(first));
+  const next = await readingFirstPublicationFixture(t, { vaultRoot: first.vaultRoot, generation: 'simple-backup-2',
+    runId: 'run_' + 'f'.repeat(32), paperId: 'pap_' + 'f'.repeat(32),
+    title: { en: 'Backup publication', 'zh-CN': '备份发布' } });
+  const previous = new Map();
+  for (const row of next.plan.inventory.filter(row => row.before_sha256 !== null)) {
+    previous.set(row.path, await readFile(join(next.vaultRoot, row.path)));
+  }
+  assert.ok(previous.size > 0);
+  assert.ok(next.plan.inventory.some(row => row.before_sha256 === null));
+  const result = await applyBilingualPublication(applyReadingFirstFixture(next));
+  const journal = JSON.parse(await readFile(join(next.vaultRoot, result.journal_path)));
+  const backupFiles = await readdir(join(next.vaultRoot, '.apa-v3/phase22/transactions', result.transaction_id, 'backup'));
+  for (const [index, row] of journal.inventory.entries()) {
+    assert.deepEqual(await readFile(join(next.vaultRoot, row.path)), next.plan.inventory[index].bytes);
+    if (previous.has(row.path)) assert.deepEqual(await readFile(join(next.vaultRoot, row.backup_path)), previous.get(row.path));
+    else assert.equal(backupFiles.includes(index + '.bin'), false);
+  }
+  assert.equal(backupFiles.filter(name => name.endsWith('.bin')).length, previous.size);
+});
 import { readCommittedGeneration } from '../../scripts/v3/phase22-active-version.mjs';
 import { queryBilingualIndex } from '../../scripts/v3/phase22-search.mjs';
 import { buildGraphProposal } from '../../scripts/v3/phase22-graph.mjs';
@@ -212,19 +256,17 @@ test('reading-first interruption after a resource write recovers in another proc
 test('registered reading source and unsigned reconstruction recipes cannot be substituted', async t => {
   const f = await readingFirstPublicationFixture(t);
   const bundle = JSON.parse(await readFile(join(f.vaultRoot, f.registration.bundle_path)));
-  await assert.rejects(rebuildRegisteredReadingFirstReview(bundle.reading_first_recipe), /RF_PUBLICATION_REGISTERED_PROOF_REQUIRED/);
+  assert.equal(bundle.reading_first_recipe, undefined);
+  await assert.rejects(rebuildRegisteredReadingFirstReview({ schema_version: 'reading-first-publication-registration-1.0' }), /RF_PUBLICATION_REGISTERED_PROOF_REQUIRED/);
   await writeFile(join(f.root, f.reviewReceipt.path), '{}');
   await assert.rejects(loadBilingualPublication({ vaultRoot: f.vaultRoot, run: f.run, trustAnchor: f.registration.trust_anchor }), /P22_REGISTERED_DEPENDENCY_CHANGED/);
 });
 
-test('a restored registration cannot mint a new publication plan from registered-only evidence', async t => {
+test('a registered plan cannot mint a new publication plan from unsigned evidence', async t => {
   const f = await readingFirstPublicationFixture(t);
-  const bundleBytes = await readFile(join(f.vaultRoot, f.registration.bundle_path));
-  const bundle = JSON.parse(bundleBytes), registration = JSON.parse(await readFile(join(f.vaultRoot, f.registration.registration_path)));
-  const restored = await rebuildRegisteredReadingFirstReview(bundle.reading_first_recipe,
-    { registration, bundleBytes, trustAnchor: f.registration.trust_anchor });
-  await assert.rejects(dryRunBilingualPublication({ vaultRoot: f.vaultRoot, run: f.run, review: restored }), /RF_PUBLICATION_LIVE_SOURCE_REQUIRED/);
   const loaded = await loadBilingualPublication({ vaultRoot: f.vaultRoot, run: f.run, trustAnchor: f.registration.trust_anchor });
+  assert.equal(loaded.review, undefined);
+  await assert.rejects(dryRunBilingualPublication({ vaultRoot: f.vaultRoot, run: f.run, review: { reviewManifest: loaded.reviewManifest } }), /P22_REVIEW_NOT_OWNED/);
   assert.equal((await dryRunBilingualPublication({ vaultRoot: f.vaultRoot, run: f.run, plan: loaded.plan })).ok, true);
 });
 
@@ -257,7 +299,7 @@ test('the V3 review entry consumes the accepted latest reading source without a 
   assert.ok(review.outputInventory.some(row => row.kind === 'index'));
 });
 
-test('a later publication preserves prior managed edits and archives the prior approved bytes', async t => {
+test('a later publication preserves prior managed edits without a full historical snapshot', async t => {
   const f = await readingFirstPublicationFixture(t);
   await applyBilingualPublication(applyReadingFirstFixture(f));
   const original = await readCommittedGeneration({ vaultRoot: f.vaultRoot });
@@ -279,9 +321,7 @@ test('a later publication preserves prior managed edits and archives the prior a
   assert.equal(await readFile(notePath, 'utf8'), edited);
   assert.equal(await readFile(secondNotePath, 'utf8'), secondEdit);
   const archived = join(f.vaultRoot, '.apa-v3/phase22/history', original.generation_id, 'snapshot', note.path);
-  assert.equal(await readFile(archived, 'utf8'), approved);
-  const currentArchive = join(f.vaultRoot, '.apa-v3/phase22/history', original.generation_id, 'current', note.path);
-  assert.equal(await readFile(currentArchive, 'utf8'), edited);
+  await assert.rejects(lstat(archived), { code: 'ENOENT' });
 });
 
 test('a legacy reading binding keeps its original strict publication contract after an old note edit', async t => {

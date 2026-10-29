@@ -17,7 +17,6 @@
     ".agents/skills/apa-query/references/configuration.md",
     ".agents/skills/apa-setup/SKILL.md",
     ".agents/skills/apa-setup/agents/openai.yaml",
-    ".gitignore",
     "Ontology/concept-taxonomy.md",
     "Ontology/method-taxonomy.md",
     "Ontology/relation-types.md",
@@ -236,7 +235,17 @@
     "test/v3/obsidian-graph-sync.test.mjs",
     "test/v3/phase21-runner.test.mjs",
     "test/v3/reading-first-preview.test.mjs",
-    "test/v3/fixtures/phase21/evaluation-cases.json"
+    "test/v3/fixtures/phase21/evaluation-cases.json",
+    "Templates/apa-public/.gitignore",
+    "test/v3/topic-source-continuity.test.mjs",
+    "test/v3/phase22-transaction.test.mjs",
+    "test/v3/phase221-acceptance.test.mjs",
+    "test/v3/phase221-historical-input.test.mjs",
+    "scripts/v3/phase221-acceptance.mjs",
+    "test/v3/helpers/phase221-transaction-fixtures.mjs",
+    "test/v3/helpers/phase221-package-fixtures.mjs",
+    "test/v3/helpers/phase221-runtime-fixtures.mjs",
+    "test/v3/phase221-transaction.test.mjs"
   ],
   "directories": [
     "Raw",
@@ -261,6 +270,10 @@
     {
       "source": "Templates/apa-public/CLAUDE.md",
       "path": "CLAUDE.md"
+    },
+    {
+      "source": "Templates/apa-public/.gitignore",
+      "path": ".gitignore"
     }
   ],
   "tests": [
@@ -306,6 +319,11 @@
     "test/v3/default-surface.test.mjs",
     "test/v3/obsidian-graph-sync.test.mjs",
     "test/v3/phase21-runner.test.mjs",
-    "test/v3/reading-first-preview.test.mjs"
+    "test/v3/reading-first-preview.test.mjs",
+    "test/v3/topic-source-continuity.test.mjs",
+    "test/v3/phase22-transaction.test.mjs",
+    "test/v3/phase221-acceptance.test.mjs",
+    "test/v3/phase221-historical-input.test.mjs",
+    "test/v3/phase221-transaction.test.mjs"
   ]
 }
