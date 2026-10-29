@@ -231,7 +231,12 @@
     "test/v3/reading-first-metadata-migration.test.mjs",
     "test/v3/reading-first-visual-provenance.test.mjs",
     "test/v3/reading-first-runtime.test.mjs",
-    "test/v3/science-controller.test.mjs"
+    "test/v3/science-controller.test.mjs",
+    "test/v3/default-surface.test.mjs",
+    "test/v3/obsidian-graph-sync.test.mjs",
+    "test/v3/phase21-runner.test.mjs",
+    "test/v3/reading-first-preview.test.mjs",
+    "test/v3/fixtures/phase21/evaluation-cases.json"
   ],
   "directories": [
     "Raw",
@@ -297,6 +302,10 @@
     "test/v3/reading-first-metadata-migration.test.mjs",
     "test/v3/reading-first-visual-provenance.test.mjs",
     "test/v3/reading-first-runtime.test.mjs",
-    "test/v3/science-controller.test.mjs"
+    "test/v3/science-controller.test.mjs",
+    "test/v3/default-surface.test.mjs",
+    "test/v3/obsidian-graph-sync.test.mjs",
+    "test/v3/phase21-runner.test.mjs",
+    "test/v3/reading-first-preview.test.mjs"
   ]
 }

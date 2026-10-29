@@ -75,7 +75,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "e6a6dbb416a1ef45a0692627ae8a723ebc34f038969f36c14b385d2dbfa9368a"
+      "sha256": "37772a606e7274079b322e75232f4bcf36d2c313b9e5ed9de3c04e8ab27db47d"
     },
     {
       "path": "CLAUDE.md",
@@ -87,7 +87,7 @@
     },
     {
       "path": "config/apa-public-files.json",
-      "sha256": "a49dbd74705c98bda672f9d680a73ccae4f271d522d61acece8d8823636bca68"
+      "sha256": "77eaebf0e60cc655f2cabd873073fc79d72531842fddd7bb33cf5eff9dc92439"
     },
     {
       "path": "config/environment.json",
@@ -143,7 +143,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "4ba6886be9f365e6cbd685e0d726d7eec0a3e18fd9394b95721f2e54444560c3"
+      "sha256": "8c403173ce3b4da20624695568e162c372af9c50c10530701cd4f05afaecbf2d"
     },
     {
       "path": "prompts/v3/flow-corrections-1.0.md",
@@ -727,7 +727,7 @@
     },
     {
       "path": "Templates/apa-public/AGENTS.md",
-      "sha256": "e6a6dbb416a1ef45a0692627ae8a723ebc34f038969f36c14b385d2dbfa9368a"
+      "sha256": "37772a606e7274079b322e75232f4bcf36d2c313b9e5ed9de3c04e8ab27db47d"
     },
     {
       "path": "Templates/apa-public/CLAUDE.md",
@@ -810,12 +810,20 @@
       "sha256": "6a0e9089c30ee0fc91e151f2c8a83d2fe111e62929963f9b60d5260e7cd396d9"
     },
     {
+      "path": "test/v3/default-surface.test.mjs",
+      "sha256": "f73ceab259e80fe324405c1269a7c6607d3c510288805e7a4ffcf298e4a4c6ad"
+    },
+    {
       "path": "test/v3/fixtures/apa-model-policy/legacy-configured-10-roles.json",
       "sha256": "15c6b64a7a7af2c5c100ff60377bed845a0e443abe42c30ee64cbb42286313a0"
     },
     {
       "path": "test/v3/fixtures/phase21/composition-cases.json",
       "sha256": "ae6b13216876f5a9393c94f4296195a6614ef98286962d675d3c9d6fb4362892"
+    },
+    {
+      "path": "test/v3/fixtures/phase21/evaluation-cases.json",
+      "sha256": "459f921d8d02b3e106940049021cecbd1975860396b5d1b6a6a458ab8b728dac"
     },
     {
       "path": "test/v3/fixtures/scientific-reading/methods-control.json",
@@ -870,6 +878,14 @@
       "sha256": "53a3c229dfa3c3ea200181b8effb9c5e0f2742fbf90188b06e8e60b11db95676"
     },
     {
+      "path": "test/v3/obsidian-graph-sync.test.mjs",
+      "sha256": "b24c464ad589c564325757539c858c974dd87b37587149318a7fe477037a8972"
+    },
+    {
+      "path": "test/v3/phase21-runner.test.mjs",
+      "sha256": "25b2028af8faaf9fa5baefc8e57ab4b22249019a7aa3aa1e6e6a539e3d6685ce"
+    },
+    {
       "path": "test/v3/phase22-graph.test.mjs",
       "sha256": "f1531a6c001944934b8ec6b13afb638059d58da7ebf0e323494b5761799ba3f8"
     },
@@ -904,6 +920,10 @@
     {
       "path": "test/v3/reading-first-obsidian.test.mjs",
       "sha256": "3f44bba46cb951504aa5c197b6e343c07630840521ebffd0a4fb4d7ce0957571"
+    },
+    {
+      "path": "test/v3/reading-first-preview.test.mjs",
+      "sha256": "d0208d90c379060d33b2f21e24c1fe39cedc30b0231734ed64a1e12b3fa63736"
     },
     {
       "path": "test/v3/reading-first-publication.test.mjs",

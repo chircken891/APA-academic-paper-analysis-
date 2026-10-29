@@ -1,0 +1,17 @@
+{
+  "schema_version": "phase21-evaluation-cases-1.0",
+  "cases": [
+    { "case_id": "P21-E01", "group": "parser", "tier": "offline_fixture", "remaining_owner": "phase21-local-test" },
+    { "case_id": "P21-E02", "group": "parser", "tier": "offline_fixture", "remaining_owner": "phase21-local-test" },
+    { "case_id": "P21-E03", "group": "parser", "tier": "offline_fixture", "remaining_owner": "phase21-local-test" },
+    { "case_id": "P21-E04", "group": "parser", "tier": "offline_fixture", "remaining_owner": "phase21-local-test" },
+    { "case_id": "P21-E05", "group": "proof_chain", "tier": "offline_fixture", "remaining_owner": "phase21-local-test" },
+    { "case_id": "P21-E06", "group": "proof_chain", "tier": "offline_fixture", "remaining_owner": "phase21-local-test" },
+    { "case_id": "P21-E07", "group": "proof_chain", "tier": "offline_fixture", "remaining_owner": "phase21-local-test" },
+    { "case_id": "P21-E08", "group": "proof_chain", "tier": "offline_fixture", "remaining_owner": "phase21-local-test" },
+    { "case_id": "P21-E09", "group": "proof_chain", "tier": "offline_fixture", "remaining_owner": "phase21-local-test" },
+    { "case_id": "P21-E10", "group": "proof_chain", "tier": "offline_fixture", "remaining_owner": "phase21-local-test" },
+    { "case_id": "P21-E11", "group": "proof_chain", "tier": "offline_fixture", "remaining_owner": "phase21-local-test" },
+    { "case_id": "P21-E12", "group": "host_capability", "tier": "host_observation", "remaining_owner": "approved-host-and-delivery-observation" }
+  ]
+}
