@@ -107,6 +107,8 @@ npm.cmd run apa:setup -- page --repo-root "$apaProjectRoot" --host-profile "$apa
 
 `inspect` 和页面展示六项宿主能力自检：按需读取、子代理排查、手动压缩、短回执、科学阶段恢复与阈值自动压缩。运行代理依据当前工具、版本、无凭据配置及必要官方文档调查各项达成方式，并记录证据、步骤和作用范围；找不到时说明查询位置与缺口。已有有效自有适配可验证复用，需要新补丁时由代理在 `config/backups/<owner>/adapters/<id>/` 准备，保留他人的适配；`owner` 根据 agent 身份与归属证据确定，不从所选模型推断。自检不写个人配置，静态达成仍需分别验证真实模型遵守、压缩和续接；阈值由用户填写，宿主设置须预览具体改动并经用户确认后备份、应用和回读，备份保存在 `config/backups/<owner>/`。详见 [配置说明](docs/CONFIGURATION.md)。
 
+生成页面前先处置自检问题：`inspect` 的 `setup_issues` 把遗留问题分为 `investigate`（能力尚未按七类来源查完，代理继续调查）、`authorize`（需持久操作，逐条向用户说明并取得决定）、`page-choice`（交给页面选择）和 `known-limit`（已查完的限制）。用户对授权项的决定记在档案同目录的 `issue-ledger.json`，通过 `page --ledger` 传入；仍有调查项、授权项未决定或台账与档案哈希不符时，`page` 退出码为 1 且不生成 HTML。阈值和压缩钩子由 `scripts/setup/apa-host-settings.mjs` 预览（`plan`）、确认写入（`apply --confirm`）与回滚（`restore`）。检测档案另存于 `config/backups/<owner>/host-profiles/`，供再次自检复用。
+
 再次自检时，先找回当前 agent 的旧档案、补丁说明和已生效设置，与当前工具及版本核对；仍有效的成果继续复用，仅对变化、缺失或失效项补充调查。每次生成独立检测报告，保留旧档案和补丁。`inspect` 只校验本次传入档案的声明，不会自动发现或合并全部旧适配；找回并引用旧成果是运行 apa-setup 的 agent 的职责。补丁未出现在新报告中时，应先核对是否漏传声明。
 
 首次 `inspect` 显示 `exists: false`、`ready: false` 是正常的：公开工程没有任何人的配置答案。`page` 返回 HTML 的完整路径；助手须用浏览器或宿主预览打开本次输出的文件。第一步确认页面所针对的项目文件夹（同页显示本项目自检与宿主能力自检），第二步核对工作目录和 MinerU 解析环境的存放位置，之后才进入“完善配置”“去除配置”“导出配置”三个独立功能；各功能拥有分页、预览和输出，可返回功能选择处切换。

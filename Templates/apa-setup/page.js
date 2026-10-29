@@ -42,8 +42,8 @@ export const modelGroupSummary = '关键判断 ≥ 原文写作 ＞ 专项分析
 // A group choice is only a combined control: it writes the same value to each configuration key listed here.
 export const modelGroups = [
   { id: 'judgment', title: '关键判断', roles: ['evidence', 'integration', 'independent-verifier'], keys: ['models.overrides.evidence', 'models.overrides.integration', 'models.roles.independent-verifier'], strength: '最高', help: '事实、来源归属和知识节点在这里定型，下游只能照用、无法纠正；已有运行中的实质问题都源自证据梳理与内容整合。独立核验是最后一道检查，弱了会漏掉上游错误。因此这一组不宜低于原文写作组。' },
-  { id: 'analysis', title: '专项分析', roles: ['methods', 'results', 'interpretation', 'scientific-reading'], keys: ['models.science'], strength: '中等', help: '各角色范围窄、输出明确，结果会经科学阅读综合与内容整合交叉整合；它们读原文量大，降一档省用量明显。不宜放到最低，方法解释和数值关系仍须准确。中等即可。' },
   { id: 'writing', title: '原文写作', roles: ['english-writer', 'chinese-writer'], keys: ['models.roles.english-writer', 'models.roles.chinese-writer'], strength: '高', help: '决定成稿讲解是否完整、连贯、适合初学者；事实以内容整合为准，所以对独立判断的要求略低于关键判断组。可与关键判断同级或低一档。每篇论文只运行原文语言对应的那一个写作角色。' },
+  { id: 'analysis', title: '专项分析', roles: ['methods', 'results', 'interpretation', 'scientific-reading'], keys: ['models.science'], strength: '中等', help: '各角色范围窄、输出明确，结果会经科学阅读综合与内容整合交叉整合；它们读原文量大，降一档省用量明显。不宜放到最低，方法解释和数值关系仍须准确。中等即可。' },
   { id: 'presentation', title: '呈现与翻译', roles: ['reading-editor', 'translation'], keys: ['models.roles.reading-editor', 'models.roles.translation'], strength: '较低', help: '阅读编辑只整理结构，不改科学段落；翻译依据已接受的原文稿，不需要重新推理科学内容，主要要求术语一致和语言自然。主要阅读译文语言时（例如英文论文、你读中文稿），翻译不宜过低。这一组可以较低。' }
 ];
 // What each group writes, shown under its strength.
@@ -293,7 +293,8 @@ function renderAchievement(make, check) {
   const commands = [];
   let input = null;
   let error = null;
-  if (ranged.length) {
+  let note = null;
+  if (ranged.length || check.id === 'threshold_compaction') {
     const label = make('label', '候选阈值（token 整数）');
     input = make('input');
     input.type = 'text';
@@ -304,7 +305,14 @@ function renderAchievement(make, check) {
     error = make('p');
     error.className = 'hint error';
     error.hidden = true;
-    box.append(label, make('p', '输入后按各步骤的参数范围和已知容量检查；本页只展示命令。'), error);
+    box.append(label);
+    if (ranged.length) box.append(make('p', '输入后按各步骤的参数范围和已知容量检查；本页只展示命令。'));
+    else {
+      note = make('p');
+      note.hidden = true;
+      box.append(note);
+    }
+    box.append(error);
     if (check.threshold?.effective_target_verified == null && ranged.some(step => step.range.unit === 'tokens')) box.append(make('p', '有效后端尚未核实；可展示符合已知范围的候选命令，实际效果仍待确认。'));
   }
   if (steps.length) {
@@ -349,6 +357,10 @@ function renderAchievement(make, check) {
         entry.code.textContent = result.value && !result.error ? entry.template.replaceAll('<N>', result.value) : '';
         entry.line.hidden = !entry.code.textContent;
       }
+      if (note) {
+        note.textContent = valid ? `候选阈值 ${value} token：请把这个数值告诉助手，由助手用宿主设置工具生成预览，确认后才写入。` : '';
+        note.hidden = !valid;
+      }
       error.textContent = [...messages].join(' ');
       error.hidden = !error.textContent;
     };
@@ -356,6 +368,27 @@ function renderAchievement(make, check) {
     update();
   }
   return box;
+}
+
+// Issues left after the agent's investigation; the page only lists them.
+export function renderSetupIssues(document, container, issues) {
+  const make = (tag, text) => {
+    const element = document.createElement(tag);
+    if (text !== undefined) element.textContent = text;
+    return element;
+  };
+  if (!Array.isArray(issues) || !issues.length) {
+    container.append(make('p', '自检没有遗留问题。'));
+    return;
+  }
+  const groups = [['investigate', '仍待调查'], ['page-choice', '需要在本页选择'], ['authorize', '已与助手讨论的授权事项'], ['known-limit', '已知限制']];
+  for (const [category, title] of groups) {
+    const items = issues.filter(item => item.category === category);
+    if (!items.length) continue;
+    const list = make('ul');
+    for (const item of items) list.append(make('li', category === 'authorize' ? `${item.summary}（已与助手讨论）` : item.summary));
+    container.append(make('h4', title), list);
+  }
 }
 
 // Reported capabilities are informational; they never enter the user's configuration operation.
@@ -455,6 +488,7 @@ export function mountApaSetup(document, snapshot, inspection, queryInspection, h
   byId('host-readiness').textContent = readiness.host;
   byId('readiness').textContent = readiness.reading;
   byId('query-readiness').textContent = readiness.query;
+  renderSetupIssues(document, byId('setup-issues'), inspection?.setup_issues ?? []);
   renderCapabilityCheck(document, byId('capability-check'), inspection?.capability_check);
   const dependencies = inspection?.dependencies || [];
   const dependencyStatus = { available: '文件或目录可找到', missing: '未找到，请检查路径或安装情况', 'wrong-type': '路径类型不符，请检查填的是文件还是目录', unavailable: '暂时无法读取' };

@@ -397,6 +397,27 @@
         }
       }
     },
+    "issueLedger": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "profile_sha256", "entries"],
+      "properties": {
+        "schema_version": { "const": "apa-setup-issue-ledger-1.0" },
+        "profile_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["id", "disposition", "note", "decided_by"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "disposition": { "enum": ["deferred", "declined", "resolved-elsewhere"] },
+              "note": { "type": "string", "minLength": 1, "pattern": "\\S" },
+              "decided_by": { "const": "user" }
+            }
+          }
+        }
+      }
+    },
     "hostCapability": {
       "type": "object",
       "additionalProperties": false,
@@ -411,13 +432,32 @@
             "type": "object", "additionalProperties": false,
             "required": ["source", "reference"],
             "properties": {
-              "source": { "enum": ["tool-schema", "system-context", "host-config", "host-docs", "local-code"] },
+              "source": { "enum": ["tool-schema", "system-context", "host-config", "host-docs", "local-code", "runtime-log", "installed-software"] },
               "reference": { "type": "string", "minLength": 1, "pattern": "\\S" }
             }
           }
         },
         "limitations": { "type": "array", "items": { "type": "string" } },
         "achievement": { "$ref": "#/definitions/hostAchievement" },
+        "investigation": {
+          "type": "object", "additionalProperties": false,
+          "required": ["searched"],
+          "properties": {
+            "searched": {
+              "type": "array",
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["source", "location", "result", "note"],
+                "properties": {
+                  "source": { "enum": ["tool-schema", "system-context", "host-config", "runtime-log", "installed-software", "local-code", "host-docs"] },
+                  "location": { "type": ["string", "null"] },
+                  "result": { "enum": ["found", "absent", "not-applicable"] },
+                  "note": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
         "recovery": {
           "type": "object", "additionalProperties": false,
           "required": ["task_handle_path", "lookup_tool", "lookup_argument", "original_host_accessible"],
@@ -454,7 +494,7 @@
         "type": "object", "additionalProperties": false,
         "required": ["source", "reference"],
         "properties": {
-          "source": { "enum": ["tool-schema", "system-context", "host-config", "host-docs", "local-code"] },
+          "source": { "enum": ["tool-schema", "system-context", "host-config", "host-docs", "local-code", "runtime-log", "installed-software"] },
           "reference": { "type": "string", "minLength": 1, "pattern": "\\S" }
         }
       }

@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Ajv from 'ajv';
 import { inspectHostCapabilities } from './apa-host-capabilities.mjs';
+import { deriveSetupIssues } from './apa-setup-issues.mjs';
 
 export const APA_CONFIG_VERSION = 'apa-local-config-1.0';
 export const APA_SCIENCE_ROLES = Object.freeze(['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration']);
@@ -14,6 +15,7 @@ const configSchema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
 const checkSchema = new Ajv({ allErrors: true }).compile(configSchema);
 const checkQueryPreferences = new Ajv({ allErrors: true }).compile(configSchema.properties.query);
 const checkHostProfileShape = new Ajv({ allErrors: true }).addSchema(configSchema, 'apa-config').getSchema('apa-config#/definitions/hostProfile');
+const checkIssueLedgerShape = new Ajv({ allErrors: true }).addSchema(configSchema, 'apa-config').getSchema('apa-config#/definitions/issueLedger');
 export const APA_REASONING_EFFORTS = Object.freeze([...configSchema.definitions.reasoningEffort.enum]);
 export const APA_QUERY_DEFAULTS = Object.freeze({ answer_language: 'question', detail: 'adaptive', audience: 'adaptive' });
 const clone = value => structuredClone(value);
@@ -138,6 +140,13 @@ export function loadHostProfile(file) {
   return profile;
 }
 
+export function loadIssueLedger(file) {
+  let ledger;
+  try { ledger = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { throw error('APA_ISSUE_LEDGER_INVALID', 'unreadable JSON'); }
+  if (!checkIssueLedgerShape(ledger)) throw error('APA_ISSUE_LEDGER_INVALID', checkIssueLedgerShape.errors.map(item => `${item.instancePath || '/'} ${item.message}`).join('; '));
+  return ledger;
+}
+
 function validateHostProfile(profile) {
   if (!checkHostProfileShape(profile)) throw error('APA_HOST_PROFILE_INVALID', checkHostProfileShape.errors.map(item => `${item.instancePath || '/'} ${item.message}`).join('; '));
   if (new Set(profile.models.map(item => item.model)).size !== profile.models.length) throw error('APA_HOST_PROFILE_INVALID', 'duplicate model');
@@ -165,7 +174,8 @@ export function inspectApaConfig({ repoRoot = process.cwd(), capability = 'readi
   const snapshot = loadApaConfig({ repoRoot });
   const validation = validateApaConfig(snapshot.config, { repoRoot, capability });
   const hostCheck = { capability_check: inspectHostCapabilities(snapshot.config, hostProfile, repoRoot), ...(hostProfile ? { host_check: checkHostProfile(snapshot.config, hostProfile, capability) } : {}) };
-  if (capability === 'query') return { ...snapshot, capability, validation, dependencies: [], ready: validation.complete, model_availability: 'not_checked', ...hostCheck };
+  const withIssues = inspection => ({ ...inspection, setup_issues: deriveSetupIssues(inspection, hostProfile) });
+  if (capability === 'query') return withIssues({ ...snapshot, capability, validation, dependencies: [], ready: validation.complete, model_availability: 'not_checked', ...hostCheck });
   const dependencies = [];
   const inspect = (key, value, kind) => {
     if (!value) return;
@@ -179,7 +189,7 @@ export function inspectApaConfig({ repoRoot = process.cwd(), capability = 'readi
   const parserDefaults = runtimeHome ? { python: path.join(runtimeHome, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'), config_path: path.join(runtimeHome, 'config.yaml') } : {};
   for (const key of ['python', 'config_path']) inspect(`parser.${key}`, snapshot.config.parser?.[key] ?? parserDefaults[key], 'file');
   for (const key of APA_WRITING_SKILLS) if (snapshot.config.writing_skills?.[key]?.enabled) inspect(`writing_skills.${key}`, snapshot.config.writing_skills[key].path, 'file');
-  return { ...snapshot, capability, validation, dependencies, ready: validation.complete && dependencies.every(item => item.status === 'available'), model_availability: 'not_checked', ...hostCheck };
+  return withIssues({ ...snapshot, capability, validation, dependencies, ready: validation.complete && dependencies.every(item => item.status === 'available'), model_availability: 'not_checked', ...hostCheck });
 }
 
 export function resolveApaConfig({ config, repoRoot = process.cwd(), mainSession, supportedModelPairs, capability = 'reading' } = {}) {

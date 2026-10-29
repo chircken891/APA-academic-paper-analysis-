@@ -115,6 +115,7 @@ test('current public export includes query and topic entries with their regressi
     'prompts/v3/role-reply-1.0.md', 'prompts/v3/science-index-1.0.md', 'prompts/v3/translation-1.0.md', 'scripts/v3/role-reply-contract.mjs',
     'scripts/v3/science-controller.mjs', 'test/v3/science-controller.test.mjs',
     'scripts/lib/apa-host-capabilities.mjs', 'scripts/lib/apa-host-achievement.mjs', 'test/setup/apa-host-capabilities.test.mjs',
+    'scripts/lib/apa-setup-issues.mjs', 'test/setup/apa-setup-issues.test.mjs',
     'test/v3/library-query.test.mjs', 'test/v3/library-query-cli.test.mjs',
     'test/v3/library-query-request.test.mjs', 'test/v3/library-query-request-cli.test.mjs',
     'scripts/v3/topic-library.mjs', 'scripts/v3/topic-publication.mjs', 'Schema/phase24/topic.schema.json',

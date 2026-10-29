@@ -63,7 +63,7 @@
     },
     {
       "path": ".agents/skills/apa-setup/SKILL.md",
-      "sha256": "9e65174b99e3dd430377aa3c5db91409130a51bab71d9b9ee9afc9d29c9431b2"
+      "sha256": "db418acbb3c661875b5f29a7d9cf5e5d2b05910bb9182c97061815204c2a3600"
     },
     {
       "path": ".gitattributes",
@@ -87,7 +87,7 @@
     },
     {
       "path": "config/apa-public-files.json",
-      "sha256": "fda716f5b5c8bcc57155d50e5f85dd18d04acfff9d132a72134770f963b00515"
+      "sha256": "efd96e45cb730798c6f406c66cc02a534e3f89ddb6882f7cb5c74fb88b0e4b82"
     },
     {
       "path": "config/environment.json",
@@ -115,7 +115,7 @@
     },
     {
       "path": "docs/CONFIGURATION.md",
-      "sha256": "7aac8d28a0b8549b5a67ebd4aecdcf4aaa1a9be8c81a2b412832a032e2d057d3"
+      "sha256": "42318e78ee3940015adbfbcf08958c9823be10c6099b5e7c7af0eba84162491e"
     },
     {
       "path": "Figures/.gitkeep",
@@ -143,7 +143,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "163eb8364361819b4551ca9a3daa7d613ea03e12c07a61479e186f82c85ae48c"
+      "sha256": "b035285956092188ed07a58e807108523c2c90239dc5d716a2efb169937db061"
     },
     {
       "path": "prompts/v3/flow-corrections-1.0.md",
@@ -183,11 +183,11 @@
     },
     {
       "path": "README.md",
-      "sha256": "1115d5ad8ed274b3efe278a6a63b8447dd2357acdaab0dc05d5a3e70ec1bdcb6"
+      "sha256": "f40196f8c66887cd129a432efc216e092484d4bec1a5a7ca450a83bb97644f79"
     },
     {
       "path": "Schema/config/apa-config.schema.json",
-      "sha256": "8410374e291ea8756c6e2cce6eb5415df64ce1d9aab9b08169653f31f26de204"
+      "sha256": "f982cf86d48a3b28f3b5a46a0945414cccadda48d2051b85dcc0c4e2ce03a828"
     },
     {
       "path": "Schema/contracts/v3-analysis-package.schema.json",
@@ -319,7 +319,7 @@
     },
     {
       "path": "scripts/apa-setup.mjs",
-      "sha256": "2756cc6a5a40411bc0e9ad32aaa751d4debd50688d502e6d037f5307c7744e09"
+      "sha256": "9d06943a757e139c723c66ad6101a58892c9f874734bc98ef92cd4b8db51a7d4"
     },
     {
       "path": "scripts/check-bm25-index.mjs",
@@ -327,7 +327,7 @@
     },
     {
       "path": "scripts/lib/apa-config.mjs",
-      "sha256": "5579ec8efedac9e4c24732a0e105e9aeac362194aaff18b0bae74896c5484a5c"
+      "sha256": "56197f3058c6cd1720f3a8add7854c27aafd82f339648c72f80ce90fc23208b7"
     },
     {
       "path": "scripts/lib/apa-host-achievement.mjs",
@@ -340,6 +340,10 @@
     {
       "path": "scripts/lib/apa-host-recipes.mjs",
       "sha256": "a3422916f5e2e4637febe2fbdd2b288ed6c32e17aae5da8c98eeb28b95cf2eff"
+    },
+    {
+      "path": "scripts/lib/apa-setup-issues.mjs",
+      "sha256": "209d723c82dc01f9dbec945729019567118bf6ee7acaef690f792fb1b9360bec"
     },
     {
       "path": "scripts/lib/managed-process.mjs",
@@ -367,7 +371,7 @@
     },
     {
       "path": "scripts/setup/apa-setup-page.mjs",
-      "sha256": "f1c90ef27c7e2d79d4ccf404de40aeaa428890be13b00d3fa49e05a2406a5098"
+      "sha256": "296f0783a6f2ef5d813b8eeed562bae6a1541fcee82eed9b8d8c57bb0852e45c"
     },
     {
       "path": "scripts/setup/bootstrap-windows.ps1",
@@ -719,7 +723,7 @@
     },
     {
       "path": "Templates/apa-setup/page.js",
-      "sha256": "9b81173880f1b2e94744e55f9c6c42d087c15676f05fe41b6fdab7eece466a9b"
+      "sha256": "f5ae3358a2dc3290904a29af4fdfe5e4b8d9e175b4af6747c6cd3c7832067702"
     },
     {
       "path": "Templates/apa-v3/apa-readable.css",
@@ -750,8 +754,12 @@
       "sha256": "fc51e4768bff1d521f2379a4712f5bac9e49174bebf114a5cf031f98131582f4"
     },
     {
+      "path": "test/setup/apa-setup-issues.test.mjs",
+      "sha256": "ab0d2548c52f72340d1791ad6490c60f661fb49a8eff15befac13668832dcfcc"
+    },
+    {
       "path": "test/setup/apa-setup-page.test.mjs",
-      "sha256": "ce597bed21d4a9c5effcb8bda8c9a733a4ffa963cd948c9e4e22fe6fef80a684"
+      "sha256": "9d6eb91e435d0196617956f7f26c7bbe84799f10c630a9dcc5fc9bd6ee287931"
     },
     {
       "path": "test/setup/bootstrap-execution.test.mjs",
@@ -763,7 +771,7 @@
     },
     {
       "path": "test/setup/public-export.test.mjs",
-      "sha256": "07335ef08e78c3d962b84172745b091383d6952dd120adbbccd9b925271f2249"
+      "sha256": "a16c4ec0030b7231a20232e7eb2de5187ca63674c1b68088ec552ec02cf5e76f"
     },
     {
       "path": "test/setup/verify-environment.test.mjs",

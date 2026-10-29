@@ -552,11 +552,11 @@ test('group current value reports mixed members per role', () => {
 test('model groups keep the agreed ids, roles and keys, each with a strength and reason that name no model', () => {
   assert.deepEqual(modelGroups.map(({ id, title, roles, keys }) => ({ id, title, roles, keys })), [
     { id: 'judgment', title: '关键判断', roles: ['evidence', 'integration', 'independent-verifier'], keys: ['models.overrides.evidence', 'models.overrides.integration', 'models.roles.independent-verifier'] },
-    { id: 'analysis', title: '专项分析', roles: ['methods', 'results', 'interpretation', 'scientific-reading'], keys: ['models.science'] },
     { id: 'writing', title: '原文写作', roles: ['english-writer', 'chinese-writer'], keys: ['models.roles.english-writer', 'models.roles.chinese-writer'] },
+    { id: 'analysis', title: '专项分析', roles: ['methods', 'results', 'interpretation', 'scientific-reading'], keys: ['models.science'] },
     { id: 'presentation', title: '呈现与翻译', roles: ['reading-editor', 'translation'], keys: ['models.roles.reading-editor', 'models.roles.translation'] }
   ]);
-  assert.deepEqual(modelGroups.map(group => group.strength), ['最高', '中等', '高', '较低']);
+  assert.deepEqual(modelGroups.map(group => group.strength), ['最高', '高', '中等', '较低']);
   assert.equal(modelGroupSummary, '关键判断 ≥ 原文写作 ＞ 专项分析 ≥ 呈现与翻译');
   const detected = hostProfile.models.map(item => item.model);
   for (const group of modelGroups) {
@@ -569,6 +569,8 @@ test('model groups keep the agreed ids, roles and keys, each with a strength and
 test('each group explains its relative strength on the page, the summary appears once, and no model is preselected', () => {
   const page = mountFake({});
   assert.equal(page.text().filter(item => item === modelGroupSummary).length, 1);
+  const groupGrid = page.fieldset('关键判断').parentElement;
+  assert.deepEqual(groupGrid.children.map(row => row.children[0].textContent), modelGroupSummary.split(/\s*[≥＞]\s*/).map(title => `${title} · 修改此组`));
   for (const group of modelGroups) {
     const fieldset = page.fieldset(group.title);
     assert.ok(fieldset, group.title);
@@ -623,4 +625,54 @@ test('the page collects a group choice through its own preview and refuses a dou
   const conflict = await page.preview();
   assert.equal(conflict.set, null);
   assert.match(conflict.message, /翻译.*二选一/);
+});
+
+test('page rejects legacy profile with investigation list', t => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-page-gate-'));
+  t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+  const file = path.join(repoRoot, 'host-profile.json');
+  fs.writeFileSync(file, JSON.stringify(hostProfile));
+  const output = path.join(repoRoot, '.tmp/apa-setup/index.html');
+  const cli = spawnSync(process.execPath, [path.resolve('scripts/apa-setup.mjs'), 'page', '--repo-root', repoRoot, '--host-profile', file], { encoding: 'utf8' });
+  assert.equal(cli.status, 1);
+  assert.match(cli.stderr, /^APA_SETUP_INVESTIGATION_INCOMPLETE: /);
+  assert.equal(cli.stderr.match(/investigate:capability:/g).length, 6);
+  assert.equal(fs.existsSync(output), false);
+});
+
+test('page without profile keeps manual fallback', t => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-page-gate-'));
+  t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+  const cli = spawnSync(process.execPath, [path.resolve('scripts/apa-setup.mjs'), 'page', '--repo-root', repoRoot], { encoding: 'utf8' });
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.ok(fs.existsSync(path.join(repoRoot, '.tmp/apa-setup/index.html')));
+});
+
+test('threshold input renders without command template', async () => {
+  const container = await renderCards({ threshold_compaction: { state: 'needs-user-action', summary: '用户决定阈值', steps: [step(null, null, { actor: 'user' })] } });
+  const [input] = findAll(container, node => node.name === 'threshold-threshold_compaction');
+  assert.ok(input);
+  assert.equal(input.value, '');
+  assert.ok(!flattenText(container).includes('候选阈值 123456 token'));
+  enter(input, '123456');
+  assert.ok(flattenText(container).includes('候选阈值 123456 token：请把这个数值告诉助手'));
+  assert.ok(findAll(container, node => node.tag === 'code').every(node => !node.textContent.includes('apa-host-settings')));
+});
+
+test('setup issues render grouped', async () => {
+  const { renderSetupIssues } = await import('../../Templates/apa-setup/page.js');
+  const container = eventNode('div');
+  renderSetupIssues({ createElement: eventNode }, container, [
+    { id: 'page-choice:missing:models.science', category: 'page-choice', subject: 'models.science', summary: '配置项 models.science 尚未回答。' },
+    { id: 'authorize:dependency:parser.python', category: 'authorize', subject: 'parser.python', summary: '依赖 parser.python 缺失' },
+    { id: 'known-limit:capability:science_recovery', category: 'known-limit', subject: 'science_recovery', summary: '宿主不提供任务查询' },
+  ]);
+  const text = flattenText(container);
+  const titles = ['需要在本页选择', '已与助手讨论的授权事项', '已知限制'].map(title => text.indexOf(title));
+  assert.ok(titles.every(index => index >= 0));
+  assert.deepEqual(titles, [...titles].sort((a, b) => a - b));
+  for (const phrase of ['models.science 尚未回答', 'parser.python 缺失', '宿主不提供任务查询']) assert.ok(text.includes(phrase), phrase);
+  const empty = eventNode('div');
+  renderSetupIssues({ createElement: eventNode }, empty, []);
+  assert.match(flattenText(empty), /没有遗留问题/);
 });

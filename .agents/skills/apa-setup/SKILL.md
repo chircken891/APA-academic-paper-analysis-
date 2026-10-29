@@ -19,13 +19,13 @@ description: Use for APA configuration requests such as 完善配置、为我配
 
 用户确认项目路径并同意将其作为 agent 工作目录后，三个 APA 技能应嵌入该目录的 `.agents/skills/`；工程自带的完整目录直接使用。三个技能为 `academic-paper-analysis`、`apa-query`、`apa-setup`，默认不安装到全局。若用户不打算采用该工作目录，或不愿将技能迁入项目作用域，须明确提醒技能发现和项目规则的作用范围可能变化，保留全局加载方式可能影响日常其他任务；后续仍固定使用已确认项目路径。已有全局副本的迁移或移除须单独确认。
 
-**配置类请求必须打开 HTML。** 使用本技能时，“完善配置”“为我配置”“帮我配置”“为某某 agent 配置”等新建、完善、修改或导入配置请求，一律执行第 3 步，生成并打开配置页供用户自主选择。会话内解释选项不能替代页面，也不能因为用户说“你决定”“全部按推荐”跳过页面。仅检查、自检、导出配置、挖空或去除配置不强制打开 HTML；去除范围仍须明确。用户已自行选择并提交完整操作且明确要求应用时，按第 4 步核对和应用，无需重新选择。
+**配置类请求必须打开 HTML。** 使用本技能时，“完善配置”“为我配置”“帮我配置”“为某某 agent 配置”等新建、完善、修改或导入配置请求，一律先完成第 3 步的问题处置，再执行第 4 步，生成并打开配置页供用户自主选择。会话内解释选项不能替代页面，也不能因为用户说“你决定”“全部按推荐”跳过页面。仅检查、自检、导出配置、挖空或去除配置不强制打开 HTML；去除范围仍须明确。用户已自行选择并提交完整操作且明确要求应用时，按第 5 步核对和应用，无需重新选择。
 
 未选择项保持未配置或原值；用户只完成部分选择时，仅保留这些选择，提示回到页面补充或按用户要求暂缓。不得为达到 `ready` 补齐。已有明确配置不重新强制选择，修改时只处理拟改变的字段；换宿主或出现不兼容时，说明限制并等待用户在页面选择，不自动修复答案。
 
 ## 1. 检测自身环境，写成宿主档案
 
-你要报告的是“我此刻能用什么”，不是“APA 过去用什么”或“这个产品一般支持什么”。只写你能在当前会话里核实的内容；核实不了的留空并注明来源为 `unavailable`，不要凭记忆补全。
+你要报告的是“我此刻能用什么”，不是“APA 过去用什么”或“这个产品一般支持什么”。只写你能在当前会话里核实的内容，不要凭记忆补全。“未知”是调查之后的结论，不是起点：留空或填 `unavailable`、`unknown` 之前，先按下文“调查来源”逐类查过并记录。
 
 依次确定：
 
@@ -43,7 +43,7 @@ description: Use for APA configuration requests such as 完善配置、为我配
 
 重复自检时，先读取当前项目已保存配置、归属明确的旧宿主档案，以及 `config/backups/<owner>/` 中的自有适配说明和入口；旧档案按其已知路径读取，不按时间最新一份直接认定归属。核对当前工具定义、宿主版本、实际生效设置与入口是否变化。有效的自有补丁继续复用，将仍有效的 `capabilities`、`achievement` 和 `adapters` 声明及来源纳入本次档案；仅针对变化、缺失或失效项补充调查，必要时新建独立补丁。不得因再次自检而丢弃已有成果、重复安装或从头重建全部适配。旧档案缺少达成方式时补充该项证据，不将其他有效项一并重做。
 
-检测只能读取，不能调用模型试探可用性，不能安装任何东西，也不能修改宿主设置。为每次检测选用未存在的 `.tmp/apa-setup/<owner>/<detection-id>/` 目录，`owner` 和 `detection-id` 使用 kebab-case，并确认不会碰撞已有目录；将结果写入该目录的 `host-profile.json`。旧档案仍可读取，不迁移或覆盖。本次报告说明复用项、变化项和仍未核实项；新报告目录不表示需要新建补丁。以下是档案格式：
+检测只能读取，不能调用模型试探可用性，不能安装任何东西，也不能修改宿主设置。为每次检测选用未存在的 `.tmp/apa-setup/<owner>/<detection-id>/` 目录，`owner` 和 `detection-id` 使用 kebab-case，并确认不会碰撞已有目录；将结果写入该目录的 `host-profile.json`。检测完成后另存一份到 `config/backups/<owner>/host-profiles/<host>-<detection-id>.json`（不覆盖已有文件）；重复自检先读该目录同宿主的档案作为复用起点，只对变化项重查。旧档案仍可读取，不迁移或覆盖。本次报告说明复用项、变化项和仍未核实项；新报告目录不表示需要新建补丁。以下是档案格式：
 
 ```json
 {
@@ -72,7 +72,19 @@ description: Use for APA configuration requests such as 完善配置、为我配
 
 ### 检测并给出达成方式
 
-在同一档案的可选 `capabilities` 中记录当前宿主六项能力的只读检查，供 `inspect` 和配置页显示。对每项写 `status`（`detected`、`blocked`、`unsupported` 或 `unknown`）、可操作的 `method`、作用范围 `scope`（`current-session`、`new-session`、`instance` 或 `unknown`）、带来源和具体位置的 `evidence`，以及 `limitations`。证据来源可为 `tool-schema`、`system-context`、`host-config`、`host-docs`、`local-code`；无依据时填 `unknown`，不要仅因产品名称推断支持。未记录的项通常为未知；检查器也会根据已报告的派发工具或本库代码的已知缺口输出相应结果。检测依据仅从当前工具定义、已安装软件的版本和代码、无凭据配置或官方文档取得；不读取或复制凭据、令牌等秘密，也不启动模型试探。
+在同一档案的可选 `capabilities` 中记录当前宿主六项能力的只读检查，供 `inspect` 和配置页显示。对每项写 `status`（`detected`、`blocked`、`unsupported` 或 `unknown`）、可操作的 `method`、作用范围 `scope`（`current-session`、`new-session`、`instance` 或 `unknown`）、带来源和具体位置的 `evidence`，以及 `limitations`。证据来源可为 `tool-schema`、`system-context`、`host-config`、`runtime-log`、`installed-software`、`local-code`、`host-docs`；不要仅因产品名称推断支持。
+
+**调查来源。** 每项能力记录 `investigation.searched`，七类来源各一条 `{source, location, result, note}`，`result` 为 `found`、`absent` 或 `not-applicable`；`found`/`absent` 必须写出实际查过的 `location`，`not-applicable` 在 `note` 说明本宿主为何没有这类来源：
+
+- `tool-schema`：本会话实际暴露的工具定义及参数。
+- `system-context`：系统提示、环境说明中写明的宿主事实。
+- `host-config`：宿主的用户级与项目级设置文件（只读，不复制凭据）。
+- `runtime-log`：宿主本机的会话记录、事件日志或转录文件中的实际行为痕迹。
+- `installed-software`：已安装宿主程序的版本、`--help` 输出、安装目录中的代码或说明。
+- `local-code`：本仓库代码、`scripts/setup/` 中的现有工具。
+- `host-docs`：宿主官方文档。
+
+七类未查完就填 `unknown` 或 `not-found` 的能力，`inspect` 会列为 `investigate`，`page` 拒绝生成页面。六项能力都必须写入档案并带 `achievement`；未记录或缺少达成方式的项同样列为 `investigate`。检查器给出“需要重新检测”的项（如 `achieved` 缺方法、作用范围或步骤依据）也列为 `investigate`。检测依据仅从当前工具定义、已安装软件的版本和代码、无凭据配置或官方文档取得；不读取或复制凭据、令牌等秘密，也不启动模型试探。
 
 对每项能力自行调查并记录可选 `achievement`：`state` 为 `achieved`、`needs-setting`、`needs-user-action`、`needs-apa-change` 或 `not-found`，另写一句 `summary` 和 `steps`。`not-found` 写明查过的位置和缺少的依据；公共接口确实缺失时使用 `needs-apa-change`，说明缺口。`achieved` 表示静态条件已具备，实际验证仍为 `not_run`。旧档案缺少 `achievement` 时提示重新检测，原有 `ready` 含义不变。
 
@@ -80,7 +92,7 @@ description: Use for APA configuration requests such as 完善配置、为我配
 
 先只读检查已有适配的归属及证据。可验证复用有效的自有补丁；需要新补丁时，只在 `config/backups/<owner>/adapters/<adapter-id>/` 新建独立目录，`owner` 为 agent 归属标识，`owner` 和 `adapter-id` 使用 kebab-case，避免与已有目录碰撞；依据 agent 身份及归属证据确定 `owner`，不从所选模型推断。说明须记录所属 agent、宿主、入口、用途、证据和验证方法。其他 agent、归属不明以及既有适配和脚本只读保留，不覆盖、改造、重命名或移动；自适配不修改公共核心。档案可选 `adapters` 数组，项含 `id`、`owner`、`host`、`root`、`entrypoints` 和 `evidence`；`root` 严格为上述归属目录，`entrypoints` 是该目录内非空相对路径数组，`evidence` 记录来源位置。`inspect` 只检查宿主一致、目录归属结构及入口存在与路径范围，显示 `available` 或 `blocked`，不执行入口，也不证明身份或实际效果。既有适配保留原路径，既存个人档案不自动重写。
 
-补丁源码的准备与启用、写入宿主设置分开。设置工具必须支持预览、确认、备份和回读，宿主设置备份放在 `config/backups/<owner>/`，只修改用户选定的设置；先展示具体目标文件、键和值并取得确认，未选择的值保持占位。检测不修改宿主设置，也不启动模型试验。
+补丁源码的准备与启用、写入宿主设置分开。宿主设置使用现有工具 `node scripts/setup/apa-host-settings.mjs plan|apply|restore --host <host> --capability threshold_compaction|compact_hook ...`：`plan` 只读，展示目标文件、键和值；`apply` 须 `--confirm`，写入前自动备份到 `config/backups/<owner>/` 并回读；`restore --backup <path> --confirm` 回滚。工具已支持的宿主，阈值和压缩钩子的达成方式应写成调用该工具的步骤，不得因档案缺少命令模板就报“未找到”。只修改用户选定的设置，未选择的值保持占位。检测不修改宿主设置，也不启动模型试验。
 
 依次检查并报告：
 
@@ -88,7 +100,7 @@ description: Use for APA configuration requests such as 完善配置、为我配
 2. `delegated_diagnostics`：实际派发工具、任务参数、独立上下文和可用回执；当前工具定义缺失时不能借用其他宿主的参数。
 3. `manual_compaction`：当前会话是否有手动压缩入口、作用范围以及是否持久修改设置。技能中的阶段提示不等于宿主已执行压缩。
 4. `concise_replies`：核对角色请求是否携带 `role-reply-1.0`，短回执的实际遵守情况仍须真实观察。
-5. `science_recovery`：核对本库已保存的派发声明与本次检测一致，并检查 `dispatch.result_handle` 是否与真实派发结果匹配、查询或等待工具与参数是否明确，以及原宿主是否仍可访问；上述条件均成立才可标记 `achieved`。尚未保存时报告需要配置，继续第 3、4 步由用户选择和确认，不自行保存。代理依据真实宿主格式编写文本正则，提取第一捕获组；查不到时记录 `not-found`。已配置 `host` 的新科学请求仅在已保存的 host 段声明 `dispatch.result_handle` 时从派发结果文本提取真实句柄，否则记为 `null`；本地 `action_id` 不是可查询的宿主句柄，缺少真实句柄时自检报告该续接为 `blocked`。控制器不主动查询或等待宿主，本地持久化只覆盖控制器退出后原宿主仍可访问的情况，不证明宿主重启恢复。
+5. `science_recovery`：核对本库已保存的派发声明与本次检测一致，并检查 `dispatch.result_handle` 是否与真实派发结果匹配、查询或等待工具与参数是否明确，以及原宿主是否仍可访问；上述条件均成立才可标记 `achieved`。尚未保存时报告需要配置，继续第 4、5 步由用户选择和确认，不自行保存。代理依据真实宿主格式编写文本正则，提取第一捕获组；查不到时记录 `not-found`。已配置 `host` 的新科学请求仅在已保存的 host 段声明 `dispatch.result_handle` 时从派发结果文本提取真实句柄，否则记为 `null`；本地 `action_id` 不是可查询的宿主句柄，缺少真实句柄时自检报告该续接为 `blocked`。控制器不主动查询或等待宿主，本地持久化只覆盖控制器退出后原宿主仍可访问的情况，不证明宿主重启恢复。
 6. `threshold_compaction`：核对**实际启用的压缩后端**、覆盖方法与参数单位、作用于当前会话还是新会话或整个实例、计量口径及阈值约束。记录用户指定的候选 token 数、上下文窗口 W、输出预留 O、压缩余量 headroom、保留预算 retained 和参数允许的上下限；未知值填 `null`，不能当作 0。`formula` 按证据选择绝对 token 触发 `absolute`、比例并受上限约束 `window-ratio-bounded` 或 `unknown`；公式必须与单位相符。对比例阈值，仅在已确认宿主公式与各值时换算并检查参数范围及取整。
 
 阈值检测按现场安装版本、实际生效的后端及作用域核实，确认候选值的换算依据后再展示操作；无法核实有效目标时报告阻塞，不更换模型或覆盖其他设置绕过。
@@ -133,9 +145,24 @@ description: Use for APA configuration requests such as 完善配置、为我配
 
 只查询相关配置时使用 `inspect --capability query`；普通查询不要求完整的阅读配置，详见 [apa-query 配置说明](../apa-query/references/configuration.md)。配置文件是唯一依据，不从旧机器路径或历史默认值猜答案。
 
-## 3. 必须打开 HTML，由用户填写配置页
+- `setup_issues`：由以上结果归类的遗留问题，第 3 步逐类处置。
 
-运行 `node scripts/apa-setup.mjs page --host-profile <本次档案实际路径> --output <本次检测目录的index.html>`（按第 0 步追加已确认的 `--repo-root`），**必须用宿主支持的方式打开返回的本地 HTML，供用户自主选择**。只生成文件或发出路径不算已打开；宿主确实无法打开时，说明限制并提供完整路径，等待用户自行打开并提交选择，不能转为代选或会话问答配置。使用本次独立输出路径，保留其他代理的预览。页面第一步由用户确认项目文件夹，第二步核对工作目录和 MinerU 存放位置，之后才进入三个功能；页面生成的操作带 `repo_root`，与应用目标不符会被拒绝。“完善配置”中的“运行宿主与派发”一页由用户选择是否采用这次检测结果；各模型项从检测结果中选择，推理强度只显示所选模型支持的档位。没有档案时，页面退回手动填写，也无法设置派发方式。生成或打开页面不等于用户批准了其中的任何操作。
+## 3. 处置自检问题，再生成页面
+
+不要拿到 `inspect` 结果就生成页面。按 `setup_issues` 的 `category` 处理，处理后重新检测相关项并再次 `inspect`，直到只剩可交给页面的项：
+
+- `investigate`：能力还没查完（`detail` 列出未查的来源）或档案缺少达成方式。继续按“调查来源”补查并更新档案，不向用户提问。
+- `authorize`：需要执行持久操作（依赖缺失、写宿主设置、需要 APA 改动）。逐条向用户说明要做什么、作用范围、需要哪项授权、怎样验证；获批的执行后只对相关项重新检测，未获批的按用户答复写入台账。
+- `page-choice`：需要用户在页面上选择的配置项和宿主声明，直接进入页面。
+- `known-limit`：七类来源都已查过、确实无法达成的限制，在页面上照实列出。
+
+台账是档案同目录的 `issue-ledger.json`：`{"schema_version":"apa-setup-issue-ledger-1.0","profile_sha256":"<档案文件字节的 SHA-256>","entries":[{"id":"<问题 id>","disposition":"deferred|declined|resolved-elsewhere","note":"<用户的答复>","decided_by":"user"}]}`。每条只记录用户在会话中的实际决定，`note` 引用用户的原话，不能代填；CLI 无法区分台账由谁写成，`decided_by` 只是你对如实记录的声明。档案改动后哈希失效，须按新档案重新确认。
+
+循环的出口是 `page` 门禁通过：存在 `investigate` 项、`authorize` 项未进台账或台账哈希不符时，`page` 退出码为 1 且不生成 HTML。不得通过省略 `--host-profile` 跳过门禁；没有档案的手动回退只用于确实无法检测宿主的情况，并须向用户说明。
+
+## 4. 必须打开 HTML，由用户填写配置页
+
+运行 `node scripts/apa-setup.mjs page --host-profile <本次档案实际路径> [--ledger <同目录 issue-ledger.json>] --output <本次检测目录的index.html>`（按第 0 步追加已确认的 `--repo-root`），**必须用宿主支持的方式打开返回的本地 HTML，供用户自主选择**。只生成文件或发出路径不算已打开；宿主确实无法打开时，说明限制并提供完整路径，等待用户自行打开并提交选择，不能转为代选或会话问答配置。使用本次独立输出路径，保留其他代理的预览。页面第一步由用户确认项目文件夹，第二步核对工作目录和 MinerU 存放位置，之后才进入三个功能；页面生成的操作带 `repo_root`，与应用目标不符会被拒绝。“完善配置”中的“运行宿主与派发”一页由用户选择是否采用这次检测结果；各模型项从检测结果中选择，推理强度只显示所选模型支持的档位。没有档案时，页面退回手动填写，也无法设置派发方式。生成或打开页面不等于用户批准了其中的任何操作。
 
 **会话只辅助理解页面**：按需解释以下分组的具体值、影响和现有值，由用户在 HTML 中作出选择，不通过会话选择工具或文字问答替代页面：
 
@@ -149,7 +176,7 @@ description: Use for APA configuration requests such as 完善配置、为我配
 
 用户在页面完成选择后，只核对其提交的操作，展示项目绝对路径、修改前后差异及未完成项，等待明确应用确认；用户明确要求先保存已选部分时，也按相同预览与确认流程处理。已有明确选择无需重复询问，但不能从“你决定”或“全部按推荐”推导答案。
 
-## 4. 应用、导出与导入
+## 5. 应用、导出与导入
 
 - 应用用户明确要求执行的操作：读取用户提供的文件或完整 JSON，核对目标、动作、字段和预览，然后运行 `node scripts/apa-setup.mjs apply --file <operation.json>`（按第 0 步追加已确认的 `--repo-root`）。用户粘贴 JSON 需要暂存时，使用仓库 `.tmp/apa-public-setup/` 下的任务文件。用户自行提交完整操作并明确要求应用时，不重复询问已确定的目标与字段；这不授权添加任何未选择的设置。不改动操作中的指纹；遇 stale 重新读取配置、展示更新后的差异并取得用户确认，再生成新操作，不能重建操作绕过拒绝。应用后再运行一次第 2 步的 `inspect`，以回读结果为准，报告实际的缺项和不可用依赖。
 - 挖空或去除配置：不强制打开 HTML。先核对用户明确要求去除的全部答案或具体字段，展示目标和范围，再按明确授权使用既有 `remove` 操作及 `apply` CLI，回读确认结果；范围不清时先澄清。不删除笔记、补丁或依赖。
