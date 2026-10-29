@@ -63,7 +63,7 @@
     },
     {
       "path": ".agents/skills/apa-setup/SKILL.md",
-      "sha256": "db418acbb3c661875b5f29a7d9cf5e5d2b05910bb9182c97061815204c2a3600"
+      "sha256": "41641c2c4c7e4a7238dff774a1df6c2b1f915c271bf83a1b47f13012358ec586"
     },
     {
       "path": ".gitattributes",
@@ -115,7 +115,7 @@
     },
     {
       "path": "docs/CONFIGURATION.md",
-      "sha256": "179abb7c638accd350e68bbb3641c20416ad9159868e34c57aeda388260ab88c"
+      "sha256": "f9263cdbf6ad98e410d1879340b2e0992320e78006843fba508421b55f6db74e"
     },
     {
       "path": "Figures/.gitkeep",
@@ -331,7 +331,7 @@
     },
     {
       "path": "scripts/lib/apa-config.mjs",
-      "sha256": "56197f3058c6cd1720f3a8add7854c27aafd82f339648c72f80ce90fc23208b7"
+      "sha256": "1b2e2c591c602de29ed9e7ce685fbea3d1432d762338a238f54486249a1cdac7"
     },
     {
       "path": "scripts/lib/apa-host-achievement.mjs",
@@ -747,7 +747,7 @@
     },
     {
       "path": "Templates/apa-setup/page.js",
-      "sha256": "f5ae3358a2dc3290904a29af4fdfe5e4b8d9e175b4af6747c6cd3c7832067702"
+      "sha256": "9eac9f18b4759003759e1fc4d19be2554a0c86852820538480461729be5b84f2"
     },
     {
       "path": "Templates/apa-v3/apa-readable.css",
@@ -783,7 +783,7 @@
     },
     {
       "path": "test/setup/apa-setup-page.test.mjs",
-      "sha256": "9d6eb91e435d0196617956f7f26c7bbe84799f10c630a9dcc5fc9bd6ee287931"
+      "sha256": "140f3cc661181dcdfa4395d5a7762ade3e097ab613ea72ba03baf65eb88f6018"
     },
     {
       "path": "test/setup/bootstrap-execution.test.mjs",

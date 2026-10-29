@@ -112,7 +112,21 @@ export function describeChanges(snapshot, payload) {
     const keys = payload.all ? Object.keys(flattenConfig(snapshot.config)) : payload.remove;
     return keys.map(key => `${fieldLabel(key)}：${describeValue(getValue(snapshot.config, key), key)} → 移除答案`);
   }
-  return Object.entries(payload.set).map(([key, value]) => `${fieldLabel(key)}：${describeValue(getValue(snapshot.config, key), key)} → ${describeValue(value, key)}`);
+  const threshold = payload.host_settings?.threshold_compaction;
+  return [
+    ...Object.entries(payload.set).map(([key, value]) => `${fieldLabel(key)}：${describeValue(getValue(snapshot.config, key), key)} → ${describeValue(value, key)}`),
+    ...(threshold ? [`宿主压缩阈值（${threshold.host}）：候选 ${threshold.tokens} token → 不写入个人配置；助手应用时据此生成宿主设置预览，你确认后才写入`] : [])
+  ];
+}
+
+// The threshold typed on a capability card travels in the operation, so the agent receives it with the copied JSON.
+export function thresholdHostSetting(raw, host) {
+  const text = String(raw ?? '').trim();
+  if (!text) return null;
+  const tokens = /^[0-9]+$/.test(text) ? Number(text) : null;
+  if (!Number.isSafeInteger(tokens) || tokens < 1) throw new Error('候选阈值须为正的 token 整数；不设置时请清空。');
+  if (!host) throw new Error('本页没有宿主检测结果，无法记录候选阈值。请让助手先检测自身环境再生成页面。');
+  return { threshold_compaction: { host, tokens } };
 }
 
 export function describeDispatch(name, dispatch) {
@@ -149,11 +163,11 @@ export function configDifferences(before, after) {
   return Object.keys(right).filter(key => JSON.stringify(left[key]) !== JSON.stringify(right[key])).map(key => ({ key, before: left[key], after: right[key] }));
 }
 
-export function createOperation(snapshot, { action = 'patch', set = {}, remove = [], all = false } = {}) {
+export function createOperation(snapshot, { action = 'patch', set = {}, remove = [], all = false, hostSettings = null } = {}) {
   // repo_root binds a page-generated operation to the project folder the user confirmed on the first page.
   const base = { schema_version: 'apa-config-operation-1.0', base_fingerprint: snapshot.fingerprint, ...(snapshot.repo_root ? { repo_root: snapshot.repo_root } : {}), action };
   if (action === 'remove') return all ? { ...base, all: true } : { ...base, remove: [...new Set(remove)] };
-  return { ...base, set, ...(remove.length ? { remove: [...new Set(remove)] } : {}) };
+  return { ...base, set, ...(remove.length ? { remove: [...new Set(remove)] } : {}), ...(hostSettings ? { host_settings: hostSettings } : {}) };
 }
 
 export function serializePayload(payload) {
@@ -306,8 +320,9 @@ function renderAchievement(make, check) {
     error.className = 'hint error';
     error.hidden = true;
     box.append(label);
+    if (check.id === 'threshold_compaction') box.append(make('p', '推荐阈值范围 250000–300000 token。仅作参考，不会自动填入；请按需要自行输入。', 'hint'));
     if (ranged.length) box.append(make('p', '输入后按各步骤的参数范围和已知容量检查；本页只展示命令。'));
-    else {
+    if (check.id === 'threshold_compaction') {
       note = make('p');
       note.hidden = true;
       box.append(note);
@@ -358,7 +373,7 @@ function renderAchievement(make, check) {
         entry.line.hidden = !entry.code.textContent;
       }
       if (note) {
-        note.textContent = valid ? `候选阈值 ${value} token：请把这个数值告诉助手，由助手用宿主设置工具生成预览，确认后才写入。` : '';
+        note.textContent = valid ? `候选阈值 ${value} token：生成“完善配置”结果时会写入 JSON 的 host_settings，随复制或下载的内容交给助手；助手据此生成宿主设置预览，你确认后才写入。` : '';
         note.hidden = !valid;
       }
       error.textContent = [...messages].join(' ');
@@ -644,8 +659,11 @@ export function mountApaSetup(document, snapshot, inspection, queryInspection, h
     }
     const groupSelections = Object.fromEntries(groupControls.filter(item => item.selected.checked).map(({ group, inputs }) => [group.id, Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value]))]));
     Object.assign(set, collectModelSet({ config: snapshot.config, hostProfile, groupSelections, roleSelections }));
-    return createOperation(snapshot, { set });
+    const hostSettings = thresholdHostSetting(thresholdInput()?.value, inspection?.capability_check?.host || hostProfile?.host);
+    return createOperation(snapshot, { set, hostSettings });
   };
+  const thresholdInput = () => document.querySelector('input[name="threshold-threshold_compaction"]');
+  thresholdInput()?.addEventListener('input', () => clearResult('edit'));
   const results = createSetupResults();
   const resultElement = (flow, id) => byId(`${flow}-${id}`);
   const clearResult = flow => {

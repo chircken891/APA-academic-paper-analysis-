@@ -93,8 +93,16 @@ function merge(target, source) {
 }
 
 export function applyApaConfigOperation({ repoRoot = process.cwd(), operation }) {
-  const allowed = ['schema_version', 'base_fingerprint', 'repo_root', 'action', 'set', 'remove', 'all', 'answers'];
+  const allowed = ['schema_version', 'base_fingerprint', 'repo_root', 'action', 'set', 'remove', 'all', 'answers', 'host_settings'];
   if (!operation || Object.keys(operation).some(key => !allowed.includes(key)) || operation.schema_version !== 'apa-config-operation-1.0' || !['patch', 'remove', 'import'].includes(operation.action)) throw error('APA_CONFIG_OPERATION_INVALID');
+  // host_settings carries the user's page choice for host settings; it is reported back, never written to the config.
+  const hostSettings = operation.host_settings;
+  if (hostSettings !== undefined) {
+    const threshold = hostSettings?.threshold_compaction;
+    const keys = threshold && typeof threshold === 'object' ? Object.keys(threshold).sort().join(',') : '';
+    if (operation.action !== 'patch' || !hostSettings || typeof hostSettings !== 'object' || Array.isArray(hostSettings) || Object.keys(hostSettings).join(',') !== 'threshold_compaction'
+      || keys !== 'host,tokens' || typeof threshold.host !== 'string' || !threshold.host.trim() || !Number.isSafeInteger(threshold.tokens) || threshold.tokens < 1) throw error('APA_CONFIG_OPERATION_INVALID');
+  }
   // Page operations carry the project folder the user confirmed; applying them to another checkout is refused.
   if (operation.repo_root !== undefined) {
     const same = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
@@ -124,7 +132,8 @@ export function applyApaConfigOperation({ repoRoot = process.cwd(), operation })
     fs.writeFileSync(temporary, `${JSON.stringify(config, null, 2)}\n`, { flag: 'wx' });
     fs.renameSync(temporary, snapshot.path);
   } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
-  return loadApaConfig({ repoRoot });
+  const applied = loadApaConfig({ repoRoot });
+  return hostSettings ? { ...applied, pending_host_settings: clone(hostSettings) } : applied;
 }
 
 export function exportApaConfig(config) {

@@ -654,9 +654,41 @@ test('threshold input renders without command template', async () => {
   assert.ok(input);
   assert.equal(input.value, '');
   assert.ok(!flattenText(container).includes('候选阈值 123456 token'));
+  assert.ok(flattenText(container).includes('推荐阈值范围 250000–300000 token'));
   enter(input, '123456');
-  assert.ok(flattenText(container).includes('候选阈值 123456 token：请把这个数值告诉助手'));
+  assert.ok(flattenText(container).includes('候选阈值 123456 token：生成“完善配置”结果时会写入 JSON 的 host_settings'));
   assert.ok(findAll(container, node => node.tag === 'code').every(node => !node.textContent.includes('apa-host-settings')));
+});
+
+test('threshold input travels in the copied operation as host_settings, never as a config answer', async () => {
+  const { thresholdHostSetting } = await import('../../Templates/apa-setup/page.js');
+  assert.equal(thresholdHostSetting('', 'dsh'), null);
+  assert.throws(() => thresholdHostSetting('25万', 'dsh'), /正的 token 整数/);
+  assert.throws(() => thresholdHostSetting('0', 'dsh'), /正的 token 整数/);
+  assert.throws(() => thresholdHostSetting('250000', undefined), /没有宿主检测结果/);
+  const hostSettings = thresholdHostSetting(' 250000 ', 'dsh');
+  assert.deepEqual(hostSettings, { threshold_compaction: { host: 'dsh', tokens: 250000 } });
+  const operation = createOperation(snapshot, { set: {}, hostSettings });
+  assert.deepEqual(JSON.parse(serializePayload(operation)).host_settings, hostSettings);
+  assert.deepEqual(operation.set, {});
+  assert.equal(createOperation(snapshot).host_settings, undefined);
+  assert.ok(describeChanges(snapshot, operation).some(line => line.includes('宿主压缩阈值（dsh）：候选 250000 token') && line.includes('不写入个人配置')));
+});
+
+test('apply reports host_settings back without writing them to the config', t => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-host-settings-op-'));
+  t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+  const hostSettings = { threshold_compaction: { host: 'dsh', tokens: 250000 } };
+  const base = () => createOperation(loadApaConfig({ repoRoot }), { set: { 'paths.runs': 'Eval/runs' }, hostSettings });
+  for (const bad of [{ threshold_compaction: { host: 'dsh', tokens: '250000' } }, { threshold_compaction: { host: '', tokens: 1 } }, { threshold_compaction: { host: 'dsh', tokens: 1, extra: true } }, { other: {} }]) {
+    assert.throws(() => applyApaConfigOperation({ repoRoot, operation: { ...base(), host_settings: bad } }), /APA_CONFIG_OPERATION_INVALID/);
+  }
+  const removal = { ...createOperation(loadApaConfig({ repoRoot }), { action: 'remove', all: true }), host_settings: hostSettings };
+  assert.throws(() => applyApaConfigOperation({ repoRoot, operation: removal }), /APA_CONFIG_OPERATION_INVALID/);
+  const result = applyApaConfigOperation({ repoRoot, operation: base() });
+  assert.deepEqual(result.pending_host_settings, hostSettings);
+  assert.equal(result.config.paths.runs, 'Eval/runs');
+  assert.equal(JSON.stringify(result.config).includes('250000'), false);
 });
 
 test('setup issues render grouped', async () => {
