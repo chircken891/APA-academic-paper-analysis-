@@ -254,3 +254,23 @@ test('topic promotion interruption recovers the complete old generation in a fre
   assert.deepEqual(await readFile(join(f.vaultRoot, f.topic.path)), before);
   assert.equal((await readCommittedGeneration({ vaultRoot: f.vaultRoot })).generation.topics[0].revision, 1);
 });
+
+test('topic updates reject managed edits after the model reply and after candidate creation', async t => {
+  const f = await committed(t), path = join(f.vaultRoot, f.topic.path);
+  const result = await topics.executeTopicUpdate({ repoRoot: f.vaultRoot, topicId: f.topic.topic_id, baseRevision: 1,
+    generationId: f.snapshot.generation_id, selectedSources: f.topic.dependencies, question: 'Update the study result', mainSession, hostCapabilities,
+    executeHost: async () => ({ answer: 'The revised result explains conditions.', adopted_sources: f.topic.dependencies, changes: {} }) });
+  const original = await readFile(path, 'utf8');
+  const edited = original.replace('<!-- AUTO:END topic -->', 'HumanEditAfterUpdateNeedle\n<!-- AUTO:END topic -->');
+  const inputs = { repoRoot: f.vaultRoot, operationId: 'changed-topic-update', question: f.topic.question, language: 'en', title: f.topic.title,
+    answer: result.answer, adoptedSources: result.adopted_sources, queryTerms: f.topic.query_terms, expectedGenerationId: f.snapshot.generation_id,
+    saveIntent: 'update', topicId: f.topic.topic_id, baseRevision: 1, execution: result.execution_record };
+  await writeFile(path, edited);
+  await assert.rejects(topics.prepareTopicSave(inputs), /P24_TOPIC_BASE_CHANGED/);
+  assert.equal(await readFile(path, 'utf8'), edited);
+  await writeFile(path, original);
+  const candidate = await topics.prepareTopicSave(inputs);
+  await writeFile(path, edited);
+  await assert.rejects(prepareTopicPublication({ vaultRoot: f.vaultRoot, candidate: candidate.candidate }), /P24_TOPIC_BASE_CHANGED/);
+  assert.equal(await readFile(path, 'utf8'), edited);
+});

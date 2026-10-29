@@ -57,7 +57,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
   if (p.knowledge_layout && !sharedKnowledge) fail('RF_OBSIDIAN_KNOWLEDGE_LAYOUT_INVALID');
   const editor = readingEditor === undefined ? undefined : validateReadingFirstEditor({ editor: readingEditor, views, presentation });
   // Editor 1.1: three heading levels, folded catalogues/captions, figure notes beside figures and a staged map.
-  const compact = editor?.schema_version === 'reading-editor-1.1';
+  const compact = ['reading-editor-1.1', 'reading-editor-1.2'].includes(editor?.schema_version);
   const writerLayout = p.layout === 'writer-modules-1.0';
   if (editor && !writerLayout) fail('RF_OBSIDIAN_EDITOR_LAYOUT_INVALID');
   if (p.layout && !writerLayout) fail('RF_OBSIDIAN_LAYOUT_INVALID');
@@ -191,7 +191,9 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     const item = knowledge.find(item => item.id === supportNotes[index].id);
     const resolveReferences = (value, language, target) => value.replace(/\[([^\]\n]+)\]\((apa-[^)]+)\)/g, (_, text, reference) => {
       const concept = /^apa-knowledge:([a-z][a-z0-9-]*)$/.exec(reference);
-      const destination = concept && destinations.get(`${concept[1]}:${language}`);
+      const committed = concept ? knowledgeRegistry.filter(entry => entry.id === concept[1]) : [];
+      if (committed.length > 1) fail('RF_OBSIDIAN_REFERENCE_INVALID');
+      const destination = concept && (destinations.get(`${concept[1]}:${language}`) ?? committed[0]?.path);
       if (!destination) fail('RF_OBSIDIAN_REFERENCE_INVALID');
       return md(text, href(target, destination) + '#' + encodeMarkdownComponent(language === 'en' ? 'English' : '中文'));
     });
@@ -266,20 +268,29 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     let reading = '', researchMap = '';
     if (compact && nodes.length) {
       // Left-to-right stages keep wide maps readable; only editor-selected nodes and their own edges are drawn.
-      const selected = editor.map.nodes, ids = new Set(selected.map(node => node.id)), mermaidId = id => id.replaceAll('-', '_');
+      const selected = editor.map.nodes, ids = new Set(selected.map(node => node.id)), drawn = new Set(), mermaidId = id => id.replaceAll('-', '_');
       const stages = [['design', en ? 'Study design' : '研究设计'], ['measurement', en ? 'Measurement and analysis' : '测量与分析'], ['finding', en ? 'Findings' : '主要发现'], ['limit', en ? 'Limits' : '限制']];
       researchMap += '```mermaid\nflowchart LR\n';
       for (const [stage, title] of stages) {
         const rows = selected.filter(node => node.stage === stage);
         if (!rows.length) continue;
         researchMap += `  subgraph stage_${stage}["${title}"]\n    direction TB\n`;
-        for (const row of rows) researchMap += `    ${mermaidId(row.id)}["${local(nodes.find(node => node.id === row.id).label, language).replace(/["\r\n<>]/g, ' ')}"]\n`;
+        for (const row of rows) {
+          researchMap += `    ${mermaidId(row.id)}["${local(nodes.find(node => node.id === row.id).label, language).replace(/["\r\n<>]/g, ' ')}"]\n`;
+          drawn.add(row.id);
+        }
         researchMap += '  end\n';
       }
       for (const relation of map.relations) if (ids.has(relation.step_id) && ids.has(relation.finding_id)) researchMap += `  ${mermaidId(relation.step_id)} --> ${mermaidId(relation.finding_id)}\n`;
       researchMap += '  classDef primary fill:#1d4ed8,stroke:#1e3a8a,stroke-width:3px,color:#ffffff\n  classDef secondary fill:#f1f5f9,stroke:#94a3b8,color:#1e293b\n';
       for (const [kind, rows] of [['primary', selected.filter(node => node.primary)], ['secondary', selected.filter(node => !node.primary)]]) if (rows.length) researchMap += `  class ${rows.map(node => mermaidId(node.id)).join(',')} ${kind}\n`;
       researchMap += '```\n\n';
+      if (editor.schema_version === 'reading-editor-1.2') {
+        if (drawn.size !== ids.size || [...ids].some(id => !drawn.has(id))) fail('RF_RESEARCH_MAP_INCOMPLETE');
+        const omitted = map.findings.filter(node => !ids.has(node.id));
+        if (omitted.length) researchMap += `${en ? 'Findings not shown in the map: ' : '未画入导图的发现：'}`
+          + omitted.map(node => sectionLink(node.section_id, local(node.label, language))).join(' · ') + '\n\n';
+      }
     } else if (nodes.length) {
       researchMap += `${writerLayout ? '###' : '##'} ${editor ? mapHeading : en ? 'Research map' : '研究导图'}\n\n\`\`\`mermaid\nflowchart TD\n`;
       for (const node of nodes) researchMap += `  ${node.id.replaceAll('-', '_')}["${local(node.label, language).replace(/["\r\n<>]/g, ' ')}"]\n`;

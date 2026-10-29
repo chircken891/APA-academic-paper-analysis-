@@ -1,4 +1,5 @@
-import { assertCommittedSnapshot, normalizeIndexPath, readCommittedReaderPresentations, readCommittedReadingFirstPresentations } from './phase22-active-version.mjs';
+import { assertCommittedSnapshot, assertRegisteredCommit, normalizeIndexPath, readCommittedReaderPresentations, readCommittedReadingFirstPresentations,
+  verifyReaderPresentation, verifyReadingFirstPresentation, INDEX_READER_PROFILE, INDEX_READING_FIRST_PROFILE, readRegisteredObject } from './phase22-active-version.mjs';
 
 const fail = (code, details = {}) => { throw Object.assign(new Error(code), { code, details }); };
 const escapeRegex = text => text.replace(/[.*+?^$\{\}()|[\]\\/]/g, '\\$&');
@@ -10,6 +11,26 @@ const escapeRegex = text => text.replace(/[.*+?^$\{\}()|[\]\\/]/g, '\\$&');
  */
 export function buildGraphProposal({ activeSnapshot, entityInventory } = {}) {
   assertCommittedSnapshot(activeSnapshot);
+  const readers = readCommittedReaderPresentations(activeSnapshot);
+  const readingFirst = readCommittedReadingFirstPresentations(activeSnapshot);
+  return graphProposal(activeSnapshot, entityInventory, readers, readingFirst);
+}
+
+/** Registered metadata drives graph membership even when editable note bytes change. */
+export function buildRegisteredGraphProposal({ activeSnapshot, entityInventory } = {}) {
+  assertRegisteredCommit(activeSnapshot);
+  const rows = profile => activeSnapshot.generation.papers.filter(paper => paper.profile === profile).map(paper => {
+    const object = activeSnapshot.generation.objects.find(row => row.path === paper.reader_presentation.path && row.kind === 'reader-presentation');
+    if (!object) fail('P22_GRAPH_PRESENTATION_MISSING', { path: paper.reader_presentation.path });
+    const { bytes } = readRegisteredObject(activeSnapshot, object.path);
+    return { paper, presentation: (profile === INDEX_READER_PROFILE ? verifyReaderPresentation : verifyReadingFirstPresentation)(paper, bytes, activeSnapshot.generation) };
+  });
+  const readers = rows(INDEX_READER_PROFILE), readingFirst = rows(INDEX_READING_FIRST_PROFILE);
+  assertRegisteredCommit(activeSnapshot);
+  return graphProposal(activeSnapshot, entityInventory, readers, readingFirst);
+}
+
+function graphProposal(activeSnapshot, entityInventory, readers, readingFirst) {
   if (!Array.isArray(entityInventory)) fail('P22_GRAPH_INVENTORY_REQUIRED');
   const paths = entityInventory.map(entry => normalizeIndexPath(entry?.path));
   if (new Set(paths.map(path => path.normalize('NFC').toLowerCase())).size !== paths.length) fail('P22_GRAPH_PATH_COLLISION');
@@ -32,8 +53,6 @@ export function buildGraphProposal({ activeSnapshot, entityInventory } = {}) {
       { paper_id: paper.paper_id, from: paper.paths['zh-CN'], to: paper.paths.en },
       { paper_id: paper.paper_id, from: paper.paths.en, to: paper.paths['zh-CN'] },
     ]);
-  const readers = readCommittedReaderPresentations(activeSnapshot);
-  const readingFirst = readCommittedReadingFirstPresentations(activeSnapshot);
   const expectedReaderNavigation = readers.flatMap(({ paper, presentation }) => presentation.navigation.map(route => ({
     paper_id: paper.paper_id, from: paper.paths[route.language], ...route,
   })));

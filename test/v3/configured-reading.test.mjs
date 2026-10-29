@@ -41,7 +41,7 @@ async function configuredRepo(t, enabled = false) {
 
 async function configuredCommittedReuseFixture(t) {
   const { root } = await configuredRepo(t);
-  const prior = await readingFirstIndexFixture(t, { vaultRoot: root });
+  const prior = await readingFirstIndexFixture(t, { vaultRoot: root, policy: 'committed-shared-nodes-1.0' });
   await prior.save(await prior.build());
   const runId = 'run_' + 'b'.repeat(32), paperId = 'pap_' + 'b'.repeat(32);
   const modules = ['abstract', 'design', 'methods', 'findings', 'discussion', 'limitations', 'conclusion'];
@@ -57,17 +57,17 @@ async function configuredCommittedReuseFixture(t) {
   let prepared;
   const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId, paperId, presentation,
     createRunControl: options => { prepared = prepareConfiguredReading({ ...options, repoRoot: root }); return prepared.runControl; } });
-  const resources = [...fixture.resources, ...Object.values(prior.paper.paths).map(path => ({ path, content: '# Existing committed paper\n' }))];
+  const resources = fixture.resources;
   return { root, prior, fixture, prepared, resources };
 }
 
 test('new configured materialization freezes and loads committed knowledge, refusing an injected registry', async t => {
   const { root, prior, fixture, prepared, resources } = await configuredCommittedReuseFixture(t);
   assert.deepEqual(prepared.runControl.reading_first_binding.configured_setup.knowledge_registry,
-    { policy: 'committed-generation-1.0', vault_root: root });
+    { policy: 'current-shared-nodes-1.0', vault_root: root });
   const args = { prepared, controller: fixture.controller, handoff: fixture.handoff, resources };
   await assert.rejects(materializeConfiguredReadingCandidate({ ...args, knowledgeRegistry: [{ id: 'orphan', path: 'Wiki/methods/orphan.md', content: 'uncommitted' }] }), /APA_CONFIGURED_KNOWLEDGE_REGISTRY_MISMATCH/);
-  const trusted = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: root });
+  const trusted = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: root, policy: 'current-shared-nodes-1.0' });
   await assert.rejects(materializeConfiguredReadingCandidate({ ...args, knowledgeRegistry: [{ ...trusted[0], content: trusted[0].content + '\nChanged content.' }] }), /APA_CONFIGURED_KNOWLEDGE_REGISTRY_MISMATCH/);
   await assert.rejects(materializeConfiguredReadingCandidate({ ...args, knowledgeRegistry: [{ ...trusted[0], canonical_key: 'different-identity' }] }), /APA_CONFIGURED_KNOWLEDGE_REGISTRY_MISMATCH/);
   const saved = await materializeConfiguredReadingCandidate(args);
@@ -79,7 +79,7 @@ test('new configured materialization freezes and loads committed knowledge, refu
 
 test('configured materialization accepts exact committed registry entries', async t => {
   const { root, prior, fixture, prepared, resources } = await configuredCommittedReuseFixture(t);
-  const trusted = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: root });
+  const trusted = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: root, policy: 'current-shared-nodes-1.0' });
   const saved = await materializeConfiguredReadingCandidate({ prepared, controller: fixture.controller, handoff: fixture.handoff, resources, knowledgeRegistry: trusted });
   assert.equal(saved.candidate.supportNotes[0].path, prior.rendered.supportNotes[0].path);
   assert.equal(saved.exported.supportNotes[0].content, saved.candidate.supportNotes[0].content);
@@ -92,7 +92,7 @@ test('configured low-level rendering rejects a forged or modified registry and a
     createRunControl: options => prepareConfiguredReading({ ...options, repoRoot: root }).runControl });
   assert.throws(() => renderReadingFirstNotes({ controller: fixture.controller,
     knowledgeRegistry: [{ id: 'orphan', path: 'Wiki/methods/orphan.md', content: 'uncommitted' }] }), /RF_KNOWLEDGE_REGISTRY_NOT_TRUSTED/);
-  const empty = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: root });
+  const empty = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: root, policy: 'current-shared-nodes-1.0' });
   assert.doesNotThrow(() => renderReadingFirstNotes({ controller: fixture.controller, knowledgeRegistry: empty }));
   empty.push({ id: 'orphan', path: 'Wiki/methods/orphan.md', content: 'uncommitted' });
   assert.throws(() => renderReadingFirstNotes({ controller: fixture.controller, knowledgeRegistry: empty }), /RF_KNOWLEDGE_REGISTRY_NOT_TRUSTED/);
@@ -100,21 +100,81 @@ test('configured low-level rendering rejects a forged or modified registry and a
 
 test('configured low-level rendering rejects stale committed data and a trusted registry from a different root', async t => {
   const { root, prior, fixture } = await configuredCommittedReuseFixture(t);
-  const trusted = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: root });
+  const trusted = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: root, policy: 'current-shared-nodes-1.0' });
   assert.doesNotThrow(() => renderReadingFirstNotes({ controller: fixture.controller, knowledgeRegistry: trusted }));
   const { root: otherRoot } = await configuredRepo(t);
-  const other = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: otherRoot });
+  const other = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: otherRoot, policy: 'current-shared-nodes-1.0' });
   assert.throws(() => renderReadingFirstNotes({ controller: fixture.controller, knowledgeRegistry: other }), /RF_KNOWLEDGE_REGISTRY_NOT_TRUSTED/);
   const path = join(root, prior.manifest.targets.support[0].path);
   await writeFile(path, (await readFile(path, 'utf8')) + '\ntampered\n');
-  assert.throws(() => renderReadingFirstNotes({ controller: fixture.controller, knowledgeRegistry: trusted }), /P22_SNAPSHOT_NOT_CURRENT/);
+  assert.throws(() => renderReadingFirstNotes({ controller: fixture.controller, knowledgeRegistry: trusted }), /P23_CURRENT_CHANGED/);
 });
 
-test('configured materialization rejects changed committed knowledge before export', async t => {
+test('configured materialization preserves current edited knowledge and records its fingerprint', async t => {
   const { root, prior, fixture, prepared, resources } = await configuredCommittedReuseFixture(t);
   const path = join(root, prior.manifest.targets.support[0].path);
   await writeFile(path, (await readFile(path, 'utf8')) + '\ntampered\n');
-  await assert.rejects(materializeConfiguredReadingCandidate({ prepared, controller: fixture.controller, handoff: fixture.handoff, resources }), /RF_KNOWLEDGE_REGISTRY_COMMITTED_INVALID/);
+  const edited = await readFile(path, 'utf8');
+  const saved = await materializeConfiguredReadingCandidate({ prepared, controller: fixture.controller, handoff: fixture.handoff, resources });
+  assert.match(saved.candidate.supportNotes[0].content, /tampered/);
+  assert.match(saved.candidate.supportNotes[0].content, /A new application\./);
+  assert.match(saved.candidate.supportNotes[0].content, /新的论文应用/);
+  assert.equal(await readFile(path, 'utf8'), edited);
+  assert.deepEqual(saved.exported.manifest.knowledge_dependencies, [{ path: prior.manifest.targets.support[0].path,
+    sha256: 'sha256:' + createHash('sha256').update(edited).digest('hex') }]);
+});
+
+test('a changed reused node is refreshed once before candidate becomes visible', async t => {
+  const { root, prior, fixture, prepared, resources } = await configuredCommittedReuseFixture(t);
+  const path = join(root, prior.manifest.targets.support[0].path);
+  let observations = 0;
+  const saved = await materializeConfiguredReadingCandidate({ prepared, controller: fixture.controller, handoff: fixture.handoff, resources,
+    onDependencyBoundary: async ({ attempt, phase }) => {
+      if (phase !== 'before-finalize') return;
+      observations++;
+      if (attempt === 1) await writeFile(path, (await readFile(path, 'utf8')) + '\nChanged during export.\n');
+    } });
+  assert.equal(observations, 2);
+  assert.match(saved.candidate.supportNotes[0].content, /Changed during export/);
+  assert.equal(saved.exported.outputRoot, prepared.paths.candidateRoot);
+  assert.equal(saved.exported.manifest.knowledge_dependencies[0].sha256,
+    'sha256:' + createHash('sha256').update(await readFile(path)).digest('hex'));
+});
+
+test('repeated changes to a reused node stop before publishing a candidate directory', async t => {
+  const { root, prior, fixture, prepared, resources } = await configuredCommittedReuseFixture(t);
+  const path = join(root, prior.manifest.targets.support[0].path);
+  let observations = 0;
+  await assert.rejects(materializeConfiguredReadingCandidate({ prepared, controller: fixture.controller, handoff: fixture.handoff, resources,
+    onDependencyBoundary: async ({ phase }) => { if (phase === 'before-finalize') { observations++; await writeFile(path, (await readFile(path, 'utf8')) + '\nRepeated edit.\n'); } } }), /P23_CURRENT_CHANGED/);
+  assert.equal(observations, 2);
+  await assert.rejects(readFile(join(prepared.paths.candidateRoot, '.apa-v3/presentation.json')), { code: 'ENOENT' });
+});
+
+test('a dependency edit during final copy reports the owned candidate and staging paths', async t => {
+  const { root, prior, fixture, prepared, resources } = await configuredCommittedReuseFixture(t);
+  const path = join(root, prior.manifest.targets.support[0].path);
+  await assert.rejects(materializeConfiguredReadingCandidate({ prepared, controller: fixture.controller, handoff: fixture.handoff, resources,
+    onDependencyBoundary: async ({ phase }) => { if (phase === 'after-finalize') await writeFile(path, (await readFile(path, 'utf8')) + '\nFinalization edit.\n'); } }),
+  error => error.code === 'P23_CURRENT_CHANGED' && error.details.owned_output_path === prepared.paths.candidateRoot
+    && error.details.staging_root.includes('reading-first-candidates'));
+  assert.ok(await readFile(join(prepared.paths.candidateRoot, '.apa-v3/presentation.json')));
+});
+
+test('new configured candidates tolerate old paper body edits while complete committed reads still reject them', async t => {
+  const { root, prior, fixture, prepared } = await configuredCommittedReuseFixture(t);
+  const path = join(root, prior.paper.paths.en);
+  const before = await readFile(path, 'utf8');
+  await writeFile(path, before.replace('Only sharedknowledgeneedle', 'Edited sharedknowledgeneedle').replace('## ', '## Edited '));
+  assert.equal((await readCommittedGeneration({ vaultRoot: root })).ok, false);
+  const saved = await materializeConfiguredReadingCandidate({ prepared, controller: fixture.controller, handoff: fixture.handoff, resources: fixture.resources });
+  assert.equal(saved.exported.validation.status, 'passed');
+  assert.equal(prepared.runControl.reading_first_binding.presentation_profile, 'reading-editor-1.2');
+  const instructions = prepared.runControl.reading_first_binding.configured_setup.sections['Reading Editor'];
+  assert.match(instructions, /reading-editor-1\.2/);
+  assert.doesNotMatch(instructions, /roughly twelve nodes/);
+  assert.ok(saved.exported.manifest.files.some(row => row.kind === 'historical-navigation'));
+  assert.equal(await readFile(path, 'utf8'), before.replace('Only sharedknowledgeneedle', 'Edited sharedknowledgeneedle').replace('## ', '## Edited '));
 });
 
 test('legacy configured bindings retain their supplied registry behavior', async t => {

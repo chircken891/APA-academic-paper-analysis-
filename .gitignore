@@ -16,6 +16,7 @@
 
 # Local interface and conversation state
 .obsidian/graph.json
+.apa-v3/phase22/graph/
 .obsidian/plugins/realclaudian/data.json
 
 # OS files

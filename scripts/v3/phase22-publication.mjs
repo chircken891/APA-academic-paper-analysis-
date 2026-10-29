@@ -1,4 +1,4 @@
-import { captureTopicPublicationRegistration, rebuildRegisteredTopicReview, assertTopicPublicationReviewLive } from './topic-publication.mjs';
+import { captureTopicPublicationRegistration, rebuildRegisteredTopicReview, assertTopicPublicationReviewLive, usesCurrentTopicPublication } from './topic-publication.mjs';
 import { loadApaConfig } from '../lib/apa-config.mjs';
 import { createHash, randomUUID, generateKeyPairSync, createPublicKey, sign, verify } from 'node:crypto';
 import { readFile, writeFile, open, lstat, realpath, mkdir, rename, link, unlink } from 'node:fs/promises';
@@ -15,9 +15,10 @@ import { isDeepStrictEqual as same } from 'node:util';
 import { fingerprintV3Json as hash } from './semantic-package-validator.mjs';
 import { assertBilingualReviewCurrent } from './phase22-review.mjs';
 import { getRunControlForDispatch, createOwnedArtifactBroker } from './owned-artifact-store.mjs';
-import { assertActiveGeneration, assertIndexGeneration, assertActiveIndexContract, readCommittedGeneration, PHASE22_COMMIT_PATH } from './phase22-active-version.mjs';
+import { assertActiveGeneration, assertIndexGeneration, assertActiveIndexContract, readCommittedGeneration, readRegisteredCommit, PHASE22_COMMIT_PATH } from './phase22-active-version.mjs';
+import { inspectManagedNote } from './phase22-managed-markdown.mjs';
 import { captureReadingFirstPublicationRegistration, rebuildRegisteredReadingFirstReview,
-  assertReadingFirstPublicationReviewLive } from './reading-first-publication.mjs';
+  assertReadingFirstPublicationReviewLive, usesCurrentReadingFirstPublication } from './reading-first-publication.mjs';
 
 const CONTROL = '.apa-v3/phase22';
 const LOCK = CONTROL + '/publication.lock';
@@ -214,7 +215,8 @@ export async function dryRunBilingualPublication({ vaultRoot, run, review, plan:
   const previous = await observe(root, PHASE22_COMMIT_PATH);
   let previousGeneration = null;
   if (previous.exists) {
-    const snapshot = await readCommittedGeneration({ vaultRoot: root });
+    const snapshot = (usesCurrentReadingFirstPublication(review) || usesCurrentTopicPublication(review))
+      ? await readRegisteredCommit({ vaultRoot: root }) : await readCommittedGeneration({ vaultRoot: root });
     if (!snapshot.ok) fail('P22_PREVIOUS_GENERATION_NOT_CURRENT', { errors: snapshot.errors });
     previousGeneration = snapshot.generation_id;
   }
@@ -239,17 +241,57 @@ export async function dryRunBilingualPublication({ vaultRoot, run, review, plan:
   if (previousGeneration) {
     const marker = JSON.parse(previous.bytes), prior = JSON.parse((await observe(root, marker.active.path)).bytes);
     const historyRoot = CONTROL + '/history/' + previousGeneration;
+    const priorManifest = await observe(root, CONTROL + '/generations/' + previousGeneration + '/manifest.json');
+    if (!priorManifest.exists) fail('P22_HISTORY_SOURCE_MISSING', { generation: previousGeneration });
+    const priorRun = JSON.parse(priorManifest.bytes).identity?.run_id;
+    let historicalFiles = [];
+    if (identifier(priorRun)) {
+      const pointer = await observe(root, CONTROL + '/runs/' + priorRun + '/CURRENT.json');
+      if (pointer.exists) {
+        const registration = JSON.parse(pointer.bytes), saved = await observe(root, registration.bundle.path);
+        if (!saved.exists || saved.sha256 !== registration.bundle.sha256) fail('P22_HISTORY_BUNDLE_INVALID');
+        const bundle = JSON.parse(saved.bytes);
+        if (bundle.plan?.hashes?.output_inventory_hash !== marker.approval.output_inventory_hash) fail('P22_HISTORY_BUNDLE_INVALID');
+        historicalFiles = [...(bundle.plan.inventory ?? []), ...(bundle.reading_first_recipe?.base?.files ?? []),
+          ...(bundle.topic_recipe?.base?.files ?? [])];
+      }
+    }
+    const matchesHistorical = (object, bytes) => {
+      try { return ['v3-note', 'topic'].includes(object.kind) ? inspectManagedNote(bytes).managedHash === object.sha256 : digest(bytes) === object.sha256; }
+      catch { return false; }
+    };
     const sourcePaths = [...prior.objects.map(row => row.path),
       marker.active.path, marker.index.path, CONTROL + '/generations/' + previousGeneration + '/manifest.json', PHASE22_COMMIT_PATH];
     for (const sourcePath of [...new Set(sourcePaths)]) {
       const source = await observe(root, sourcePath);
       if (!source.exists) fail('P22_HISTORY_SOURCE_MISSING', { path: sourcePath });
+      const object = prior.objects.find(row => row.path === sourcePath);
+      let bytes = source.bytes, readsCurrent = true;
+      if (object) {
+        if (matchesHistorical(object, bytes)) {
+          // Current human-only bytes preserve the complete pre-publication note. The
+          // history payload is frozen in the approved plan and does not write this path.
+          if (sourcePath.startsWith('Wiki/')) readsCurrent = false;
+        } else {
+          if (sourcePath.startsWith('Wiki/')) {
+            const currentPath = historyRoot + '/current/' + sourcePath;
+            if ((await observe(root, currentPath)).exists) fail('P22_HISTORY_TARGET_EXISTS', { path: currentPath });
+            inventory.push(await bindOutput(root, { path: currentPath, kind: 'history', bytes: source.bytes,
+              byte_sha256: source.sha256, byte_length: source.byte_length, before_sha256: null, before_byte_length: null,
+              source_path: sourcePath }));
+          }
+          const saved = historicalFiles.find(row => (row.path === sourcePath || row.path?.endsWith('/snapshot/' + sourcePath))
+            && typeof row.bytes_base64 === 'string' && matchesHistorical(object, Buffer.from(row.bytes_base64, 'base64')));
+          if (!saved) fail('P22_HISTORY_ORIGINAL_UNAVAILABLE', { path: sourcePath });
+          bytes = Buffer.from(saved.bytes_base64, 'base64'); readsCurrent = false;
+        }
+      }
       const path = historyRoot + '/snapshot/' + sourcePath;
       const old = await observe(root, path);
       if (old.exists) fail('P22_HISTORY_TARGET_EXISTS', { path });
-      inventory.push(await bindOutput(root, { path, kind: 'history', bytes: source.bytes, byte_sha256: source.sha256,
-        byte_length: source.byte_length, before_sha256: null, before_byte_length: null, source_path: sourcePath }));
-      readDependencies.push({ path: sourcePath, byte_sha256: source.sha256, byte_length: source.byte_length,
+      inventory.push(await bindOutput(root, { path, kind: 'history', bytes, byte_sha256: digest(bytes),
+        byte_length: bytes.length, before_sha256: null, before_byte_length: null, source_path: sourcePath }));
+      if (readsCurrent) readDependencies.push({ path: sourcePath, byte_sha256: source.sha256, byte_length: source.byte_length,
         before_identity: source.identity, parents: source.parents });
     }
   }
@@ -623,6 +665,16 @@ async function withTopicHints(result, plan, record) {
   }
 }
 
+async function withCommittedGraph(result, vaultRoot) {
+  if (result.status !== 'committed') return result;
+  try {
+    const { syncCommittedGraph } = await import('./obsidian-graph-sync.mjs');
+    return { ...result, graph_sync: await syncCommittedGraph({ vaultRoot }) };
+  } catch (error) {
+    return { ...result, graph_sync: { ok: false, status: 'retryable', error: { code: error.code ?? error.message } } };
+  }
+}
+
 /** Exact controller authority is required even for a synthetic temporary apply. */
 export async function applyBilingualPublication(args = {}) {
   const { plan } = args;
@@ -713,18 +765,19 @@ export async function applyBilingualPublication(args = {}) {
       await saveJournal(ctx, journal, lock, row.kind === 'commit' ? 'committed' : 'promoted', row.path);
       await args.onPromotionBoundary?.({ timing: 'after', path: row.path, kind: row.kind, transaction_id: transactionId });
     }
-    const observed = await readCommittedGeneration({ vaultRoot: ctx.root });
+    const observed = (usesCurrentReadingFirstPublication(planRecord.review) || usesCurrentTopicPublication(planRecord.review))
+      ? await readRegisteredCommit({ vaultRoot: ctx.root }) : await readCommittedGeneration({ vaultRoot: ctx.root });
     if (!observed.ok) fail('P22_COMMITTED_READER_REJECTED', { errors: observed.errors });
     await ctx.operation('post_commit.retained', CONTROL + '/transactions/' + transactionId + '/retained.json',
       () => writeFile(join(ctx.root, CONTROL, 'transactions', transactionId, 'retained.json'), jsonBytes({ committed: true, cleanup_authorized: false }), { flag: 'wx' }));
-    return await withTopicHints(resultFor(journal), plan, planRecord);
+    return await withCommittedGraph(await withTopicHints(resultFor(journal), plan, planRecord), ctx.root);
   } catch (error) {
     if (journal && !committed) {
       const marker = journal.inventory.find(row => row.kind === 'commit');
       try { committed = Boolean(marker && await ownedPostimage(ctx, marker)); } catch { /* Do not infer a commit from unreadable bytes. */ }
     }
     if (committed || journal?.state === 'committed') {
-      return await withTopicHints({ ...resultFor({ ...journal, state: 'committed' }), cleanup_warnings: [{ code: error.code ?? error.message }] }, plan, planRecord);
+      return await withCommittedGraph(await withTopicHints({ ...resultFor({ ...journal, state: 'committed' }), cleanup_warnings: [{ code: error.code ?? error.message }] }, plan, planRecord), ctx.root);
     }
     if (journal && lock) {
       try { error.recovery = await rollback(ctx, journal, lock); }
@@ -801,7 +854,7 @@ export async function recoverBilingualPublication({ vaultRoot, run, transactionI
     } else if (journal.state !== 'rolled_back') {
       await rollback(ctx, journal, lock);
     }
-    return resultFor(journal);
+    return await withCommittedGraph(resultFor(journal), ctx.root);
   } finally {
     await releaseLock(ctx, lock);
   }

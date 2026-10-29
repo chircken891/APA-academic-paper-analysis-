@@ -93,6 +93,7 @@ function presentationBytes(inputs, paper) {
 async function buildReaderIndex(validatedInputs, generation, previous) {
   const prepared = structuredClone(generation), readers = new Map();
   for (const paper of prepared.papers.filter(row => row.profile === INDEX_READER_PROFILE)) {
+    if (validatedInputs.carryHistoricalDocuments && retainedPaper(previous, paper)) continue;
     const matches = validatedInputs.papers.filter(input => input.presentation?.manifest.identity.paper_id === paper.paper_id);
     if (!matches.length && retainedPaper(previous, paper)) {
       const { bytes } = presentationBytes(validatedInputs, paper);
@@ -120,6 +121,11 @@ async function buildReaderIndex(validatedInputs, generation, previous) {
 function buildIndex(validatedInputs, generation, readers = new Map(), previous) {
   const documents = [], coveredPaths = new Set();
   for (const paper of generation.papers) {
+    if (validatedInputs.carryHistoricalDocuments && retainedPaper(previous, paper)) {
+      documents.push(...previous.index.documents.filter(row => row.paper_id === paper.paper_id).map(row => structuredClone(row)));
+      Object.values(paper.paths).forEach(path => coveredPaths.add(path));
+      continue;
+    }
     if (paper.profile === INDEX_READING_FIRST_PROFILE) {
       const matches = validatedInputs.papers.filter(input => input.readingFirst?.identity.paper_id === paper.paper_id);
       if (matches.length > 1 || (!matches.length && !retainedPaper(previous, paper))) fail('P22_CANDIDATE_PAPER_MISSING', { paper_id: paper.paper_id });
@@ -179,10 +185,16 @@ function buildIndex(validatedInputs, generation, readers = new Map(), previous) 
     }
   }
   for (const topic of generation.topics ?? []) {
+    if (validatedInputs.carryHistoricalDocuments && previous?.generation.topics?.some(row => hash(row) === hash(topic))) {
+      documents.push(...previous.index.documents.filter(row => row.entity_type === 'topic' && row.topic_id === topic.topic_id).map(row => structuredClone(row)));
+      coveredPaths.add(topic.path);
+      continue;
+    }
     documents.push(...topicIndexDocuments({ topic, bytes: fileBytes(validatedInputs, topic.path), generation }));
     coveredPaths.add(topic.path);
   }
   for (const object of generation.objects.filter(object => !coveredPaths.has(object.path))) {
+    if (validatedInputs.carryHistoricalDocuments && previous?.generation.objects.some(row => hash(row) === hash(object))) continue;
     const matches = (validatedInputs.files ?? []).filter(file => file.path === object.path);
     if (matches.length !== 1 || !(matches[0].bytes instanceof Uint8Array) || sha(matches[0].bytes) !== object.sha256) fail('P22_CANDIDATE_OBJECT_MISSING', { path: object.path });
     if (object.kind === 'support') assertV3SupportBytes(matches[0].bytes, object.path);

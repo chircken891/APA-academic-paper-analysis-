@@ -49,6 +49,35 @@ test('shared knowledge cross-references resolve forward and backward to the matc
   assert.throws(() => renderReadingFirstObsidian(data), { code: 'RF_OBSIDIAN_REFERENCE_INVALID' });
 });
 
+test('shared retained state resolves a non-selected committed node only by unique stable ID', () => {
+  const previous = input();
+  previous.presentation.knowledge_layout = 'shared-bilingual-1.0';
+  const other = structuredClone(previous.presentation.knowledge[0]);
+  Object.assign(other, { id: 'other', canonical_key: 'other', aliases: [], title: { en: 'Other method', 'zh-CN': '另一种方法' } });
+  previous.presentation.knowledge.push(other);
+  previous.presentation.knowledge[0].paragraphs = { en: ['Prior [method](apa-knowledge:other).'], 'zh-CN': ['既有[方法](apa-knowledge:other)。'] };
+  const prior = renderReadingFirstObsidian(previous).supportNotes;
+  const current = input();
+  current.presentation.knowledge_layout = 'shared-bilingual-1.0';
+  current.knowledgeRegistry = [
+    { id: 'rate', canonical_key: 'age-standardisation', path: prior[0].path, content: prior[0].content },
+    { id: 'other', canonical_key: 'other', path: prior[1].path, content: prior[1].content },
+  ];
+  const result = renderReadingFirstObsidian(current);
+  assert.equal(result.supportNotes.length, 1);
+  const body = decodeURIComponent(result.supportNotes[0].content);
+  assert.match(body, /Prior \[method\]\(另一种方法\.md#English\)/);
+  assert.match(body, /既有\[方法\]\(另一种方法\.md#中文\)/);
+  assert.doesNotMatch(body, /\]\(apa-knowledge:/);
+  current.knowledgeRegistry.pop();
+  assert.throws(() => renderReadingFirstObsidian(current), { code: 'RF_OBSIDIAN_REFERENCE_INVALID' });
+  current.knowledgeRegistry.push({ id: 'not-other', aliases: ['other'], path: prior[1].path, content: prior[1].content });
+  assert.throws(() => renderReadingFirstObsidian(current), { code: 'RF_OBSIDIAN_REFERENCE_INVALID' });
+  current.knowledgeRegistry.pop();
+  current.knowledgeRegistry.push({ id: 'other', path: prior[1].path, content: prior[1].content }, { id: 'other', path: 'Wiki/methods/ambiguous.md', content: prior[1].content });
+  assert.throws(() => renderReadingFirstObsidian(current), { code: 'RF_OBSIDIAN_REFERENCE_INVALID' });
+});
+
 test('shared bilingual confirmed identity reuse exports a merged candidate preserving original human bytes', () => {
   const data = input(); data.presentation.knowledge_layout = 'shared-bilingual-1.0';
   const original = '---\ncustom: keep\n---\n# Existing\nHuman text.\n';
@@ -354,6 +383,15 @@ function compactInput() {
   Object.values(data.readingEditor.languages).forEach(language => { language.visuals = [{ id: 'fig-1', title: 'Figure 1 Burden', notes: [{ section_id: 'findings', paragraph_index: 2 }] }]; });
   return data;
 }
+
+test('reading editor 1.2 renders omitted findings as bilingual section links', () => {
+  const data = compactInput();
+  data.readingEditor.schema_version = 'reading-editor-1.2';
+  data.presentation.map.findings.push({ id: 'other', label: { en: 'Other finding', 'zh-CN': '其他发现' }, section_id: 'findings' });
+  const notes = renderReadingFirstObsidian(data).notes;
+  assert.match(notes.find(note => note.language === 'en').content, /Findings not shown in the map: \[Other finding\]\(#/);
+  assert.match(notes.find(note => note.language === 'zh-CN').content, /未画入导图的发现：\[其他发现\]\(#/);
+});
 
 test('reading editor 1.1 keeps three heading levels and puts figure notes, folded captions and a staged map in place', () => {
   const content = renderReadingFirstObsidian(compactInput()).notes.find(note => note.language === 'en').content;

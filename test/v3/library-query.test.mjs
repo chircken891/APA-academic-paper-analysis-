@@ -27,7 +27,7 @@ test('publication transaction binds bibliography and original source to library 
   await applyBilingualPublication(applyReadingFirstFixture(f));
   const found = await queryLibrary({ vaultRoot: f.vaultRoot, query: 'supported' });
   assert.equal(found.ok, true);
-  assert.equal(found.status, 'matches');
+  assert.equal(found.status, 'matches', JSON.stringify(found.diagnostics));
   assert.equal(found.generation_id, 'reading-generation-1');
   assert.equal(found.evidence_mode, 'synthetic');
   assert.equal(found.scientific_approval, false);
@@ -67,14 +67,17 @@ test('query validates arguments and ignores caller-supplied uncommitted snapshot
   assert.deepEqual(result.results, []);
 });
 
-test('a corrupted committed original cannot be downgraded to apparently usable note evidence', async t => {
+test('a corrupted registered original is reported while available notes remain searchable', async t => {
   const f = await readingFirstPublicationFixture(t);
   await applyBilingualPublication(applyReadingFirstFixture(f));
   const { queryLibrary, readQuerySource } = await library();
   await writeFile(join(f.vaultRoot, f.resources[0].path), 'changed original bytes');
   const result = await queryLibrary({ vaultRoot: f.vaultRoot, query: 'supported' });
-  assert.equal(result.status, 'not_ready');
-  assert.deepEqual(result.results, []);
+  assert.equal(result.status, 'partial');
+  assert.equal(result.incomplete, true);
+  assert.equal(result.results[0].citation.status, 'partial');
+  assert.equal(result.results[0].citation.sources[0].status, 'unavailable');
+  assert.equal(result.diagnostics[0].code, 'P23_CITATION_SOURCE_BINDING_INVALID');
   assert.equal((await readQuerySource({ vaultRoot: f.vaultRoot, paperId: f.paperId })).status, 'not_ready');
 });
 
@@ -137,9 +140,45 @@ test('a citation cannot point at an asset with another registered identity', asy
   const f = await citationConsumerFixture(t, citation => { citation.sources[0].sha256 = digest(Buffer.from('other source')); });
   const { queryLibrary, readQuerySource } = await library();
   const found = await queryLibrary({ vaultRoot: f.vaultRoot, query: 'finalresultneedle' });
-  assert.equal(found.status, 'not_ready');
-  assert.equal(found.errors[0].code, 'P23_CITATION_SOURCE_BINDING_INVALID');
+  assert.equal(found.status, 'partial');
+  assert.equal(found.diagnostics[0].code, 'P23_CITATION_SOURCE_BINDING_INVALID');
   assert.equal((await readQuerySource({ vaultRoot: f.vaultRoot, paperId: f.identity.paper_id })).status, 'not_ready');
+});
+
+test('a damaged supplementary source does not invalidate the selected intact source', async t => {
+  const f = await readingFirstIndexFixture(t);
+  const originalPath = f.manifest.targets.assets.find(path => path.startsWith('Raw/'));
+  const original = f.files.find(row => row.path === originalPath);
+  const supplement = { path: 'Raw/supplement.pdf', kind: 'asset', bytes: Buffer.from('synthetic supplement') };
+  f.files.push(supplement);
+  f.generation.objects.push({ path: supplement.path, kind: 'asset', sha256: digest(supplement.bytes) });
+  f.manifest.targets.assets.push(supplement.path);
+  f.manifest.citation = { bibliography: { title: { en: 'Two source study' } }, sources: [
+    { source_id: 'paper', path: originalPath, sha256: digest(original.bytes), byte_length: original.bytes.length, source_version: null, locators: [] },
+    { source_id: 'supplement', path: supplement.path, sha256: digest(supplement.bytes), byte_length: supplement.bytes.length, source_version: null, locators: [] },
+  ] };
+  const sidecar = f.files.find(row => row.kind === 'reader-presentation');
+  sidecar.bytes = Buffer.from(JSON.stringify(f.manifest));
+  f.paper.reader_presentation.sha256 = digest(sidecar.bytes);
+  f.generation.objects.find(row => row.path === sidecar.path).sha256 = digest(sidecar.bytes);
+  await f.save(await f.build());
+  await writeFile(join(f.vaultRoot, supplement.path), 'damaged supplement');
+  const { queryLibrary, readQuerySource, executeLibraryQuery } = await library();
+  const main = await readQuerySource({ vaultRoot: f.vaultRoot, paperId: f.identity.paper_id, sourceId: 'paper' });
+  assert.equal(main.status, 'identity_verified');
+  assert.equal((await readQuerySource({ vaultRoot: f.vaultRoot, paperId: f.identity.paper_id, sourceId: 'supplement' })).status, 'not_ready');
+  const found = await queryLibrary({ vaultRoot: f.vaultRoot, query: 'finalresultneedle' });
+  assert.equal(found.status, 'partial');
+  assert.equal(found.results[0].citation.sources.find(row => row.source_id === 'paper').status, 'identity_verified');
+  assert.equal(found.results[0].citation.sources.find(row => row.source_id === 'supplement').status, 'unavailable');
+  assert.ok(found.diagnostics.some(row => row.path === supplement.path));
+  const result = await executeLibraryQuery({ repoRoot: f.vaultRoot, question: 'finalresultneedle',
+    mainSession: { model: 'synthetic-main', reasoning_effort: 'high' }, hostCapabilities: { currentSession: true },
+    executeHost: async () => ({ answer: 'An answer based on the intact source.', adopted_sources: [{ paper_id: f.identity.paper_id,
+      analysis_revision: f.identity.analysis_revision, adopted_generation_id: f.generation.generation_id, source_id: 'paper',
+      source_sha256: digest(original.bytes), source_version: null, locators: [], adopted_for: ['answer'] }] }) });
+  assert.equal(result.status, 'answered');
+  assert.equal(result.adopted_sources[0].source_id, 'paper');
 });
 
 test('a valid committed empty generation differs from an absent generation or an unmatched query', async t => {

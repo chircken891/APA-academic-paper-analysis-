@@ -6,7 +6,7 @@ import { queryLibrary } from '../../scripts/v3/library-query.mjs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readTopicSources } from '../../scripts/v3/topic-library.mjs';
-import { readingFirstPublicationFixture, applyReadingFirstFixture } from './helpers/reading-first-publication-fixtures.mjs';
+import { readingFirstPublicationFixture, applyReadingFirstFixture, readingFirstPublicationAuthority } from './helpers/reading-first-publication-fixtures.mjs';
 import { applyBilingualPublication, registerBilingualPublication, loadBilingualPublication, dryRunBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
 import { rebuildRegisteredTopicReview } from '../../scripts/v3/topic-publication.mjs';
 import { spawnSync } from 'node:child_process';
@@ -101,4 +101,36 @@ test('topic registration rejects bare recipes, candidate edits, and adopted sour
   const sourcePath = f.currentSnapshot.generation.objects.find(o => o.kind === 'asset' && o.path.endsWith('.pdf')).path;
   await writeFile(join(f.vaultRoot, sourcePath), 'changed source');
   await assert.rejects(loadBilingualPublication({ vaultRoot: f.vaultRoot, run: f.run, trustAnchor: registration.trust_anchor }), /P22_REGISTERED_DEPENDENCY_CHANGED/);
+});
+
+test('topic source expansion survives an unrelated managed note edit', async t => {
+  const f = await createTopicFixture(t);
+  const snapshot = await publishTopicFixture(f);
+  const topic = snapshot.generation.topics[0];
+  const paperPath = join(f.vaultRoot, snapshot.generation.papers[1].paths.en);
+  const previous = await readFile(paperPath, 'utf8');
+  await writeFile(paperPath, previous.replace('<!-- AUTO:END reading -->', '\nUser changed this explanation.\n<!-- AUTO:END reading -->'));
+  const unrelatedSidecar = join(f.vaultRoot, snapshot.generation.papers[1].reader_presentation.path);
+  await writeFile(unrelatedSidecar, 'damaged unrelated presentation');
+  const expanded = await readTopicSources({ vaultRoot: f.vaultRoot, topicId: topic.topic_id, generationId: snapshot.generation_id });
+  assert.equal(expanded.ok, true);
+  assert.equal(expanded.sources[0].status, 'historical_reference');
+});
+
+test('new topic publication can be prepared while a registered paper contains user edits', async t => {
+  const f = await createTopicFixture(t, { register: false });
+  const paperPath = join(f.vaultRoot, f.currentSnapshot.generation.papers[1].paths.en);
+  const original = await readFile(paperPath, 'utf8');
+  const edited = original.replace('<!-- AUTO:END reading -->', '\nA user edit retained.\n<!-- AUTO:END reading -->');
+  await writeFile(paperPath, edited);
+  const { prepareTopicPublication } = await import('../../scripts/v3/topic-publication.mjs');
+  const prepared = await prepareTopicPublication({ vaultRoot: f.vaultRoot, candidate: f.candidate });
+  assert.equal(prepared.ok, true);
+  const authority = await readingFirstPublicationAuthority({ root: f.root, vaultRoot: f.vaultRoot, runId: f.run }, prepared.plan);
+  await registerBilingualPublication({ vaultRoot: f.vaultRoot, run: f.run, plan: prepared.plan, sourceInputs: prepared.sourceInputs, ...authority });
+  const result = await applyBilingualPublication({ vaultRoot: f.vaultRoot, run: f.run, plan: prepared.plan, ...authority });
+  assert.equal(result.status, 'committed');
+  assert.equal(await readFile(paperPath, 'utf8'), edited);
+  const found = await queryLibrary({ vaultRoot: f.vaultRoot, query: 'topiconlytoken' });
+  assert.ok(found.results.some(row => row.topic_id === f.candidate.topic.topic_id));
 });

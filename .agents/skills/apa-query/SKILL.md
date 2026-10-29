@@ -5,7 +5,7 @@ description: Search and compare papers already in the current APA knowledge vaul
 
 # APA Query
 
-Answer the user's question from the current committed APA library. Use the same local entry from Codex or an existing Obsidian agent with local tools; keep the requested language, depth and evidence scope.
+Answer the user's question from the current content of registered APA notes. Saved edits to registered Wiki prose are effective immediately; published receipts retain their historical meaning. Use the same local entry from Codex or an existing Obsidian agent with local tools; keep the requested language, depth and evidence scope.
 
 ## Select the task
 
@@ -24,7 +24,7 @@ For a lookup, run `node scripts/apa-query.mjs search --query "short search terms
 
 ## Working boundaries
 
-- Search only verified committed V3 content. Different language notes for one paper are one study; a topic is a synthesis, not another paper. No matches means this query found no indexed evidence, not that the idea is false or unstudied. A new idea can start a new question without an existing topic; external research requires the user's requested scope.
+- Search current Markdown within the verified registered V3 inventory. Use returned current paths, anchors and content hashes; preserve partial-result diagnostics and independently checked source identities. Old review receipts do not certify later edits. Different language notes for one paper are one study; a topic is a synthesis, not another paper. No matches means this query found no indexed evidence. A new idea can start a new question without an existing topic; external research requires the user's requested scope.
 - Ordinary lookup and answering are read-only. Saving requires an explicit request and actual adopted sources. Prepare the candidate before seeking its exact publication approval; existing scope authorization persists, and a request to prepare is not approval to commit it.
 - Evidence answering and a selected incremental update each use one configured task, in the current session when supported or one native delegation otherwise. Writing guidance is applied inside that task. No automatic model/provider fallback, paper-role chain or extra polishing/review call.
 - Related-source hints use existing terms and source relationships without model calls or topic changes. The user selects the sources to update; preserve old revisions and personal notes.

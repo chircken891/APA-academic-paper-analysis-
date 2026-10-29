@@ -9,7 +9,8 @@ import { createReadingFirstRunControl, acceptReadingFirstResult, getReadingFirst
 import { commitOwnedArtifact } from '../../scripts/v3/owned-artifact-store.mjs';
 import { createApaRoleModelPolicy } from '../../scripts/apa-model-policy.mjs';
 import { buildConfiguredReadingInstructions, prepareConfiguredReading } from '../../scripts/v3/configured-reading.mjs';
-import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, getScienceRequest, createScienceHandoff } from '../../scripts/v3/science-controller.mjs';
+import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, prepareScienceCorrection, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, getScienceRequest, createScienceHandoff, recordScienceCompactionBoundary } from '../../scripts/v3/science-controller.mjs';
+import { ingestObservedRunStep } from '../../scripts/v3/phase21-runner.mjs';
 const roles = ['evidence','methods','results','interpretation','scientific-reading','integration'];
 const sha = b => 'sha256:' + createHash('sha256').update(b).digest('hex');
 async function fixture(t) {
@@ -30,6 +31,91 @@ async function fixture(t) {
   const options={prepared,tasks,brokerConfig,statePath:join(root,'state.json')};
   await mkdir(join(root,'native')); return {root,options,tasks,checkpointTask};
 }
+
+async function failedFinalDispatch(t, { maxTotalCalls = 14, maxCalls = 6 } = {}) {
+  const f = await fixture(t);
+  f.options.prepared = structuredClone(f.options.prepared);
+  f.options.prepared.runControl.reading_first_binding.max_total_calls = maxTotalCalls;
+  f.options.prepared.runControl.reading_first_binding.max_calls = maxCalls;
+  f.options.brokerConfig.run_controls = [f.options.prepared.runControl];
+  let controller = await createScienceController(f.options);
+  for (const batch of [['evidence'], ['methods', 'results'], ['interpretation'], ['scientific-reading'], ['integration']]) {
+    const requests = await prepareScienceRequests({ controller });
+    assert.deepEqual(requests.map(item => item.role), batch);
+    for (const { role, request } of requests) {
+      await recordScienceDispatchIntent({ controller, role });
+      const step = request.emittedStep;
+      const args = structuredClone(step.arguments);
+      if (role === 'integration') args.message += ' accidental change';
+      const observation = { action_id: step.action_id, run_id: 'run', input_fingerprint: step.input_fingerprint, port: 'current-collaboration', tool_call: { name: step.action, arguments: args }, raw_result_text: JSON.stringify({ agent_id: 'original-' + role }) };
+      if (role === 'integration') {
+        await assert.rejects(() => recordScienceHostObservation({ controller, role, observation }), /SCIENCE_OBSERVATION_INVALID/);
+      } else {
+        await recordScienceHostObservation({ controller, role, observation });
+        await writeFile(join(f.root, f.tasks[role].native_path), JSON.stringify({ role, text: 'source' }));
+        await acceptScienceResult({ controller, role });
+      }
+    }
+  }
+  controller = await restoreScienceController(f.options);
+  const original = getScienceRequest({ controller, role: 'integration' });
+  const task = { ...f.tasks.integration, task_id: 'integration-retry', task_name: 'integration_retry', native_path: 'native/integration-retry.json', instruction_path: 'instructions/integration-retry.txt' };
+  const grant = { role: 'integration', task, authorizationId: 'explicit-correction', maxScienceCalls: 7, maxTotalCalls, deadline: '2099-01-01T00:00:00Z' };
+  return { ...f, controller, original, grant };
+}
+
+test('authorized correction retains a rejected original, counts both calls, and survives restore', async t => {
+  const f = await failedFinalDispatch(t);
+  assert.equal(getScienceState(f.controller).reserved_calls, 6);
+  const originalReceipts = Object.fromEntries(roles.slice(0, 5).map(role => [role, getScienceState(f.controller).roles[role].receipt]));
+  await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant, authorizationId: '' }), /SCIENCE_CORRECTION_UNAUTHORIZED/);
+  await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant, authorizationId: 'synthetic' }), /SCIENCE_CORRECTION_UNAUTHORIZED/);
+  await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant, maxScienceCalls: 6 }), /SCIENCE_CORRECTION_UNAUTHORIZED/);
+  await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant, maxTotalCalls: 15 }), /SCIENCE_CORRECTION_UNAUTHORIZED/);
+  await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant, deadline: '2098-01-01T00:00:00Z' }), /SCIENCE_CORRECTION_UNAUTHORIZED/);
+  await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant, task: { ...f.grant.task, native_path: f.tasks.evidence.native_path } }), /SCIENCE_CORRECTION_TASK_INVALID/);
+  await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant, task: { ...f.grant.task, owner_actor_id: 'another-owner' } }), /SCIENCE_CORRECTION_TASK_INVALID/);
+  await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant, role: 'evidence' }), /SCIENCE_CORRECTION_UNAVAILABLE/);
+  await prepareScienceCorrection({ controller: f.controller, ...f.grant });
+  await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant }), /SCIENCE_CORRECTION_UNAVAILABLE/);
+  let controller = await restoreScienceController(f.options);
+  const [{ role, request }] = await prepareScienceRequests({ controller });
+  assert.equal(role, 'integration');
+  assert.equal(request.emittedStep.arguments.task_name, 'integration_retry');
+  assert.equal(request.packet.requested_model, f.original.request.packet.requested_model);
+  assert.equal(request.emittedStep.arguments.reasoning_effort, f.original.request.emittedStep.arguments.reasoning_effort);
+  assert.deepEqual(request.packet.source, f.original.request.packet.source);
+  const intent = await recordScienceDispatchIntent({ controller, role });
+  assert.equal(getScienceState(controller).reserved_calls, 7);
+  controller = await restoreScienceController(f.options);
+  assert.deepEqual(await prepareScienceRequests({ controller }), []);
+  const resumed = getScienceRequest({ controller, role });
+  assert.deepEqual(resumed.intent, intent);
+  assert.deepEqual(resumed.original, f.original);
+  const step = request.emittedStep;
+  await recordScienceHostObservation({ controller, role, observation: { action_id: step.action_id, run_id: 'run', input_fingerprint: step.input_fingerprint, port: 'current-collaboration', tool_call: { name: step.action, arguments: step.arguments }, raw_result_text: JSON.stringify({ agent_id: 'corrected-integration' }) } });
+  await writeFile(join(f.root, f.grant.task.native_path), JSON.stringify({ role, text: 'new genuine result' }));
+  const receipt = await acceptScienceResult({ controller, role });
+  assert.equal(receipt.artifact_id, f.tasks.integration.artifact_id);
+  assert.equal(getScienceState(controller).accepted_results, 6);
+  for (const role of roles.slice(0, 5)) assert.deepEqual(getScienceState(controller).roles[role].receipt, originalReceipts[role]);
+  controller = await restoreScienceController(f.options);
+  assert.equal(getScienceState(controller).reserved_calls, 7);
+  assert.equal(getScienceState(controller).accepted_results, 6);
+  const disk = JSON.parse(await readFile(f.options.statePath, 'utf8')).data;
+  assert.deepEqual(disk.entries.integration.request, f.original.request);
+  assert.deepEqual(disk.entries.integration.intent, f.original.intent);
+  assert.deepEqual(disk.entries.integration.observations, f.original.observations);
+  assert.equal(disk.entries.integration.observation.blocked_reason, 'OBSERVATION_CORRELATION_MISMATCH');
+  await assert.rejects(() => createScienceHandoff({ controller, checkpointTask: f.checkpointTask }), /SCIENCE_READING_BUDGET_REBIND_REQUIRED/);
+});
+
+test('correction is rejected when its budget or original deadline cannot cover reading', async t => {
+  const f = await failedFinalDispatch(t, { maxTotalCalls: 9, maxCalls: 3 });
+  await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant }), /SCIENCE_CORRECTION_UNAUTHORIZED/);
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2099-01-01T00:00:00Z') });
+  await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant }), /SCIENCE_DEADLINE_EXPIRED/);
+});
 test('intent is durable and never reissued while outcome is unknown', async t=>{
   const f=await fixture(t), controller=await createScienceController(f.options);
   assert.equal(getScienceState(controller).accepted_results,0);
@@ -42,6 +128,34 @@ test('intent is durable and never reissued while outcome is unknown', async t=>{
   await assert.rejects(()=>recordScienceDispatchIntent({controller:recovered,role}),/SCIENCE_DISPATCH_UNAVAILABLE/);
   assert.equal(getScienceState(recovered).reserved_calls,1); assert.equal(getScienceState(recovered).accepted_results,0);
 });
+
+test('restore preserves a historical source-metadata rejection and accepts a newly correlated original return', async t => {
+  const f = await fixture(t);
+  f.options.prepared = structuredClone(f.options.prepared);
+  const source = f.options.prepared.scientificInput.sources[0];
+  Object.assign(source, { id: 'main', kind: 'main' });
+  f.options.prepared.runControl.reading_first_binding.input_fingerprint = (await import('../../scripts/v3/reading-first-runtime.mjs')).fingerprintReadingFirst(f.options.prepared.scientificInput);
+  f.options.brokerConfig.run_controls = [f.options.prepared.runControl];
+  let controller = await createScienceController(f.options);
+  const [{ request }] = await prepareScienceRequests({ controller });
+  await recordScienceDispatchIntent({ controller, role: 'evidence' });
+  const step = request.emittedStep;
+  const observation = { action_id: step.action_id, run_id: 'run', input_fingerprint: step.input_fingerprint, port: 'current-collaboration', tool_call: { name: step.action, arguments: step.arguments }, raw_result_text: JSON.stringify({ agent_id: 'original-evidence' }) };
+  const historical = ingestObservedRunStep({ packet: request.packet, emittedStep: step, observation, run: { run_id: 'run' }, legacySourceComparison: true });
+  assert.equal(historical.status, 'blocked');
+  const saved = JSON.parse(await readFile(f.options.statePath, 'utf8'));
+  Object.assign(saved.data.entries.evidence, { raw_observation: observation, observation: historical, observations: [{ raw: observation, validated: historical }] });
+  const { fingerprintReadingFirst } = await import('../../scripts/v3/reading-first-runtime.mjs');
+  saved.fingerprint = fingerprintReadingFirst(saved.data);
+  await writeFile(f.options.statePath, JSON.stringify(saved));
+  controller = await restoreScienceController(f.options);
+  const accepted = await recordScienceHostObservation({ controller, role: 'evidence', observation });
+  assert.equal(accepted.status, 'observed');
+  const actual = getScienceRequest({ controller, role: 'evidence' });
+  assert.equal(actual.observations.length, 2);
+  assert.equal(actual.observations[0].validated.status, 'blocked');
+  assert.equal(actual.observations[1].validated.agent_id, 'original-evidence');
+});
 test('observed evidence is accepted once and unlocks methods and results in parallel', async t=>{
   const f=await fixture(t), controller=await createScienceController(f.options);
   const [{role,request}]=await prepareScienceRequests({controller}); await recordScienceDispatchIntent({controller,role});
@@ -52,6 +166,12 @@ test('observed evidence is accepted once and unlocks methods and results in para
   assert.deepEqual(await acceptScienceResult({controller,role}),receipt);
   const recovered=await restoreScienceController(f.options);
   assert.equal(getScienceState(recovered).accepted_results,1);
+  assert.equal(getScienceState(recovered).compaction_boundary.id, 'evidence-accepted');
+  assert.equal(getScienceState(recovered).compaction_boundary.recovery.saved, true);
+  await recordScienceCompactionBoundary({ controller: recovered, id: 'evidence-accepted', status: 'skipped', reason: 'context unknown' });
+  const restoredAgain=await restoreScienceController(f.options);
+  assert.equal(getScienceState(restoredAgain).compaction_boundary.reminder.status, 'skipped');
+  await assert.rejects(() => recordScienceCompactionBoundary({ controller: restoredAgain, id: 'evidence-accepted', status: 'prompted', reason: 'again' }), /SCIENCE_COMPACTION_ALREADY_RECORDED/);
   assert.deepEqual((await prepareScienceRequests({controller:recovered})).map(row=>row.role),['methods','results']);
 });
 
@@ -62,11 +182,32 @@ test('handoff is gated by six owned results and restores the same Writer action'
     const requests=await prepareScienceRequests({controller}); assert.deepEqual(requests.map(row=>row.role),batch);
     for (const {role,request} of requests) {
       await recordScienceDispatchIntent({controller,role}); const step=request.emittedStep;
+      if (role === 'methods') {
+        assert.equal(getScienceState(controller).roles.methods.status,'outcome_unknown');
+        assert.equal(getScienceState(controller).compaction_boundary,null);
+        await assert.rejects(() => recordScienceCompactionBoundary({controller,id:'evidence-accepted',status:'prompted',reason:'unsafe while task may run'}), /SCIENCE_COMPACTION_UNAVAILABLE/);
+      }
       await recordScienceHostObservation({controller,role,observation:{action_id:step.action_id,run_id:'run',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:JSON.stringify({agent_id:'synthetic-'+role})}});
+      if (role === 'methods') {
+        assert.equal(getScienceState(controller).roles.methods.status,'observed');
+        await assert.rejects(() => recordScienceCompactionBoundary({controller,id:'methods-results-accepted',status:'prompted',reason:'task lacks receipt'}), /SCIENCE_COMPACTION_UNAVAILABLE/);
+      }
       await writeFile(join(f.root,f.tasks[role].native_path),JSON.stringify({role,text:'synthetic result'}));
       await acceptScienceResult({controller,role});
     }
+    if (batch[0] === 'evidence') await recordScienceCompactionBoundary({controller,id:'evidence-accepted',status:'skipped',reason:'context unknown'});
+    if (batch[0] === 'methods') {
+      const boundary=getScienceState(controller).compaction_boundary;
+      assert.equal(boundary.id,'methods-results-accepted');
+      assert.equal(boundary.running_count,0);
+      assert.equal(boundary.recovery.saved,true);
+      await recordScienceCompactionBoundary({controller,id:boundary.id,status:'skipped',reason:'context unknown'});
+    }
     controller=await restoreScienceController(f.options);
+    if (batch[0] === 'methods') {
+      assert.equal(getScienceState(controller).compaction_boundary.reminder.status,'skipped');
+      await assert.rejects(() => recordScienceCompactionBoundary({controller,id:'methods-results-accepted',status:'prompted',reason:'again'}),/SCIENCE_COMPACTION_ALREADY_RECORDED/);
+    }
   }
   assert.equal(getScienceState(controller).accepted_results,6);
   const first=await createScienceHandoff({controller,checkpointTask:f.checkpointTask});
@@ -79,6 +220,8 @@ test('handoff is gated by six owned results and restores the same Writer action'
   assert.equal(getScienceState(controller).handoff.status,'transferred');
   const downstream=await restoreReadingFirstRuntime({handoff:resumed.handoff,runControl:resumed.runControl,checkpointReceipt:resumed.checkpointReceipt});
   assert.equal(downstream.requests[0].emittedStep.action_id,firstId);
+  assert.equal(snapshotReadingFirstRuntime(downstream.controller).state.compaction_reminders['evidence-accepted'].status,'skipped');
+  assert.equal(snapshotReadingFirstRuntime(downstream.controller).state.compaction_reminders['methods-results-accepted'].status,'skipped');
   assert.deepEqual(downstream.requests,first.requests);
   const writer=downstream.requests[0], step=writer.emittedStep;
   await writeFile(join(f.root,writer.task.native_path),JSON.stringify({language:'en',sections:[{heading:'Study',paragraphs:['The synthetic study explains its design and limitation.']}]}));

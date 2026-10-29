@@ -93,7 +93,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-wind
 
 ## Obsidian 与更新
 
-将工程目录作为知识库打开。配置页不改已有 Obsidian 设置。`npm run setup:check:full` 增加 Obsidian 检查。默认检索和图谱只消费已提交 V3 代次；候选交付与正式发布分开。
+将工程目录作为知识库打开。配置页不改已有 Obsidian 设置。`npm run setup:check:full` 增加 Obsidian 检查。默认检索和图谱以已提交 V3 记录确定登记范围，读取已登记笔记的当前内容；候选交付与正式发布分开。
 
 更新保留本地答案与知识资料。重新检查依赖和配置即可；旧运行不自动重绑。
 

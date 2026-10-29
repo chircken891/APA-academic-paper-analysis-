@@ -12,6 +12,16 @@ const alternate = { model: 'synthetic-alternate', reasoning_effort: 'medium' };
 const hostCapabilities = { currentSession: true, nativeDelegation: true };
 const inputs = repoRoot => ({ repoRoot, question: 'finalresultneedle', mainSession, hostCapabilities });
 
+test('answer is rejected when retrieved current note changes during host execution', async t => {
+  const f = await fixture(t);
+  const { executeLibraryQuery } = await library();
+  await assert.rejects(executeLibraryQuery({ ...inputs(f.vaultRoot), executeHost: async task => {
+    const path = join(f.vaultRoot, task.evidence.results[0].hits[0].path);
+    await writeFile(path, (await readFile(path, 'utf8')) + '\nchanged after retrieval\n');
+    return 'Answer based on a previous snapshot.';
+  } }), { code: 'P23_CURRENT_CHANGED' });
+});
+
 test('query freezes configured presentation defaults and current request overrides without saving choices', async t => {
   const f = await fixture(t, { query: { answer_language: 'zh-CN', detail: 'detailed', audience: 'beginner' } });
   const { prepareLibraryQuery } = await library();

@@ -2,14 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, readFile, writeFile, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { spawnSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { reviewedReadingFirstFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
 import { buildBilingualReview } from '../../scripts/v3/phase22-review.mjs';
 import { captureReadingFirstPublicationSource } from '../../scripts/v3/reading-first-runtime.mjs';
 import { readingFirstPublicationFixture, applyReadingFirstFixture } from './helpers/reading-first-publication-fixtures.mjs';
-import { applyBilingualPublication, loadBilingualPublication, registerBilingualPublication, dryRunBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
+import { applyBilingualPublication, recoverBilingualPublication, loadBilingualPublication, registerBilingualPublication, dryRunBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
 import { readCommittedGeneration } from '../../scripts/v3/phase22-active-version.mjs';
 import { queryBilingualIndex } from '../../scripts/v3/phase22-search.mjs';
 import { buildGraphProposal } from '../../scripts/v3/phase22-graph.mjs';
@@ -89,6 +89,68 @@ test('another reading paper preserves the first paper and updates one shared bil
   assert.equal(queryBilingualIndex({ index: result.index, activeSnapshot: result, query: 'supportonlytoken' }).results.length, 2);
   const after = await loadBilingualPublication({ vaultRoot: g.vaultRoot, run: g.run, trustAnchor: g.registration.trust_anchor });
   assert.deepEqual(after.plan.hashes, g.plan.hashes);
+});
+
+test('enabled graph follows the next committed paper and committed recovery', async t => {
+  const f = await readingFirstPublicationFixture(t, { generation: 'graph-publication-1', controlOptions: { sourceLanguage: 'en' } });
+  await applyBilingualPublication(applyReadingFirstFixture(f));
+  const original = await readCommittedGeneration({ vaultRoot: f.vaultRoot });
+  const proposal = buildGraphProposal({ activeSnapshot: original,
+    entityInventory: original.generation.objects.filter(row => row.path.endsWith('.md')).map(({ path }) => ({ path })) });
+  const policy = { search: proposal.filter, hideUnresolved: true, showOrphans: true };
+  const graphPath = join(f.vaultRoot, '.obsidian/graph.json');
+  const statePath = join(f.vaultRoot, '.apa-v3/phase22/graph/MANAGED.json');
+  await mkdir(dirname(graphPath), { recursive: true });
+  await mkdir(dirname(statePath), { recursive: true });
+  const oldGraph = JSON.stringify({ ...policy, colorGroups: [{ query: 'tag:important', color: { a: 1, rgb: 123 } }], scale: 0.75 });
+  const oldState = JSON.stringify({ schema_version: 'phase22-managed-graph-1.0', enabled: true,
+    generation_id: original.generation.generation_id, policy });
+  await writeFile(graphPath, oldGraph);
+  await writeFile(statePath, oldState);
+  const shared = original.generation.shared_nodes[0];
+  const g = await readingFirstPublicationFixture(t, { vaultRoot: f.vaultRoot, generation: 'graph-publication-2',
+    runId: 'run_' + 'd'.repeat(32), paperId: 'pap_' + 'd'.repeat(32), controlOptions: { sourceLanguage: 'en' },
+    title: { en: 'Next graph paper', 'zh-CN': '新增图谱论文' },
+    knowledgeRegistry: [{ id: 'method', canonical_key: 'synthetic-method', path: shared.path, content: await readFile(join(f.vaultRoot, shared.path), 'utf8') }] });
+  const published = await applyBilingualPublication(applyReadingFirstFixture(g));
+  assert.equal(published.status, 'committed');
+  assert.equal(published.graph_sync?.status, 'synchronized');
+  const current = await readCommittedGeneration({ vaultRoot: f.vaultRoot });
+  const expected = buildGraphProposal({ activeSnapshot: current,
+    entityInventory: current.generation.objects.filter(row => row.path.endsWith('.md')).map(({ path }) => ({ path })) });
+  const actual = JSON.parse(await readFile(graphPath));
+  assert.equal(actual.search, expected.filter);
+  assert.equal(actual.scale, 0.75);
+  assert.deepEqual(actual.colorGroups, JSON.parse(oldGraph).colorGroups);
+  const regex = new RegExp(actual.search.slice(6, -1));
+  for (const paper of current.generation.papers) {
+    assert.equal(regex.test(paper.paths.en), true);
+    assert.equal(regex.test(paper.paths['zh-CN']), false);
+  }
+  assert.equal(regex.test('Wiki/sources/uncommitted.md'), false);
+  // Recreate the derived state left behind when a process stops after committing its marker.
+  await writeFile(graphPath, oldGraph);
+  await writeFile(statePath, oldState);
+  const recovered = await recoverBilingualPublication({ vaultRoot: g.vaultRoot, run: g.run,
+    transactionId: published.transaction_id, trustAnchor: g.registration.trust_anchor });
+  assert.equal(recovered.status, 'committed');
+  assert.equal(recovered.graph_sync?.status, 'synchronized');
+  assert.equal(JSON.parse(await readFile(graphPath)).search, expected.filter);
+});
+
+test('a derived graph failure is reported without rolling back a committed paper', async t => {
+  const f = await readingFirstPublicationFixture(t);
+  const graphPath = join(f.vaultRoot, '.obsidian/graph.json');
+  const statePath = join(f.vaultRoot, '.apa-v3/phase22/graph/MANAGED.json');
+  await mkdir(dirname(graphPath), { recursive: true });
+  await mkdir(dirname(statePath), { recursive: true });
+  await writeFile(graphPath, 'invalid graph json');
+  await writeFile(statePath, JSON.stringify({ schema_version: 'phase22-managed-graph-1.0', enabled: true, policy: {} }));
+  const published = await applyBilingualPublication(applyReadingFirstFixture(f));
+  assert.equal(published.status, 'committed');
+  assert.equal(published.graph_sync.status, 'retryable');
+  assert.equal((await readCommittedGeneration({ vaultRoot: f.vaultRoot })).ok, true);
+  assert.equal(await readFile(graphPath, 'utf8'), 'invalid graph json');
 });
 
 test('republication preserves both Personal Notes and manual knowledge bytes and excludes them from search', async t => {
@@ -193,4 +255,62 @@ test('the V3 review entry consumes the accepted latest reading source without a 
     [...f.candidate.notes].sort((a, b) => a.path.localeCompare(b.path)).map(row => row.content));
   assert.ok(review.outputInventory.some(row => row.kind === 'active'));
   assert.ok(review.outputInventory.some(row => row.kind === 'index'));
+});
+
+test('a later publication preserves prior managed edits and archives the prior approved bytes', async t => {
+  const f = await readingFirstPublicationFixture(t);
+  await applyBilingualPublication(applyReadingFirstFixture(f));
+  const original = await readCommittedGeneration({ vaultRoot: f.vaultRoot });
+  const note = f.candidate.notes[0], notePath = join(f.vaultRoot, note.path);
+  const approved = await readFile(notePath, 'utf8');
+  const edited = approved.replace('<!-- AUTO:END reading -->', '\n用户补充保留。\n<!-- AUTO:END reading -->');
+  assert.notEqual(edited, approved);
+  await writeFile(notePath, edited);
+  const shared = original.generation.shared_nodes[0];
+  const g = await readingFirstPublicationFixture(t, { vaultRoot: f.vaultRoot, generation: 'reading-edited-next',
+    currentRegistryRoot: f.vaultRoot,
+    runId: 'run_' + 'e'.repeat(32), paperId: 'pap_' + 'e'.repeat(32),
+    title: { en: 'Next after edit', 'zh-CN': '编辑后的新论文' } });
+  const secondNotePath = join(f.vaultRoot, f.candidate.notes[1].path);
+  const secondBefore = await readFile(secondNotePath, 'utf8');
+  const secondEdit = secondBefore.replace('<!-- AUTO:END reading -->', '\n批准后补充。\n<!-- AUTO:END reading -->');
+  await writeFile(secondNotePath, secondEdit);
+  await applyBilingualPublication(applyReadingFirstFixture(g));
+  assert.equal(await readFile(notePath, 'utf8'), edited);
+  assert.equal(await readFile(secondNotePath, 'utf8'), secondEdit);
+  const archived = join(f.vaultRoot, '.apa-v3/phase22/history', original.generation_id, 'snapshot', note.path);
+  assert.equal(await readFile(archived, 'utf8'), approved);
+  const currentArchive = join(f.vaultRoot, '.apa-v3/phase22/history', original.generation_id, 'current', note.path);
+  assert.equal(await readFile(currentArchive, 'utf8'), edited);
+});
+
+test('a legacy reading binding keeps its original strict publication contract after an old note edit', async t => {
+  const f = await readingFirstPublicationFixture(t);
+  await applyBilingualPublication(applyReadingFirstFixture(f));
+  const original = await readCommittedGeneration({ vaultRoot: f.vaultRoot });
+  const path = join(f.vaultRoot, f.candidate.notes[0].path);
+  const before = await readFile(path, 'utf8');
+  await writeFile(path, before.replace('<!-- AUTO:END reading -->', '\nLegacy drift.\n<!-- AUTO:END reading -->'));
+  const shared = original.generation.shared_nodes[0];
+  await assert.rejects(readingFirstPublicationFixture(t, { vaultRoot: f.vaultRoot, generation: 'legacy-after-edit',
+    runId: 'run_' + 'f'.repeat(32), paperId: 'pap_' + 'f'.repeat(32),
+    knowledgeRegistry: [{ id: 'method', canonical_key: 'synthetic-method', path: shared.path,
+      content: await readFile(join(f.vaultRoot, shared.path), 'utf8') }] }), /RF_PUBLICATION_PREVIOUS_GENERATION_INVALID/);
+});
+
+test('current shared content changed after rendering cannot be overwritten by publication preparation', async t => {
+  const f = await readingFirstPublicationFixture(t);
+  await applyBilingualPublication(applyReadingFirstFixture(f));
+  const g = await reviewedReadingFirstFixture(t, { currentRegistryRoot: f.vaultRoot,
+    runId: 'run_' + 'e'.repeat(32), paperId: 'pap_' + 'e'.repeat(32),
+    title: { en: 'New reading', 'zh-CN': '新论文' } });
+  const path = join(f.vaultRoot, g.candidate.supportNotes[0].path);
+  const original = await readFile(path, 'utf8');
+  const edited = original.replace('<!-- AUTO:END shared-knowledge -->', 'HumanChangedAfterRenderNeedle\n<!-- AUTO:END shared-knowledge -->');
+  assert.notEqual(original, edited);
+  await writeFile(path, edited);
+  const source = await captureReadingFirstPublicationSource({ controller: g.controller, presentation: g.candidate });
+  await assert.rejects(prepareReadingFirstPublication({ source, vaultRoot: f.vaultRoot, generation: 'new-after-edit',
+    evidenceMode: 'synthetic', resources: g.resources }), /RF_PUBLICATION_KNOWLEDGE_CHANGED_SINCE_RENDER/);
+  assert.equal(await readFile(path, 'utf8'), edited);
 });

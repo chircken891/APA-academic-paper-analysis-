@@ -63,7 +63,9 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
   };
   const runBinding = (options.createRunControl ?? createReadingFirstRunControl)({ runId, scientificInput: input, mainSession: { model: 'gpt-6-astra', reasoning_effort: 'high' },
     authorizationId: 'synthetic-publication-source-only', deadline: options.deadline ?? '2099-01-01T00:00:00Z', maxCalls: 7,
-    writingMode: 'source-first', sourceLanguage: 'en', presentationMode: 'reading-editor', taskBindings: tasks, ...options.controlOptions });
+    writingMode: 'source-first', sourceLanguage: 'en', presentationMode: 'reading-editor', taskBindings: tasks, ...options.controlOptions,
+    ...(options.currentRegistryRoot ? { configuredSetup: { paths: { runRoot: root }, writing_instructions: { en: '', 'zh-CN': '' },
+      knowledge_registry: { policy: 'current-shared-nodes-1.0', vault_root: options.currentRegistryRoot } } } : {}) });
   const binding = runBinding.reading_first_binding;
   const authorizedBindings = [
     ...roles.map(role => ({ run_id: runId, actor_id: role, role, artifact_path: 'science/' + role + '.json', revision: '1' })),
@@ -103,7 +105,7 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
   }])) };
   if (binding.presentation_mode === 'reading-editor') await complete(createReadingFirstPresentationRequest({ controller }), editor);
   const knowledgeRegistry = binding.configured_setup?.knowledge_registry
-    ? await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: binding.configured_setup.knowledge_registry.vault_root })
+    ? await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: binding.configured_setup.knowledge_registry.vault_root, policy: binding.configured_setup.knowledge_registry.policy })
     : options.knowledgeRegistry ?? [];
   if (binding.configured_setup?.knowledge_registry && options.knowledgeRegistry !== undefined) {
     const supplied = options.knowledgeRegistry, byPath = new Map(knowledgeRegistry.map(row => [row.path, row]));

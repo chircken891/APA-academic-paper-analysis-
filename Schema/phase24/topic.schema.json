@@ -783,6 +783,9 @@
             "files"
           ],
           "properties": {
+            "current_content_policy": {
+              "const": "registered-current-1.0"
+            },
             "generation": {
               "$ref": "../phase22/active-index-1.0#/$defs/active"
             },
@@ -1065,6 +1068,10 @@
               "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$"
             },
             "input_hash": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "base_managed_hash": {
               "type": "string",
               "pattern": "^sha256:[a-f0-9]{64}$"
             },

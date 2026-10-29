@@ -16,7 +16,7 @@ const installerPath = path.join(root, 'scripts/setup/install-global-integrations
 test('APA configuration links and documented environment fields resolve to their actual owners', async () => {
   const guide = await readFile(guidePath, 'utf8');
   for (const [, target] of guide.matchAll(/\]\(([^)]+)\)/g)) {
-    assert.equal((await stat(path.resolve(path.dirname(guidePath), target))).isFile(), true, target);
+    assert.equal((await stat(path.resolve(path.dirname(guidePath), target.split('#')[0]))).isFile(), true, target);
   }
   const contract = JSON.parse(await readFile(path.join(root, 'config/environment.json'), 'utf8'));
   const table = guide.split('## 环境合同')[1].split('不得只修改')[0];

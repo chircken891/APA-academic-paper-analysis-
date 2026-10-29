@@ -7,7 +7,7 @@ import YAML from 'yaml';
 import { fingerprintV3Json as hash } from './semantic-package-validator.mjs';
 import { inspectManagedNote, mergeManagedNote } from './phase22-managed-markdown.mjs';
 import { readCommittedGeneration, assertActiveGeneration, assertIndexGeneration, phase22GenerationPaths,
-  INDEX_READING_FIRST_PROFILE } from './phase22-active-version.mjs';
+  readRegisteredCommit, INDEX_READING_FIRST_PROFILE } from './phase22-active-version.mjs';
 import { buildBilingualIndex } from './phase22-search.mjs';
 import { assertReadingFirstPublicationManifest } from './reading-first-index.mjs';
 import { captureReadingFirstPublicationSource, createExternalReadingFirstPublicationSource,
@@ -132,8 +132,14 @@ function migrateKnowledgeMetadata(bytes, path) {
     .replace(/^graph_scope: v2-canonical\r?$/m, 'graph_scope: v3-candidate');
   return Buffer.from(header + text.slice(front[0].length));
 }
-async function baseFor(root) {
+async function baseFor(root, currentPolicy = false) {
   if (regularBytes(root, '.apa-v3/phase22/COMMITTED.json', { missing: true }) === null) return { snapshot: null, generation: null, index: null, files: new Map() };
+  if (currentPolicy) {
+    const registered = await readRegisteredCommit({ vaultRoot: root });
+    if (!registered.ok) fail('RF_PUBLICATION_PREVIOUS_GENERATION_INVALID', { errors: registered.errors });
+    return { snapshot: null, generation: clone(registered.generation), index: clone(registered.index), carryHistoricalDocuments: true,
+      files: new Map(registered.generation.objects.map(row => [row.path, regularBytes(root, row.path)])) };
+  }
   const snapshot = await readCommittedGeneration({ vaultRoot: root });
   if (!snapshot.ok) fail('RF_PUBLICATION_PREVIOUS_GENERATION_INVALID', { errors: snapshot.errors });
   return { snapshot, generation: clone(snapshot.generation), index: clone(snapshot.index),
@@ -185,7 +191,10 @@ function publicationCitation(data, resources) {
 export async function buildReadingFirstPublicationReview({ source, vaultRoot, generation, evidenceMode = 'actual', resources, knowledgeMetadataMigrations } = {}) {
   const data = await inspectReadingFirstPublicationSource(source);
   if (data.origin !== 'live') fail('RF_PUBLICATION_LIVE_SOURCE_REQUIRED');
-  const root = rootPath(vaultRoot), base = await baseFor(root);
+  const root = rootPath(vaultRoot);
+  const policy = data.recipe.binding?.configured_setup?.knowledge_registry;
+  const currentPolicy = policy?.policy === 'current-shared-nodes-1.0' && resolve(policy.vault_root) === root;
+  const base = await baseFor(root, currentPolicy);
   const options = { vaultRoot: root, generation, evidenceMode, resources: resourceBindings(data, resources),
     ...(knowledgeMetadataMigrations === undefined ? {} : { knowledgeMetadataMigrations: clone(knowledgeMetadataMigrations) }) };
   return buildReview({ source, data, options, base, preimages: null });
@@ -250,6 +259,14 @@ async function buildReview({ source, data, options, base, preimages }) {
   for (const note of candidate.supportNotes ?? []) {
     const path = safePath(note.path), reviewed = Buffer.from(note.content), original = before(path), migration = migrations.get(path);
     if (!/^Wiki\/(methods|concepts)\/[^/]+\.md$/.test(path)) fail('RF_PUBLICATION_SUPPORT_PATH_INVALID');
+    if (data.recipe.binding?.configured_setup?.knowledge_registry?.policy === 'current-shared-nodes-1.0' && original !== null && !migration) {
+      const matches = (data.recipe.rendering?.knowledgeRegistry ?? []).filter(row => row.path === path || row.canonical_path === path);
+      if (matches.length !== 1 || matches[0].current_content !== true || typeof matches[0].content !== 'string'
+        || sha(Buffer.from(matches[0].content)) !== matches[0].content_sha256
+        || sha(original) !== matches[0].content_sha256) {
+        fail('RF_PUBLICATION_KNOWLEDGE_CHANGED_SINCE_RENDER', { path, action: 'refresh_candidate' });
+      }
+    }
     let bytes = reviewed, comparison = original;
     if (migration) {
       if (original === null || sha(original) !== migration.before_sha256 || sha(reviewed) !== migration.candidate_sha256) fail('RF_PUBLICATION_METADATA_MIGRATION_MISMATCH', { path });
@@ -299,12 +316,14 @@ async function buildReview({ source, data, options, base, preimages }) {
   const finalFiles = [...files].map(([path, bytes]) => ({ path, bytes }));
   const built = await buildBilingualIndex({ validatedInputs: { papers: [{ readingFirst: presentation,
     notes: Object.fromEntries(candidate.notes.map(note => [note.language, Buffer.from(note.content)])) }], files: finalFiles,
+    ...(base.carryHistoricalDocuments ? { carryHistoricalDocuments: true } : {}),
     ...(base.snapshot ? { previousSnapshot: base.snapshot } : base.generation ? { previousPrepared: { generation: base.generation, index: base.index } } : {}) }, generation: active });
   const pairPaths = phase22GenerationPaths(generation);
   add(pairPaths.active, 'active', jsonBytes(built.generation));
   add(pairPaths.index, 'index', built.bytes);
   for (const object of active.objects.filter(row => !output.some(entry => entry.path === row.path))) {
     if (readDependencies.some(row => row.path === object.path)) continue;
+    if (base.carryHistoricalDocuments && object.path.startsWith('Wiki/')) continue;
     const bytes = files.get(object.path);
     if (!(bytes instanceof Uint8Array)) fail('RF_PUBLICATION_PREVIOUS_OBJECT_MISSING', { path: object.path });
     readDependencies.push({ path: object.path, byte_sha256: sha(bytes), byte_length: bytes.length });
@@ -336,7 +355,8 @@ async function buildReview({ source, data, options, base, preimages }) {
   const result = freeze({ ok: true, status, reviewManifest, outputInventory: output, hashes, diagnostics: [] });
   const recipe = { schema_version: 'reading-first-publication-registration-1.0', source: data.recipe,
     options: clone(options), preimages: encodeFiles(beforeFiles),
-    base: { generation: base.generation, index: base.index, files: encodeFiles(base.files) } };
+    base: { generation: base.generation, index: base.index, files: encodeFiles(base.files),
+      ...(base.carryHistoricalDocuments ? { carryHistoricalDocuments: true } : {}) } };
   records.set(result, { source, recipe, sourceBindings, toolBindings,
     stamp: hash({ manifest: reviewManifest, output: inventoryStamp(output), hashes }) });
   return result;
@@ -349,6 +369,11 @@ export async function assertReadingFirstPublicationReviewCurrent(review) {
   await inspectReadingFirstPublicationSource(record.source);
   currentBindings(record.sourceBindings); currentBindings(record.toolBindings);
   return review;
+}
+
+/** A current-content publication is selected only by its frozen reading binding. */
+export function usesCurrentReadingFirstPublication(review) {
+  return records.get(review)?.recipe?.source?.binding?.configured_setup?.knowledge_registry?.policy === 'current-shared-nodes-1.0';
 }
 
 /** Restored evidence can reload its signed plan, but cannot mint a new plan or approval source. */
@@ -391,7 +416,8 @@ export async function rebuildRegisteredReadingFirstReview(recipe, proof) {
   const source = await restoreReadingFirstPublicationSource(recipe.source), data = await inspectReadingFirstPublicationSource(source);
   const options = { ...clone(recipe.options), resources: resourceBindings(data, recipe.options.resources) };
   return buildReview({ source, data, options,
-    base: { snapshot: null, generation: recipe.base.generation, index: recipe.base.index, files: decodeFiles(recipe.base.files) },
+    base: { snapshot: null, generation: recipe.base.generation, index: recipe.base.index, files: decodeFiles(recipe.base.files),
+      carryHistoricalDocuments: recipe.base.carryHistoricalDocuments === true },
     preimages: decodeFiles(recipe.preimages) });
 }
 

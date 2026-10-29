@@ -166,7 +166,27 @@ export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, p
   const state = Buffer.from(JSON.stringify({ item: node, applications })).toString('base64');
   const addition = `${start}\n<!-- KNOWLEDGE_STATE ${state} -->\n${body}${end}\n`;
   let content;
-  if (original !== undefined) {
+  if (original !== undefined && from >= 0 && matches.some(row => row.current_content === true)) {
+    // Keep every visible byte from the current node, including edits inside the managed region.
+    const oldRegion = original.slice(from, to);
+    const newItem = node.paper_additions?.find(row => row.paper_id === paperId);
+    let appended = '';
+    if (newItem) for (const language of languages) for (const section of additionSections(newItem, language)) {
+      appended += `\n### ${heading(section.heading)}\n\n${section.paragraphs.map(value => resolveReferences(value, language, target)).join('\n\n')}\n`;
+    }
+    for (const formula of node.formulas ?? []) if (!(prior.item.formulas ?? []).some(old => old.latex === formula.latex)) {
+      appended += `\n$$\n${formula.latex}\n$$\n\n${formula.description['zh-CN']} / ${formula.description.en}\n`;
+    }
+    for (const source of node.sources ?? []) if (!(prior.item.sources ?? []).some(old => old.url === source.url)) {
+      appended += `\n- [${source.title.replace(/[\[\]\r\n]/g, ' ')}](${source.url.replace(/\(/g, '%28').replace(/\)/g, '%29')})\n`;
+    }
+    if (!previousApplications.some(row => row.paper_id === paperId)) {
+      appended += '\n## 论文应用增补 / Additional paper applications\n\n' + languages.map(language =>
+        `- [${applicationLabel({ paper_id: paperId, targets: paperTargets, title: paperTitle }, language)}](${href(target, paperTargets[language])})`).join('\n') + '\n';
+    }
+    const updatedRegion = oldRegion.replace(/<!-- KNOWLEDGE_STATE [A-Za-z0-9+/=]+ -->/, `<!-- KNOWLEDGE_STATE ${state} -->`);
+    content = original.slice(0, from) + updatedRegion + appended + original.slice(to);
+  } else if (original !== undefined) {
     content = from < 0 ? original + (original.endsWith('\n') ? '\n' : '\n\n') + addition : original.slice(0, from) + addition.trimEnd() + original.slice(to + end.length);
   } else {
     const aliases = [...new Set([...names(item.title), ...(item.aliases ?? [])])];

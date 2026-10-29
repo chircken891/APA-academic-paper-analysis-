@@ -7,6 +7,7 @@ import Ajv2020 from 'ajv/dist/2020.js';
 import { fingerprintV3Json as hash } from './semantic-package-validator.mjs';
 import { inspectManagedNote, mergeManagedNote } from './phase22-managed-markdown.mjs';
 import { readCommittedGeneration, assertActiveGeneration, assertIndexGeneration, phase22GenerationPaths } from './phase22-active-version.mjs';
+import { readCurrentVaultContent } from './current-vault-content.mjs';
 import { buildBilingualIndex } from './phase22-search.mjs';
 import { createPhase22ContractValidator } from './phase22-contract-loader.mjs';
 import { readRegisteredTopicDependency, validateSourceChangeEvent, validateTopicEventResolutions, assertTopicCandidatePending } from './topic-library.mjs';
@@ -52,9 +53,10 @@ function bytesAt(root, path, missing = false) {
   binding(cursor);
   return readFileSync(cursor);
 }
-const toolBindings = () => ['./topic-publication.mjs', './topic-library.mjs', './phase22-publication.mjs', './phase22-review.mjs',
+const toolBindings = (currentContentPolicy = false) => ['./topic-publication.mjs', './topic-library.mjs', './phase22-publication.mjs', './phase22-review.mjs',
   './phase22-active-version.mjs', './phase22-managed-markdown.mjs', './phase22-search.mjs', '../../Schema/phase24/topic.schema.json',
-  '../../Schema/phase22/active-index.schema.json', '../../Schema/phase22/review-manifest.schema.json', '../../Schema/phase22/publication-transaction.schema.json']
+  '../../Schema/phase22/active-index.schema.json', '../../Schema/phase22/review-manifest.schema.json', '../../Schema/phase22/publication-transaction.schema.json',
+  ...(currentContentPolicy ? ['./current-vault-content.mjs'] : [])]
   .map(path => binding(fileURLToPath(new URL(path, import.meta.url))));
 const stamp = rows => rows.map(({ bytes, ...row }) => ({ ...row, observed_sha256: sha(bytes) }));
 function freeze(value) {
@@ -81,7 +83,7 @@ async function build({ options, base, preimages, restored = false }) {
     if (!restored) await validateSourceChangeEvent({ vaultRoot: root, snapshot: base.snapshot, event: candidate.event });
     else {
       // The recipe binds the already validated exact target and original committed snapshots.
-      const live = await readCommittedGeneration({ vaultRoot: root });
+      const live = base.currentContentPolicy ? await readCurrentVaultContent({ vaultRoot: root }) : await readCommittedGeneration({ vaultRoot: root });
       await validateSourceChangeEvent({ vaultRoot: root, snapshot: live, event: candidate.event });
     }
   }
@@ -108,7 +110,10 @@ async function build({ options, base, preimages, restored = false }) {
   if (old !== null && !previous) fail('P24_TARGET_UNREGISTERED');
   if (previous) validateTopicEventResolutions({ topic, previous, answer: inspected.regions.find(r => r.id === 'topic').bytes.toString('utf8'),
     events: base.generation.source_events ?? [], inputFingerprint: candidate.execution?.input_hash });
-  const merged = sourceChange ? null : mergeManagedNote({ existingBytes: old, rendered: note, expectedManagedHash: previous?.managed_hash });
+  if (previous && base.currentContentPolicy && old
+    && inspectManagedNote(old).managedHash !== (candidate.execution?.base_managed_hash ?? previous.managed_hash)) fail('P24_TOPIC_BASE_CHANGED');
+  const merged = sourceChange ? null : mergeManagedNote({ existingBytes: old, rendered: note,
+    expectedManagedHash: base.currentContentPolicy && old ? inspectManagedNote(old).managedHash : previous?.managed_hash });
   const generation = options.generation ?? 'topic-' + hash({ run, topic, ...(sourceChange ? { event: candidate.event } : {}) }).slice(7, 47);
   if (generation === base.generation.generation_id) fail('P22_GENERATION_NOT_NEW');
   phase22GenerationPaths(generation);
@@ -127,11 +132,13 @@ async function build({ options, base, preimages, restored = false }) {
   delete active.index_manifest;
   assertActiveGeneration(active);
   const built = await buildBilingualIndex({ generation: active, validatedInputs: { papers: [], files: [...files].map(([path, bytes]) => ({ path, bytes })),
-    ...(base.snapshot ? { previousSnapshot: base.snapshot } : { previousPrepared: { generation: base.generation, index: base.index } }) } });
+    ...(base.currentContentPolicy ? { carryHistoricalDocuments: true, previousPrepared: { generation: base.generation, index: base.index } }
+      : base.snapshot ? { previousSnapshot: base.snapshot } : { previousPrepared: { generation: base.generation, index: base.index } }) } });
   const paths = phase22GenerationPaths(generation);
   add(paths.active, 'active', jsonBytes(built.generation)); add(paths.index, 'index', built.bytes);
-  const dependencies = [...base.files].filter(([p]) => p !== path).map(([path, bytes]) => ({ path, byte_sha256: sha(bytes), byte_length: bytes.length }));
-  const tools = toolBindings();
+  const dependencies = [...base.files].filter(([p]) => p !== path && !(base.currentContentPolicy && p.startsWith('Wiki/')))
+    .map(([path, bytes]) => ({ path, byte_sha256: sha(bytes), byte_length: bytes.length }));
+  const tools = toolBindings(base.currentContentPolicy);
   const scientificReviewHash = hash({ topic, candidate: sourceBindings, ...(sourceChange ? { event: candidate.event } : { adopted_sources: topic.dependencies }) });
   const evidenceMode = base.generation.evidence_mode;
   const status = evidenceMode === 'actual' ? 'review_ready' : 'synthetic_prepared';
@@ -156,15 +163,16 @@ async function build({ options, base, preimages, restored = false }) {
   const review = freeze({ ok: true, status, reviewManifest, outputInventory: output, hashes, diagnostics: [] });
   const source = {};
   const recipe = { schema_version: 'phase24-topic-registration-1.0', options: clone(options),
-    base: { generation: base.generation, index: base.index, files: encode(base.files) }, preimages: encode(beforeFiles) };
+    base: { generation: base.generation, index: base.index, files: encode(base.files),
+      ...(base.currentContentPolicy ? { current_content_policy: 'registered-current-1.0' } : {}) }, preimages: encode(beforeFiles) };
   records.set(review, { source, restored, recipe, sourceBindings, tools, stamp: hash({ reviewManifest, output: stamp(output), hashes }) });
   return { review, source };
 }
 
 export async function prepareTopicPublication({ vaultRoot, candidate, operationId, generation } = {}) {
-  const root = resolve(vaultRoot), snapshot = await readCommittedGeneration({ vaultRoot: root });
+  const root = resolve(vaultRoot), snapshot = await readCurrentVaultContent({ vaultRoot: root });
   if (!snapshot.ok) fail('P24_COMMITTED_GENERATION_REQUIRED', { errors: snapshot.errors });
-  const base = { snapshot, generation: clone(snapshot.generation), index: clone(snapshot.index),
+  const base = { snapshot, currentContentPolicy: true, generation: clone(snapshot.generation), index: clone(snapshot.index),
     files: new Map(snapshot.generation.objects.map(o => [o.path, bytesAt(root, o.path)])) };
   const { review, source } = await build({ options: { vaultRoot: root, candidate, operationId: operationId ?? candidate.operation_id, ...(generation ? { generation } : {}) }, base });
   const { dryRunBilingualPublication } = await import('./phase22-publication.mjs');
@@ -178,6 +186,9 @@ export function assertTopicPublicationReviewCurrent(review) {
   if (record.stamp !== hash({ reviewManifest: review.reviewManifest, output: stamp(review.outputInventory), hashes: review.hashes })) fail('P22_REVIEW_OUTPUT_INVALIDATED');
   current(record.sourceBindings); current(record.tools);
   return review;
+}
+export function usesCurrentTopicPublication(review) {
+  return records.get(review)?.recipe?.base?.current_content_policy === 'registered-current-1.0';
 }
 export function getTopicPublicationCandidate(review) {
   assertTopicPublicationReviewCurrent(review);
@@ -212,7 +223,8 @@ export async function rebuildRegisteredTopicReview(recipe, { registration, bundl
       || grant.key_fingerprint !== sha(key) || sha(bundleBytes) !== pointer.bundle.sha256 || !same(JSON.parse(Buffer.from(bundleBytes)).topic_recipe, recipe)
       || !verify(null, Buffer.from(hash(grant.payload)), createPublicKey({ key, format: 'der', type: 'spki' }), Buffer.from(grant.signature, 'base64'))) fail('P24_REGISTERED_PROOF_REQUIRED');
   } catch { fail('P24_REGISTERED_PROOF_REQUIRED'); }
-  const built = await build({ options: recipe.options, base: { snapshot: null, generation: recipe.base.generation, index: recipe.base.index, files: decode(recipe.base.files) },
+  const built = await build({ options: recipe.options, base: { snapshot: null, generation: recipe.base.generation, index: recipe.base.index, files: decode(recipe.base.files),
+    currentContentPolicy: recipe.base.current_content_policy === 'registered-current-1.0' },
     preimages: decode(recipe.preimages), restored: true });
   return built.review;
 }

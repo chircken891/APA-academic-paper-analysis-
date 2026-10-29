@@ -35,6 +35,30 @@ test('reading editor 1.1 validates figure notes and a shared staged map selectio
     ['empty map',value=>{value.map.nodes=[];},/MAP_INVALID/],
   ]) {const changed=make();mutate(changed);assert.throws(()=>check(changed),code,name);}
 });
+test('reading editor 1.2 requires every step while allowing omitted findings',()=>{
+  const presentation={knowledge:[{id:'method'}],visuals:[],map:{steps:[{id:'step'},{id:'step-two'}],findings:[{id:'finding'}],relations:[]}};
+  const value=editor(); value.schema_version='reading-editor-1.2'; value.map={nodes:[{id:'step',stage:'design'},{id:'step-two',stage:'measurement'}]};
+  for (const language of ['en','zh-CN']) value.languages[language].visuals=[];
+  const check=()=>validateReadingFirstEditor({editor:value,views,presentation});
+  assert.equal(check(),value);
+  value.map.nodes.pop();
+  assert.throws(check,error=>error.code==='READING_FIRST_EDITOR_MAP_INVALID' && error.details?.missing_steps?.includes('step-two'));
+  value.map.nodes.push({id:'step',stage:'design'});
+  assert.throws(check,/MAP_INVALID/);
+});
+test('reading editor 1.2 covers a fourteen-step map without requiring thirteen findings',()=>{
+  const steps=Array.from({length:14},(_,i)=>({id:`d${i+1}`}));
+  const findings=Array.from({length:13},(_,i)=>({id:`r${i+1}`}));
+  const presentation={knowledge:[{id:'method'}],visuals:[],map:{steps,findings,relations:[]}};
+  const value=editor(); value.schema_version='reading-editor-1.2';
+  value.map={nodes:[...steps.map(node=>({id:node.id,stage:'measurement'})),{id:'r1',stage:'finding',primary:true}]};
+  for (const language of ['en','zh-CN']) value.languages[language].visuals=[];
+  assert.equal(validateReadingFirstEditor({editor:value,views,presentation}),value);
+  value.map.nodes=value.map.nodes.filter(node=>node.id!=='d7');
+  assert.throws(()=>validateReadingFirstEditor({editor:value,views,presentation}),error=>error.details?.missing_steps?.includes('d7'));
+  value.schema_version='reading-editor-1.1';
+  assert.equal(validateReadingFirstEditor({editor:value,views,presentation}),value);
+});
 test('shared bilingual inventory validates nonempty knowledge links and matching association sets',()=>{
   const presentation={knowledge_layout:'shared-bilingual-1.0',knowledge:[{id:'method'},{id:'measure'}]};
   const check=value=>validateReadingFirstEditor({editor:value,views,presentation});

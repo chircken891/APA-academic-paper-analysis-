@@ -248,7 +248,7 @@ export function emitApprovedRunStep({ packet, run, dispatchContext, approvedBudg
   });
 }
 
-export function ingestObservedRunStep({ packet, emittedStep, observation, store, ledger, run, dispatchContext, approvedBudget, retryPolicy, previousObservation, now = new Date().toISOString() } = {}) {
+export function ingestObservedRunStep({ packet, emittedStep, observation, store, ledger, run, dispatchContext, approvedBudget, retryPolicy, previousObservation, legacySourceComparison = false, now = new Date().toISOString() } = {}) {
   void store; void dispatchContext; void approvedBudget; void retryPolicy;
   const approved = validatedPacket(packet);
   validateContinuation(approved, previousObservation);
@@ -256,11 +256,12 @@ export function ingestObservedRunStep({ packet, emittedStep, observation, store,
   const expectedFingerprint = packetFingerprint(approved);
   const expectedScope = packetScope(approved);
   const expectedScopeFingerprint = hash(Buffer.from(stable(expectedScope)));
+  const emittedSource = legacySourceComparison ? approved.source : { path: approved.source.path, sha256: approved.source.sha256, byte_length: approved.source.byte_length };
   const matching = emittedStep?.kind === 'phase21-approved-host-step' && typeof emittedStep.action_id === 'string' && emittedStep.action_id.trim().length > 0 && emittedStep.run_id === approved.run_id
     && emittedStep.input_fingerprint === expectedFingerprint && emittedStep.port === approved.backend.identity
     && emittedStep.action === approved.host_action_scope.action && run?.run_id === approved.run_id
     && emittedStep.packet_scope_fingerprint === expectedScopeFingerprint && same(emittedStep.packet_scope, expectedScope)
-    && same(emittedStep.source, approved.source) && emittedStep.allowed_output_root === approved.allowed_output_root
+    && same(emittedStep.source, emittedSource) && emittedStep.allowed_output_root === approved.allowed_output_root
     && emittedStep.user_approval_id === approved.user_approval_id && same(emittedStep.approved_budget, approved.approved_budget_cap)
     && emittedStep.retry_policy?.max_retries === approved.retry_allowance
     && same(emittedStep.permitted_result_fields, approved.host_action_scope.permitted_result_fields)

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync, mkdirSync, writeFileSync, linkSync, unlinkSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync, linkSync, unlinkSync, lstatSync, cpSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, join } from 'node:path';
 import { inspectApaConfig, resolveApaConfig } from '../lib/apa-config.mjs';
 import { createConfiguredApaRoleModelPolicy, resolveApaRoleModel, buildHostDispatchArguments } from '../apa-model-policy.mjs';
@@ -7,7 +7,8 @@ import { SCIENCE_INDEX_PROFILE, createReadingFirstRunControl, fingerprintReading
 import { exportReadingFirstPreview } from './reading-first-preview.mjs';
 import { emitApprovedRunStep, createCurrentMineruBaselinePort } from './phase21-runner.mjs';
 import { getRoleReplyContract, loadRoleReplyContract } from './role-reply-contract.mjs';
-import { readCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
+import { readCommittedReadingFirstKnowledgeRegistry, assertCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
+import { readingEditorInstructions } from './reading-first-editor-contract.mjs';
 
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
@@ -58,6 +59,7 @@ export function buildConfiguredReadingInstructions(writingSkills = {}) {
   }
   delete sections['Writer module guidance'];
   sections['Reading Editor'] = sections['Reading Editor'].replace(/Meaningful emphasis is required where it helps comprehension;[^\r\n]*/g, 'Meaningful emphasis is required where it helps comprehension. Numbered hierarchy, tables, lists, callouts and navigable catalogues remain available.');
+  sections['Reading Editor'] = readingEditorInstructions(sections['Reading Editor']);
   const writingInstructions = Object.fromEntries(['en', 'zh-CN'].map(language => [language, Object.entries(writingSkills)
     .filter(([key]) => key !== (language === 'en' ? 'humanizer-zh' : 'humanizer'))
     .map(([key, guide]) => 'Selected optional writing guidance: ' + key + '\n' + JSON.stringify({ path: guide.path, sha256: sha(Buffer.from(guide.content)) })
@@ -88,7 +90,7 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
     python: resolvedConfig.parser.python ?? join(resolvedConfig.parser.runtime_home, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
     configPath: resolvedConfig.parser.config_path ?? join(resolvedConfig.parser.runtime_home, 'config.yaml') };
   const configuredSetup = { schema_version: 'apa-configured-reading-1.0', config_fingerprint: loaded.fingerprint, paths, parser: parserOptions,
-    knowledge_registry: { policy: 'committed-generation-1.0', vault_root: resolve(repoRoot) },
+    knowledge_registry: { policy: 'current-shared-nodes-1.0', vault_root: resolve(repoRoot) },
     role_model_policy: createConfiguredApaRoleModelPolicy(mainSession, resolvedConfig.roles),
     ...buildConfiguredReadingInstructions(resolvedConfig.writingSkills) };
   // The language other than the paper's original is translated from the accepted source draft; its tasks run as the translation role.
@@ -195,15 +197,61 @@ export function createConfiguredMineruPort({ prepared, repoRoot, dependencies } 
 }
 
 /** Save the same rendered Obsidian candidate through the existing self-contained exporter; grants no publication authority. */
-export async function materializeConfiguredReadingCandidate({ prepared, controller, handoff, resources, ...renderOptions } = {}) {
+export async function materializeConfiguredReadingCandidate({ prepared, controller, handoff, resources, onDependencyBoundary, ...renderOptions } = {}) {
   const checkpoint = snapshotReadingFirstRuntime(controller);
   if (checkpoint.control_fingerprint !== fingerprintReadingFirst(prepared.runControl.reading_first_binding)
     || checkpoint.handoff_fingerprint !== handoff?.handoff_fingerprint) throw new Error('APA_CONFIGURED_CANDIDATE_BINDING_MISMATCH');
   const policy = prepared.runControl.reading_first_binding.configured_setup?.knowledge_registry;
+  if (policy?.policy === 'current-shared-nodes-1.0') {
+    if (typeof policy.vault_root !== 'string' || resolve(policy.vault_root) !== policy.vault_root) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_POLICY_INVALID');
+    try { lstatSync(prepared.paths.candidateRoot); throw Object.assign(new Error('RF_PREVIEW_OUTPUT_EXISTS'), { code: 'RF_PREVIEW_OUTPUT_EXISTS' }); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const scratch = join(policy.vault_root, '.tmp', 'reading-first-candidates');
+    mkdirSync(scratch, { recursive: true });
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const trusted = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, policy: policy.policy });
+        if (attempt === 1 && renderOptions.knowledgeRegistry !== undefined) {
+          const supplied = renderOptions.knowledgeRegistry, byPath = new Map(trusted.map(row => [row.path, row]));
+          if (!Array.isArray(supplied) || new Set(supplied.map(row => row?.path)).size !== supplied.length
+            || supplied.some(row => !byPath.has(row?.path) || fingerprintReadingFirst(row) !== fingerprintReadingFirst(byPath.get(row.path)))) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_MISMATCH');
+        }
+        const options = { ...renderOptions, knowledgeRegistry: trusted };
+        const candidate = renderReadingFirstNotes({ controller, ...options });
+        const stage = join(scratch, 'candidate-' + randomUUID());
+        const exported = await exportReadingFirstPreview({ outputRoot: stage, identity: handoff.identity,
+          views: ['en', 'zh-CN'].map(language => checkpoint.state.views[language].value), presentation: handoff.presentation, resources,
+          ...(checkpoint.state.readingEditor ? { readingEditor: checkpoint.state.readingEditor.value } : {}), ...options,
+          targetRegistry: candidate.targetRegistry, historicalKnowledge: { vaultRoot: policy.vault_root } });
+        if (candidate.notes.some(note => exported.notes.find(other => other.path === note.path)?.content !== note.content)
+          || (candidate.supportNotes?.length ?? 0) !== (exported.supportNotes?.length ?? 0)
+          || candidate.supportNotes?.some(note => exported.supportNotes.find(other => other.path === note.path)?.content !== note.content)) throw new Error('APA_CONFIGURED_CANDIDATE_RENDER_MISMATCH');
+        await onDependencyBoundary?.({ attempt, phase: 'before-finalize', stagingRoot: stage });
+        const paths = (exported.manifest.knowledge_dependencies ?? []).map(row => row.path);
+        assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: trusted, policy: policy.policy, paths });
+        mkdirSync(dirname(prepared.paths.candidateRoot), { recursive: true });
+        try { mkdirSync(prepared.paths.candidateRoot); }
+        catch (error) { if (error.code === 'EEXIST') throw Object.assign(new Error('RF_PREVIEW_OUTPUT_EXISTS'), { code: 'RF_PREVIEW_OUTPUT_EXISTS' }); throw error; }
+        try {
+          cpSync(stage, prepared.paths.candidateRoot, { recursive: true, force: false, errorOnExist: true });
+          await onDependencyBoundary?.({ attempt, phase: 'after-finalize', stagingRoot: stage, outputRoot: prepared.paths.candidateRoot });
+          assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: trusted, policy: policy.policy, paths });
+        } catch (error) {
+          error.details = { ...error.details, owned_output_path: prepared.paths.candidateRoot, staging_root: stage };
+          throw error;
+        }
+        return { candidate, exported: { ...exported, outputRoot: prepared.paths.candidateRoot }, staging_root: stage };
+      } catch (error) {
+        if (error.code !== 'P23_CURRENT_CHANGED' || attempt === 2) throw error;
+        // Accepted views and their receipts remain untouched; only the candidate is re-rendered.
+        try { lstatSync(prepared.paths.candidateRoot); throw error; } catch (probe) { if (probe.code !== 'ENOENT') throw probe; }
+      }
+    }
+  }
   let trusted;
   if (policy !== undefined) {
-    if (policy?.policy !== 'committed-generation-1.0' || typeof policy.vault_root !== 'string' || resolve(policy.vault_root) !== policy.vault_root) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_POLICY_INVALID');
-    trusted = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root });
+    if (!['committed-generation-1.0', 'committed-shared-nodes-1.0'].includes(policy?.policy) || typeof policy.vault_root !== 'string' || resolve(policy.vault_root) !== policy.vault_root) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_POLICY_INVALID');
+    trusted = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, policy: policy.policy });
     if (renderOptions.knowledgeRegistry !== undefined) {
       const supplied = renderOptions.knowledgeRegistry, byPath = new Map(trusted.map(row => [row.path, row]));
       if (!Array.isArray(supplied) || new Set(supplied.map(row => row?.path)).size !== supplied.length
@@ -212,7 +260,7 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
     renderOptions.knowledgeRegistry = trusted;
   }
   const assertRegistryCurrent = async () => {
-    if (trusted && fingerprintReadingFirst(await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root })) !== fingerprintReadingFirst(trusted)) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_CHANGED');
+    if (trusted && fingerprintReadingFirst(await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, policy: policy.policy })) !== fingerprintReadingFirst(trusted)) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_CHANGED');
   };
   const candidate = renderReadingFirstNotes({ controller, ...renderOptions });
   await assertRegistryCurrent();
@@ -220,7 +268,8 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
   const exported = await exportReadingFirstPreview({ outputRoot: prepared.paths.candidateRoot, identity: handoff.identity,
     views: ['en', 'zh-CN'].map(language => checkpoint.state.views[language].value), presentation: handoff.presentation, resources,
     ...(checkpoint.state.readingEditor ? { readingEditor: checkpoint.state.readingEditor.value } : {}), ...renderOptions,
-    targetRegistry: candidate.targetRegistry });
+    targetRegistry: candidate.targetRegistry,
+    ...(policy?.policy === 'committed-shared-nodes-1.0' ? { historicalKnowledge: { vaultRoot: policy.vault_root } } : {}) });
   await assertRegistryCurrent();
   if (candidate.notes.some(note => exported.notes.find(other => other.path === note.path)?.content !== note.content)
     || (candidate.supportNotes?.length ?? 0) !== (exported.supportNotes?.length ?? 0)

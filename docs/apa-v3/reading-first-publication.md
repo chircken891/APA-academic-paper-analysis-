@@ -40,6 +40,8 @@ const registration = await registerBilingualPublication({
 
 ## 审阅、批准与事务
 
+新配置化运行冻结 `current-shared-nodes-1.0`。发布准备保留无关正式笔记的当前修改，仅对实际读取依赖及写入目标绑定指纹；共享节点增补保留当前正文。复用节点在候选渲染后发生变化时，发布准备要求刷新候选；批准后写入目标变化时停止覆盖并重新展示差异。历史归档区分可通过原托管校验的 `snapshot/` 与有正文差异的 `current/` 捕获稿，保留个人区，人工修改内容不会取得旧科学审查的含义。旧冻结运行继续使用原发布合同。
+
 审阅返回的完整文件清单、`review_hash` 与 `output_inventory_hash`。共享知识的新建和增补、原始资源的新增，以及保留的人工内容都应能在这份清单中核对。已存在的知识节点沿用稳定身份和路径，两语论文共用同一节点。
 
 实际写入沿用 `registerBilingualPublication`、`applyBilingualPublication` 与 `recoverBilingualPublication` 的现有批准记录、维护窗口和两个精确哈希。没有批准时，`review` 和 `dry-run` 可用于检查，`apply` 拒绝执行。当前 CLI 不承担论文模型派遣，也不接受随意的候选 JSON 作为已注册运行。
@@ -53,11 +55,19 @@ node scripts/v3/bilingual.mjs dry-run --vault-root <vault-root> --run <run> --pr
 
 ## 发布后的索引与图谱
 
-事务成功后，`.apa-v3/phase22/COMMITTED.json` 选择新代次。默认检索读取该代次中的中英文论文与共享知识内容，命中链接落到实际标题或块；默认图谱收录已提交论文唯一的 `Wiki/sources/` 原文语言入口及共享节点，排除 `Wiki/translations/` 译文。历史两语均在 sources 的布局保留中文入口。新增一篇论文或增补同一个知识节点时，其他已提交论文继续保留。
+事务成功后，`.apa-v3/phase22/COMMITTED.json` 选择新登记代次。默认检索读取登记笔记的当前 Markdown，在内存中刷新索引，命中链接落到当前标题或块并携带内容指纹；直接编辑正文后，下一次查询即可使用。原发布索引保留历史含义。默认图谱收录已登记论文唯一的 `Wiki/sources/` 原文语言入口及共享节点，排除 `Wiki/translations/` 译文；连接关系由 Obsidian 读取当前 Markdown。历史两语均在 sources 的布局保留中文入口。新增一篇论文或增补同一个知识节点时，其他已提交论文及人工修改继续保留。
 
-只放入 `Wiki/`、只改 `status` 或版本字段，均不建立已提交身份。未提交候选不进入默认检索和图谱。人工笔记不进入机器生成内容的索引，重发时保留；管理区或来源出现冲突时报告具体冲突。
+新文件只放入 `Wiki/`、只改 `status` 或版本字段，均不建立登记身份。未提交候选不进入默认检索和图谱。已登记正文可直接编辑，个人笔记专用区保持原有检索排除范围；原文来源身份或实际写入目标出现冲突时报告具体对象。
 
 阅读内容审查、发布事务与 Obsidian 原生显示检查分别记录。没有真实原生观察时仍为 `not_run`，发布不会将其改成通过；已接受的普通限制也不会因此消失。
+
+### 图谱自动同步
+
+在用户选定的库执行 `npm run obsidian:graph:sync -- --vault-root "<vault-root>"`，将图谱切换到当前已提交节点，并为该库启用后续自动同步。每次正式提交成功或已提交事务恢复后，发布器从重新校验的 COMMITTED 代次生成精确路径筛选，更新 `.obsidian/graph.json` 中的 `search`、`hideUnresolved` 和 `showOrphans`。原文语言入口、共享节点和专题纳入图谱，译文和未提交内容继续排除。
+
+本库启用状态保存在 `.apa-v3/phase22/graph/MANAGED.json`，不进入公共导出；未启用的库保留原有行为。每次改写前，原配置按内容哈希保存在同目录的 `backups/` 中，颜色、布局、缩放等其余字段保留。若用户改过受管理的筛选字段，发布结果中的 `graph_sync.status` 为 `custom_filter_preserved`，自动同步保留该修改；再次显式执行 sync 可恢复自动管理。派生图谱同步失败时返回 `retryable` 等具体状态，已经提交的论文保持提交成功。
+
+已打开的 Obsidian 图谱可能仍持有内存中的旧筛选；关闭并重新打开图谱标签页后会读取新配置。自动同步更新磁盘清单，发布结果和 `obsidian:graph:check` 不冒充原生界面检查。图谱已打开且用户要求展示时，应重开图谱并核对实际筛选。
 
 ## 已提交笔记的路径整理
 

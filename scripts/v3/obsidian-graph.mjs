@@ -1,8 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readCommittedGeneration } from './phase22-active-version.mjs';
-import { buildGraphProposal } from './phase22-graph.mjs';
+import { readCommittedGeneration, readRegisteredCommit } from './phase22-active-version.mjs';
+import { buildRegisteredGraphProposal } from './phase22-graph.mjs';
+import { syncCommittedGraph } from './obsidian-graph-sync.mjs';
 
 export const defaultVaultRoot = fileURLToPath(new URL('../../', import.meta.url));
 export async function readCommittedIndex(vaultRoot = defaultVaultRoot) {
@@ -16,9 +17,11 @@ export async function readCommittedIndex(vaultRoot = defaultVaultRoot) {
   return snapshot;
 }
 export async function inspectV3Graph({ vaultRoot = defaultVaultRoot, checkConfiguration = true } = {}) {
-  const activeSnapshot = await readCommittedIndex(vaultRoot);
+  const activeSnapshot = await readRegisteredCommit({ vaultRoot });
+  if (!activeSnapshot.ok) throw Object.assign(new Error('P22_DEFAULT_COMMITTED_REQUIRED'), { code: 'P22_DEFAULT_COMMITTED_REQUIRED', details: activeSnapshot });
+  if (!activeSnapshot.generation.papers.length) throw Object.assign(new Error('P22_DEFAULT_COMMITTED_EMPTY'), { code: 'P22_DEFAULT_COMMITTED_EMPTY', details: { generation_id: activeSnapshot.generation_id } });
   // Generation objects are admitted by the observer; never scan Wiki for candidates.
-  const proposal = buildGraphProposal({ activeSnapshot,
+  const proposal = buildRegisteredGraphProposal({ activeSnapshot,
     entityInventory: activeSnapshot.generation.objects.filter(row => row.path.endsWith('.md')).map(({ path }) => ({ path })) });
   if (!checkConfiguration) return { ok: true, status: 'proposal', proposal };
   const actual = JSON.parse(await readFile(resolve(vaultRoot, '.obsidian/graph.json'), 'utf8'));
@@ -46,8 +49,10 @@ export function reportFailure(error) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const [command, ...tokens] = process.argv.slice(2);
-    if (!['check', 'proposal'].includes(command)) throw Object.assign(new Error('P22_DEFAULT_COMMAND_INVALID'), { code: 'P22_DEFAULT_COMMAND_INVALID', exitCode: 2 });
-    const result = await inspectV3Graph({ vaultRoot: parseVaultRoot(tokens), checkConfiguration: command === 'check' });
+    if (!['check', 'proposal', 'sync'].includes(command)) throw Object.assign(new Error('P22_DEFAULT_COMMAND_INVALID'), { code: 'P22_DEFAULT_COMMAND_INVALID', exitCode: 2 });
+    const vaultRoot = parseVaultRoot(tokens);
+    const result = command === 'sync' ? await syncCommittedGraph({ vaultRoot, enableAutoSync: true })
+      : await inspectV3Graph({ vaultRoot, checkConfiguration: command === 'check' });
     process.stdout.write(JSON.stringify(result) + '\n');
     process.exitCode = result.ok ? 0 : 1;
   } catch (error) { reportFailure(error); }

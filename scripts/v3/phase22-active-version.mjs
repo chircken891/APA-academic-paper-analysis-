@@ -23,6 +23,8 @@ export const PHASE22_COMMIT_PATH = '.apa-v3/phase22/COMMITTED.json';
 const schema = JSON.parse(readFileSync(new URL('../../Schema/phase22/active-index.schema.json', import.meta.url), 'utf8'));
 const validate = new Ajv2020({ allErrors: true, strict: true }).compile(schema);
 const snapshots = new WeakMap();
+const sharedSnapshots = new WeakMap();
+const registeredCommits = new WeakMap();
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const fail = (code, details = {}) => { throw Object.assign(new Error(code), { code, details }); };
 
@@ -436,6 +438,123 @@ function parsePair(root, markerBytes) {
   if (generation.generation_id !== marker.generation_id || generation.evidence_mode !== marker.evidence_mode) fail('P22_COMMIT_PAIR_INVALID');
   const index = assertIndexGeneration(JSON.parse(indexBytes), generation);
   return { marker, generation, index };
+}
+
+/** Observe the committed metadata pair without imposing historical hashes on editable notes. */
+export async function readRegisteredCommit({ vaultRoot, maxAttempts = 2, onReadBoundary } = {}) {
+  if (typeof vaultRoot !== 'string' || !Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 3) fail('P22_READER_ARGUMENT_INVALID');
+  let last;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const before = readRegular(vaultRoot, PHASE22_COMMIT_PATH);
+      await onReadBoundary?.('after-pointer', { attempt });
+      const { marker, generation, index } = parsePair(vaultRoot, before);
+      await onReadBoundary?.('after-pair', { attempt });
+      parsePair(vaultRoot, before);
+      if (!before.equals(readRegular(vaultRoot, PHASE22_COMMIT_PATH))) fail('P22_GENERATION_CHANGED');
+      const snapshot = freezePhase22Value({ ok: true, status: 'current', committed: true, generation_id: generation.generation_id,
+        generation, index, evidence_mode: marker.evidence_mode, approval: marker.approval });
+      registeredCommits.set(snapshot, { root: resolve(vaultRoot), markerHash: sha(before), indexHash: hash(index) });
+      return snapshot;
+    } catch (error) { last = { code: error.code ?? 'P22_GENERATION_UNREADABLE', details: error.details ?? {} }; }
+  }
+  return { ok: false, status: 'not_current', errors: [last], attempts: maxAttempts };
+}
+
+export function assertRegisteredCommit(snapshot) {
+  const record = registeredCommits.get(snapshot);
+  if (!record) fail('P22_REGISTERED_COMMIT_REQUIRED');
+  const before = readRegular(record.root, PHASE22_COMMIT_PATH);
+  if (sha(before) !== record.markerHash) fail('P22_GENERATION_CHANGED');
+  parsePair(record.root, before);
+  if (!before.equals(readRegular(record.root, PHASE22_COMMIT_PATH))) fail('P22_GENERATION_CHANGED');
+  return record;
+}
+
+/** Read a registered immutable object under a pair-only capability. */
+export function readRegisteredObject(snapshot, path) {
+  const record = assertRegisteredCommit(snapshot);
+  const object = snapshot.generation.objects.find(row => row.path === path);
+  if (!object || path.startsWith('Wiki/')) fail('P22_REGISTERED_OBJECT_MISSING', { path });
+  const bytes = readRegular(record.root, path);
+  if (sha(bytes) !== object.sha256) fail('P22_OBJECT_HASH_MISMATCH', { path });
+  assertRegisteredCommit(snapshot);
+  return { bytes, sha256: object.sha256 };
+}
+
+function verifySharedObjects(root, generation) {
+  const objects = new Map(generation.objects.map(row => [row.path, row]));
+  for (const node of generation.shared_nodes) {
+    const item = objects.get(node.path);
+    if (item?.kind !== 'support') fail('P22_SHARED_MEMBER_INVALID', { path: node.path });
+    let bytes;
+    try { bytes = readRegular(root, node.path); }
+    catch (cause) { fail('P22_SHARED_OBJECT_UNREADABLE', { path: node.path, cause: cause.code ?? cause.message }); }
+    assertV3SupportBytes(bytes, node.path);
+    if (sha(bytes) !== item.sha256) fail('P22_OBJECT_HASH_MISMATCH', { path: node.path });
+  }
+}
+
+/** Restricted capability: verifies the committed pair and shared nodes, never paper bytes. */
+export async function readCommittedSharedNodes({ vaultRoot, maxAttempts = 2, onReadBoundary } = {}) {
+  if (typeof vaultRoot !== 'string' || !Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 3) fail('P22_READER_ARGUMENT_INVALID');
+  let last;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const before = readRegular(vaultRoot, PHASE22_COMMIT_PATH);
+      await onReadBoundary?.('after-pointer', { attempt });
+      const { marker, generation } = parsePair(vaultRoot, before);
+      verifySharedObjects(vaultRoot, generation);
+      await onReadBoundary?.('after-objects', { attempt });
+      const current = parsePair(vaultRoot, before);
+      verifySharedObjects(vaultRoot, current.generation);
+      if (!before.equals(readRegular(vaultRoot, PHASE22_COMMIT_PATH))) fail('P22_GENERATION_CHANGED');
+      const snapshot = freezePhase22Value({ ok: true, generation_id: generation.generation_id, generation, evidence_mode: marker.evidence_mode });
+      sharedSnapshots.set(snapshot, { root: resolve(vaultRoot), markerHash: sha(before) });
+      return snapshot;
+    } catch (error) { last = { code: error.code ?? 'P22_GENERATION_UNREADABLE', details: error.details ?? {} }; }
+  }
+  return { ok: false, status: 'not_current', errors: [last], attempts: maxAttempts };
+}
+
+export function assertCommittedSharedNodes(snapshot) {
+  const record = sharedSnapshots.get(snapshot);
+  if (!record) fail('P22_SHARED_SNAPSHOT_NOT_COMMITTED');
+  try {
+    const before = readRegular(record.root, PHASE22_COMMIT_PATH);
+    if (sha(before) !== record.markerHash) fail('P22_GENERATION_CHANGED');
+    const { generation } = parsePair(record.root, before);
+    verifySharedObjects(record.root, generation);
+    if (!before.equals(readRegular(record.root, PHASE22_COMMIT_PATH))) fail('P22_GENERATION_CHANGED');
+  } catch (cause) { fail('P22_SHARED_SNAPSHOT_NOT_CURRENT', { cause: cause.code ?? cause.message, ...cause.details }); }
+  return record;
+}
+
+/** Read only one registered asset, guarded by the same scoped capability. */
+export function readCommittedSharedAsset(snapshot, path) {
+  const record = assertCommittedSharedNodes(snapshot);
+  const item = snapshot.generation.objects.find(row => row.kind === 'asset' && row.path === path);
+  if (!item) fail('P22_SHARED_ASSET_UNREGISTERED', { path });
+  const bytes = readRegular(record.root, path);
+  if (sha(bytes) !== item.sha256) fail('P22_OBJECT_HASH_MISMATCH', { path });
+  assertCommittedSharedNodes(snapshot);
+  return { generation_id: snapshot.generation_id, path, bytes, sha256: item.sha256 };
+}
+
+export function readCommittedSharedNodeContents(snapshot) {
+  const record = assertCommittedSharedNodes(snapshot);
+  const objects = new Map(snapshot.generation.objects.map(row => [row.path, row]));
+  const contents = new Map();
+  for (const node of snapshot.generation.shared_nodes) {
+    const item = objects.get(node.path);
+    if (item?.kind !== 'support') fail('P22_SHARED_MEMBER_INVALID', { path: node.path });
+    const bytes = readRegular(record.root, node.path);
+    assertV3SupportBytes(bytes, node.path);
+    if (sha(bytes) !== item.sha256) fail('P22_OBJECT_HASH_MISMATCH', { path: node.path });
+    contents.set(node.path, bytes);
+  }
+  assertCommittedSharedNodes(snapshot);
+  return contents;
 }
 
 /** Only this double-read observer can mint a public-query snapshot capability. */

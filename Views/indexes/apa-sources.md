@@ -6,7 +6,7 @@ tags: [v3, index]
 
 # APA 已发布论文
 
-本视图读取 `.apa-v3/phase22/COMMITTED.json` 指向的 generation，不扫描旧版论文或阅读候选。它用于导航；完整对象与索引校验由 `npm run index:check` 执行。
+本视图读取 `.apa-v3/phase22/COMMITTED.json` 指向的登记清单，不扫描旧版论文或阅读候选。它用于导航；`npm run index:check` 核验提交记录与历史登记索引的配对，查询入口从已登记笔记当前正文刷新内存索引。
 
 ```dataviewjs
 try {

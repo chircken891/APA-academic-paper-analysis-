@@ -2,6 +2,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { renderReadingFirstObsidian } from './reading-first-obsidian.mjs';
+import { inspectCommittedReadingFirstRegistry, readCommittedReadingFirstRegistryResource, assertCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
 
 const fail = (code, details = {}) => { throw Object.assign(new Error(code), { code, details }); };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -23,14 +24,17 @@ function anchors(content) {
   }
   return { blocks, headings };
 }
+function referencesFor(file) {
+  const content = file.bytes.toString('utf8').replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, '');
+  const references = [...content.matchAll(/!?\[[^\]\n]*\]\((<[^>\n]+>|[^)\n]+)\)/g)].map(match => ({ target: match[1].startsWith('<') ? match[1].slice(1, -1) : match[1].replace(/\s+["'][\s\S]*$/, ''), wiki: false }));
+  references.push(...[...content.matchAll(/!?\[\[([^\]\n]+)\]\]/g)].map(match => ({ target: match[1].split('|')[0], wiki: true })));
+  return references;
+}
 export function validateReadingFirstPreviewFiles(files) {
   const byPath = new Map(files.map(file => [file.path, file]));
   let links = 0;
   for (const file of files.filter(row => /\.md$/i.test(row.path))) {
-    const content = file.bytes.toString('utf8').replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, '');
-    const references = [...content.matchAll(/!?\[[^\]\n]*\]\((<[^>\n]+>|[^)\n]+)\)/g)].map(match => ({ target: match[1].startsWith('<') ? match[1].slice(1, -1) : match[1].replace(/\s+["'][\s\S]*$/, ''), wiki: false }));
-    references.push(...[...content.matchAll(/!?\[\[([^\]\n]+)\]\]/g)].map(match => ({ target: match[1].split('|')[0], wiki: true })));
-    for (const reference of references) {
+    for (const reference of referencesFor(file)) {
       if (/^(?:https?:|mailto:|doi:)/i.test(reference.target)) continue;
       const target = decoded(reference.target.trim());
       if (!target || target.startsWith('/') || /[\\\x00-\x1f]/.test(target) || /^[a-z][a-z0-9+.-]*:/i.test(target)) fail('RF_PREVIEW_LINK_INVALID', { source: file.path, target });
@@ -56,10 +60,11 @@ export function validateReadingFirstPreviewFiles(files) {
 }
 
 /** Export a new self-contained candidate only after all resources and local links pass. */
-export async function exportReadingFirstPreview({ outputRoot, identity, views, presentation, targetRegistry, knowledgeRegistry = [], resources = [], readingEditor } = {}) {
+export async function exportReadingFirstPreview({ outputRoot, identity, views, presentation, targetRegistry, knowledgeRegistry = [], resources = [], readingEditor, historicalKnowledge } = {}) {
   if (typeof outputRoot !== 'string' || !path.isAbsolute(outputRoot) || !Array.isArray(resources)) fail('RF_PREVIEW_INPUT_INVALID');
   const root = path.resolve(outputRoot);
   try { await lstat(root); fail('RF_PREVIEW_OUTPUT_EXISTS', { outputRoot: root }); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const history = historicalKnowledge === undefined ? null : inspectCommittedReadingFirstRegistry({ vaultRoot: historicalKnowledge.vaultRoot, registry: knowledgeRegistry });
   const rendered = renderReadingFirstObsidian({ identity, views, presentation, targetRegistry, knowledgeRegistry, readingEditor });
   const files = [], paths = new Set();
   function add(relative, bytes, kind) {
@@ -73,6 +78,7 @@ export async function exportReadingFirstPreview({ outputRoot, identity, views, p
   for (const note of rendered.notes) add(note.path, note.bytes, 'paper');
   for (const note of rendered.supportNotes) add(note.path, note.bytes, 'knowledge-candidate');
   for (const resource of resources) {
+    if (history && (knowledgeRegistry.some(row => row.path === resource.path) || history.paper_paths.includes(resource.path))) fail('RF_PREVIEW_HISTORICAL_RESOURCE_CONFLICT', { path: resource.path });
     let bytes;
     if (typeof resource?.content === 'string' && resource.source_path === undefined) bytes = Buffer.from(resource.content);
     else if (resource?.content === undefined && typeof resource?.source_path === 'string' && path.isAbsolute(resource.source_path) && /^(?:sha256:)?[a-f0-9]{64}$/i.test(resource.sha256) && Number.isSafeInteger(resource.byte_length) && resource.byte_length >= 0) {
@@ -82,11 +88,71 @@ export async function exportReadingFirstPreview({ outputRoot, identity, views, p
     } else fail('RF_PREVIEW_RESOURCE_INVALID', { path: resource?.path });
     add(resource.path, bytes, 'resource');
   }
+  if (history) {
+    const historical = new Map(knowledgeRegistry.map(row => [row.path, row]));
+    const papers = new Set(history.paper_paths), nav = new Map();
+    const catalog = () => [...new Set([...files.map(row => row.path), ...historical.keys(), ...papers, ...history.asset_paths])];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!/\.md$/i.test(file.path) || file.kind === 'historical-navigation') continue;
+      for (const reference of referencesFor(file)) {
+        if (/^(?:https?:|mailto:|doi:)/i.test(reference.target)) continue;
+        const target = decoded(reference.target.trim()), split = target.indexOf('#');
+        const location = split < 0 ? target : target.slice(0, split), fragment = split < 0 ? '' : target.slice(split + 1);
+        if (!location) continue;
+        let destination = path.posix.normalize(path.posix.join(path.posix.dirname(file.path), location));
+        if (reference.wiki) {
+          const candidates = catalog();
+          let options = [location, `${location}.md`, destination, `${destination}.md`].filter(value => candidates.includes(value));
+          if (!options.length && !location.includes('/')) options = candidates.filter(value => value.endsWith('/' + location) || value.endsWith('/' + location + '.md'));
+          options = [...new Set(options)];
+          if (options.length !== 1) fail('RF_PREVIEW_LINK_UNRESOLVED', { source: file.path, target });
+          destination = options[0];
+        }
+        if (nav.has(destination)) { if (fragment) nav.get(destination).add(fragment); continue; }
+        const present = files.find(row => row.path === destination);
+        if (present) {
+          if (file.kind === 'historical-reference' && present.kind === 'resource') {
+            try {
+              const asset = readCommittedReadingFirstRegistryResource({ vaultRoot: historicalKnowledge.vaultRoot, registry: knowledgeRegistry, path: destination });
+              if (!asset.bytes.equals(present.bytes)) fail('RF_PREVIEW_RESOURCE_MISMATCH', { path: destination });
+            } catch (cause) { fail('RF_PREVIEW_HISTORICAL_RESOURCE_UNAVAILABLE', { source: file.path, target, path: destination, cause: cause.code ?? cause.message }); }
+          }
+          continue;
+        }
+        if (historical.has(destination)) {
+          if (typeof historical.get(destination).content !== 'string') fail('RF_PREVIEW_HISTORICAL_RESOURCE_UNAVAILABLE', { source: file.path, target, path: destination });
+          if (historical.get(destination).current_content) assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: historicalKnowledge.vaultRoot, registry: knowledgeRegistry, paths: [destination] });
+          add(destination, Buffer.from(historical.get(destination).content), 'historical-reference');
+        } else if (papers.has(destination)) {
+          const fragments = new Set(fragment ? [fragment] : []); nav.set(destination, fragments);
+          add(destination, Buffer.alloc(0), 'historical-navigation');
+        } else {
+          try {
+            const asset = readCommittedReadingFirstRegistryResource({ vaultRoot: historicalKnowledge.vaultRoot, registry: knowledgeRegistry, path: destination });
+            add(destination, asset.bytes, 'historical-asset');
+          } catch (cause) { fail('RF_PREVIEW_HISTORICAL_RESOURCE_UNAVAILABLE', { source: file.path, target, path: destination, cause: cause.code ?? cause.message }); }
+        }
+      }
+    }
+    for (const [destination, fragments] of nav) {
+      const labels = [...fragments].map(fragment => fragment.startsWith('^') ? `Navigation placeholder ${fragment}` : `## ${fragment}`);
+      files.find(row => row.path === destination).bytes = Buffer.from(`# 历史论文导航 / Historical paper navigation\n\n正文未包含在此预览中。The paper content is not included in this preview.\n\n正式库路径 / Vault path: \`${destination}\`\n\n${labels.join('\n\n')}\n`);
+    }
+    inspectCommittedReadingFirstRegistry({ vaultRoot: historicalKnowledge.vaultRoot, registry: knowledgeRegistry });
+  }
   const validation = validateReadingFirstPreviewFiles(files);
+  const knowledgeDependencies = knowledgeRegistry.filter(row => row.current_content && row.content_sha256
+    && files.some(file => file.path === row.path && ['knowledge-candidate', 'historical-reference'].includes(file.kind)))
+    .map(row => ({ path: row.path, sha256: row.content_sha256 }));
+  if (history && knowledgeDependencies.length) assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: historicalKnowledge.vaultRoot,
+    registry: knowledgeRegistry, paths: knowledgeDependencies.map(row => row.path) });
   const manifest = { schema_version: 'reading-first-preview-1.0', paper_id: identity.paper_id, targetRegistry: rendered.targetRegistry, knowledgeProposals: rendered.knowledgeProposals,
+    ...(knowledgeDependencies.length ? { knowledge_dependencies: knowledgeDependencies } : {}),
     ...(rendered.visual_resources ? { visual_resources: rendered.visual_resources } : {}),
     review: { overall: 'pending', native_obsidian: 'not_run' }, validation,
-    files: files.map(file => ({ path: file.path, kind: file.kind, sha256: digest(file.bytes), byte_length: file.bytes.length })) };
+    files: files.map(file => ({ path: file.path, kind: file.kind, sha256: digest(file.bytes), byte_length: file.bytes.length,
+      ...(file.kind.startsWith('historical-') ? { generation_id: history.generation_id, source_path: file.path, publishable: false } : {}) })) };
   // mkdir is deliberately non-recursive: a second invocation can never merge into an old candidate.
   try { await mkdir(root); } catch (error) { if (error.code === 'EEXIST') fail('RF_PREVIEW_OUTPUT_EXISTS', { outputRoot: root }); throw error; }
   for (const file of [...files, { path: manifestPath, bytes: Buffer.from(JSON.stringify(manifest, null, 2) + '\n') }]) {
