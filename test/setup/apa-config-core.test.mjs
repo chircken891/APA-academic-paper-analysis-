@@ -126,6 +126,20 @@ test('resolver uses only explicit answers and enabled skill files', t => {
   config.writing_skills['nature-writing'] = { enabled: true, path: skill };
   assert.throws(() => api.resolveApaConfig({ config, repoRoot }), /INCOMPLETE/);
 });
+test('translation model is required for new reading configs and resolves like other roles', t => {
+  const repoRoot = temporary(t);
+  const choice = { mode: 'explicit', model: 'sonnet', reasoning_effort: 'high' };
+  const roles = Object.fromEntries(api.APA_CONFIG_ROLES.filter(role => role !== 'translation').map(role => [role, { mode: 'follow-main' }]));
+  const config = { schema_version: 'apa-local-config-1.0', models: { science: { mode: 'follow-main' }, roles }, paths: { runs: 'runs', parse: 'parse', candidates: 'candidates' }, parser: { runtime_home: repoRoot }, reading: { source_language: 'en', presentation_mode: 'writer' }, writing_skills: Object.fromEntries(api.APA_WRITING_SKILLS.map(key => [key, { enabled: false }])) };
+  const validation = api.validateApaConfig(config, { repoRoot });
+  assert.equal(validation.valid, true);
+  assert.equal(validation.complete, false);
+  assert.deepEqual(validation.missing, ['models.roles.translation']);
+  config.models.roles.translation = choice;
+  assert.equal(api.validateApaConfig(config, { repoRoot }).complete, true);
+  const resolved = api.resolveApaConfig({ config, repoRoot, mainSession: { model: 'main-model', reasoning_effort: 'high' } });
+  assert.deepEqual(resolved.roles.translation, { model: 'sonnet', reasoning_effort: 'high' });
+});
 test('CLI inspect/apply/export and malformed input keep installation separate', t => {
   const repoRoot = temporary(t);
   const cli = path.resolve('scripts/apa-setup.mjs');
@@ -150,6 +164,20 @@ test('CLI inspect/apply/export and malformed input keep installation separate', 
   assert.equal(pagePath, path.join(repoRoot, '.tmp/apa-setup/index.html'));
   assert.match(fs.readFileSync(pagePath, 'utf8'), /apa-setup-data/);
 });
+test('CLI export creates owner parent and refuses to replace an existing export', t => {
+  const repoRoot = temporary(t);
+  const output = path.join(repoRoot, 'config/backups/example-owner/export.json');
+  const cli = path.resolve('scripts/apa-setup.mjs');
+  const run = () => spawnSync(process.execPath, [cli, 'export', '--repo-root', repoRoot, '--output', output], { encoding: 'utf8' });
+  const first = run();
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(JSON.parse(first.stdout).output, output);
+  const bytes = fs.readFileSync(output);
+  assert.equal(JSON.parse(bytes).schema_version, 'apa-config-export-1.0');
+  assert.notEqual(run().status, 0);
+  assert.deepEqual(fs.readFileSync(output), bytes);
+});
+
 test('inspection reports missing existing runtime dependencies without probing network or installing', t => {
   const repoRoot = temporary(t);
   const snapshot = api.loadApaConfig({ repoRoot });

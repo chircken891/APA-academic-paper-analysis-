@@ -32,6 +32,7 @@ try {
     result = exportApaConfig(loadApaConfig(args).config);
     if (args.output) {
       const output = path.resolve(args.output);
+      fs.mkdirSync(path.dirname(output), { recursive: true });
       fs.writeFileSync(output, `${JSON.stringify(result, null, 2)}\n`, { flag: 'wx' });
       result = { output };
     }

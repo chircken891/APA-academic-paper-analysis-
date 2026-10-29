@@ -3,7 +3,7 @@ import { readFileSync, mkdirSync, writeFileSync, linkSync, unlinkSync } from 'no
 import { dirname, isAbsolute, relative, resolve, join } from 'node:path';
 import { inspectApaConfig, resolveApaConfig } from '../lib/apa-config.mjs';
 import { createConfiguredApaRoleModelPolicy, resolveApaRoleModel, buildHostDispatchArguments } from '../apa-model-policy.mjs';
-import { createReadingFirstRunControl, fingerprintReadingFirst, renderReadingFirstNotes, snapshotReadingFirstRuntime } from './reading-first-runtime.mjs';
+import { SCIENCE_INDEX_PROFILE, createReadingFirstRunControl, fingerprintReadingFirst, renderReadingFirstNotes, snapshotReadingFirstRuntime } from './reading-first-runtime.mjs';
 import { exportReadingFirstPreview } from './reading-first-preview.mjs';
 import { emitApprovedRunStep, createCurrentMineruBaselinePort } from './phase21-runner.mjs';
 import { getRoleReplyContract, loadRoleReplyContract } from './role-reply-contract.mjs';
@@ -17,6 +17,38 @@ const scienceSections = { evidence: 'Evidence/Coverage Mapper', methods: 'Design
 /** Freeze selected guidance into the binding. Disabled skills contribute no optional instructions. */
 export function buildConfiguredReadingInstructions(writingSkills = {}) {
   const sections = sectionsOf(readFileSync(new URL('../../prompts/v3/reading-first-contracts.md', import.meta.url), 'utf8'));
+  // Configured runs freeze their own source-translation instructions. The base
+  // prompt remains byte-identical for older runs that bind its fingerprint.
+  sections['Common data contract'] = sections['Common data contract']
+    .replace('Read the complete registered assignment and shared scientific basis,', 'Read the complete registered assignment and its supplied scientific basis or accepted source view,')
+    .replace('consumes both accepted Writer outputs before rendering', 'consumes the accepted source-language Writer and Translation views before rendering')
+    .replace('each Writer returns `knowledge_content:', 'each language view returns `knowledge_content:')
+    .replace("This field only updates the Writer's language;", "This field only updates the view's language;")
+    .replace('each Writer expresses its language, Reading Editor organizes supplied content', 'the source-language Writer expresses the scientific basis, Translation carries its accepted view into the other language, and Reading Editor organizes supplied content')
+    .replace(/In a new `writingMode:'source-first'` run,[^\r\n]*/, "In this configured source-translation run, the source-language Writer composes from the admitted scientific basis. Translation receives the accepted `source_view` and faithfully produces the other language with the same modules, section IDs and placements. The paper's actual source language determines both writing direction and original-note routing.");
+  sections['English Writer'] = sections['English Writer'].replace(
+    'In this English view, preserve the complete source caption/notes in their original English wording beside each visual; the Chinese counterpart uses a faithful translation. Put analyst interpretation, unit clarification or a suspected correction in a separate paragraph labelled **Reading note**.',
+    'In this source-language view, preserve the complete source caption/notes in their original wording beside each visual. Put analyst interpretation, unit clarification or a suspected correction in a separate, unlabelled paragraph.');
+  sections['Chinese Writer'] = sections['Chinese Writer'].replace(
+    '图片旁的“原图注／原表注”忠实翻译完整原文及注释；分析者解释、单位澄清或疑似纠错另写为 **阅读说明**，不混入或静默改写原注。',
+    '图片旁保留完整原图注及注释的原文；分析者解释、单位澄清或疑似纠错另写为不加标签的独立段落，不混入或静默改写原注。');
+  const sourceSections = sectionsOf(readFileSync(new URL('../../prompts/v3/phase21-scientific-contracts.md', import.meta.url), 'utf8'));
+  const scienceReplacements = [
+    ['Both Writers receive the agreed scientific basis. In a new source-first writing binding, the first Writer authors its complete reading note and the other Writer faithfully adapts its accepted source_view into natural target-language prose with matching modules and section IDs. Legacy independent-language bindings keep their original route.', 'The source-language Writer receives the agreed scientific basis and authors its source view. Translation faithfully produces the other language from the accepted source_view with matching modules and section IDs.'],
+    ['accept both real Writer outputs', 'accept the real source-language Writer and Translation outputs'],
+    ['for both Writers to express', 'for the source-language Writer to express and Translation to carry into the other language'],
+    ['through synthesis and both Writers', 'through synthesis, the source-language Writer and Translation'],
+    ['for both writers', 'for the source-language Writer and Translation'],
+    ['The final language writers express this agreed map', 'The source-language Writer and Translation express this agreed map'],
+    ['content for the Writers.', 'content for the source-language Writer and translated view.'],
+    ['this synthesis is not a substitute for either Writer\'s final prose', 'this synthesis is not a substitute for the source-language Writer\'s final prose'],
+    ['the Writers author the final module/subsection organization, paragraphs and resource placements in their existing tasks.', 'the source-language Writer authors the final module/subsection organization, paragraphs and resource placements; Translation preserves them in the other language.'],
+    ['ensure the relevant Writers consume them', 'ensure the source-language Writer consumes them and Translation carries them into the other language'],
+    ['Writers can reorganize language and draw the agreed map', 'The source-language Writer can organize the prose and draw the agreed map; Translation preserves the structure and meaning'],
+    ['English uses the original wording and Chinese a faithful translation.', 'The source language retains the original caption wording; the other language provides a faithful translation.'],
+  ];
+  const science = Object.fromEntries(['Common scientific contract', ...Object.values(scienceSections)].map(key => [key,
+    scienceReplacements.reduce((section, [before, after]) => section.replaceAll(before, after), sourceSections[key])]));
   const correctionsPath = new URL('../../prompts/v3/flow-corrections-1.0.md', import.meta.url);
   const correctionBytes = readFileSync(correctionsPath), corrections = sectionsOf(correctionBytes);
   sections['Overall Verifier'] += '\n\n' + corrections['Review ownership'];
@@ -30,7 +62,7 @@ export function buildConfiguredReadingInstructions(writingSkills = {}) {
     .filter(([key]) => key !== (language === 'en' ? 'humanizer-zh' : 'humanizer'))
     .map(([key, guide]) => 'Selected optional writing guidance: ' + key + '\n' + JSON.stringify({ path: guide.path, sha256: sha(Buffer.from(guide.content)) })
       + '\nApply only guidance relevant to this language and the assigned article module, within the existing APA output contract. Do not run skill workflows, commands, extra roles or review loops.\n' + guide.content).join('\n\n')]));
-  return { sections, writing_instructions: writingInstructions, science_guidance: corrections['Scientific reuse'],
+  return { sections, science_sections: science, writing_instructions: writingInstructions, science_guidance: corrections['Scientific reuse'],
     flow_corrections: { schema_version: 'flow-corrections-1.0', sha256: sha(correctionBytes), byte_length: correctionBytes.length },
     writing_guides: Object.fromEntries(Object.entries(writingSkills).map(([key, guide]) => [key, { path: guide.path, sha256: sha(Buffer.from(guide.content)), byte_length: Buffer.byteLength(guide.content) }])) };
 }
@@ -59,9 +91,14 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
     knowledge_registry: { policy: 'committed-generation-1.0', vault_root: resolve(repoRoot) },
     role_model_policy: createConfiguredApaRoleModelPolicy(mainSession, resolvedConfig.roles),
     ...buildConfiguredReadingInstructions(resolvedConfig.writingSkills) };
-  const runControl = createReadingFirstRunControl({ ...options, ...(loaded.config.host ? { host: loaded.config.host } : {}), mainSession, configuredSetup, writingMode: 'source-first',
+  // The language other than the paper's original is translated from the accepted source draft; its tasks run as the translation role.
+  const translationKeys = options.sourceLanguage === 'en' ? ['zh-CN', 'zh-CN-r2'] : ['en', 'en-r2'];
+  // A caller-supplied role for these keys must already be translation; anything else is a conflict, not something to overwrite.
+  if (Object.entries(options.taskBindings ?? {}).some(([key, task]) => translationKeys.includes(key) && task?.role !== undefined && task.role !== 'translation')) throw new Error('READING_FIRST_TRANSLATION_ROLE_REQUIRED');
+  const taskBindings = options.taskBindings && Object.fromEntries(Object.entries(options.taskBindings).map(([key, task]) => [key, translationKeys.includes(key) ? { ...task, role: 'translation' } : task]));
+  const runControl = createReadingFirstRunControl({ ...options, ...(taskBindings ? { taskBindings } : {}), ...(loaded.config.host ? { host: loaded.config.host } : {}), mainSession, configuredSetup, writingMode: 'source-translation',
     roleReplyContract: options.roleReplyContract === undefined ? getRoleReplyContract() : options.roleReplyContract,
-    firstWritingLanguage: resolvedConfig.reading.source_language, presentationMode: resolvedConfig.reading.presentation_mode });
+    firstWritingLanguage: options.sourceLanguage, presentationMode: resolvedConfig.reading.presentation_mode, handoffProfile: SCIENCE_INDEX_PROFILE });
   return freeze({ resolvedConfig, scientificInput: structuredClone(options.scientificInput), configurationFingerprint: loaded.fingerprint, paths, parserOptions, runControl });
 }
 
@@ -77,7 +114,7 @@ export function createConfiguredScienceRequest({ prepared, role, task, dispatchC
   const binding = prepared.runControl.reading_first_binding, source = prepared.scientificInput?.sources?.[0] ?? payload.sources?.[0];
   if (!source) throw new Error('APA_CONFIGURED_SCIENCE_SOURCE_REQUIRED');
   const reply = loadRoleReplyContract(binding.role_reply_contract);
-  const sections = sectionsOf(readFileSync(new URL('../../prompts/v3/phase21-scientific-contracts.md', import.meta.url), 'utf8'));
+  const sections = binding.configured_setup?.science_sections ?? sectionsOf(readFileSync(new URL('../../prompts/v3/phase21-scientific-contracts.md', import.meta.url), 'utf8'));
   const outputPath = ownedPath(prepared.paths.runRoot, task.native_path);
   let message = [sections['Common scientific contract'], sections[scienceSections[role]],
     ...(binding.configured_setup?.science_guidance ? [binding.configured_setup.science_guidance] : []),
@@ -104,7 +141,7 @@ export function createConfiguredScienceRequest({ prepared, role, task, dispatchC
     allowed_output_root: prepared.paths.runRoot, backend: { identity: 'current-collaboration', version: 'native-collaboration', runtime_configuration_version: 'reading-first-1.0', configuration },
     endpoint: { value: 'current-session', egress: 'approved', retention: 'approved' }, host_action_scope: binding.host
       ? { action: binding.host.dispatch.tool, dispatch: structuredClone(binding.host.dispatch), role, output_path: outputPath,
-        arguments: buildHostDispatchArguments(binding.host.dispatch, { taskName: task.task_name, message, model }), result_bindings: { agent_id: null }, permitted_result_fields: ['raw_result_text', 'agent_id'] }
+        arguments: buildHostDispatchArguments(binding.host.dispatch, { taskName: task.task_name, message, model }), result_bindings: { agent_id: structuredClone(binding.host.dispatch.result_handle ?? null) }, permitted_result_fields: ['raw_result_text', 'agent_id'] }
       : { action: 'collaboration.spawn_agent', role, output_path: outputPath,
         arguments: { task_name: task.task_name, message, ...model, fork_turns: 'none' }, result_bindings: { agent_id: binding.host_result_agent_id_path }, permitted_result_fields: ['raw_result_text', 'agent_id'] },
     role_model_policy: binding.role_model_policy, expected_resource_fields: ['elapsed_ms'], requested_model: model.model, observed_model: 'unknown',

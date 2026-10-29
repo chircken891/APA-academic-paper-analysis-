@@ -47,9 +47,12 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
     source_id: source.id, source_path: presentation.source_pdf, source_sha256: source.sha256,
     sha256: figure.sha256, byte_length: figure.byte_length,
   });
+  // A configured run (createRunControl) translates the non-source language; its tasks declare the translation role. options.translationLanguage overrides this (null for none).
+  const sourceLanguage = options.sourceLanguage ?? options.controlOptions?.sourceLanguage ?? 'en';
+  const translationLanguage = options.translationLanguage !== undefined ? options.translationLanguage : options.createRunControl ? (sourceLanguage === 'en' ? 'zh-CN' : 'en') : null;
   const tasks = Object.fromEntries(['en', 'zh-CN', 'presentation', 'review', 'en-r2', 'zh-CN-r2', 'presentation-r2', 'review-r2'].map(key => [key, {
     task_id: key, task_name: 'publication_' + key.replaceAll('-', '_').toLowerCase(), owner_actor_id: key,
-    role: key.startsWith('presentation') ? 'reading-editor' : key.startsWith('en') ? 'english-writer' : key.startsWith('zh') ? 'chinese-writer' : 'independent-verifier',
+    role: key.startsWith('presentation') ? 'reading-editor' : translationLanguage && key.startsWith(translationLanguage === 'en' ? 'en' : 'zh') ? 'translation' : key.startsWith('en') ? 'english-writer' : key.startsWith('zh') ? 'chinese-writer' : 'independent-verifier',
     artifact_id: key, artifact_path: 'accepted/' + key + '.json', native_path: 'native/' + key + '.json', revision: '1',
     ...(options.instructionFiles ? { instruction_path: 'instructions/' + key + '.txt' } : {}),
   }]));

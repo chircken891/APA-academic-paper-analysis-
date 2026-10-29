@@ -15,11 +15,12 @@ Controller 使用 scripts/v3/configured-reading.mjs 的 prepareConfiguredReading
 | Interpretation/Appraisal Specialist | 结论强度、局限、替代解释与适用边界 |
 | Scientific Reading Synthesizer | 组织完整研究讲解 |
 | Integrator | 合并解释和分歧，确认资源与共享知识身份，交付 Writer |
-| English Writer / Chinese Writer | 各自真实生成完整内容，第二语言消费第一语言 |
-| Reading Editor（可选） | 消费真实双语 Writer 输出，整理重点、层级和导航 |
+| English Writer / Chinese Writer | 按实际论文原文语言选择其中一个，生成完整原文语言阅读稿 |
+| Translation | 消费已接收的原文语言稿及译文所需上下文，生成另一语言稿 |
+| Reading Editor（可选） | 消费真实原文稿与译稿，整理重点、层级和导航 |
 | Independent Verifier | 完整候选一次整体审查，至多一次实质问题局部复核 |
 
-模型选择按本库答案解析；实际请求显式传递参数并用 fork_turns:none。请求身份、实际可观察身份与独立性分开记录，未知值不猜测。角色只写预登记输出，临时文件不进入阅读目录。
+模型选择按本库答案解析；实际请求使用冻结的宿主派发工具和参数，按该宿主支持的方式保证独立上下文。没有保存宿主声明时沿用 Codex 兼容派发路径，使用 `fork_turns:'none'`。请求身份、实际可观察身份与独立性分开记录，未知值不猜测。角色只写预登记输出，临时文件不进入阅读目录。
 
 ## 科学讲解
 

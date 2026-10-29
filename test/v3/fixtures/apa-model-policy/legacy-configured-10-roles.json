@@ -1,0 +1,48 @@
+{
+  "version": "apa-configured-role-model-policy-1.0",
+  "main_session": {
+    "model": "unknown"
+  },
+  "roles": {
+    "evidence": {
+      "model": "sonnet",
+      "reasoning_effort": "high"
+    },
+    "methods": {
+      "model": "sonnet",
+      "reasoning_effort": "high"
+    },
+    "results": {
+      "model": "sonnet",
+      "reasoning_effort": "high"
+    },
+    "interpretation": {
+      "model": "sonnet",
+      "reasoning_effort": "high"
+    },
+    "scientific-reading": {
+      "model": "sonnet",
+      "reasoning_effort": "high"
+    },
+    "integration": {
+      "model": "sonnet",
+      "reasoning_effort": "high"
+    },
+    "english-writer": {
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high"
+    },
+    "chinese-writer": {
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high"
+    },
+    "reading-editor": {
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high"
+    },
+    "independent-verifier": {
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high"
+    }
+  }
+}

@@ -4,7 +4,7 @@
 
 ## 从阅读完成到发布审阅
 
-Controller 保留已接受整体审查所对应的原 `presentation` 对象，以及真实 Writer、Reading Editor 和 Verifier 的 owned 回执。`reading_complete` 表示可以准备发布审阅；阅读候选本身的 `publishable:false` 不授予写入正式库的权限。实质问题未解决、缺少关键审查或内容已改变的结果不能进入发布准备。
+Controller 保留已接受整体审查所对应的原 `presentation` 对象，以及真实原文语言 Writer、Translation、适用时的 Reading Editor 和 Verifier 的 owned 回执；旧绑定保留其实际两语 Writer 回执。`reading_complete` 表示可以准备发布审阅；阅读候选本身的 `publishable:false` 不授予写入正式库的权限。实质问题未解决、缺少关键审查或内容已改变的结果不能进入发布准备。
 
 ```js
 import { captureReadingFirstPublicationSource } from '../../scripts/v3/reading-first-runtime.mjs';
@@ -53,7 +53,7 @@ node scripts/v3/bilingual.mjs dry-run --vault-root <vault-root> --run <run> --pr
 
 ## 发布后的索引与图谱
 
-事务成功后，`.apa-v3/phase22/COMMITTED.json` 选择新代次。默认检索读取该代次中的中英文论文与共享知识内容，命中链接落到实际标题或块；图谱收录中文论文入口及共享节点。新增一篇论文或增补同一个知识节点时，其他已提交论文继续保留。
+事务成功后，`.apa-v3/phase22/COMMITTED.json` 选择新代次。默认检索读取该代次中的中英文论文与共享知识内容，命中链接落到实际标题或块；默认图谱收录已提交论文唯一的 `Wiki/sources/` 原文语言入口及共享节点，排除 `Wiki/translations/` 译文。历史两语均在 sources 的布局保留中文入口。新增一篇论文或增补同一个知识节点时，其他已提交论文继续保留。
 
 只放入 `Wiki/`、只改 `status` 或版本字段，均不建立已提交身份。未提交候选不进入默认检索和图谱。人工笔记不进入机器生成内容的索引，重发时保留；管理区或来源出现冲突时报告具体冲突。
 

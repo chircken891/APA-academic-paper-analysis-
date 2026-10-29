@@ -15,6 +15,7 @@ function safePath(path, { source = false } = {}) {
     throw new Error(`UNSAFE_PATH: ${path}`);
   }
   if (path.split('/').some(part => ['.git', 'node_modules', '.obsidian', '.runtime'].includes(part.toLowerCase()))) throw new Error(`PRIVATE_PATH: ${path}`);
+  if (path.toLowerCase() === 'config/backups' || path.toLowerCase().startsWith('config/backups/')) throw new Error(`PRIVATE_PATH: ${path}`);
   if (source && (privateRootsLower.has(path.split('/')[0].toLowerCase()) || path.toLowerCase() === 'config/apa.local.json')) throw new Error(`PRIVATE_PATH: ${path}`);
   return path;
 }

@@ -4,13 +4,13 @@ README 负责安装、使用和更新说明；`academic-paper-analysis` 负责�
 
 ## 用户选择与应用边界
 
-首次获取项目，必须先由用户指定或明确确认项目文件夹的绝对路径，之后才可克隆、解压、安装或写入配置。当前会话目录及其子目录不能默认采用；建议用户将所选文件夹设为 agent 工作目录。已有工程也以用户明确选定的根目录为目标；同一会话已确认的目录无需重复询问。后续命令使用该目标，支持根目录参数时显式传入；下文 CLI 示例执行时须追加 `--repo-root "<用户确认的项目绝对路径>"`。
+首次获取项目，必须先由用户指定或明确确认项目文件夹的绝对路径，之后才可克隆、解压、安装或写入配置。当前会话目录及其子目录不能默认采用；建议用户将所选文件夹设为 agent 工作目录。用户同意后使用项目 `.agents/skills/` 中随仓库提供的三个 APA 技能，默认不安装全局技能，已有全局副本保留。若用户不采用该工作目录或不将技能迁入项目作用域，须说明技能发现和规则作用范围可能变化，保留全局加载方式可能影响日常其他任务。已有工程也以用户明确选定的根目录为目标；同一会话已确认的目录无需重复询问。后续命令使用该目标，支持根目录参数时显式传入；下文 CLI 示例执行时须追加 `--repo-root "<用户确认的项目绝对路径>"`。
 
-安装授权不等于配置选择授权。用户可以自行填写配置页，或通过会话辅助配置：依次确认宿主派发方式、模型与推理强度、输出目录、解析器位置、写作顺序与呈现方式、写作指导；查询偏好单独成组，可明确选择暂不配置。助手逐组展示具体选项及影响，等待回答后继续。“帮我配置”“你决定”“全部按推荐”不能代替分组选择。
+安装授权不等于配置选择授权。用户提出“完善配置”“为我配置”“为某某 agent 配置”等配置请求时，助手必须生成并打开本地 HTML，由用户自行选择宿主派发方式、模型与推理强度、输出目录、解析器位置、呈现方式和写作指导；查询偏好可明确选择暂不配置。无法打开时提供页面路径并等待用户自行打开和选择，不以会话问答替代页面。导出配置及挖空或去除配置不强制打开页面，去除范围仍须明确。“你决定”“全部按推荐”不能代替用户选择。
 
 检测报告、推荐值、历史默认、示例和唯一可用选项均不属于用户答案；即使宿主只能跟随主会话，也须解释限制，等待用户选择采用或暂缓。未回答项保持未配置或原值，不为达到 `ready` 自动补齐。已保存且无需改变的配置不重新选择；拟修改或不兼容的字段须取得新的选择。普通只读查询沿用既有运行时默认，不自动把默认值保存成个人配置。
 
-会话辅助仅整理用户已选择的字段，展示项目绝对路径与前后差异，取得明确应用确认后才使用既有 CLI 保存并回读。用户自行提交完整操作并明确要求应用时，不重复询问已确定的目标及字段；未选择的字段仍不补入。禁止直接编辑个人答案绕过流程，或代操作页面制造用户选择。详细交互见 [apa-setup 技能](../.agents/skills/apa-setup/SKILL.md)。
+助手核对用户所选字段、项目绝对路径与前后差异，取得明确应用确认后才使用既有 CLI 保存并回读。用户自行提交完整操作并明确要求应用时，不重复询问已确定的目标及字段；未选择的字段仍不补入。禁止直接编辑个人答案绕过流程，或代操作页面制造用户选择。详细交互见 [apa-setup 技能](../.agents/skills/apa-setup/SKILL.md)。
 
 配置格式、CLI 接口及指纹合同保持不变；格式和指纹校验不能证明用户授权，不增设可由助手自行填写的“用户已同意”标记。分别报告工程已获取、依赖已安装、用户配置已保存与运行条件已就绪；实际模型调用、PDF 解析和论文验收继续单独报告。
 
@@ -35,23 +35,27 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 | host | 子代理派发方式：`{name, dispatch:{tool, model_argument, effort_argument, instruction_argument, task_name_argument, fresh_context}}`。只能采用 apa-setup 宿主档案中的检测结果；新运行冻结此段并按它生成派发参数。`model_argument` 为 null 表示派发工具不能选模型、子代理沿用主会话（此时 `effort_argument` 也为 null），各角色须为 follow-main，否则 `validation.conflicts` 列出冲突并阻止新运行 |
 | models.science | 六科学角色共同模型/强度或 follow-main |
 | models.overrides | 可覆盖 evidence、methods、results、interpretation、scientific-reading、integration |
-| models.roles | english-writer、chinese-writer、reading-editor、independent-verifier 分别选择；暂不用 Editor 也保留设置 |
+| models.roles | english-writer、chinese-writer、translation、reading-editor、independent-verifier 分别选择；translation 把已接受的原文语言稿译成另一种语言，新阅读运行必填；暂不用 Editor 也保留设置 |
 | paths.runs/parse/candidates | 本库内输出根目录，每次追加独立 run ID |
 | parser.runtime_home | 已有 MinerU 环境 |
 | parser.python/config_path | 可选显式路径；否则从运行目录派生 |
-| reading.source_language | 保留的配置键名；en 或 zh-CN 指定先写哪种语言，另一语言消费已接受内容。它不表示论文原文语言 |
+| reading.source_language | 旧字段，新阅读运行忽略；可缺省，已有的 en 或 zh-CN 值保留且合法。写作顺序由每篇论文的实际原文语言决定 |
 | reading.presentation_mode | reading-editor 或 writer |
 | writing_skills | 六技能各自明确 enabled；启用时提供 SKILL.md 路径 |
 
-新配置阅读调用必须按实际主论文向 `prepareConfiguredReading` 显式传入 `sourceLanguage`（`en` 或 `zh-CN`）；原文语言属于每篇文献的事实，不从个人偏好推定。运行将其冻结为 `binding.source_language`，决定 `Wiki/sources/` 与 `Wiki/translations/` 的归属；配置的 `reading.source_language` 则冻结为 `first_writing_language`，只决定顺序和另一语言消费的 `source_view`。旧绑定缺少后者时沿用其原有顺序，不修改旧记录。
+新配置阅读调用必须按实际主论文向 `prepareConfiguredReading` 显式传入 `sourceLanguage`（`en` 或 `zh-CN`）；原文语言属于每篇文献的事实，不从个人偏好推定。运行将其冻结为 `binding.source_language`，决定 `Wiki/sources/` 与 `Wiki/translations/` 的归属；新运行以同一 `sourceLanguage` 冻结 `first_writing_language`：只有原文语言对应的 Writer 接收科学材料，另一语言由 Translation 角色（`models.roles.translation`）依据已接受的原文稿翻译。旧绑定保留其原有顺序和 `source-first` 模式，不修改旧记录。
 
-宿主档案 `apa-host-profile-1.0`（结构见 `Schema/config/apa-config.schema.json` 的 `hostProfile`）由助手检测自身环境后写入 `.tmp/apa-setup/host-profile.json`，记录宿主名、当前会话、派发工具及参数名、派发工具可接受的模型与各自的推理强度档位，以及每项的来源。`inspect`/`page` 加 `--host-profile <file>` 时，检查结果增加 `host_check`（派发方式是否一致、模型或强度是否与本宿主不符），页面的模型与强度选项也来自档案。档案是助手的自我报告，不证明派发或模型实际可用。
+宿主档案 `apa-host-profile-1.0`（结构见 `Schema/config/apa-config.schema.json` 的 `hostProfile`）由助手检测自身环境后写入本次独立的 `.tmp/apa-setup/<owner>/<detection-id>/host-profile.json`，`owner` 和 `detection-id` 使用 kebab-case，目录须未被占用；旧档案仍可读取，不迁移或覆盖。档案记录宿主名、当前会话、派发工具及参数名、派发工具可接受的模型与各自的推理强度档位，以及每项的来源；派发工具可选记录 `dispatch.result_handle`（`{source:'text', pattern}`，从派发结果文本提取任务句柄的正则，捕获组 1 为句柄），缺省时 APA 不提取句柄。`inspect`/`page` 加 `--host-profile <file>` 时，检查结果增加 `host_check`（派发方式是否一致、模型或强度是否与本宿主不符），页面的模型与强度选项也来自档案。档案是助手的自我报告，不证明派发或模型实际可用。
 
-档案的可选 `capabilities` 提供六项减负能力的证据：按需读取、子代理排查、阶段手动压缩、短回执、科学阶段恢复与阈值自动压缩。`inspect` 输出 `capability_check`，配置页展示同一报告中的方式、范围、依据、限制和下一步。`detected` 表示检测到方式，`conditional` 表示还存在待满足条件，`blocked`、`unsupported`、`unknown` 分别表示阻塞、不支持及未知；没有档案时不凭宿主名称补成可用。档案只用于检测，不进入 `config/apa.local.json`，能力报告不改变 `ready`；`ready` 也不能证明真实派发、模型遵守、压缩或续接成功。
+档案的可选 `capabilities` 提供六项能力的证据：按需读取、子代理排查、阶段手动压缩、短回执、科学阶段恢复与阈值自动压缩。运行代理依据当前真实工具定义、本机版本和帮助、无凭据配置及必要的官方文档调查，并为各项写可选 `achievement`：`state` 为 `achieved`、`needs-setting`、`needs-user-action`、`needs-apa-change` 或 `not-found`，另有 `summary` 和 `steps`；未找到时写出查询位置和缺口。每步包含 `actor`（`apa`、`script`、`user`）、`instruction`、`command`（字符串或 `null`）、`scope`（`current-session`、`new-session`、`instance`、`project-settings`、`user-settings`、`unknown`）、`persistent`、`verify`、`evidence`（`source` 与 `reference`）；可选 `adapter_id` 和 `range`。旧档案缺少该字段时提示重检。`achieved` 表示静态条件具备，实际验证保持 `not_run`；能力报告不改变 `ready`，也不能证明真实派发、模型遵守、压缩或续接成功。
 
-阈值项须检查实际启用的后端、配置单位和范围、作用于当前会话、新会话或整个实例，以及用户候选阈值、模型上下文容量、输出预留、压缩余量、保留预算和 token 计量口径。未知项保留 `null`；某次试验提出的 200,000 token 不是默认值。Codex CLI、Claude Code 和独立 DeepSeek Harness 的具体方法须按现场版本及配置核实，不能将新启动参数视作已改变当前桌面会话，也不能把未命中实际后端的字段当作有效覆盖。科学阶段仅持久化控制器状态；当前配置了 `host` 的请求还有真实任务句柄提取适配缺口，报告为阻塞，不能用本地 `action_id` 假装可查询或等待宿主任务。检测与完整档案填写方法见 [apa-setup 技能](../.agents/skills/apa-setup/SKILL.md)；真实宿主试验与配置应用需另行授权。
+`threshold_compaction` 的非空 `step.command` 必须同时包含 `<N>` 并提供 `range`，否则屏蔽该命令；`effective_target_verified` 为 `false` 时屏蔽该能力的命令。只读调查命令写入 `instruction`、`verify` 或 `evidence`，`step.command` 可为 `null`。`range` 的 `min`、`max` 为数值或 `null`，`unit` 为 `tokens`、`ratio` 或 `percent`，表示命令参数单位。页面使用用户输入的 token 候选值及已核实的公式换算，未知条件保留未知。检查实际启用的后端、覆盖目标、作用范围、计量口径和阈值约束；设置由用户选择，具体目标文件、键和值经预览确认后才能应用。所需设置工具应支持预览、确认、备份及回读，宿主设置备份放在 `config/backups/<owner>/`，仅更改用户选中的设置。
 
-显式模型对象为 `{mode:'explicit',model,reasoning_effort}`，所选模型在宿主上没有推理强度参数时省略 `reasoning_effort`；跟随主会话为 `{mode:'follow-main'}`。配置接受非空模型标识，不限定 GPT；实际派发须符合当前宿主支持的模型和参数组合。现有自动派发对接 Codex，其他宿主需要对应调用与回执适配。配置不是用量、来源或执行授权。
+科学阶段恢复沿用 `dispatch.result_handle` 的文本正则提取规则，由代理依据真实结果确定格式；静态达成还须核对本库已保存的派发声明与本次检测一致、提取配置与派发结果匹配，记录查询工具及参数并确认原宿主可访问。尚未保存时报告需要配置，由用户选择并确认后再保存。控制器持久化自身状态，不主动查询或等待宿主；真实续接仍需单独验证。
+
+档案可选 `adapters` 数组，包含 `id`、`owner`、`host`、`root`、`entrypoints`、`evidence`。新补丁只能放在 `config/backups/<owner>/adapters/<id>/`，`owner` 为 agent 归属标识，`owner` 与 `id` 均为 kebab-case，依据身份及归属证据确定 `owner`，不从所选模型推断；入口为该目录内非空相对路径数组，说明记录所属 agent、宿主、入口、用途、证据和验证方法。再次自检时，代理先只读检查当前 owner 的既有档案与适配说明，并结合当前证据核对；有效自有补丁可继续复用，仅对变化和缺口继续调查，需要新补丁时建立独立目录避免碰撞。其他 agent、归属不明以及已有适配和脚本只读保留。公共 `inspect` 只检查本次传入档案所声明的补丁的宿主一致、归属结构、入口存在和路径范围，显示 `available` 或 `blocked`；它不自动发现或合并旧成果，也不执行入口或证明身份和实际效果。既有适配无需迁移，个人档案不自动重写；公共接口缺失时报告 `needs-apa-change`，不修改公共核心以完成自适配。补丁源码准备和启用、宿主设置写入分别处理。完整流程见 [apa-setup 技能](../.agents/skills/apa-setup/SKILL.md)。
+
+显式模型对象为 `{mode:'explicit',model,reasoning_effort}`，所选模型在宿主上没有推理强度参数时省略 `reasoning_effort`；跟随主会话为 `{mode:'follow-main'}`。配置接受非空模型标识，不限定 GPT；实际派发须符合当前宿主支持的模型和参数组合。派发与回执能力依当前宿主档案及其适配确认。配置不是用量、来源或执行授权。
 
 查询配置检查与 CLI 任务准备解析 `models.query` 和可选 `query` 回答偏好，不要求阅读角色、工作目录、MinerU 或写作指导，也不读取写作文件。`apa-query` 技能可按需要在同一回答任务中引用本库已启用且可读的写作指导，不增加模型调用；具体规则见[查询写作指导](../.agents/skills/apa-query/references/writing.md)。空答案仍可检索；未保存查询选择时按 follow-main 解析，不把默认值写入个人文件。显式查询组合必须由当前宿主提供 `supportedModelPairs` 确认；未知能力报 `APA_MODEL_AVAILABILITY_UNKNOWN`，不支持报 `APA_MODEL_UNSUPPORTED`，均不自动更换模型。follow-main 要求有效的当前会话组合；提供宿主能力列表时同样检查支持情况。配置结构错误仍会拒绝。新论文阅读继续要求原有完整配置和依赖，旧冻结绑定不变。
 
@@ -63,26 +67,26 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 
 专题增量更新复用 `models.query`、详略与讲解对象偏好和当前宿主能力，保持专题原有语言，不新增模型、路径或后台任务配置。相关提示不调用模型；用户选定来源后才准备一次更新任务。任务准备、宿主实际执行、差异候选与正式提交是不同状态；请求模型与可观察身份分别保存，身份不符时不重试或切换模型。
 
-技能键为 nature-writing、nature-polishing、nature-shared、humanizer、humanizer-zh、stss。Nature Writing/Polishing 还要求 Shared。仅选中的指导注入对应语言 Writer；停用项不暗中保留。科学事实、证据和发布边界属于固定合同，不随文风技能关闭。
+技能键为 nature-writing、nature-polishing、nature-shared、humanizer、humanizer-zh、stss。Nature Writing/Polishing 还要求 Shared。仅选中的指导注入对应语言的 Writer 或 Translation（新运行为原文语言 Writer 与译文语言 Translation）；停用项不暗中保留。科学事实、证据和发布边界属于固定合同，不随文风技能关闭。
 
 ## 页面与操作
 
 `npm run setup:check` 检查仓库默认 MinerU 环境等基础项，不证明其他自选解析环境可用。`apa-setup inspect` 检查个人配置所选路径和依赖文件，实际解析使用新运行冻结的配置；文件存在仍不等于实际解析验收。
 
-`npm run apa:setup -- page` 生成 `.tmp/apa-setup/index.html`。首页提供完善配置、去除配置和导出配置三个独立入口。进入功能后只显示该功能的分页、预览及输出；返回首页可切换功能，填写内容保留，各功能的结果和下载文件名独立。页面内嵌脚本和样式，不启动后台服务，不向网络发送答案。
+本次检测的页面通过 `--host-profile <本次档案实际路径> --output <本次检测目录的index.html>` 生成并使用返回的完整路径，避免覆盖其他预览。页面先要求用户确认所针对的项目文件夹（同页展示本项目自检和宿主能力自检），再核对工作目录与 MinerU 解析环境的存放位置并显示其实际位置，之后才提供完善配置、去除配置和导出配置三个独立入口。存放位置的修改并入完善配置的预览。进入功能后只显示该功能的分页、预览及输出；返回首页可切换功能，填写内容保留，各功能的结果和下载文件名独立。页面内嵌脚本和样式，不启动后台服务，不向网络发送答案。
 
-- **完善**：知识库查询与六类阅读配置分别分页填写或修改，可在本功能内导入备份；预览后生成局部操作。任一字段页都能预览手动选中的修改，导入变化单独预览，不混合去除或导出操作。
+- **完善**：宿主派发、知识库查询与阅读配置分别分页填写或修改，连同第二步勾选的位置修改，可在本功能内导入备份；预览后生成局部操作。任一字段页都能预览手动选中的修改，导入变化单独预览，不混合去除或导出操作。
 - **去除**：默认全部，也可选定字段；只移除答案，不删除笔记或卸载依赖。
 - **导出**：自定义文件名，导出 apa-config-export-1.0 JSON。只包含页面读取时已保存的答案，不包含完善配置中尚未应用的修改。可能含个人路径，分享前审阅。
 - **导入**：读取导出文件，展示差异再生成操作。未提供字段保留，模型模式整体替换。
 
-下载操作 JSON 与复制同一 JSON 等价。将用户自行选择的文件、路径或粘贴内容交给助手并明确要求应用。会话辅助方式按上述分组选择、差异预览及应用确认流程生成操作。剪贴板受限时手动选择文本复制。助手应用后回读并报告缺项和依赖，不自行修正缺项。
+下载操作 JSON 与复制同一 JSON 等价。将用户自行选择的文件、路径或粘贴内容交给助手并明确要求应用。剪贴板受限时手动选择文本复制。单独导出或按明确范围挖空配置可使用相应 CLI，无须打开页面。助手应用后回读并报告缺项和依赖，不自行修正缺项。
 
-操作格式为 apa-config-operation-1.0，包含 base_fingerprint 及 patch/remove/import 动作。指纹过期被拒绝；须重新读取配置并展示新差异，由用户确认后生成新操作，禁止改旧指纹绕过拒绝。`node scripts/apa-setup.mjs apply --file <操作文件>` 应用；无 --file 时读标准输入。`inspect` 只报告状态，需读取 ready、validation、dependencies，不能把正常退出视作就绪。
+操作格式为 apa-config-operation-1.0，包含 base_fingerprint 及 patch/remove/import 动作。页面生成的操作还带 repo_root（用户在第一步确认的项目绝对路径），apply 时与 `--repo-root` 不一致即以 APA_CONFIG_REPO_MISMATCH 拒绝；其他合法操作可不带此字段。指纹过期被拒绝；须重新读取配置并展示新差异，由用户确认后生成新操作，禁止改旧指纹绕过拒绝。`node scripts/apa-setup.mjs apply --file <操作文件>` 应用；无 --file 时读标准输入。`inspect` 只报告状态，需读取 ready、validation、dependencies，不能把正常退出视作就绪。
 
 `node scripts/apa-setup.mjs inspect --capability query` 检查查询配置；`--capability reading` 或不传选项沿用阅读检查。两者的 `ready` 都只是对应配置/文件的就绪状态，`model_availability: 'not_checked'` 表示未检查当前宿主模型、未执行模型任务。页面分别展示查询和阅读状态，因此查询配置就绪与阅读依赖缺失可以同时成立。
 
-`node scripts/apa-setup.mjs export --output <新文件>` 导出答案并拒绝覆盖现有文件。配置导出不包含代码或论文。完善、字段去除、导出及差异导入均处理 `models.query` 与 `query` 偏好；仅选择查询字段的操作保留科学角色、解析器和目录原值。
+`node scripts/apa-setup.mjs export --output <新文件>` 导出答案并拒绝覆盖现有文件，CLI 会创建目标父目录。助手按技能规则确定完整目标，再传给 `--output`：用户指定路径或文件名时优先采用；仅指定文件名或未指定时使用 `config/backups/<owner>/`，默认文件名为 `apa-config-backup-YYYYMMDD-HHmmss-SSS.json`。`owner` 根据 agent 身份及归属证据确定，不从所选模型推断。CLI 未传 `--output` 时只输出 JSON，相对路径按当前命令目录解析。配置导出不包含代码或论文。完善、字段去除、导出及差异导入均处理 `models.query` 与 `query` 偏好；仅选择查询字段的操作保留科学角色、解析器和目录原值。
 
 ## 安装与固定规则
 

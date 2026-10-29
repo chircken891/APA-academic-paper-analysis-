@@ -117,3 +117,198 @@ test('capability schema rejects invented pass status, invalid units and negative
     assert.throws(() => loadHostProfile(file), /APA_HOST_PROFILE_INVALID/);
   }
 });
+
+const evidence = [{ source: 'host-docs', reference: 'installed help' }];
+const step = (extra = {}) => ({ actor: 'user', instruction: '按宿主文档操作', command: null, scope: 'current-session', persistent: false, verify: '检查结果', evidence, ...extra });
+const achievement = (extra = {}) => ({ state: 'achieved', summary: '已检测', steps: [step()], ...extra });
+const resultHandle = { source: 'text', pattern: 'agentId:\\s*([A-Za-z0-9_-]+)' };
+const saveHost = (root, report, dispatch = report.dispatch, name = report.host) => {
+  fs.mkdirSync(path.join(root, 'config'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'config/apa.local.json'), JSON.stringify({ schema_version: 'apa-local-config-1.0', host: { name, dispatch } }));
+};
+
+test('unknown host declaration survives profile load and inspection without synthesized recipes', t => {
+  const root = temporary(t);
+  const report = profile();
+  report.capabilities = { manual_compaction: { ...finding(), achievement: achievement() } };
+  const file = path.join(root, 'profile.json');
+  fs.writeFileSync(file, JSON.stringify(report));
+  const loaded = loadHostProfile(file);
+  const result = inspectApaConfig({ repoRoot: root, hostProfile: loaded, capability: 'query' });
+  assert.deepEqual(result.capability_check.checks.find(row => row.id === 'manual_compaction').achievement, report.capabilities.manual_compaction.achievement);
+  assert.equal(result.capability_check.checks.find(row => row.id === 'concise_replies').achievement.state, 'needs-user-action');
+  assert.deepEqual(result.capability_check.adapters, []);
+  assert.equal(result.ready, true);
+  assert.equal(result.capability_check.runtime_validation, 'not_run');
+});
+
+test('claims require evidence and cannot contradict status or lack investigation', t => {
+  const root = temporary(t);
+  const report = profile();
+  const cap = { ...finding(), achievement: achievement() };
+  report.capabilities = { manual_compaction: cap };
+  for (const status of ['blocked', 'unknown', 'unsupported']) {
+    cap.status = status;
+    assert.equal(check(root, report, 'manual_compaction').achievement.state, 'needs-user-action');
+  }
+  cap.status = 'detected';
+  cap.method = null;
+  assert.equal(check(root, report, 'manual_compaction').achievement.state, 'needs-user-action');
+  cap.method = 'manual';
+  cap.scope = 'unknown';
+  assert.equal(check(root, report, 'manual_compaction').achievement.state, 'needs-user-action');
+  cap.scope = 'current-session';
+  cap.evidence = [];
+  cap.achievement.steps[0].evidence = [];
+  assert.equal(check(root, report, 'manual_compaction').achievement.state, 'needs-user-action');
+  cap.achievement.state = 'not-found';
+  assert.equal(check(root, report, 'manual_compaction').achievement.state, 'needs-user-action');
+  cap.limitations = ['已检查安装版帮助'];
+  assert.equal(check(root, report, 'manual_compaction').achievement.state, 'not-found');
+});
+
+test('achieved declarations require evidence for every step', t => {
+  const root = temporary(t);
+  const report = { ...profile(), capabilities: { manual_compaction: { ...finding(), achievement: achievement({ steps: [step(), step({ evidence: [] })] }) } } };
+  const result = check(root, report, 'manual_compaction').achievement;
+  assert.equal(result.state, 'needs-user-action');
+  assert.match(result.summary, /步骤.*依据/);
+  report.capabilities.manual_compaction.achievement.steps[1].evidence = evidence;
+  assert.equal(check(root, report, 'manual_compaction').achievement.state, 'achieved');
+});
+
+test('placeholder command without an explicit range is blocked', t => {
+  const root = temporary(t);
+  const report = { ...profile(), capabilities: { threshold_compaction: { ...finding(), threshold: threshold(), achievement: achievement({ state: 'needs-setting', steps: [step({ command: 'tool --limit <N>' })] }) } } };
+  const result = check(root, report, 'threshold_compaction').achievement;
+  assert.equal(result.state, 'needs-user-action');
+  assert.equal(result.steps[0].command, null);
+  assert.match(result.summary, /范围/);
+});
+
+test('science recovery requires matching saved host, valid handle and complete lookup', t => {
+  const root = temporary(t);
+  const report = profile();
+  report.dispatch.result_handle = resultHandle;
+  const recovery = { task_handle_path: 'response.agentId', lookup_tool: 'lookup', lookup_argument: 'id', original_host_accessible: true };
+  report.capabilities = { science_recovery: { ...finding(), recovery, achievement: achievement() } };
+  assert.equal(check(root, report, 'science_recovery').achievement.state, 'needs-user-action');
+  const { result_handle: ignored, ...withoutHandle } = report.dispatch;
+  saveHost(root, report, withoutHandle);
+  assert.equal(check(root, report, 'science_recovery').achievement.state, 'needs-user-action');
+  saveHost(root, report, { ...report.dispatch, result_handle: { source: 'text', pattern: '(other)' } });
+  assert.equal(check(root, report, 'science_recovery').achievement.state, 'needs-user-action');
+  saveHost(root, report, report.dispatch, 'another-host');
+  assert.equal(check(root, report, 'science_recovery').achievement.state, 'needs-user-action');
+  saveHost(root, report);
+  assert.equal(check(root, report, 'science_recovery').achievement.state, 'achieved');
+  recovery.lookup_tool = null;
+  assert.equal(check(root, report, 'science_recovery').achievement.state, 'needs-user-action');
+  recovery.lookup_tool = 'lookup';
+  report.dispatch.result_handle.pattern = 'agentId:[a-z]+';
+  saveHost(root, report);
+  assert.equal(check(root, report, 'science_recovery').achievement.state, 'needs-user-action');
+  report.dispatch.result_handle.pattern = '(';
+  saveHost(root, report);
+  assert.equal(check(root, report, 'science_recovery').achievement.state, 'needs-user-action');
+});
+
+test('threshold range commands require templates and never substitute user selection', t => {
+  const root = temporary(t);
+  const cap = { ...finding(), threshold: threshold(), achievement: achievement({ state: 'needs-setting', steps: [step({ command: 'tool --limit 200000', range: { min: 0, max: 1000000, unit: 'tokens' } })] }) };
+  const report = { ...profile(), capabilities: { threshold_compaction: cap } };
+  let row = check(root, report, 'threshold_compaction');
+  assert.equal(row.achievement.steps[0].command, null);
+  assert.match(row.achievement.summary, /<N>/);
+  cap.achievement.steps[0].command = 'tool-v2 --limit <N>';
+  row = check(root, report, 'threshold_compaction');
+  assert.equal(row.achievement.steps[0].command, 'tool-v2 --limit <N>');
+  assert.equal(row.threshold.candidate_value, 200000);
+});
+
+test('threshold command without range and template is blocked', t => {
+  const root = temporary(t);
+  const cap = { ...finding(), threshold: { ...threshold(), candidate_tokens: null }, achievement: achievement({ state: 'needs-setting', steps: [step({ command: 'tool --limit 200000' })] }) };
+  const result = check(root, { ...profile(), capabilities: { threshold_compaction: cap } }, 'threshold_compaction').achievement;
+  assert.equal(result.state, 'needs-user-action');
+  assert.equal(result.steps[0].command, null);
+  assert.match(result.summary, /范围|<N>/);
+});
+
+test('threshold commands are blocked when the target backend is unverified', t => {
+  const root = temporary(t);
+  const cap = { ...finding(), threshold: { ...threshold(), effective_target_verified: false }, achievement: achievement({ state: 'needs-setting', steps: [step({ command: 'tool --limit <N>', range: { min: 100000, max: 1000000, unit: 'tokens' } }), step({ command: null })] }) };
+  const result = check(root, { ...profile(), capabilities: { threshold_compaction: cap } }, 'threshold_compaction').achievement;
+  assert.equal(result.state, 'needs-user-action');
+  assert.ok(result.steps.every(item => item.command === null));
+  assert.match(result.summary, /后端|目标/);
+});
+
+test('threshold command retains a valid token template with verified target', t => {
+  const root = temporary(t);
+  const cap = { ...finding(), threshold: threshold(), achievement: achievement({ state: 'needs-setting', steps: [step({ command: 'tool --limit <N>', range: { min: 100000, max: 1000000, unit: 'tokens' } })] }) };
+  const result = check(root, { ...profile(), capabilities: { threshold_compaction: cap } }, 'threshold_compaction').achievement;
+  assert.equal(result.state, 'needs-setting');
+  assert.equal(result.steps[0].command, 'tool --limit <N>');
+});
+
+test('adapter declarations are checked read-only and block commands when unavailable', t => {
+  const root = temporary(t);
+  const folder = path.join(root, 'config/backups/example-owner/adapters/host-patch');
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.join(folder, 'entry.mjs'), 'do not execute');
+  const adapter = { id: 'host-patch', owner: 'example-owner', host: 'synthetic-host', root: 'config/backups/example-owner/adapters/host-patch', entrypoints: ['entry.mjs'], evidence };
+  const report = { ...profile(), adapters: [adapter], capabilities: { manual_compaction: { ...finding(), achievement: achievement({ steps: [step({ adapter_id: adapter.id, command: 'run entry' })] }) } } };
+  const inspect = () => inspectApaConfig({ repoRoot: root, hostProfile: report, capability: 'query' }).capability_check;
+  let result = inspect();
+  assert.equal(result.adapters[0].status, 'available');
+  assert.equal(result.checks.find(row => row.id === 'manual_compaction').achievement.steps[0].command, 'run entry');
+  for (const change of [
+    { root: 'config/backups/other-owner/adapters/host-patch' },
+    { root: 'config/apa-adapters/example-owner/host-patch' },
+    { entrypoints: ['missing.mjs'] },
+    { entrypoints: ['../../outside.mjs'] },
+    { entrypoints: ['..\\..\\outside.mjs'] },
+    { host: 'other-host' },
+  ]) {
+    Object.assign(adapter, { root: 'config/backups/example-owner/adapters/host-patch', entrypoints: ['entry.mjs'], host: 'synthetic-host' }, change);
+    result = inspect();
+    assert.equal(result.adapters[0].status, 'blocked');
+    assert.ok(result.adapters[0].issues.length);
+    const item = result.checks.find(row => row.id === 'manual_compaction').achievement;
+    assert.equal(item.state, 'needs-user-action');
+    assert.equal(item.steps[0].command, null);
+  }
+  report.adapters = [];
+  assert.equal(inspect().checks.find(row => row.id === 'manual_compaction').achievement.steps[0].command, null);
+  assert.equal(fs.readFileSync(path.join(folder, 'entry.mjs'), 'utf8'), 'do not execute');
+});
+
+test('adapter realpath rejects a junction escaping its declared root', t => {
+  const root = temporary(t);
+  const folder = path.join(root, 'config/backups/example-owner/adapters/host-patch');
+  const outside = path.join(root, 'outside');
+  fs.mkdirSync(folder, { recursive: true });
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, 'entry.mjs'), 'unchanged');
+  fs.symlinkSync(outside, path.join(folder, 'link'), 'junction');
+  const report = { ...profile(), adapters: [{ id: 'host-patch', owner: 'example-owner', host: 'synthetic-host', root: 'config/backups/example-owner/adapters/host-patch', entrypoints: ['link/entry.mjs'], evidence }] };
+  assert.equal(inspectApaConfig({ repoRoot: root, hostProfile: report }).capability_check.adapters[0].status, 'blocked');
+});
+
+test('schema rejects malformed declarations without affecting old profiles', t => {
+  const root = temporary(t);
+  const file = path.join(root, 'profile.json');
+  const cap = { ...finding(), achievement: achievement() };
+  const adapter = { id: 'host-patch', owner: 'example-owner', host: 'synthetic-host', root: 'config/backups/example-owner/adapters/host-patch', entrypoints: ['entry.mjs'], evidence };
+  for (const report of [
+    { ...profile(), capabilities: { manual_compaction: { ...cap, achievement: achievement({ state: 'done' }) } } },
+    { ...profile(), capabilities: { manual_compaction: { ...cap, achievement: achievement({ steps: [step({ evidence: [{ source: 'unknown', reference: 'x' }] })] }) } } },
+    { ...profile(), capabilities: { manual_compaction: { ...cap, achievement: achievement({ steps: [step({ range: { min: 0, max: 1, unit: 'characters' } })] }) } } },
+    { ...profile(), adapters: [{ ...adapter, owner: 'Other Owner' }] },
+    { ...profile(), adapters: [{ ...adapter, entrypoints: [] }] },
+  ]) {
+    fs.writeFileSync(file, JSON.stringify(report));
+    assert.throws(() => loadHostProfile(file), /APA_HOST_PROFILE_INVALID/);
+  }
+});

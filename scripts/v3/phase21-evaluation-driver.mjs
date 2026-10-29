@@ -160,7 +160,7 @@ export function validateEvaluationApprovalPacket(packet) {
     const dispatched = scope?.dispatch !== undefined;
     if (!validateApaRoleModelPolicy(policy) || packet.backend?.identity !== 'current-collaboration'
       || !(dispatched ? scope.action === scope.dispatch?.tool : ['collaboration.spawn_agent', 'collaboration.followup_task'].includes(scope?.action))
-      || !(APA_VERIFIER_ROLES.includes(scope?.role) || packet.workflow_profile === 'reading-first-1.0' && ['evidence','methods','results','interpretation','scientific-reading','integration','comparison','ledger','english-writer','chinese-writer','reading-editor','independent-verifier'].includes(scope?.role))) errors.push('ROLE_MODEL_POLICY_INVALID');
+      || !(APA_VERIFIER_ROLES.includes(scope?.role) || packet.workflow_profile === 'reading-first-1.0' && ['evidence','methods','results','interpretation','scientific-reading','integration','comparison','ledger','english-writer','chinese-writer','translation','reading-editor','independent-verifier'].includes(scope?.role))) errors.push('ROLE_MODEL_POLICY_INVALID');
     else {
       const profile = resolveApaRoleModel(scope.role, policy.main_session, policy);
       if (packet.requested_model !== profile.model || (dispatched ? !hostDispatchArgumentsMatch(scope.dispatch, scope.arguments, profile) : scope.action === 'collaboration.spawn_agent'

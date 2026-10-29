@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { renderApaSetupPage } from '../../scripts/setup/apa-setup-page.mjs';
-import { configDifferences, copySetupPayload, createOperation, createSetupNavigator, createSetupResults, describeChanges, describeValue, fieldValue, flattenConfig, serializePayload, setupPages } from '../../Templates/apa-setup/page.js';
+import { collectModelSet, configDifferences, copySetupPayload, createOperation, createSetupNavigator, createSetupResults, describeChanges, describeValue, fieldValue, flattenConfig, groupCurrent, modelGroupSummary, modelGroups, mountApaSetup, serializePayload, setupPages, unknownConfigKeys } from '../../Templates/apa-setup/page.js';
 import { loadApaConfig, applyApaConfigOperation, exportApaConfig, inspectApaConfig } from '../../scripts/lib/apa-config.mjs';
 import { fields, readinessMessages } from '../../Templates/apa-setup/page.js';
 
@@ -37,6 +37,98 @@ test('capability report shows host-specific methods, limits and evidence as text
   assert.match(html, /id="capability-check"/);
   assert.ok(!html.includes(hostile));
 });
+// DOM stub with events, so cards that react to input can be driven without a browser.
+const eventNode = tag => ({ tag, textContent: '', value: '', hidden: false, children: [], listeners: {}, append(...children) { this.children.push(...children); }, addEventListener(type, handler) { (this.listeners[type] ||= []).push(handler); } });
+const flattenText = root => [root.hidden ? '' : root.textContent, ...(root.hidden ? [] : root.children.flatMap(flattenText))].join('\n');
+const findAll = (root, predicate) => [root, ...root.children.flatMap(child => findAll(child, predicate))].filter(predicate);
+async function renderCards(achievements, threshold, extras = {}) {
+  const { renderCapabilityCheck } = await import('../../Templates/apa-setup/page.js');
+  const checks = Object.entries(achievements).map(([id, achievement]) => ({ id, label: id, status: 'conditional', method: '方式', scope: 'new-session', evidence: [], limitations: [], next_check: '核验', achievement, ...(threshold && id === 'threshold_compaction' ? { threshold } : {}), ...extras.check }));
+  const container = eventNode('div');
+  renderCapabilityCheck({ createElement: eventNode }, container, { host: '任意宿主', detected_at: 't', runtime_validation: 'not_run', checks, adapters: extras.adapters || [] });
+  return container;
+}
+
+const step = (command, range, extra = {}) => ({ actor: 'agent', instruction: '执行说明 <示例>', command, scope: 'new-session', persistent: false, verify: '核验结果', evidence: [{ source: 'local-code', reference: '<路径>' }], ...(range ? { range } : {}), ...extra });
+const achievement = steps => ({ state: 'achieved', summary: '静态能力', steps });
+const visibleCommands = container => findAll(container, node => node.tag === 'code' && node.textContent).map(node => node.textContent);
+const enter = (input, value) => { input.value = value; for (const handler of input.listeners.input) handler({ target: input }); };
+
+test('agent declarations, APA rules, step evidence and adapters are displayed as text', async () => {
+  const hostile = '<img src=x onerror=alert(1)>';
+  const container = await renderCards({ arbitrary: achievement([step('inspect <run_id>', null, { adapter_id: 'patch-1' })]), absent: { state: 'not-found', summary: hostile, steps: [] } }, null, {
+    check: { apa_support: ['规则 <A>'] },
+    adapters: [{ id: 'patch-1', owner: hostile, host: 'example', root: 'local/root', entrypoints: ['local/entry'], evidence: [{ source: 'local-code', reference: 'proof' }], status: 'blocked', issues: ['问题 <B>'] }]
+  });
+  const text = flattenText(container);
+  for (const phrase of ['已具备（静态依据）', '已调查但未找到', hostile, '规则 <A>', 'local-code：<路径>', 'patch-1', 'local/root', 'local/entry', 'blocked', '问题 <B>', 'proof']) assert.ok(text.includes(phrase), phrase);
+  assert.deepEqual(visibleCommands(container), ['inspect <run_id>']);
+  assert.equal(findAll(container, node => node.tag === 'img').length, 0);
+  assert.deepEqual(createOperation(snapshot).set, {});
+});
+
+test('each token command uses its own range, all placeholders, and safe user input', async () => {
+  const container = await renderCards({ threshold_compaction: achievement([
+    step('first <N> middle <N> end', { min: 100, max: 300, unit: 'tokens' }),
+    step('second <N>', { min: 200, max: 400, unit: 'tokens' }),
+    step('open <N>', { min: null, max: null, unit: 'tokens' })
+  ]) });
+  const [input] = findAll(container, node => node.tag === 'input');
+  assert.equal(input.value, '');
+  assert.deepEqual(visibleCommands(container), []);
+  assert.match(flattenText(container), /范围.*未知/);
+  enter(input, '150'); assert.deepEqual(visibleCommands(container), ['first 150 middle 150 end', 'open 150']);
+  enter(input, '250'); assert.deepEqual(visibleCommands(container), ['first 250 middle 250 end', 'second 250', 'open 250']);
+  enter(input, '350'); assert.deepEqual(visibleCommands(container), ['second 350', 'open 350']);
+  for (const value of ['0', '2e5', '9007199254740992', '']) { enter(input, value); assert.deepEqual(visibleCommands(container), []); }
+});
+
+test('ratio and percent commands require verified formula and recalculate capacity on each input', async () => {
+  const threshold = { candidate_tokens: 500, formula: 'window-ratio-bounded', effective_target_verified: true, context_window_tokens: 1000, output_reserve_tokens: 100, headroom_tokens: 100, retained_tokens: 100, measurement: 'input', feasibility: 'incompatible' };
+  const steps = [step('ratio <N> then <N>', { min: 0.4, max: 0.7, unit: 'ratio' }), step('percent <N>', { min: 20, max: 60, unit: 'percent' })];
+  const container = await renderCards({ threshold_compaction: achievement(steps) }, threshold);
+  const [input] = findAll(container, node => node.tag === 'input');
+  assert.equal(input.value, '500');
+  assert.deepEqual(visibleCommands(container), ['ratio 0.5 then 0.5', 'percent 50']);
+  enter(input, '650'); assert.deepEqual(visibleCommands(container), ['ratio 0.65 then 0.65']);
+  enter(input, '850'); assert.deepEqual(visibleCommands(container), []);
+  enter(input, '100'); assert.deepEqual(visibleCommands(container), []);
+  const unknown = await renderCards({ threshold_compaction: achievement(steps) }, { ...threshold, formula: 'unknown' });
+  assert.deepEqual(visibleCommands(unknown), []);
+  assert.match(flattenText(unknown), /公式.*未.*核实/);
+  const missing = await renderCards({ threshold_compaction: achievement(steps) }, { ...threshold, measurement: null });
+  assert.deepEqual(visibleCommands(missing), []);
+});
+
+test('recorded token input is rechecked against capacity and commands require placeholders', async () => {
+  const threshold = { candidate_tokens: 900, context_window_tokens: 1000, output_reserve_tokens: 100, headroom_tokens: 100, retained_tokens: 100, measurement: 'input', feasibility: 'within-reported-limits' };
+  const container = await renderCards({ threshold_compaction: achievement([
+    step('valid <N>', { min: null, max: null, unit: 'tokens' }),
+    step('stale 900', { min: null, max: null, unit: 'tokens' })
+  ]) }, threshold);
+  const [input] = findAll(container, node => node.tag === 'input');
+  assert.deepEqual(visibleCommands(container), []);
+  enter(input, '500');
+  assert.deepEqual(visibleCommands(container), ['valid 500']);
+  assert.match(flattenText(container), /缺少 <N> 模板/);
+  enter(input, '100');
+  assert.deepEqual(visibleCommands(container), []);
+});
+
+test('an explicitly unverified effective target hides token commands and scope names are readable', async () => {
+  const steps = [step('token <N>', { min: 1, max: 1000, unit: 'tokens' }, { scope: 'instance' }), step(null, null, { scope: 'unknown' })];
+  const blocked = await renderCards({ threshold_compaction: achievement(steps) }, { candidate_tokens: 500, effective_target_verified: false });
+  assert.deepEqual(visibleCommands(blocked), []);
+  assert.match(flattenText(blocked), /有效.*后端.*未.*核实/);
+  assert.match(flattenText(blocked), /宿主实例/);
+  assert.match(flattenText(blocked), /范围尚不明确/);
+  for (const effective_target_verified of [null, undefined]) {
+    const unknown = await renderCards({ threshold_compaction: achievement(steps) }, { candidate_tokens: 500, effective_target_verified });
+    assert.deepEqual(visibleCommands(unknown), ['token 500']);
+    assert.match(flattenText(unknown), /有效.*后端.*尚未核实/);
+  }
+});
+
 test('query selection uses existing patch, export, import difference and removal boundaries', t => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-page-query-'));
   t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
@@ -107,26 +199,30 @@ test('query defaults are described without replacing reading language labels or 
   assert.deepEqual(fields.filter(field => field.group === 'query').map(field => field.key), ['models.query', 'query.answer_language', 'query.detail', 'query.audience']);
 });
 
-test('each function has its own navigation and returning home preserves form nodes', () => {
+test('the project folder and locations come before the three functions, and returning home preserves form nodes', () => {
   const control = () => ({ listeners: {}, attributes: {}, addEventListener(name, listener) { this.listeners[name] = listener; }, setAttribute(name, value) { this.attributes[name] = value; }, removeAttribute(name) { delete this.attributes[name]; } });
   const pages = setupPages.map(page => ({ ...page, element: { hidden: false, form: { value: '', checked: false } } }));
   const buttons = setupPages.map(control);
   const status = {}; const previous = control(); const next = control(); const observed = [];
   const navigator = createSetupNavigator({ pages, buttons, status, previous, next, onChange: page => observed.push(page.id) });
   const assertSingle = id => assert.deepEqual(pages.filter(page => !page.element.hidden).map(page => page.id), [id]);
-  assertSingle('overview'); assert.equal(previous.disabled, true); assert.equal(next.disabled, true);
+  assertSingle('project'); assert.ok(buttons.every(button => button.hidden));
+  assert.deepEqual(setupPages.filter(page => !page.flow).map(page => page.id), ['project', 'locations', 'functions']);
+  assert.ok(!setupPages.some(page => ['paths', 'parser'].includes(page.id)));
+  navigator.home('locations'); assertSingle('locations'); navigator.home(); assertSingle('functions');
   navigator.enter('edit'); assertSingle('host');
   navigator.show('query'); assertSingle('query');
-  const queryForm = pages[2].element.form; queryForm.value = 'retained-model'; queryForm.checked = true;
-  buttons[setupPages.findIndex(page => page.id === 'paths')].listeners.click(); assertSingle('paths');
-  navigator.show('query'); assertSingle('query'); assert.equal(pages[2].element.form, queryForm); assert.equal(queryForm.value, 'retained-model'); assert.equal(queryForm.checked, true);
-  navigator.show('edit-result'); assertSingle('edit-result'); assert.equal(next.disabled, true); assert.match(status.textContent, /完善配置.*第 10 \/ 10 页/);
+  const queryPage = pages.find(page => page.id === 'query');
+  const queryForm = queryPage.element.form; queryForm.value = 'retained-model'; queryForm.checked = true;
+  buttons[setupPages.findIndex(page => page.id === 'reading')].listeners.click(); assertSingle('reading');
+  navigator.show('query'); assertSingle('query'); assert.equal(queryPage.element.form, queryForm); assert.equal(queryForm.value, 'retained-model'); assert.equal(queryForm.checked, true);
+  navigator.show('edit-result'); assertSingle('edit-result'); assert.equal(next.disabled, true); assert.match(status.textContent, /完善配置.*第 7 \/ 7 页/);
   assert.throws(() => navigator.show('remove'), /当前功能/); assertSingle('edit-result');
-  navigator.home(); assertSingle('overview');
+  navigator.home(); assertSingle('functions');
   navigator.enter('remove'); assertSingle('remove'); next.listeners.click(); assertSingle('remove-result'); assert.equal(next.disabled, true);
   previous.listeners.click(); assertSingle('remove');
   navigator.home(); navigator.enter('export'); assertSingle('export-section'); next.listeners.click(); assertSingle('export-result'); assert.equal(next.disabled, true);
-  navigator.home(); navigator.enter('edit'); assertSingle('host'); assert.equal(pages[2].element.form.value, 'retained-model');
+  navigator.home(); navigator.enter('edit'); assertSingle('host'); assert.equal(queryPage.element.form.value, 'retained-model');
   assert.throws(() => navigator.show('missing'), /未知/);
   assert.ok(observed.includes('remove-result')); assert.ok(observed.includes('export-result'));
 });
@@ -178,7 +274,7 @@ test('all and selected removal operations use the same snapshot fingerprint and 
 test('reader-facing preview distinguishes actual patches, removal and saved-answer backup', () => {
   const operation = createOperation(snapshot, { set: { 'paths.runs': '.tmp/new' } });
   assert.deepEqual(describeChanges(snapshot, operation), ['执行记录目录：.tmp/old → .tmp/new']);
-  assert.deepEqual(describeChanges(snapshot, createOperation(snapshot, { action: 'remove', remove: ['reading.source_language'] })), ['首先写作的语言：先写英文，再写中文 → 移除答案']);
+  assert.deepEqual(describeChanges(snapshot, createOperation(snapshot, { action: 'remove', remove: ['reading.source_language'] })), ['首先写作的语言（旧设置，新运行不再使用）：先写英文，再写中文 → 移除答案']);
   assert.deepEqual(describeChanges(snapshot, createOperation(snapshot)), []);
   assert.match(describeChanges(snapshot, { schema_version: 'apa-config-export-1.0', answers: config })[0], /不包含尚未应用/);
   assert.match(describeValue({ mode: 'follow-main' }), /新运行开始时固定/);
@@ -313,4 +409,218 @@ test('remove, export and import treat the saved host dispatch as one answer', t 
   assert.match(html, /清除子代理派发方式后，新论文和查询改按 Codex 的方式派发/);
   assert.match(html, /备份包含子代理派发方式/);
   assert.match(html, /备份里的子代理派发方式属于当时检测的宿主/);
+});
+
+test('page operations are bound to the confirmed project folder and refused elsewhere', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-setup-repo-'));
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-setup-other-'));
+  t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(other, { recursive: true, force: true }); });
+  const current = loadApaConfig({ repoRoot: root });
+  const operation = createOperation({ ...current, repo_root: root }, { set: { 'paths.runs': '.tmp/runs' } });
+  assert.equal(operation.repo_root, root);
+  assert.throws(() => applyApaConfigOperation({ repoRoot: other, operation }), /APA_CONFIG_REPO_MISMATCH/);
+  assert.throws(() => applyApaConfigOperation({ repoRoot: root, operation: { ...operation, repo_root: 'relative/path' } }), /APA_CONFIG_REPO_MISMATCH/);
+  assert.equal(applyApaConfigOperation({ repoRoot: root, operation }).config.paths.runs, '.tmp/runs');
+  assert.equal(createOperation(snapshot).repo_root, undefined);
+  const html = renderApaSetupPage({ snapshot, repoRoot: root });
+  assert.equal(JSON.parse(html.match(/<script id="apa-setup-data" type="application\/json">(.*?)<\/script>/s)[1]).repoRoot, path.resolve(root));
+  assert.ok(html.indexOf('id="project-step"') < html.indexOf('id="locations-step"') && html.indexOf('id="locations-step"') < html.indexOf('id="function-menu"'));
+});
+
+test('location fields show the actual position inside the confirmed project', async () => {
+  const { resolveInProject, groups } = await import('../../Templates/apa-setup/page.js');
+  assert.deepEqual(groups.filter(group => group.location).map(group => group.id), ['paths', 'parser']);
+  assert.equal(resolveInProject('D:\\vault', 'Eval/apa-v3/runs'), 'D:\\vault\\Eval\\apa-v3\\runs');
+  assert.equal(resolveInProject('D:\\vault', './.runtime/mineru'), 'D:\\vault\\.runtime\\mineru');
+  assert.equal(resolveInProject('/home/a/vault', '.runtime/mineru'), '/home/a/vault/.runtime/mineru');
+  assert.equal(resolveInProject('D:\\vault', 'E:/other'), 'E:/other');
+});
+
+// Minimal DOM: enough for mountApaSetup to build and for the preview button to run the page's own collect().
+function createFakeDocument() {
+  const registry = [];
+  class Node {
+    constructor(tag, text) { this.tag = tag; this.children = []; this.parent = null; this.listeners = {}; this.attributes = {}; this.dataset = {}; this.hidden = false; this.disabled = false; this.checked = false; this.className = ''; this._text = text ?? ''; this._value = ''; registry.push(this); }
+    get textContent() { return this._text + this.children.map(child => child.textContent).join(''); }
+    set textContent(value) { this._text = String(value); this.children = []; }
+    get value() { return this._value; }
+    set value(value) { this._value = this.tag === 'select' && !this.children.some(option => option.value === value) ? '' : String(value); }
+    append(...nodes) { for (const node of nodes) { node.parent = this; this.children.push(node); } }
+    prepend(...nodes) { for (const node of nodes) node.parent = this; this.children.unshift(...nodes); }
+    replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
+    remove() {}
+    addEventListener(name, listener) { (this.listeners[name] ||= []).push(listener); }
+    dispatchEvent(event) { for (const listener of this.listeners[event.type] || []) listener(event); }
+    click() { this.dispatchEvent(new Event('click')); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+    removeAttribute(name) { delete this.attributes[name]; }
+    get parentElement() { return this.parent; }
+    focus() {}
+    scrollIntoView() {}
+    select() {}
+    closest(tag) { return this.parent ?? new Node(tag); }
+    querySelectorAll(selector) { return registry.filter(node => node !== this && matches(node, selector)); }
+    querySelector(selector) { return this.querySelectorAll(selector)[0] ?? new Node('div'); }
+  }
+  const matches = (node, selector) => {
+    const [, tag, cls, attr, value, checked] = selector.match(/^([a-z]*)(?:\.([\w-]+))?(?:\[([\w-]+)="([^"]*)"\])?(:checked)?$/);
+    if (tag && node.tag !== tag) return false;
+    if (cls && node.className !== cls) return false;
+    if (attr && (attr === 'name' ? node.name : node.dataset[attr.replace('data-', '')]) !== value) return false;
+    return !checked || node.checked;
+  };
+  const byIdCache = new Map();
+  return {
+    registry,
+    createElement: tag => new Node(tag),
+    getElementById: id => { if (!byIdCache.has(id)) byIdCache.set(id, new Node('div')); return byIdCache.get(id); },
+    querySelectorAll: selector => registry.filter(node => matches(node, selector)),
+    querySelector: selector => registry.find(node => matches(node, selector)) ?? new Node(selector.replace(/[^a-z].*/, '') || 'div')
+  };
+}
+
+function mountFake(config, profile = hostProfile) {
+  const document = createFakeDocument();
+  mountApaSetup(document, { config: { schema_version: 'apa-local-config-1.0', ...config }, fingerprint: 'fp', exists: true, path: 'config/apa.local.json' }, null, null, profile, 'D:\\vault');
+  const named = name => document.registry.find(node => node.name === name);
+  const text = () => document.registry.map(node => node.textContent);
+  const fieldset = title => document.registry.find(node => node.tag === 'fieldset' && node.children[0]?.textContent.includes(title));
+  const preview = async () => {
+    document.getElementById('enter-edit').click();
+    document.querySelector('[data-preview="patch"]').click();
+    await new Promise(resolve => setImmediate(resolve));
+    const payload = document.getElementById('edit-payload').value;
+    return { message: document.getElementById('edit-message').textContent, set: payload ? JSON.parse(payload).set : null };
+  };
+  const choose = (prefix, { model, effort, mode = 'explicit' }) => {
+    const select = named(`${prefix}-mode`);
+    const toggle = select.parent.parent.children[0].children[0].children[0];
+    toggle.checked = true; toggle.dispatchEvent(new Event('change'));
+    select.value = mode; select.dispatchEvent(new Event('change'));
+    if (model) { named(`${prefix}-model`).value = model; named(`${prefix}-model`).dispatchEvent(new Event('change')); }
+    if (effort) { named(`${prefix}-effort`).value = effort; named(`${prefix}-effort`).dispatchEvent(new Event('change')); }
+  };
+  return { document, named, text, fieldset, preview, choose };
+}
+
+test('location suggestions require a click and preview only durable project paths', async () => {
+  const config = { paths: { runs: 'existing/runs' }, models: { science: { mode: 'follow-main' } } };
+  const original = structuredClone(config);
+  const page = mountFake(config);
+  assert.deepEqual((await page.preview()).set, {});
+  page.document.getElementById('suggestions').click();
+  assert.deepEqual((await page.preview()).set, {
+    'paths.runs': 'Eval/apa-v3/runs',
+    'paths.parse': 'Eval/apa-v3/parse',
+    'paths.candidates': 'Eval/apa-v3/reading'
+  });
+  assert.deepEqual(config, original);
+});
+
+test('a group choice writes the same model to every key in the group', () => {
+  const choice = { mode: 'explicit', model: 'think-model', effort: 'high' };
+  const expected = { mode: 'explicit', model: 'think-model', reasoning_effort: 'high' };
+  const keysOf = id => modelGroups.find(group => group.id === id).keys;
+  const presentation = collectModelSet({ config: {}, groupSelections: { presentation: choice } });
+  assert.deepEqual(Object.keys(presentation), ['models.roles.reading-editor', 'models.roles.translation']);
+  assert.ok(Object.values(presentation).every(value => JSON.stringify(value) === JSON.stringify(expected)));
+  assert.deepEqual(Object.keys(collectModelSet({ config: {}, groupSelections: { judgment: choice } })), keysOf('judgment'));
+  assert.deepEqual(collectModelSet({ config: {}, groupSelections: { analysis: { mode: 'follow-main' } } }), { 'models.science': { mode: 'follow-main' } });
+  assert.deepEqual(collectModelSet({ config: { models: { roles: { translation: expected } } }, groupSelections: { presentation: choice } }), { 'models.roles.reading-editor': expected });
+  assert.throws(() => collectModelSet({ config: {}, groupSelections: { writing: { mode: 'explicit', model: 'think-model' } }, hostProfile }), /推理强度/);
+  assert.throws(() => collectModelSet({ config: {}, groupSelections: { writing: { mode: '' } } }), /原文写作/);
+});
+
+test('group and individual selection of the same key is refused', () => {
+  const choice = { mode: 'follow-main' };
+  assert.throws(() => collectModelSet({ config: {}, groupSelections: { presentation: choice }, roleSelections: { 'models.roles.translation': choice } }), /翻译.*translation.*二选一/);
+  assert.throws(() => collectModelSet({ config: {}, groupSelections: { judgment: choice }, roleSelections: { 'models.overrides.evidence': choice } }), /证据梳理.*evidence.*二选一/);
+  assert.deepEqual(Object.keys(collectModelSet({ config: {}, groupSelections: { analysis: choice }, roleSelections: { 'models.overrides.methods': choice } })).sort(), ['models.overrides.methods', 'models.science']);
+});
+
+test('group current value reports mixed members per role', () => {
+  const same = { mode: 'follow-main' };
+  const presentation = modelGroups.find(group => group.id === 'presentation');
+  assert.deepEqual(groupCurrent({ models: { roles: { 'reading-editor': same, translation: same } } }, presentation), { uniform: true, value: same });
+  assert.deepEqual(groupCurrent({}, presentation), { uniform: true, value: undefined });
+  const mixed = groupCurrent({ models: { roles: { 'reading-editor': same } } }, presentation);
+  assert.equal(mixed.uniform, false);
+  assert.deepEqual(mixed.perKey, [{ role: 'reading-editor', key: 'models.roles.reading-editor', value: same }, { role: 'translation', key: 'models.roles.translation', value: undefined }]);
+  assert.equal(groupCurrent({ models: { science: same } }, modelGroups.find(group => group.id === 'analysis')).uniform, true);
+});
+
+test('model groups keep the agreed ids, roles and keys, each with a strength and reason that name no model', () => {
+  assert.deepEqual(modelGroups.map(({ id, title, roles, keys }) => ({ id, title, roles, keys })), [
+    { id: 'judgment', title: '关键判断', roles: ['evidence', 'integration', 'independent-verifier'], keys: ['models.overrides.evidence', 'models.overrides.integration', 'models.roles.independent-verifier'] },
+    { id: 'analysis', title: '专项分析', roles: ['methods', 'results', 'interpretation', 'scientific-reading'], keys: ['models.science'] },
+    { id: 'writing', title: '原文写作', roles: ['english-writer', 'chinese-writer'], keys: ['models.roles.english-writer', 'models.roles.chinese-writer'] },
+    { id: 'presentation', title: '呈现与翻译', roles: ['reading-editor', 'translation'], keys: ['models.roles.reading-editor', 'models.roles.translation'] }
+  ]);
+  assert.deepEqual(modelGroups.map(group => group.strength), ['最高', '中等', '高', '较低']);
+  assert.equal(modelGroupSummary, '关键判断 ≥ 原文写作 ＞ 专项分析 ≥ 呈现与翻译');
+  const detected = hostProfile.models.map(item => item.model);
+  for (const group of modelGroups) {
+    assert.ok(group.help.length > 30, group.id);
+    assert.ok(!detected.some(model => group.help.includes(model)), group.id);
+    assert.ok(!/gpt|claude|sonnet|opus|haiku|推荐使用|建议使用/i.test(group.help), group.id);
+  }
+});
+
+test('each group explains its relative strength on the page, the summary appears once, and no model is preselected', () => {
+  const page = mountFake({});
+  assert.equal(page.text().filter(item => item === modelGroupSummary).length, 1);
+  for (const group of modelGroups) {
+    const fieldset = page.fieldset(group.title);
+    assert.ok(fieldset, group.title);
+    const content = fieldset.textContent;
+    assert.ok(content.includes(`相对强度：${group.strength}`) && content.includes(group.help), group.title);
+  }
+  const selects = page.document.registry.filter(node => node.tag === 'select' && /-(mode|model|effort)$/.test(node.name));
+  assert.ok(selects.length > 0 && selects.every(select => select.value === ''));
+  const saved = { mode: 'explicit', model: 'think-model', reasoning_effort: 'low' };
+  const withSaved = mountFake({ models: { science: saved, roles: { translation: saved } } });
+  const models = withSaved.document.registry.filter(node => node.tag === 'select' && node.name.endsWith('-model'));
+  assert.ok(models.every(select => select.value === '' || select.value === 'think-model'));
+  assert.equal(withSaved.named('group-analysis-model').value, 'think-model');
+  assert.equal(withSaved.named('group-presentation-model').value, '');
+  assert.equal(withSaved.named('models.roles.translation-model').value, 'think-model');
+});
+
+test('the page lists all eleven roles in a collapsed individual section and marks a missing translation', () => {
+  const page = mountFake({ models: { roles: { 'reading-editor': { mode: 'follow-main' } } } });
+  const roles = page.document.registry.find(node => node.tag === 'details' && node.children[0]?.textContent === '按角色单独设置（可选）');
+  assert.ok(roles);
+  assert.equal(roles.children.filter(child => child.tag === 'div').flatMap(child => child.children).length, 11);
+  const presentation = page.fieldset('呈现与翻译').textContent;
+  assert.ok(presentation.includes('阅读编辑：跟随主会话') && presentation.includes('翻译：未配置'));
+  assert.ok(page.fieldset('关键判断').textContent.includes('当前：未配置'));
+});
+
+test('first writing language is no longer asked and a legacy value stays labelled and importable', () => {
+  assert.ok(!fields.some(field => field.key === 'reading.source_language'));
+  assert.equal(setupPages.find(page => page.id === 'reading').title, '笔记呈现');
+  assert.ok(!setupPages.some(page => ['science', 'writers'].includes(page.id)));
+  assert.equal(setupPages.find(page => page.id === 'models').title, '角色模型');
+  assert.deepEqual(unknownConfigKeys({ schema_version: 'apa-local-config-1.0', reading: { source_language: 'en', presentation_mode: 'writer' }, models: { roles: { translation: { mode: 'follow-main' } } } }), []);
+  assert.deepEqual(unknownConfigKeys({ schema_version: 'apa-local-config-1.0', reading: { nope: 1 } }), ['reading.nope']);
+});
+
+test('importing an old backup without translation neither lists it nor clears an existing choice', () => {
+  const translation = { mode: 'explicit', model: 'think-model', reasoning_effort: 'low' };
+  const current = { schema_version: 'apa-local-config-1.0', models: { science: { mode: 'follow-main' }, roles: { translation } } };
+  const oldBackup = { schema_version: 'apa-local-config-1.0', models: { science: { mode: 'explicit', model: 'big-model' } } };
+  assert.deepEqual(configDifferences(current, oldBackup).map(item => item.key), ['models.science']);
+  assert.equal(mountFake({ models: current.models }).named('models.roles.translation-model').value, 'think-model');
+});
+
+test('the page collects a group choice through its own preview and refuses a doubly chosen role', async () => {
+  const page = mountFake({});
+  page.choose('group-presentation', { model: 'think-model', effort: 'high' });
+  const result = await page.preview();
+  const expected = { mode: 'explicit', model: 'think-model', reasoning_effort: 'high' };
+  assert.deepEqual(result.set, { 'models.roles.reading-editor': expected, 'models.roles.translation': expected });
+  page.choose('models.roles.translation', { mode: 'follow-main' });
+  const conflict = await page.preview();
+  assert.equal(conflict.set, null);
+  assert.match(conflict.message, /翻译.*二选一/);
 });

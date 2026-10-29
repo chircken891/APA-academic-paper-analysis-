@@ -208,11 +208,11 @@ for (const hostStyle of ['codex','mapped']) test(`configured reading binds and r
   const parser=join(configRoot,'mineru'), bin=join(parser,'venv',process.platform==='win32'?'Scripts':'bin'); await mkdir(bin,{recursive:true});
   await writeFile(join(bin,process.platform==='win32'?'python.exe':'python'),'synthetic'); await writeFile(join(parser,'config.yaml'),'synthetic');
   const choice=hostStyle==='mapped'?{mode:'explicit',model:'opus',reasoning_effort:'high'}:{mode:'explicit',model:'gpt-6.1-sol',reasoning_effort:'low'};
-  const config={schema_version:'apa-local-config-1.0',models:{science:choice,overrides:{},roles:Object.fromEntries(['english-writer','chinese-writer','reading-editor','independent-verifier'].map(role=>[role,{mode:'follow-main'}]))},paths:{runs:'runs',parse:'parse',candidates:'candidates'},parser:{runtime_home:parser},reading:{source_language:'en',presentation_mode:'writer'},writing_skills:Object.fromEntries(['nature-writing','nature-polishing','nature-shared','humanizer','humanizer-zh','stss'].map(key=>[key,{enabled:false}]))};
+  const config={schema_version:'apa-local-config-1.0',models:{science:choice,overrides:{},roles:Object.fromEntries(['english-writer','chinese-writer','translation','reading-editor','independent-verifier'].map(role=>[role,{mode:'follow-main'}]))},paths:{runs:'runs',parse:'parse',candidates:'candidates'},parser:{runtime_home:parser},reading:{source_language:'en',presentation_mode:'writer'},writing_skills:Object.fromEntries(['nature-writing','nature-polishing','nature-shared','humanizer','humanizer-zh','stss'].map(key=>[key,{enabled:false}]))};
   if(hostStyle==='mapped') config.host={name:'claude-code',dispatch:{tool:'Agent',model_argument:'model',effort_argument:'effort',instruction_argument:'prompt',task_name_argument:'description',fresh_context:null}};
   await writeFile(join(configRoot,'config/apa.local.json'),JSON.stringify(config));
   const old=f.options.prepared, binding=old.runControl.reading_first_binding;
-  const prepared=prepareConfiguredReading({repoRoot:configRoot,runId:'run',scientificInput:old.scientificInput,sessionContext:hostStyle==='mapped'?{model:'sonnet'}:{model:'gpt-6-astra',effort:'high'},authorizationId:'synthetic',deadline:binding.deadline,sourceLanguage:'en',taskBindings:binding.task_bindings,maxCalls:6,priorCalls:6,maxTotalCalls:12});
+  const prepared=prepareConfiguredReading({repoRoot:configRoot,runId:'run',scientificInput:old.scientificInput,sessionContext:hostStyle==='mapped'?{model:'sonnet'}:{model:'gpt-6-astra',effort:'high'},authorizationId:'synthetic',deadline:binding.deadline,sourceLanguage:'en',taskBindings:{...binding.task_bindings,'zh-CN':{...binding.task_bindings['zh-CN'],role:'translation'}},maxCalls:6,priorCalls:6,maxTotalCalls:12});
   const brokerConfig={...f.options.brokerConfig,artifact_root:prepared.paths.runRoot,run_controls:[prepared.runControl]};
   const options={...f.options,prepared,brokerConfig,statePath:join(prepared.paths.runRoot,'state.json')};
   const controller=await createScienceController(options); const [{request}]=await prepareScienceRequests({controller});
@@ -287,4 +287,28 @@ test('science instruction writes recover from interrupted temporary and publishe
   const [{role,request}]=await prepareScienceRequests({controller}); assert.equal(role,'evidence');
   assert.equal(request.instruction_file.path,join(f.root,'instructions/evidence.txt'));
   assert.equal(getScienceState(controller).next_actions[0].action,'record_dispatch_intent');
+});
+test('claude-code science observations keep the agentId from result text across restore', async t=>{
+  const f=await fixture(t), configRoot=join(f.root,'configured'); await mkdir(join(configRoot,'config'),{recursive:true});
+  const parser=join(configRoot,'mineru'), bin=join(parser,'venv',process.platform==='win32'?'Scripts':'bin'); await mkdir(bin,{recursive:true});
+  await writeFile(join(bin,process.platform==='win32'?'python.exe':'python'),'synthetic'); await writeFile(join(parser,'config.yaml'),'synthetic');
+  const resultHandle={source:'text',pattern:'agentId:\\s*([A-Za-z0-9_-]+)'};
+  const config={schema_version:'apa-local-config-1.0',models:{science:{mode:'explicit',model:'opus',reasoning_effort:'high'},overrides:{},roles:Object.fromEntries(['english-writer','chinese-writer','translation','reading-editor','independent-verifier'].map(role=>[role,{mode:'follow-main'}]))},paths:{runs:'runs',parse:'parse',candidates:'candidates'},parser:{runtime_home:parser},reading:{source_language:'en',presentation_mode:'writer'},writing_skills:Object.fromEntries(['nature-writing','nature-polishing','nature-shared','humanizer','humanizer-zh','stss'].map(key=>[key,{enabled:false}])),
+    host:{name:'claude-code',dispatch:{tool:'Agent',model_argument:'model',effort_argument:'effort',instruction_argument:'prompt',task_name_argument:'description',fresh_context:null,result_handle:resultHandle}}};
+  await writeFile(join(configRoot,'config/apa.local.json'),JSON.stringify(config));
+  const old=f.options.prepared, binding=old.runControl.reading_first_binding;
+  const prepared=prepareConfiguredReading({repoRoot:configRoot,runId:'run',scientificInput:old.scientificInput,sessionContext:{model:'sonnet'},authorizationId:'synthetic',deadline:binding.deadline,sourceLanguage:'en',taskBindings:{...binding.task_bindings,'zh-CN':{...binding.task_bindings['zh-CN'],role:'translation'}},maxCalls:6,priorCalls:6,maxTotalCalls:12});
+  const brokerConfig={...f.options.brokerConfig,artifact_root:prepared.paths.runRoot,run_controls:[prepared.runControl]};
+  const options={...f.options,prepared,brokerConfig,statePath:join(prepared.paths.runRoot,'state.json')};
+  const controller=await createScienceController(options); const [{request}]=await prepareScienceRequests({controller});
+  assert.deepEqual(request.packet.host_action_scope.result_bindings.agent_id,resultHandle);
+  await recordScienceDispatchIntent({controller,role:'evidence'}); const step=request.emittedStep;
+  const raw='Done.\nagentId: sci-evidence-1 (use SendMessage with to: sci-evidence-1 to continue this agent)';
+  const observed=await recordScienceHostObservation({controller,role:'evidence',observation:{action_id:step.action_id,run_id:'run',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:raw}});
+  assert.equal(observed.agent_id,'sci-evidence-1'); assert.equal(observed.host_task_handle_status,'extracted');
+  const restored=await restoreScienceController(options);
+  assert.equal(getScienceState(restored).roles.evidence.agent_id,'sci-evidence-1');
+  assert.equal(getScienceRequest({controller:restored,role:'evidence'}).observations[0].raw.raw_result_text,raw);
+  await recordScienceHostObservation({controller:restored,role:'evidence',observation:{kind:'host_update',action_id:step.action_id,agent_id:'sci-evidence-1',tool_call:{name:'SendMessage',arguments:{to:'sci-evidence-1'}},raw_result_text:'continued'}});
+  assert.equal(getScienceRequest({controller:restored,role:'evidence'}).host_updates.length,1);
 });

@@ -5,15 +5,17 @@ export const DEFAULT_APA_REASONING_EFFORT = 'medium';
 export const FORMAL_APA_MODELS = Object.freeze([DEFAULT_APA_MODEL, 'gpt-6-sol', 'gpt-5.6-terra']);
 
 export const APA_ROLE_MODEL_POLICY_VERSION = 'apa-role-model-policy-1.0';
-export const APA_MAIN_SESSION_ROLES = Object.freeze(['english-writer', 'chinese-writer', 'reading-editor', 'bilingual-verifier', 'independent-verifier', 'source-check', 'scientific-audit', 'post-render-verifier']);
-export const APA_VERIFIER_ROLES = Object.freeze(APA_MAIN_SESSION_ROLES.filter(role => !role.endsWith('-writer') && role !== 'reading-editor'));
+export const APA_MAIN_SESSION_ROLES = Object.freeze(['english-writer', 'chinese-writer', 'translation', 'reading-editor', 'bilingual-verifier', 'independent-verifier', 'source-check', 'scientific-audit', 'post-render-verifier']);
+export const APA_VERIFIER_ROLES = Object.freeze(APA_MAIN_SESSION_ROLES.filter(role => !role.endsWith('-writer') && role !== 'translation' && role !== 'reading-editor'));
 const executionRoles = new Set(['evidence', 'methods', 'results', 'interpretation', 'comparison', 'integration', 'scientific-reading', 'ledger', 'quantity', 'mapping']);
 const validMainSession = value => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).length === 2 && typeof value.model === 'string' && /^gpt-[a-zA-Z0-9.-]+$/.test(value.model)
   && ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(value.reasoning_effort);
 
 export const APA_CONFIGURED_MODEL_POLICY_VERSION = 'apa-configured-role-model-policy-1.0';
-export const APA_CONFIGURED_ROLES = Object.freeze(['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration', 'english-writer', 'chinese-writer', 'reading-editor', 'independent-verifier']);
+// Policies frozen before translation existed carry exactly the legacy roles; translation is optional so they stay valid.
+export const APA_CONFIGURED_ROLES = Object.freeze(['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration', 'english-writer', 'chinese-writer', 'translation', 'reading-editor', 'independent-verifier']);
+const LEGACY_CONFIGURED_ROLES = Object.freeze(APA_CONFIGURED_ROLES.filter(role => role !== 'translation'));
 // A configured model may omit reasoning_effort when its host has no such parameter.
 const validConfiguredModelPair = value => !!(value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).every(key => key === 'model' || key === 'reasoning_effort') && typeof value.model === 'string' && value.model.trim()
@@ -24,8 +26,16 @@ export const CODEX_HOST_DISPATCH = Object.freeze({ tool: 'collaboration.spawn_ag
   instruction_argument: 'message', task_name_argument: 'task_name', fresh_context: Object.freeze({ argument: 'fork_turns', value: 'none' }) });
 const dispatchKeys = ['tool', 'model_argument', 'effort_argument', 'instruction_argument', 'task_name_argument', 'fresh_context'];
 const named = value => typeof value === 'string' && value.trim().length > 0;
+// Optional: where the host's own task handle appears in a dispatch result. Profiles saved without it keep their original shape.
+const validResultHandle = handle => {
+  if (!handle || typeof handle !== 'object' || Array.isArray(handle) || Object.keys(handle).sort().join() !== 'pattern,source' || handle.source !== 'text' || !named(handle.pattern)) return false;
+  try { new RegExp(handle.pattern); } catch { return false; }
+  return true;
+};
 export function validHostDispatch(dispatch) {
-  if (!dispatch || typeof dispatch !== 'object' || Array.isArray(dispatch) || Object.keys(dispatch).sort().join() !== [...dispatchKeys].sort().join()) return false;
+  if (!dispatch || typeof dispatch !== 'object' || Array.isArray(dispatch)) return false;
+  const keys = Object.keys(dispatch).filter(key => key !== 'result_handle');
+  if (keys.sort().join() !== [...dispatchKeys].sort().join() || Object.hasOwn(dispatch, 'result_handle') && !validResultHandle(dispatch.result_handle)) return false;
   if (![dispatch.tool, dispatch.instruction_argument].every(named)
     || ![dispatch.model_argument, dispatch.effort_argument, dispatch.task_name_argument].every(value => value === null || named(value))) return false;
   // A tool that cannot choose the model runs the child on the main session's route, effort included.
@@ -34,6 +44,14 @@ export function validHostDispatch(dispatch) {
   if (fresh !== null && (!fresh || typeof fresh !== 'object' || Array.isArray(fresh) || Object.keys(fresh).sort().join() !== 'argument,value' || !named(fresh.argument))) return false;
   const used = [dispatch.model_argument, dispatch.effort_argument, dispatch.instruction_argument, dispatch.task_name_argument, fresh?.argument].filter(value => value !== null && value !== undefined);
   return new Set(used).size === used.length;
+}
+
+/** The host task handle declared by dispatch.result_handle (first capture group), or null; nothing is inferred when undeclared or absent. */
+export function extractHostTaskHandle(rawResultText, dispatch) {
+  const handle = dispatch?.result_handle;
+  if (typeof rawResultText !== 'string' || !validResultHandle(handle)) return null;
+  const value = new RegExp(handle.pattern).exec(rawResultText)?.[1];
+  return typeof value === 'string' && value.trim() ? value : null;
 }
 
 /**
@@ -82,8 +100,9 @@ export function resolveApaRoleModel(role, mainSession, policy) {
 export function validateApaRoleModelPolicy(policy) {
   if (policy?.version === APA_CONFIGURED_MODEL_POLICY_VERSION) return !!(!Array.isArray(policy) && Object.keys(policy).length === 3
     && validConfiguredModelPair(policy.main_session) && policy.roles && typeof policy.roles === 'object' && !Array.isArray(policy.roles)
-    && Object.keys(policy.roles).length === APA_CONFIGURED_ROLES.length
-    && APA_CONFIGURED_ROLES.every(role => validConfiguredModelPair(policy.roles[role])));
+    && Object.keys(policy.roles).length === LEGACY_CONFIGURED_ROLES.length + (Object.hasOwn(policy.roles, 'translation') ? 1 : 0)
+    && LEGACY_CONFIGURED_ROLES.every(role => validConfiguredModelPair(policy.roles[role]))
+    && (!Object.hasOwn(policy.roles, 'translation') || validConfiguredModelPair(policy.roles.translation)));
   return !!(policy && typeof policy === 'object' && !Array.isArray(policy) && Object.keys(policy).length === 2
     && policy.version === APA_ROLE_MODEL_POLICY_VERSION && validMainSession(policy.main_session));
 }

@@ -7,10 +7,10 @@ import { checkMineruRuntime as publicCheckMineruRuntime } from '../lib/mineru-ru
 import { advanceRun as controlledAdvanceRun, resumeRun as controlledResumeRun } from './workflow-orchestrator.mjs';
 import { getRunControlForDispatch } from './owned-artifact-store.mjs';
 import { recordEvidenceCase, validateEvaluationApprovalPacket } from './phase21-evaluation-driver.mjs';
-import { DEFAULT_APA_REASONING_EFFORT, APA_VERIFIER_ROLES, resolveApaRoleModel, validateApaRoleModelPolicy, hostDispatchArgumentsMatch, validHostDispatch } from '../apa-model-policy.mjs';
+import { DEFAULT_APA_REASONING_EFFORT, APA_VERIFIER_ROLES, resolveApaRoleModel, validateApaRoleModelPolicy, hostDispatchArgumentsMatch, validHostDispatch, extractHostTaskHandle } from '../apa-model-policy.mjs';
 
 const READING_FIRST_ROLE_ORDER = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'];
-const READING_FIRST_HOST_ROLES = [...READING_FIRST_ROLE_ORDER, 'comparison', 'ledger', 'english-writer', 'chinese-writer', 'reading-editor', 'independent-verifier'];
+const READING_FIRST_HOST_ROLES = [...READING_FIRST_ROLE_ORDER, 'comparison', 'ledger', 'english-writer', 'chinese-writer', 'translation', 'reading-editor', 'independent-verifier'];
 const ROLE_ORDER = ['source-check', 'evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'comparison', 'integration', 'ledger'];
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const p20 = () => ({ source_rule_binding: 'unverified', initial_delivery_binding: 'unverified', continuation_delivery_binding: 'unverified' });
@@ -109,7 +109,8 @@ function validateDispatchedHostScope(packet) {
     || dispatch.task_name_argument && (typeof args[dispatch.task_name_argument] !== 'string' || !/^[a-z0-9_]+$/.test(args[dispatch.task_name_argument]))) fail('HOST_ARGUMENTS_INVALID');
   if (hash(Buffer.from(message)) !== packet.instruction_fingerprint) fail('HOST_INSTRUCTION_FINGERPRINT_MISMATCH');
   validateHostScopeLimits(packet);
-  if (scope.result_bindings?.agent_id !== null) fail('HOST_RESULT_BINDING_REQUIRED');
+  // The binding mirrors the saved dispatch: its declared result handle, or null when the host declares none.
+  if (!same(scope.result_bindings?.agent_id, dispatch.result_handle ?? null)) fail('HOST_RESULT_BINDING_REQUIRED');
 }
 
 function validateHostScopeLimits(packet) {
@@ -271,15 +272,18 @@ export function ingestObservedRunStep({ packet, emittedStep, observation, store,
       && observation?.input_fingerprint === expectedFingerprint && observation?.port === approved.backend.identity
       && same(observation?.tool_call, { name: emittedStep.action, arguments: emittedStep.arguments });
     const raw = typeof observation?.raw_result_text === 'string' ? observation.raw_result_text : null;
-    const idPath = approved.host_action_scope.result_bindings.agent_id;
+    const resultHandle = approved.host_action_scope.dispatch?.result_handle;
+    const idPath = resultHandle ? null : approved.host_action_scope.result_bindings.agent_id;
     const returnedId = raw && idPath ? observedAgentId(raw, idPath) : null;
     const continuation = approved.host_action_scope.action === 'collaboration.followup_task';
     // A returned empty string is observable; an absent return is not. Spawn still needs an identity.
     const hasReturn = raw !== null && (continuation || raw.trim().length > 0);
+    // A declared result handle yields the real host task handle or null; it is never replaced by the Controller's action id.
+    const hostHandle = resultHandle && hasReturn ? extractHostTaskHandle(raw, approved.host_action_scope.dispatch) : null;
     // Hosts whose return carries no parseable id are correlated by the Controller's own action id.
-    const agentId = continuation ? previousObservation.agent_id : idPath ? returnedId : hasReturn ? emittedStep?.action_id ?? null : null;
+    const agentId = continuation ? previousObservation.agent_id : resultHandle ? hostHandle : idPath ? returnedId : hasReturn ? emittedStep?.action_id ?? null : null;
     const reason = !matching ? 'EMITTED_STEP_PACKET_SCOPE_MISMATCH' : !correlated ? 'OBSERVATION_CORRELATION_MISMATCH'
-      : !hasReturn ? 'HOST_RAW_RESULT_REQUIRED' : !agentId ? 'HOST_AGENT_ID_UNAVAILABLE'
+      : !hasReturn ? 'HOST_RAW_RESULT_REQUIRED' : !agentId && !resultHandle ? 'HOST_AGENT_ID_UNAVAILABLE'
         : continuation && returnedId && returnedId !== agentId ? 'HOST_AGENT_ID_MISMATCH' : null;
     const result = {
       status: reason ? 'blocked' : 'observed', blocked_reason: reason, observed_at: now,
@@ -287,7 +291,9 @@ export function ingestObservedRunStep({ packet, emittedStep, observation, store,
       run_id: approved.run_id, user_approval_id: approved.user_approval_id, input_fingerprint: expectedFingerprint,
       source: structuredClone(approved.source),
       port: approved.backend.identity, role: approved.host_action_scope.role, output_path: approved.host_action_scope.output_path,
-      agent_id: reason ? null : agentId, tool_call: structuredClone(observation?.tool_call ?? null),
+      agent_id: reason ? null : agentId,
+      ...(resultHandle ? { host_task_handle_status: reason ? 'not_observed' : hostHandle ? 'extracted' : 'not_found_in_result_text' } : {}),
+      tool_call: structuredClone(observation?.tool_call ?? null),
       raw_result_text: raw, raw_result_sha256: raw !== null ? hash(Buffer.from(raw)) : null,
       evidence_tier: approved.intended_evidence_tier, execution_status: 'not_verified',
       correlation_basis: 'operator_recorded_not_platform_attested',

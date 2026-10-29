@@ -1,4 +1,6 @@
 // Read-only interpretation of the current agent's evidence. Never invokes a host or applies settings.
+import { inspectAchievement, inspectAdapters } from './apa-host-achievement.mjs';
+
 const checks = [
   ['on_demand_reading', '按需读取', '核对文件读取工具与技能入口；实际运行时检查是否只读取所需范围。'],
   ['delegated_diagnostics', '子代理排查', '核对当前派发工具、独立上下文及返回方式；真实派发另行验证。'],
@@ -49,7 +51,8 @@ function inspectThreshold(row, input) {
   row.limitations.push('计算只使用档案报告的上限；宿主公式、取整与 token 口径须另行核对，实际自动触发仍未验证。');
 }
 
-export function inspectHostCapabilities(config, profile) {
+export function inspectHostCapabilities(config, profile, repoRoot = process.cwd()) {
+  const adapters = inspectAdapters(repoRoot, profile);
   const rows = checks.map(([id, label, nextCheck]) => {
     const input = profile?.capabilities?.[id];
     const row = {
@@ -75,7 +78,10 @@ export function inspectHostCapabilities(config, profile) {
       limited(row);
       if (input?.recovery) row.recovery = structuredClone(input.recovery);
       row.limitations.push('本地状态恢复仅覆盖 Controller 进程退出且原宿主仍可访问；不会自动查询或等待宿主任务。');
-      if (config.host) {
+      if (config.host?.dispatch?.result_handle) {
+        row.limitations.push('当前已配置 host 的请求按 dispatch.result_handle 从结果文本提取真实任务句柄；提取不到时记为 null 并在观察记录说明，实际续接尚未在真实运行中验证。');
+        row.evidence.push({ source: 'local-code', reference: 'scripts/apa-model-policy.mjs:extractHostTaskHandle; scripts/v3/phase21-runner.mjs:ingestObservedRunStep' });
+      } else if (config.host) {
         row.status = 'blocked';
         row.limitations.push('当前已配置 host 的请求将 result_bindings.agent_id 设为 null；本地 action_id 不等于可查询的真实宿主任务句柄，自动续接适配尚未完成。');
         row.evidence.push({ source: 'local-code', reference: 'scripts/v3/configured-reading.mjs:createConfiguredScienceRequest; scripts/v3/phase21-runner.mjs:ingestObservedRunStep' });
@@ -84,7 +90,10 @@ export function inspectHostCapabilities(config, profile) {
       }
     }
     if (id === 'threshold_compaction') inspectThreshold(row, input?.threshold);
+    if (id === 'on_demand_reading') row.apa_support = ['APA Controller 要求按需读取所需范围。'];
+    if (id === 'concise_replies') row.apa_support = ['配置化运行使用 role-reply-1.0 短回执合同。'];
+    row.achievement = inspectAchievement(row, input, config, profile, adapters);
     return row;
   });
-  return { host: profile?.host ?? null, detected_at: profile?.detected_at ?? null, runtime_validation: 'not_run', checks: rows };
+  return { host: profile?.host ?? null, detected_at: profile?.detected_at ?? null, runtime_validation: 'not_run', adapters, checks: rows };
 }

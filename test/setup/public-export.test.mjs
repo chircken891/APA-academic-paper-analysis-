@@ -75,9 +75,17 @@ test('relative imports, schema refs and required local Markdown links must close
 
 test('unsafe allowlist paths and private source selections are refused', async t => {
   const f = await fixture(t);
-  for (const path of ['../secret', '.git/config', 'config/apa.local.json', 'Raw/paper.pdf']) {
+  for (const path of ['../secret', '.git/config', 'config/apa.local.json', 'config/backups/example-owner/adapters/example-patch/entry.mjs', 'config/backups/claude/claude.json', 'Raw/paper.pdf']) {
     await assert.rejects(exportPublicApa({ ...f, allowlist: { ...f.allowlist, files: [path] } }), /UNSAFE_PATH|PRIVATE_PATH/);
   }
+});
+
+test('public export refuses private backup directory as a directory or template target', async t => {
+  const f = await fixture(t);
+  for (const allowlist of [
+    { ...f.allowlist, directories: [...f.allowlist.directories, 'config/backups'] },
+    { ...f.allowlist, templates: [{ path: 'config/backups/claude/snapshot.json', source: 'entry.mjs' }] },
+  ]) await assert.rejects(exportPublicApa({ ...f, allowlist }), /PRIVATE_PATH/);
 });
 
 test('export package runs only the declared synthetic suites and leaves source package unchanged', async t => {
@@ -104,9 +112,9 @@ test('current public export includes query and topic entries with their regressi
     '.agents/skills/apa-query/references/contracts-and-tools.md', '.agents/skills/apa-query/references/writing.md',
     '.agents/skills/apa-query/references/configuration.md',
     'scripts/apa-query.mjs', 'scripts/v3/library-query.mjs',
-    'prompts/v3/role-reply-1.0.md', 'scripts/v3/role-reply-contract.mjs',
+    'prompts/v3/role-reply-1.0.md', 'prompts/v3/science-index-1.0.md', 'prompts/v3/translation-1.0.md', 'scripts/v3/role-reply-contract.mjs',
     'scripts/v3/science-controller.mjs', 'test/v3/science-controller.test.mjs',
-    'scripts/lib/apa-host-capabilities.mjs', 'test/setup/apa-host-capabilities.test.mjs',
+    'scripts/lib/apa-host-capabilities.mjs', 'scripts/lib/apa-host-achievement.mjs', 'test/setup/apa-host-capabilities.test.mjs',
     'test/v3/library-query.test.mjs', 'test/v3/library-query-cli.test.mjs',
     'test/v3/library-query-request.test.mjs', 'test/v3/library-query-request-cli.test.mjs',
     'scripts/v3/topic-library.mjs', 'scripts/v3/topic-publication.mjs', 'Schema/phase24/topic.schema.json',
@@ -126,6 +134,7 @@ test('current public export includes query and topic entries with their regressi
   assert.match(pkg.scripts.test, /test\/v3\/science-controller\.test\.mjs/);
   assert.match(pkg.scripts.test, /test\/setup\/apa-host-capabilities\.test\.mjs/);
   assert.equal(paths.has('config/apa.local.json'), false);
+  assert.equal([...paths].some(path => path.startsWith('config/backups/')), false);
   assert.equal([...paths].some(path => /^(?:Eval\/|\.planning\/|\.apa-v3\/)/.test(path)), false);
   for (const path of [...paths].filter(path => path.startsWith('Wiki/'))) {
     assert.match(path, /\/\.gitkeep$/);

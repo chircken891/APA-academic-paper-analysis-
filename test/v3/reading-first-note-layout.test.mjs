@@ -72,7 +72,7 @@ test('layout requires a supported source language and rejects unsafe translation
 for (const sourceLanguage of ['en', 'zh-CN', 'legacy']) test(`${sourceLanguage} frozen layout survives runtime checkpoint and publication recipe reload`, async t => {
   const fixture = await reviewedReadingFirstFixture(t, {
     controlOptions: { sourceLanguage: sourceLanguage === 'legacy' ? 'en' : sourceLanguage },
-    ...(sourceLanguage === 'legacy' ? { createRunControl: args => {
+    ...(sourceLanguage === 'legacy' ? { translationLanguage: null, createRunControl: args => {
       const control = structuredClone(createReadingFirstRunControl(args));
       delete control.reading_first_binding.note_layout;
       return control;

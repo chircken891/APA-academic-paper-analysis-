@@ -7,7 +7,7 @@ import { inspectHostCapabilities } from './apa-host-capabilities.mjs';
 
 export const APA_CONFIG_VERSION = 'apa-local-config-1.0';
 export const APA_SCIENCE_ROLES = Object.freeze(['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration']);
-export const APA_CONFIG_ROLES = Object.freeze(['english-writer', 'chinese-writer', 'reading-editor', 'independent-verifier']);
+export const APA_CONFIG_ROLES = Object.freeze(['english-writer', 'chinese-writer', 'translation', 'reading-editor', 'independent-verifier']);
 export const APA_WRITING_SKILLS = Object.freeze(['nature-writing', 'nature-polishing', 'nature-shared', 'humanizer', 'humanizer-zh', 'stss']);
 const schemaPath = fileURLToPath(new URL('../../Schema/config/apa-config.schema.json', import.meta.url));
 const configSchema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
@@ -44,7 +44,7 @@ export function validateApaConfig(config, { repoRoot = process.cwd(), complete =
     ? modelChoiceEntries(config).filter(([key, choice]) => choice?.mode === 'explicit' && (capability === 'reading' || key === 'models.query')).map(([key]) => `${key} requires follow-main: host ${config.host.name} cannot select the model`)
     : [];
   if (capability === 'query') return { valid: errors.length === 0, complete: errors.length === 0 && conflicts.length === 0, errors, missing, conflicts };
-  for (const key of ['models.science', ...APA_CONFIG_ROLES.map(role => `models.roles.${role}`), 'paths.runs', 'paths.parse', 'paths.candidates', 'parser.runtime_home', 'reading.source_language', 'reading.presentation_mode', ...APA_WRITING_SKILLS.map(skill => `writing_skills.${skill}.enabled`)]) {
+  for (const key of ['models.science', ...APA_CONFIG_ROLES.map(role => `models.roles.${role}`), 'paths.runs', 'paths.parse', 'paths.candidates', 'parser.runtime_home', 'reading.presentation_mode', ...APA_WRITING_SKILLS.map(skill => `writing_skills.${skill}.enabled`)]) {
     if (get(config, key) === undefined) missing.push(key);
   }
   for (const key of APA_WRITING_SKILLS) if (config?.writing_skills?.[key]?.enabled && !config.writing_skills[key].path) missing.push(`writing_skills.${key}.path`);
@@ -91,8 +91,13 @@ function merge(target, source) {
 }
 
 export function applyApaConfigOperation({ repoRoot = process.cwd(), operation }) {
-  const allowed = ['schema_version', 'base_fingerprint', 'action', 'set', 'remove', 'all', 'answers'];
+  const allowed = ['schema_version', 'base_fingerprint', 'repo_root', 'action', 'set', 'remove', 'all', 'answers'];
   if (!operation || Object.keys(operation).some(key => !allowed.includes(key)) || operation.schema_version !== 'apa-config-operation-1.0' || !['patch', 'remove', 'import'].includes(operation.action)) throw error('APA_CONFIG_OPERATION_INVALID');
+  // Page operations carry the project folder the user confirmed; applying them to another checkout is refused.
+  if (operation.repo_root !== undefined) {
+    const same = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+    if (typeof operation.repo_root !== 'string' || !path.isAbsolute(operation.repo_root) || !same(path.resolve(operation.repo_root), path.resolve(repoRoot))) throw error('APA_CONFIG_REPO_MISMATCH');
+  }
   const snapshot = loadApaConfig({ repoRoot });
   if (operation.base_fingerprint !== snapshot.fingerprint) throw error('APA_CONFIG_STALE');
   let config = clone(snapshot.config);
@@ -159,7 +164,7 @@ export function inspectApaConfig({ repoRoot = process.cwd(), capability = 'readi
   if (hostProfile) validateHostProfile(hostProfile);
   const snapshot = loadApaConfig({ repoRoot });
   const validation = validateApaConfig(snapshot.config, { repoRoot, capability });
-  const hostCheck = { capability_check: inspectHostCapabilities(snapshot.config, hostProfile), ...(hostProfile ? { host_check: checkHostProfile(snapshot.config, hostProfile, capability) } : {}) };
+  const hostCheck = { capability_check: inspectHostCapabilities(snapshot.config, hostProfile, repoRoot), ...(hostProfile ? { host_check: checkHostProfile(snapshot.config, hostProfile, capability) } : {}) };
   if (capability === 'query') return { ...snapshot, capability, validation, dependencies: [], ready: validation.complete, model_availability: 'not_checked', ...hostCheck };
   const dependencies = [];
   const inspect = (key, value, kind) => {

@@ -6,9 +6,11 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { exportPublicApa } from '../../scripts/setup/export-public-apa.mjs';
-import { prepareConfiguredReading, createConfiguredScienceRequest, getConfiguredReadingDispatchArguments, materializeConfiguredReadingCandidate } from '../../scripts/v3/configured-reading.mjs';
+import { inspectApaConfig } from '../../scripts/lib/apa-config.mjs';
+import { prepareConfiguredReading,createConfiguredScienceRequest, getConfiguredReadingDispatchArguments, materializeConfiguredReadingCandidate } from '../../scripts/v3/configured-reading.mjs';
 import { reviewedReadingFirstFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
 import { commitOwnedArtifact } from '../../scripts/v3/owned-artifact-store.mjs';
+import { ingestObservedRunStep } from '../../scripts/v3/phase21-runner.mjs';
 import { createReadingFirstRevisionRequests, createReadingFirstPresentationRequest, createReadingFirstReviewRequest, renderReadingFirstNotes, fingerprintReadingFirst, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, getReadingFirstState } from '../../scripts/v3/reading-first-runtime.mjs';
 import { readingFirstPublicationFixture, applyReadingFirstFixture } from './helpers/reading-first-publication-fixtures.mjs';
 import { readingFirstIndexFixture } from './helpers/reading-first-index-fixtures.mjs';
@@ -25,7 +27,7 @@ async function configuredRepo(t, enabled = false) {
   await writeFile(guide, 'ENGLISH_OPTIONAL_GUIDANCE: explain concrete actions.');
   const choice = { mode: 'explicit', model: 'gpt-6.1-sol', reasoning_effort: 'low' };
   const config = { schema_version: 'apa-local-config-1.0', models: { science: choice, overrides: { results: { ...choice, reasoning_effort: 'high' } },
-    roles: Object.fromEntries(['english-writer','chinese-writer','reading-editor','independent-verifier'].map(role => [role, choice])) },
+    roles: Object.fromEntries(['english-writer','chinese-writer','translation','reading-editor','independent-verifier'].map(role => [role, choice])) },
     paths: { runs: '.tmp/runs', parse: '.tmp/parse', candidates: '.tmp/candidates' }, parser: { runtime_home: join(root, 'mineru') },
     reading: { source_language: 'zh-CN', presentation_mode: 'reading-editor' },
     writing_skills: Object.fromEntries(['nature-writing','nature-polishing','nature-shared','humanizer','humanizer-zh','stss'].map(key => [key, { enabled: enabled && key === 'humanizer', ...(enabled && key === 'humanizer' ? { path: guide } : {}) }])) };
@@ -291,6 +293,15 @@ test('session context supplies the main pair and rejects a conflicting explicit 
     sessionContext: { ...sessionContext, reasoning_effort: 'medium' } }), /APA_CONFIGURED_SESSION_CONTEXT_INVALID/);
 });
 
+test('configured runs freeze the science index handoff profile', async t => {
+  const { root } = await configuredRepo(t);
+  const runId = 'run_' + '2'.repeat(32);
+  let options;
+  await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId,
+    createRunControl: input => { options = input; return prepareConfiguredReading({ ...input, repoRoot: root }).runControl; } });
+  assert.equal(prepareConfiguredReading({ ...options, repoRoot: root }).runControl.reading_first_binding.handoff_profile, 'science-index-1.0');
+});
+
 test('science instruction retry reuses identical bytes and rejects conflicting content without overwriting', async t => {
   const { root } = await configuredRepo(t);
   let prepared;
@@ -332,7 +343,7 @@ test('dispatch arguments preserve emitted model and task and reject packet or st
     task: { task_name: 'configured_evidence', native_path: 'native/evidence-new.json', instruction_path: 'instructions/science-new.txt' } });
   const entries = snapshotReadingFirstRuntime(fixture.controller).state.request_entries;
   const requests = [science, ...entries.map(entry => entry.request)];
-  assert.deepEqual(new Set(entries.map(entry => entry.request.packet.host_action_scope.role)), new Set(['english-writer', 'chinese-writer', 'reading-editor', 'independent-verifier']));
+  assert.deepEqual(new Set(entries.map(entry => entry.request.packet.host_action_scope.role)), new Set(['english-writer', 'translation', 'reading-editor', 'independent-verifier']));
   for (const request of requests) {
     const actual = getConfiguredReadingDispatchArguments({ prepared, request });
     assert.deepEqual(actual, request.emittedStep.arguments);
@@ -378,22 +389,81 @@ test('new configured reading requires the actual paper language instead of infer
   }
 });
 
-for (const [sourceLanguage, firstWritingLanguage, digit] of [['en', 'zh-CN', '7'], ['zh-CN', 'en', '8']]) {
-  test(`${sourceLanguage} original keeps source-note routing when ${firstWritingLanguage} is written first`, async t => {
+test('configured runs use the paper source language and the translation model', async t => {
+  const { root, config } = await configuredRepo(t);
+  config.models.roles.translation = { mode: 'explicit', model: 'gpt-6.1-sol', reasoning_effort: 'high' };
+  await writeFile(join(root, 'config/apa.local.json'), JSON.stringify(config));
+  let prepared;
+  const runId = 'run_' + '5'.repeat(32);
+  const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId,
+    createRunControl: options => { prepared = prepareConfiguredReading({ ...options, repoRoot: root, sourceLanguage: 'en' }); return prepared.runControl; } });
+  const binding = prepared.runControl.reading_first_binding;
+  assert.equal(binding.writing_mode, 'source-translation');
+  assert.equal(binding.translation_profile, 'translation-1.0');
+  assert.equal(binding.first_writing_language, 'en');
+  assert.equal(fixture.created.requests[0].language, 'en');
+  assert.equal(fixture.created.requests[0].packet.host_action_scope.role, 'english-writer');
+  const translation = snapshotReadingFirstRuntime(fixture.controller).state.request_entries.find(entry => entry.key === 'zh-CN').request;
+  assert.equal(translation.packet.host_action_scope.role, 'translation');
+  assert.equal(translation.packet.requested_model, 'gpt-6.1-sol');
+  assert.equal(translation.emittedStep.arguments.reasoning_effort, 'high');
+});
+
+test('translation task keys must declare the translation role or leave it absent', async t => {
+  const { root } = await configuredRepo(t);
+  const runId = 'run_' + 'b'.repeat(32);
+  let seen;
+  const withRoles = (taskBindings, keys, role) => Object.fromEntries(Object.entries(taskBindings).map(([key, task]) => {
+    if (!keys.includes(key)) return [key, task];
+    const { role: _dropped, ...rest } = task;
+    return [key, role === undefined ? rest : { ...rest, role }];
+  }));
+  const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId,
+    createRunControl: options => {
+      // A conflicting role on a translation key fails before any run control is created.
+      for (const [keys, conflict] of [[['zh-CN'], 'chinese-writer'], [['zh-CN-r2'], 'english-writer']]) {
+        assert.throws(() => prepareConfiguredReading({ ...options, repoRoot: root, taskBindings: withRoles(options.taskBindings, keys, conflict) }), /READING_FIRST_TRANSLATION_ROLE_REQUIRED/);
+      }
+      // An absent role is filled with translation.
+      seen = prepareConfiguredReading({ ...options, repoRoot: root, taskBindings: withRoles(options.taskBindings, ['zh-CN', 'zh-CN-r2'], undefined) }).runControl;
+      return prepareConfiguredReading({ ...options, repoRoot: root }).runControl;
+    } });
+  assert.equal(seen.reading_first_binding.task_bindings['zh-CN'].role, 'translation');
+  assert.equal(seen.reading_first_binding.task_bindings['zh-CN-r2'].role, 'translation');
+  assert.equal(fixture.binding.task_bindings['zh-CN'].role, 'translation');
+});
+
+test('configs without reading.source_language are complete', async t => {
+  const { root, config } = await configuredRepo(t);
+  delete config.reading.source_language;
+  await writeFile(join(root, 'config/apa.local.json'), JSON.stringify(config));
+  const loaded = inspectApaConfig({ repoRoot: root });
+  assert.equal(loaded.validation.complete, true, JSON.stringify(loaded.validation));
+  assert.deepEqual(loaded.validation.missing, []);
+  const runId = 'run_' + '6'.repeat(32);
+  const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId, sourceLanguage: 'zh-CN',
+    createRunControl: options => prepareConfiguredReading({ ...options, repoRoot: root, sourceLanguage: 'zh-CN' }).runControl });
+  assert.equal(fixture.binding.first_writing_language, 'zh-CN');
+  assert.equal(fixture.created.requests[0].language, 'zh-CN');
+});
+
+for (const [sourceLanguage, translationLanguage, digit] of [['en', 'zh-CN', '7'], ['zh-CN', 'en', '8']]) {
+  test(`${sourceLanguage} original is written first, then translated into ${translationLanguage}, with source-note routing`, async t => {
     const { root, config } = await configuredRepo(t);
-    config.reading.source_language = firstWritingLanguage;
+    config.reading.source_language = translationLanguage;
     await writeFile(join(root, 'config/apa.local.json'), JSON.stringify(config));
     let prepared;
     const runId = 'run_' + digit.repeat(32);
-    const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId,
+    const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId, sourceLanguage,
       createRunControl: options => {
         prepared = prepareConfiguredReading({ ...options, repoRoot: root, sourceLanguage });
         return prepared.runControl;
       } });
-    assert.equal(fixture.created.requests[0].language, firstWritingLanguage);
+    assert.equal(fixture.created.requests[0].language, sourceLanguage);
     const checkpoint = snapshotReadingFirstRuntime(fixture.controller);
-    const counterpart = checkpoint.state.request_entries.find(entry => ['en', 'zh-CN'].includes(entry.key) && entry.key !== firstWritingLanguage);
-    assert.equal(counterpart.payload.source_view.language, firstWritingLanguage);
+    const counterpart = checkpoint.state.request_entries.find(entry => ['en', 'zh-CN'].includes(entry.key) && entry.key !== sourceLanguage);
+    assert.equal(counterpart.request.packet.host_action_scope.role, 'translation');
+    assert.equal(counterpart.payload.source_view.language, sourceLanguage);
     for (const note of fixture.candidate.notes) {
       assert.ok(note.path.startsWith(note.language === sourceLanguage ? 'Wiki/sources/' : 'Wiki/translations/'), note.path);
     }
@@ -404,25 +474,114 @@ for (const [sourceLanguage, firstWritingLanguage, digit] of [['en', 'zh-CN', '7'
   });
 }
 
-test('local repair follows the first-written view even when the paper source language differs', async t => {
+for (const [sourceLanguage, translationLanguage, digit] of [['en', 'zh-CN', 'a'], ['zh-CN', 'en', 'c']]) {
+  test(`configured ${sourceLanguage} Writer, ${translationLanguage} Translation and Editor receive consistent figure and role instructions`, async t => {
+    const { root } = await configuredRepo(t, true);
+    let prepared;
+    const runId = 'run_' + digit.repeat(32);
+    const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId, sourceLanguage,
+      createRunControl: options => {
+        prepared = prepareConfiguredReading({ ...options, repoRoot: root, sourceLanguage });
+        return prepared.runControl;
+      } });
+    const checkpoint = snapshotReadingFirstRuntime(fixture.controller);
+    const entries = checkpoint.state.request_entries;
+    const requestFor = key => entries.find(entry => entry.key === key).request;
+    const writer = requestFor(sourceLanguage), translation = requestFor(translationLanguage), editor = requestFor('presentation');
+    assert.equal(writer.packet.host_action_scope.role, sourceLanguage === 'en' ? 'english-writer' : 'chinese-writer');
+    assert.equal(translation.packet.host_action_scope.role, 'translation');
+    assert.equal(editor.packet.host_action_scope.role, 'reading-editor');
+    for (const request of [writer, translation, editor]) {
+      const instruction = request.emittedStep.arguments.message;
+      assert.match(instruction, /source-language Writer and Translation/);
+      assert.match(instruction, /without a label such as "Reading note"/);
+      assert.doesNotMatch(instruction, /both accepted Writer outputs|both real Writer outputs/);
+      assert.doesNotMatch(instruction, /separate paragraph labelled \*\*Reading note\*\*|另写为 \*\*阅读说明\*\*/);
+    }
+    const writerInstruction = writer.emittedStep.arguments.message;
+    assert.match(writerInstruction, sourceLanguage === 'en' ? /complete source caption.*original wording/ : /完整原图注.*原文/);
+    assert.doesNotMatch(writerInstruction, /original English wording|忠实翻译完整原文及注释/);
+    assert.equal(writerInstruction.includes('ENGLISH_OPTIONAL_GUIDANCE'), sourceLanguage === 'en');
+    assert.equal(translation.emittedStep.arguments.message.includes('ENGLISH_OPTIONAL_GUIDANCE'), translationLanguage === 'en');
+    assert.doesNotMatch(editor.emittedStep.arguments.message, /ENGLISH_OPTIONAL_GUIDANCE/);
+    assert.equal(JSON.parse(translation.emittedStep.arguments.message.split('\n\n').at(-1)).source_view.language, sourceLanguage);
+    for (const role of ['evidence', 'methods', 'results', 'integration']) {
+      const request = createConfiguredScienceRequest({ prepared, role, dispatchContext: fixture.broker.dispatchContext,
+        task: { task_name: 'current_' + role, native_path: 'native/current-' + role + '.json' } });
+      const instruction = request.emittedStep.arguments.message;
+      assert.match(instruction, /source-language Writer.*Translation/);
+      assert.doesNotMatch(instruction, /Both Writers receive|both real Writer outputs|both Writers|both writers/);
+      assert.doesNotMatch(instruction, /English uses the original wording and Chinese a faithful translation/);
+      if (role === 'results') assert.match(instruction, /source language.*faithful translation/i);
+    }
+  });
+}
+
+test('a previously frozen configured contract is reused byte for byte after restore', async t => {
+  const { root, config } = await configuredRepo(t);
+  const contractPath = fileURLToPath(new URL('../../prompts/v3/reading-first-contracts.md', import.meta.url));
+  const prompt = await readFile(contractPath, 'utf8');
+  const originalSections = Object.fromEntries([...prompt.matchAll(/^## (.+)\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/gm)].map(match => [match[1], match[2].trim()]));
+  const oldSections = {
+    common: originalSections['Common data contract'],
+    english: originalSections['English Writer'].split(/\r?\n\r?\n/).filter(paragraph => !/Nature Skills|Apply Humanizer|Apply stss|采用 Humanizer-zh|用 stss/.test(paragraph)).join('\n\n'),
+  };
+  const runId = 'run_' + 'd'.repeat(32), artifactRoot = join(root, '.tmp/runs', runId);
+  let oldPrepared;
+  const fixture = await reviewedReadingFirstFixture(t, { artifactRoot, runId,
+    createRunControl: options => {
+      const prepared = prepareConfiguredReading({ ...options, repoRoot: root });
+      const control = structuredClone(prepared.runControl);
+      control.reading_first_binding.configured_setup.sections['Common data contract'] = oldSections.common;
+      control.reading_first_binding.configured_setup.sections['English Writer'] = oldSections.english;
+      delete control.reading_first_binding.configured_setup.science_sections;
+      oldPrepared = { ...prepared, runControl: control };
+      return control;
+    } });
+  const checkpoint = snapshotReadingFirstRuntime(fixture.controller);
+  const writer = checkpoint.state.request_entries.find(entry => entry.key === 'en').request.emittedStep.arguments.message;
+  assert.ok(writer.includes(oldSections.common));
+  assert.ok(writer.includes(oldSections.english));
+  const legacyScience = createConfiguredScienceRequest({ prepared: oldPrepared, role: 'evidence', dispatchContext: fixture.broker.dispatchContext,
+    task: { task_name: 'legacy_evidence', native_path: 'native/legacy-evidence.json' } });
+  assert.match(legacyScience.emittedStep.arguments.message, /reconciles their identities and content for the Writers/);
+  const receipt = await commitOwnedArtifact({ artifactRoot, dispatchContext: fixture.broker.dispatchContext,
+    capability: fixture.broker.issueCapability({ runId, actorId: 'controller', role: 'control', artifactPath: 'checkpoint.json', revision: '1' }),
+    artifact: { artifact_id: 'checkpoint', content: JSON.stringify(checkpoint) }, expectedRevision: '1' });
+  config.reading.presentation_mode = 'writer';
+  await writeFile(join(root, 'config/apa.local.json'), JSON.stringify(config));
+  const restored = await restoreReadingFirstRuntime({ handoff: fixture.handoff, runControl: fixture.runControl, checkpointReceipt: receipt });
+  assert.equal(restored.ok, true, JSON.stringify(restored.errors));
+  const restoredWriter = snapshotReadingFirstRuntime(restored.controller).state.request_entries.find(entry => entry.key === 'en').request.emittedStep.arguments.message;
+  assert.equal(restoredWriter, writer);
+  assert.equal(await readFile(contractPath, 'utf8'), prompt);
+});
+
+test('local repair revises the source draft first and then retranslates it, while a translation-only issue skips the source', async t => {
   const { root, config } = await configuredRepo(t);
   config.reading.presentation_mode = 'writer';
   await writeFile(join(root, 'config/apa.local.json'), JSON.stringify(config));
-  const runId = 'run_' + '9'.repeat(32);
-  const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId,
+  const review = affected => ({ overall: { complete: true, coherent: true, bilingual_consistent: true }, key_nodes: [
+    { kind: 'main_conclusion', location: 'findings', finding: 'A supported finding.' },
+    { kind: 'key_design', location: 'design', finding: 'A supported design.' },
+  ], issues: [{ severity: 'material', kind: 'content', repair_owner: 'writer', affected_languages: affected, detail: 'Clarify the method.' }], scope: 'Synthetic local repair routing.' });
+  const build = (digit, affected) => reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', 'run_' + digit.repeat(32)), runId: 'run_' + digit.repeat(32),
     createRunControl: options => prepareConfiguredReading({ ...options, repoRoot: root, sourceLanguage: 'en', maxCalls: 6,
       taskBindings: Object.fromEntries(Object.entries(options.taskBindings).filter(([key]) => !key.startsWith('presentation'))) }).runControl,
-    review: { overall: { complete: true, coherent: true, bilingual_consistent: true }, key_nodes: [
-      { kind: 'main_conclusion', location: 'findings', finding: 'A supported finding.' },
-      { kind: 'key_design', location: 'design', finding: 'A supported design.' },
-    ], issues: [{ severity: 'material', kind: 'content', repair_owner: 'writer', affected_languages: ['zh-CN'], detail: 'Clarify the method in the first-written account.' }], scope: 'Synthetic local repair routing.' },
-  });
-  const first = createReadingFirstRevisionRequests({ controller: fixture.controller });
-  assert.deepEqual(first.map(request => request.language), ['zh-CN']);
-  await fixture.complete(first[0], fixture.views.find(view => view.language === 'zh-CN'));
-  const counterpart = createReadingFirstRevisionRequests({ controller: fixture.controller });
-  assert.deepEqual(counterpart.map(request => request.language), ['en']);
-  assert.equal(JSON.parse(counterpart[0].emittedStep.arguments.message.split('\n\n').at(-1)).source_view.language, 'zh-CN');
+    review: review(affected) });
+  const sourceIssue = await build('9', ['en']);
+  const first = createReadingFirstRevisionRequests({ controller: sourceIssue.controller });
+  assert.deepEqual(first.map(request => request.language), ['en']);
+  assert.throws(() => createReadingFirstRevisionRequests({ controller: sourceIssue.controller }), /READING_FIRST_SOURCE_DRAFT_PENDING/);
+  await sourceIssue.complete(first[0], sourceIssue.views.find(view => view.language === 'en'));
+  const counterpart = createReadingFirstRevisionRequests({ controller: sourceIssue.controller });
+  assert.deepEqual(counterpart.map(request => request.language), ['zh-CN']);
+  assert.equal(counterpart[0].packet.host_action_scope.role, 'translation');
+  assert.equal(JSON.parse(counterpart[0].emittedStep.arguments.message.split('\n\n').at(-1)).source_view.language, 'en');
+  const translationIssue = await build('a', ['zh-CN']);
+  const only = createReadingFirstRevisionRequests({ controller: translationIssue.controller });
+  assert.deepEqual(only.map(request => request.language), ['zh-CN']);
+  assert.equal(only[0].packet.host_action_scope.role, 'translation');
 });
 
 test('a configured material review must name its owner before commit or a repair can be requested', async t => {
@@ -433,7 +592,7 @@ test('a configured material review must name its owner before commit or a repair
   assert.equal(fixture.binding.repair_routing, 'owner-routed-1.0');
   assert.equal(fixture.binding.configured_setup.flow_corrections.schema_version, 'flow-corrections-1.0');
   const review = { overall: { complete: false, coherent: true, bilingual_consistent: true }, key_nodes: [],
-    issues: [{ severity: 'material', kind: 'content', detail: 'The missing owner must not trigger a Writer revision.', affected_languages: ['en'] }], scope: 'Synthetic configured review.' };
+    issues: [{ severity: 'material', kind: 'content', detail: 'The missing owner must not trigger a Writer revision.', affected_languages: ['zh-CN'] }], scope: 'Synthetic configured review.' };
   const before = getReadingFirstState(fixture.controller).calls_used;
   await assert.rejects(() => fixture.complete(fixture.reviewRequest, review), /READING_FIRST_REVIEW_INVALID/);
   await assert.rejects(() => readFile(join(fixture.root, fixture.reviewRequest.task.artifact_path)), /ENOENT/);
@@ -445,7 +604,7 @@ test('a configured material review must name its owner before commit or a repair
   assert.equal(getReadingFirstState(fixture.controller).status, 'revision_required');
 });
 
-test('configured source-first Writer, Editor and science requests consume resolved settings, then owned restore ignores changed local answers', async t => {
+test('configured source Writer, Translation, Editor and science requests consume resolved settings, then owned restore ignores changed local answers', async t => {
   const { root, config } = await configuredRepo(t);
   let prepared;
   const runId = 'run_' + 'b'.repeat(32);
@@ -459,7 +618,7 @@ test('configured source-first Writer, Editor and science requests consume resolv
   assert.equal(saved.exported.outputRoot, prepared.paths.candidateRoot);
   assert.equal(saved.exported.validation.status, 'passed');
   assert.equal(await readFile(join(prepared.paths.candidateRoot, fixture.candidate.notes[0].path), 'utf8'), fixture.candidate.notes[0].content);
-  assert.equal(fixture.created.requests[0].language, 'zh-CN');
+  assert.equal(fixture.created.requests[0].language, 'en');
   assert.equal(fixture.created.requests[0].emittedStep.arguments.reasoning_effort, 'low');
   const writerInstruction = await readFile(fixture.created.requests[0].instruction_file.path, 'utf8');
   assert.doesNotMatch(writerInstruction, /Nature Skills|Humanizer|stss|自我辩护|Nature \+/);
@@ -476,13 +635,13 @@ test('configured source-first Writer, Editor and science requests consume resolv
     capability: fixture.broker.issueCapability({ runId, actorId: 'controller', role: 'control', artifactPath: 'checkpoint.json', revision: '1' }),
     artifact: { artifact_id: 'checkpoint', content: JSON.stringify(checkpoint) }, expectedRevision: '1' });
   config.models.science.reasoning_effort = 'ultra';
-  config.reading.source_language = 'en';
+  config.reading.source_language = 'zh-CN';
   await writeFile(join(root, 'config/apa.local.json'), JSON.stringify(config));
   const restored = await restoreReadingFirstRuntime({ handoff: fixture.handoff, runControl: fixture.runControl, checkpointReceipt: receipt });
   assert.equal(restored.ok, true, JSON.stringify(restored.errors));
   assert.equal(getReadingFirstState(restored.controller).status, 'reading_complete');
   assert.equal(prepared.runControl.reading_first_binding.source_language, 'en');
-  assert.equal(prepared.runControl.reading_first_binding.first_writing_language, 'zh-CN');
+  assert.equal(prepared.runControl.reading_first_binding.first_writing_language, 'en');
   assert.equal(snapshotReadingFirstRuntime(restored.controller).control_fingerprint, checkpoint.control_fingerprint);
 });
 
@@ -662,4 +821,72 @@ test('a host without model selection sends neither model nor effort and blocks e
   config.models.science = { mode: 'explicit', model: 'deepseek-flash', reasoning_effort: 'high' };
   await writeFile(join(root, 'config/apa.local.json'), JSON.stringify(config));
   assert.throws(() => prepareConfiguredReading({ ...options, mainSession: undefined, sessionContext, repoRoot: root }), /APA_CONFIG_INCOMPLETE.*models\.science requires follow-main/);
+});
+
+const claudeResultHandle = { source: 'text', pattern: 'agentId:\\s*([A-Za-z0-9_-]+)' };
+async function hostHandleRun(t, host) {
+  const { root, config } = await configuredRepo(t);
+  if (host) config.host = { name: host.name, dispatch: { tool: 'Agent', model_argument: 'model', effort_argument: 'effort', instruction_argument: 'prompt', task_name_argument: 'description', fresh_context: null, ...host.extra } };
+  await writeFile(join(root, 'config/apa.local.json'), JSON.stringify(config));
+  let prepared;
+  const runId = 'run_' + '6'.repeat(32);
+  const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId,
+    createRunControl: options => { prepared = prepareConfiguredReading({ ...options, repoRoot: root }); return prepared.runControl; } });
+  // Observed steps carry only path, hash and length of the source, so the science request uses the same three fields.
+  const sources = prepared.scientificInput.sources.map(({ path, sha256, byte_length }) => ({ path, sha256, byte_length }));
+  const science = createConfiguredScienceRequest({ prepared: { ...prepared, scientificInput: { ...prepared.scientificInput, sources } }, role: 'evidence', dispatchContext: fixture.broker.dispatchContext,
+    task: { task_name: 'handle_evidence', native_path: 'native/handle-evidence.json' } });
+  const step = science.emittedStep;
+  const observe = raw => ingestObservedRunStep({ packet: science.packet, emittedStep: step, run: { run_id: science.packet.run_id },
+    observation: { action_id: step.action_id, run_id: science.packet.run_id, input_fingerprint: step.input_fingerprint, port: 'current-collaboration',
+      tool_call: { name: step.action, arguments: step.arguments }, raw_result_text: raw } });
+  return { prepared, fixture, science, observe };
+}
+
+test('claude-code dispatch records the agentId from result text', async t => {
+  const { extractHostTaskHandle } = await import('../../scripts/apa-model-policy.mjs');
+  const { prepared, fixture, science, observe } = await hostHandleRun(t, { name: 'claude-code', extra: { result_handle: claudeResultHandle } });
+  const dispatch = prepared.runControl.reading_first_binding.host.dispatch;
+  assert.deepEqual(dispatch.result_handle, claudeResultHandle);
+  assert.deepEqual(science.packet.host_action_scope.result_bindings.agent_id, claudeResultHandle);
+  assert.equal(getReadingFirstState(fixture.controller).status, 'reading_complete');
+  for (const { request } of snapshotReadingFirstRuntime(fixture.controller).state.request_entries) assert.deepEqual(request.packet.host_action_scope.result_bindings.agent_id, claudeResultHandle);
+  const raw = 'Evidence map written.\nagentId: a1b2c3 (use SendMessage with to: a1b2c3 to continue this agent)';
+  assert.equal(extractHostTaskHandle(raw, dispatch), 'a1b2c3');
+  const observed = observe(raw);
+  assert.equal(observed.status, 'observed');
+  assert.equal(observed.agent_id, 'a1b2c3');
+  assert.equal(observed.host_task_handle_status, 'extracted');
+  assert.equal(observed.raw_result_text, raw);
+  const unbound = structuredClone(science);
+  unbound.packet.host_action_scope.result_bindings.agent_id = null;
+  assert.throws(() => getConfiguredReadingDispatchArguments({ prepared, request: unbound }), /APA_CONFIGURED_DISPATCH_MISMATCH/);
+});
+
+test('missing agentId stays null and is reported', async t => {
+  const { extractHostTaskHandle } = await import('../../scripts/apa-model-policy.mjs');
+  const { prepared, observe } = await hostHandleRun(t, { name: 'claude-code', extra: { result_handle: claudeResultHandle } });
+  const raw = 'Evidence map written; no handle line.';
+  assert.equal(extractHostTaskHandle(raw, prepared.runControl.reading_first_binding.host.dispatch), null);
+  const observed = observe(raw);
+  assert.equal(observed.status, 'observed');
+  assert.equal(observed.blocked_reason, null);
+  assert.equal(observed.agent_id, null);
+  assert.equal(observed.host_task_handle_status, 'not_found_in_result_text');
+  assert.equal(observed.raw_result_text, raw);
+  const { result_handle: _ignored, ...withoutHandle } = prepared.runControl.reading_first_binding.host.dispatch;
+  assert.equal(extractHostTaskHandle('agentId: a1b2c3', withoutHandle), null);
+});
+
+test('codex dispatch keeps its structured agent_id path', async t => {
+  const codex = await hostHandleRun(t);
+  assert.deepEqual(codex.science.packet.host_action_scope.result_bindings.agent_id, ['agent_id']);
+  const observed = codex.observe(JSON.stringify({ agent_id: 'codex-77', note: 'agentId: other' }));
+  assert.equal(observed.agent_id, 'codex-77');
+  assert.equal(Object.hasOwn(observed, 'host_task_handle_status'), false);
+  const saved = await hostHandleRun(t, { name: 'claude-code', extra: {} });
+  assert.equal(saved.science.packet.host_action_scope.result_bindings.agent_id, null);
+  const legacy = saved.observe('agentId: not-declared');
+  assert.equal(legacy.agent_id, saved.science.emittedStep.action_id);
+  assert.equal(Object.hasOwn(legacy, 'host_task_handle_status'), false);
 });

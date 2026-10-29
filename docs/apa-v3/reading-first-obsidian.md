@@ -2,7 +2,7 @@
 
 ## 使用入口
 
-新运行的 `createReadingFirstRunControl` 默认 `presentationRequired: true`。Integrator 在原有 owned 输出中提供 `presentation`，`buildReadingFirstHandoff` 随科学交接冻结它；两语 Writer 共享科学材料和资源目录，直接编排最终阅读稿；渲染器落实结构与引用，不代编全文。没有呈现信息时不能把纯文字结果当成完整交付。`presentationRequired: false` 仅供明确的历史合同兼容与合成旧路径测试；旧绑定缺少字段时维持原行为。
+新运行的 `createReadingFirstRunControl` 默认 `presentationRequired: true`。Integrator 在原有 owned 输出中提供 `presentation`，`buildReadingFirstHandoff` 随科学交接冻结它；原文语言 Writer 接收科学材料和资源目录，直接编排最终阅读稿，Translation 依据该稿译出另一语言；渲染器落实结构与引用，不代编全文。没有呈现信息时不能把纯文字结果当成完整交付。`presentationRequired: false` 仅供明确的历史合同兼容与合成旧路径测试；旧绑定缺少字段时维持原行为。
 
 既有 `renderReaderNotes({input,targetRegistry,existingTargets,presentationOptions})` 自动选择完整呈现。`presentationOptions.knowledgeRegistry` 提供只读知识节点身份/别名匹配，不能授权写正式节点。完成整体审查后，按[最新阅读结果的 V3 发布](reading-first-publication.md)准备完整文件清单，经精确哈希批准后复用既有事务；正式索引与图谱读取已提交代次。
 
@@ -12,9 +12,9 @@
 
 ### 阅读呈现编辑
 
-新功能性交付建议在新控制绑定中显式设 `presentationMode:'reading-editor'`。顺序为科学整合 → 首先写作语言的 Writer → 另一语言 Writer → 一次双语 Reading Editor → 渲染 → 原有一次整体审查。Writer 保留完整讲解和资源落点；Reading Editor 为这些真实 accepted views 添加呈现信息，不改写科学段落，不增加科学核对或润色调用。旧绑定和默认 `presentationMode:'writer'` 保持兼容，不自动升级。
+新功能性交付建议在新控制绑定中显式设 `presentationMode:'reading-editor'`。顺序为科学整合 → 原文语言 Writer → Translation → 一次双语 Reading Editor → 渲染 → 原有一次整体审查（旧 source-first 绑定为首先写作语言的 Writer → 另一语言 Writer）。Writer 保留完整讲解和资源落点；Reading Editor 为这些真实 accepted views 添加呈现信息，不改写科学段落，不增加科学核对或润色调用。旧绑定和默认 `presentationMode:'writer'` 保持兼容，不自动升级。
 
-两语 Writer 接收后调用 `createReadingFirstPresentationRequest({controller})`。请求包含 `views`、原 `view_receipts`、登记的 `presentation`、`output_schema`（新绑定为 `reading-editor-1.1`，旧绑定为 `reading-editor-1.0`，见下文）；局部修订附 `issues`。按既有真实 host/native/owned 流程接收编辑输出后再渲染。编辑角色使用本次冻结的角色模型及推理强度，配置为follow-main时才采用冻结主会话设置。新模式控制器允许后续调用上限4–8次，并不自动授予这些调用：两语Writer、Editor、整体审查共4次；两语修正、Editor更新和一次局部复核还需4次。若授权包含完整修复链，须在冻结前预留8次，并把先行科学调用计入独立总上限。具体授权可更小，复用已接收两语稿的窗口无需重跑Writer。恢复不重置额度和期限，也不扩大旧绑定。
+原文稿与译稿接收后调用 `createReadingFirstPresentationRequest({controller})`。请求包含 `views`、原 `view_receipts`、登记的 `presentation`、`output_schema`（新绑定为 `reading-editor-1.1`，旧绑定为 `reading-editor-1.0`，见下文）；局部修订附 `issues`。按既有真实 host/native/owned 流程接收编辑输出后再渲染。编辑角色使用本次冻结的角色模型及推理强度，配置为follow-main时才采用冻结主会话设置。新模式控制器允许后续调用上限4–8次，并不自动授予这些调用：原文Writer、Translation、Editor、整体审查共4次；原文稿与译稿修正、Editor更新和一次局部复核还需4次。若授权包含完整修复链，须在冻结前预留8次，并把先行科学调用计入独立总上限。具体授权可更小，复用已接收原文稿与译稿的窗口无需重跑Writer与Translation。恢复不重置额度和期限，也不扩大旧绑定。
 
 编辑输出绑定 `readingFirstViewsFingerprint(views)`，格式及校验见 [编辑接口](../../scripts/v3/reading-first-editor.mjs) 和 [Reading Editor 合同](../../prompts/v3/reading-first-contracts.md#reading-editor)：
 
@@ -58,11 +58,13 @@ Writer 输出：
 
 正文可使用 `[方法页](apa-source:paper#page=2)`、`[图1](apa-visual:fig1)`、`[年龄标化](apa-knowledge:age-standardization)`。渲染器根据目录转换为库内相对链接；源页为物理页，印刷页标签使用已确认映射。Writer 选择引用位置和可读标签，不编造路径或页码。文献信息、资源导航和独立个人笔记由渲染器生成。
 
-新配置阅读使用 `writingMode:'source-first'`，但论文原文语言与写作顺序分别冻结：调用者按实际主论文显式传入 `sourceLanguage`，控制绑定的 `source_language` 用于原文笔记和译文目录归属；本库 `reading.source_language` 仍是首先写作的偏好，由配置入口传为 `firstWritingLanguage` 并冻结为 `first_writing_language`。先运行首先写作语言的 Writer，再将其已接收 `source_view` 交另一位 Writer。例如英文论文也可先写中文，英文笔记仍在 sources、中文仍在 translations。第06篇历史绑定先英文后中文。第二位 Writer 保持结构、科学含义及资源关系，以自然目标语言表达；事实仍以科学材料为准。旧绑定缺少 `first_writing_language` 时继续沿原 `source_language` 决定顺序，不切换旧顺序，也不从旧文字稿映射制造新 Writer 回执。
+新配置阅读使用 `writingMode:'source-translation'` 与 `translation_profile:'translation-1.0'`：调用者按实际主论文显式传入 `sourceLanguage`，控制绑定的 `source_language` 同时决定原文笔记和译文目录归属以及 Writer 与 Translation 的方向；本库 `reading.source_language` 不再询问，新运行忽略。只运行原文语言对应的 Writer（英文论文用 English Writer，中文论文用 Chinese Writer），再把其已接收 `source_view` 交 Translation。Translation 不接收科学交接，输入只有原文稿与回执、Integrator 的 `terminology` 以及 `presentation` 中的双语标签和 ID；输出与 Writer 视图同一结构，由 `validateLayoutView` 校验，以自然目标语言保持结构、科学含义及资源关系；始终忠实翻译、不改动事实；原文稿看似矛盾或有误时照原文翻译，并在回复文字中指出该段，由整体审查经原文 Writer 修订处理。例如英文论文由 English Writer 成稿，英文笔记在 sources，中文译稿在 translations；中文论文相反。第06篇历史绑定先英文后中文，保留。旧绑定缺少 `first_writing_language` 时继续沿原 `source_language` 决定顺序，不切换旧顺序，也不从旧文字稿映射制造新 Writer 回执。
 
 `scientificInput.presentation_assets` 可登记导出的来源资源 `{path,sha256,byte_length}`，随输入指纹冻结并在运行/恢复时检查。它不授权新增论文来源；原页派生与外部方法背景沿用既有来源许可。
 
-已获授权的历史科学材料复用通过 `scientificInput.adopted_science: [{artifact_root,artifact_id,receipt}]` 接入，不能与非空 `role_artifacts` 混用。接口读取原 owned 文件并验证原回执，保持原 run、所有者和来源根；运行中继续检查原字节。仅该复用路径允许 `scientificInput.presentation` 作为单独绑定的版式与资源适配，不冒充新的 Integrator 科学输出。新窗口独立限定调用和截止时间，不复活旧额度。工厂默认 `independent` 兼容旧调用者，新流程须显式传入 `writingMode:'source-first'`。
+已获授权的历史科学材料复用通过 `scientificInput.adopted_science: [{artifact_root,artifact_id,receipt}]` 接入，不能与非空 `role_artifacts` 混用。接口读取原 owned 文件并验证原回执，保持原 run、所有者和来源根；运行中继续检查原字节。仅该复用路径允许 `scientificInput.presentation` 作为单独绑定的版式与资源适配，不冒充新的 Integrator 科学输出。新窗口独立限定调用和截止时间，不复活旧额度。工厂默认 `independent` 兼容旧调用者，新流程须显式传入 `writingMode:'source-translation'`。
+
+新的配置化运行冻结 `handoff_profile:'science-index-1.0'`，下游请求不再内联六个科学角色的全部输出。Writer 及其修订请求只内联 Integrator 输出；`handoff.presentation` 存在时，Integrator 内嵌的 `presentation` 不再重复。其余角色登记在 `handoff.science_index:[{role,path,sha256,byte_length}]`，路径来自各自回执所在的 artifact 根，Writer 仅在核对页码、原值或上游措辞时按需读取，指纹不符即为输入错误。整体审查请求携带同一精简交接，并把 `presentation.supportNotes` 写成 `review-inputs/<review|review-r2>/` 下的文件，列入 `support_note_files:[{path,note_path,sha256,byte_length}]`，主笔记仍内联；字节相同的已有文件可复用，字节不同则报冲突。局部复核 `review-r2` 不带科学交接，只同样外置支持笔记。读取规则写在 `prompts/v3/science-index-1.0.md`，仅对新绑定注入，其指纹随状态冻结，改动后请求以 `READING_FIRST_SCIENCE_INDEX_NOTE_CHANGED` 失败。没有该字段的旧绑定请求字节和指纹不变，`reading-first-contracts.md` 也未改动。
 
 图注文字应来自已保存材料。裁去外部图题或说明时，现有按语言提供的 `caption` 中须完整保留对应原题、说明、缩写、符号、排除条件及脚注，并在图片旁标明原注和来源页；英文保留原文，中文忠实翻译。尚未可靠转录时保留图片内原注。分析者解读、单位澄清或疑似纠错使用 Writer 的独立“Reading note / 阅读说明”段落，不混入原注，不增加图注字段。原注有矛盾也不静默改正；跨页表按顺序保留注释归属。年龄标化等教学公式与作者实际模型继续区分。
 
@@ -76,11 +78,11 @@ Writer 输出：
 
 Writer 可通过其正常 view 的 `knowledge_content:[{id,paragraphs,sections?}]` 提交自己语言的节点内容；新共享布局请求要求覆盖所有已登记知识 ID。ID 不得重复或新建，段落非空；只覆盖自身语言，公用来源、公式和身份保持原目录。接收前校验，阅读呈现编辑请求及最终渲染消费合并后的目录。旧布局不消费该扩展。
 
-中断后的显式获批续接可通过 `adopted_views` 复用一份或两份真实 Writer 回执。已接受先写语言的那一份时，只触发缺失的另一语言 Writer；两份齐备时直接进入呈现编辑。原运行、失败调用和截止时间保留，新窗口单独绑定；不能把复用视为新写作，也不能通过恢复重置额度。
+中断后的显式获批续接可通过 `adopted_views` 复用一份或两份真实 Writer 回执。已接受原文语言的那一份时，只触发缺失的 Translation（旧 source-first 绑定为另一语言 Writer）；两份齐备时直接进入呈现编辑。原运行、失败调用和截止时间保留，新窗口单独绑定；不能把复用视为新写作，也不能通过恢复重置额度。
 
 若同一新任务窗口已经实际执行科学调用，控制绑定用 `priorCalls` 计入已用量，`maxCalls` 限制后续 Writer/Editor/Verifier 调用，`maxTotalCalls` 独立限制总调用。`priorCalls` 为非负整数且须有足够总上限，非零值冻结为 `prior_calls`；恢复时已用量等于此前实际调用加本窗口请求数，不重置截止时间。第06篇本轮使用3次先行科学调用、后续最多7次、总计最多10次；该授权不是其他运行的默认预算。
 
-Methods 提供通用知识，Results 识别图型、子图和裁切区域，Integrator 合并身份并组织本文应用，两位 Writer 在既有任务内提供相应语言内容及受影响论文段落，Reading Editor 负责呈现。遇到缺口按原定向补缺接口交回内容所有者，不由编辑补造。允许的权威方法资料检索仍受本次来源范围、预算和截止时间约束。
+Methods 提供通用知识，Results 识别图型、子图和裁切区域，Integrator 合并身份并组织本文应用，原文语言 Writer 与 Translation 在既有任务内提供相应语言内容及受影响论文段落，Reading Editor 负责呈现。遇到缺口按原定向补缺接口交回内容所有者，不由编辑补造。允许的权威方法资料检索仍受本次来源范围、预算和截止时间约束。
 
 先由名称和别名发现候选，Methods 与 Integrator 比较定义、方法实质、适用条件和边界，确认稳定身份后再形成同一节点的增补候选；保留人工内容、原来源及不同论文的应用链接，避免重复定义。已有共享节点的 `KNOWLEDGE_STATE.item` 保留原 paragraphs/sections/sources/formulas，新论文内容存为按 paper_id 区分的 `paper_additions`；同一论文后续增补替换自己的增补段，来源按 URL 合并。该接口不授权改写基干定义、撤销旧来源或覆盖人工区；这类冲突须单独处理，不能伪装成增补。来源说明只限定其实际支持的新内容，不因本次未重复检索而否定旧来源。本轮预览只生成已有节点的合并候选，不写正式库；历史双语候选保留，新入口不再指向重复节点。图型节点沿用 `Wiki/methods/`，其他概念沿用既有分类，不建立平行目录。
 

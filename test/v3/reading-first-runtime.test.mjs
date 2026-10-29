@@ -2,27 +2,35 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtemp, writeFile, mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { createOwnedArtifactBroker, commitOwnedArtifact } from '../../scripts/v3/owned-artifact-store.mjs';
 import { createPhase21ContractValidator } from '../../scripts/v3/phase21-contract-loader.mjs';
 import { buildPreRenderHandoff } from '../../scripts/v3/workflow-composer.mjs';
 import { createLanguageRequests } from '../../scripts/v3/phase22-language.mjs';
 import { renderReaderNotes } from '../../scripts/v3/phase221-presentation.mjs';
 import { getRoleReplyContract, loadRoleReplyContract } from '../../scripts/v3/role-reply-contract.mjs';
-import { READING_FIRST_PROFILE, fingerprintReadingFirst, resolveReadingWorkflowProfile, acceptReadingFirstResult, createReadingFirstReviewRequest, getReadingFirstState, createReadingFirstRevisionRequests, createReadingFirstRunControl, snapshotReadingFirstRuntime, restoreReadingFirstRuntime, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstEnrichmentRequests, buildReadingFirstHandoff } from '../../scripts/v3/reading-first-runtime.mjs';
+import { APA_CONFIGURED_ROLES, createConfiguredApaRoleModelPolicy } from '../../scripts/apa-model-policy.mjs';
+import { buildConfiguredReadingInstructions } from '../../scripts/v3/configured-reading.mjs';
+import { READING_FIRST_PROFILE, SCIENCE_INDEX_PROFILE, fingerprintReadingFirst, resolveReadingWorkflowProfile, acceptReadingFirstResult, createReadingFirstReviewRequest, getReadingFirstState, createReadingFirstRevisionRequests, createReadingFirstRunControl, snapshotReadingFirstRuntime, restoreReadingFirstRuntime, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstEnrichmentRequests, buildReadingFirstHandoff } from '../../scripts/v3/reading-first-runtime.mjs';
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const roles = ['evidence','methods','results','interpretation','scientific-reading','integration'];
-async function setup(t, { presentation, presentationRequired = false, writingMode = 'independent', sourceLanguage = 'en', presentationMode = 'writer', priorCalls = 0, maxTotalCalls, roleReplyContract, enrichmentPolicy, legacyRepairRouting = false, invalidRepairRouting = false, maxCalls = presentationMode==='reading-editor'?7:6 } = {}) {
+async function setup(t, { presentation, presentationRequired = false, writingMode = 'independent', sourceLanguage = 'en', presentationMode = 'writer', priorCalls = 0, maxTotalCalls, roleReplyContract, enrichmentPolicy, handoffProfile, legacyRepairRouting = false, invalidRepairRouting = false, maxCalls = presentationMode==='reading-editor'?7:6, firstWritingLanguage, integrationContent = {}, writingSkills = {} } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'reading-first-'));
   t.after(() => rm(root, {recursive:true,force:true}));
   const sourceBytes=Buffer.from('Synthetic original source: design, result and limitation.');
   await writeFile(join(root,'source.pdf'),sourceBytes);
-  const tasks=Object.fromEntries(['en','zh-CN','review','en-r2','zh-CN-r2','review-r2',...(presentationMode==='reading-editor'?['presentation','presentation-r2']:[])].map(key=>[key,{task_id:key,task_name:'reading_'+key.replaceAll('-','_').toLowerCase(),owner_actor_id:key,role:key.startsWith('presentation')?'reading-editor':key.startsWith('en')?'english-writer':key.startsWith('zh')?'chinese-writer':'independent-verifier',artifact_id:key,artifact_path:key+'.json',native_path:'native/'+key+'.json',revision:'1'}]));
+  const tasks=Object.fromEntries(['en','zh-CN','review','en-r2','zh-CN-r2','review-r2',...(presentationMode==='reading-editor'?['presentation','presentation-r2']:[])].map(key=>[key,{task_id:key,task_name:'reading_'+key.replaceAll('-','_').toLowerCase(),owner_actor_id:key,role:key.startsWith('presentation')?'reading-editor':writingMode==='source-translation'&&!key.startsWith('review')&&!key.startsWith(sourceLanguage.slice(0,2))?'translation':key.startsWith('en')?'english-writer':key.startsWith('zh')?'chinese-writer':'independent-verifier',artifact_id:key,artifact_path:key+'.json',native_path:'native/'+key+'.json',revision:'1'}]));
   if(enrichmentPolicy) tasks['enrich-late-evidence']={task_id:'enrich-late-evidence',task_name:'enrich_late_evidence',owner_actor_id:'enrich-late-evidence',role:'evidence',source_root:'sources/enrich-late-evidence',artifact_id:'enrich-late-evidence',artifact_path:'enrich-late-evidence.json',native_path:'native/enrich-late-evidence.json',revision:'1'};
   const bindings=[...roles.map(role=>({run_id:'run',actor_id:role,role,artifact_path:'science/'+role+'.json',revision:'1'})),...Object.values(tasks).map(task=>({run_id:'run',actor_id:task.owner_actor_id,role:task.role,artifact_path:task.artifact_path,revision:task.revision}))];
   const input={identity:{paper_id:presentation ? 'pap_'+'a'.repeat(32) : 'synthetic',run_id:'run'},sources:[{...(enrichmentPolicy ? {id:'main'} : {}),path:join(root,'source.pdf'),sha256:sha(sourceBytes),byte_length:sourceBytes.length}],context:'Read all existing material as a connected account.',role_artifacts:roles};
-  const runBinding=createReadingFirstRunControl({presentationMode,writingMode,sourceLanguage,presentationRequired,priorCalls,maxTotalCalls,roleReplyContract,enrichmentPolicy,runId:'run',scientificInput:input,mainSession:{model:'gpt-6-astra',reasoning_effort:'high'},authorizationId:'synthetic-only',maxCalls,deadline:'2099-01-01T00:00:00Z',taskBindings:tasks});
+  // source-translation takes its writing rules only from a configured setup, so those runs use a configured fixture with all eleven roles.
+  const configuredSetup=writingMode==='source-translation' ? {schema_version:'apa-configured-reading-1.0',config_fingerprint:sha(Buffer.from('config')),paths:{runRoot:root},
+    role_model_policy:createConfiguredApaRoleModelPolicy({model:'gpt-6-astra',reasoning_effort:'high'},Object.fromEntries(APA_CONFIGURED_ROLES.map(role=>[role,{model:'gpt-6-astra',reasoning_effort:'high'}]))),...buildConfiguredReadingInstructions(writingSkills)} : undefined;
+  const runBinding=createReadingFirstRunControl({configuredSetup,presentationMode,writingMode,sourceLanguage,firstWritingLanguage,presentationRequired,priorCalls,maxTotalCalls,roleReplyContract,enrichmentPolicy,handoffProfile,runId:'run',scientificInput:input,mainSession:{model:'gpt-6-astra',reasoning_effort:'high'},authorizationId:'synthetic-only',maxCalls,deadline:'2099-01-01T00:00:00Z',taskBindings:tasks});
   const binding=structuredClone(runBinding.reading_first_binding);
   if (legacyRepairRouting) delete binding.repair_routing;
   if (invalidRepairRouting) binding.repair_routing='unknown-routing';
@@ -35,7 +43,7 @@ async function setup(t, { presentation, presentationRequired = false, writingMod
   const schema=JSON.parse(await readFile(new URL('../../Schema/phase21/proof-chain.schema.json',import.meta.url),'utf8'));
   const phase21Validator=await createPhase21ContractValidator({schemas:[schema]});
   const scienceRun={run_id:'run',workflow_profile:READING_FIRST_PROFILE,artifact_root:root,phase21Validator,declared_fingerprints:fingerprints,current_fingerprints:fingerprints,route_fingerprint:'fixed',chain:{schema_version:'phase21-proof-chain-1.0',run_id:'run',delivery_status:'pending_resolver',artifacts:[],dependencies:[],required_artifacts:required,integration_prerequisites:integration,metadata:{requirement_refs:['APA3-04']},p20_e12_status:'unverified'}};
-  const scienceResult=await runFiniteRoleSequence({run:scienceRun,dispatchContext:broker.dispatchContext,artifactStore:broker,actions:roles.map(role=>({role,action:{type:'write_artifact',actor_id:role,role,artifact_path:'science/'+role+'.json',revision:'1',artifact:{artifact_id:role,content:JSON.stringify({context:'Full connected science for '+role,...(role==='integration' && presentation ? {presentation} : {})})}}}))});
+  const scienceResult=await runFiniteRoleSequence({run:scienceRun,dispatchContext:broker.dispatchContext,artifactStore:broker,actions:roles.map(role=>({role,action:{type:'write_artifact',actor_id:role,role,artifact_path:'science/'+role+'.json',revision:'1',artifact:{artifact_id:role,content:JSON.stringify({context:'Full connected science for '+role,...(role==='integration' && presentation ? {presentation} : {}),...(role==='integration' ? integrationContent : {})})}}}))});
   assert.notEqual(scienceResult.status,'blocked',JSON.stringify(scienceResult.delivery_gate));
   assert.equal(scienceResult.receipts.length,6);
   assert.equal(scienceResult.chain.source_check,undefined);
@@ -58,6 +66,142 @@ test('new runs default to reading first while existing legacy binding is preserv
   assert.equal(resolveReadingWorkflowProfile({existingBinding:{profile:READING_FIRST_PROFILE}}),READING_FIRST_PROFILE);
 });
 
+test('handoff profile is frozen only when requested and rejects unknown values',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'reading-first-profile-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const bytes=Buffer.from('Synthetic original source.');
+  await writeFile(join(root,'source.pdf'),bytes);
+  const options={runId:'run',scientificInput:{identity:{paper_id:'synthetic',run_id:'run'},sources:[{path:join(root,'source.pdf'),sha256:sha(bytes),byte_length:bytes.length}],context:'Read all existing material as a connected account.',role_artifacts:roles},mainSession:{model:'gpt-6-astra',reasoning_effort:'high'},authorizationId:'synthetic-only',deadline:'2099-01-01T00:00:00Z',taskBindings:{}};
+  assert.equal(SCIENCE_INDEX_PROFILE,'science-index-1.0');
+  assert.equal(Object.hasOwn(createReadingFirstRunControl(options).reading_first_binding,'handoff_profile'),false);
+  assert.equal(createReadingFirstRunControl({...options,handoffProfile:SCIENCE_INDEX_PROFILE}).reading_first_binding.handoff_profile,'science-index-1.0');
+  assert.throws(()=>createReadingFirstRunControl({...options,handoffProfile:'other'}),/READING_FIRST_HANDOFF_PROFILE_INVALID/);
+});
+
+// Paths and the fingerprints derived from them differ per machine and temp root, and the writing guide is a separate document, so request bytes are compared after masking them.
+const maskPaths = (value, ...roots) => {
+  let masked = value;
+  for (const [root, label] of roots) masked = masked.replaceAll(root.replaceAll('\\', '\\\\'), label).replaceAll(root, label);
+  return masked.replaceAll('\\\\', '/').replaceAll('\\', '/').replace(/"(input_fingerprint|handoff_fingerprint)":"sha256:[0-9a-f]{64}"/g, '"$1":"<ROOT-DERIVED>"').replace(/\{"writing_guide":\{[^}]*\}\}/, '<WRITING-GUIDE>');
+};
+const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url)).replace(/[\\/]$/, '');
+function maskedRequest(s, request) {
+  const message = maskPaths(request.emittedStep.arguments.message, [s.root, '<ROOT>'], [repositoryRoot, '<REPO>']);
+  const { input, writing_guide, ...configuration } = JSON.parse(maskPaths(JSON.stringify(request.packet.backend.configuration), [s.root, '<ROOT>'], [repositoryRoot, '<REPO>']));
+  return { instruction_fingerprint: sha(Buffer.from(message)), configuration_fingerprint: fingerprintReadingFirst(configuration), message };
+}
+// Fingerprints of the masked en Writer request, captured from the code before science-index-1.0 existed (2026-10-28).
+const LEGACY_EN_WRITER = {
+  instruction_fingerprint: 'sha256:f54d7e9a82646f82c43d8782f35219ff1bcd2969d60028e520223e096c96107a',
+  configuration_fingerprint: 'sha256:260d65b2be453ff03476f6856289755115a74223cffc463f1c34771fbeb115aa',
+};
+const requestPayload = request => JSON.parse(request.emittedStep.arguments.message.split('\n\n').at(-1));
+const INDEXED_ROLES = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading'];
+test('legacy bindings keep identical writer requests after masking machine-dependent fields', async t => {
+  const s = await setup(t);
+  const request = s.created.requests.find(item => item.language === 'en');
+  const { instruction_fingerprint, configuration_fingerprint, message } = maskedRequest(s, request);
+  assert.equal(instruction_fingerprint, LEGACY_EN_WRITER.instruction_fingerprint);
+  assert.equal(configuration_fingerprint, LEGACY_EN_WRITER.configuration_fingerprint);
+  assert.doesNotMatch(message, /science-index-1\.0|science_index/);
+  const payload = requestPayload(request);
+  assert.equal(payload.handoff.science.length, 6);
+  assert.equal(Object.hasOwn(payload.handoff, 'science_index'), false);
+  assert.equal(Object.hasOwn(request.packet.backend.configuration, 'science_index'), false);
+});
+test('science index handoff inlines only Integrator and indexes other roles by receipt', async t => {
+  const presentation = { layout: 'writer-modules-1.0', modules: [] };
+  const s = await setup(t, { handoffProfile: SCIENCE_INDEX_PROFILE, presentation });
+  const note = await readFile(new URL('../../prompts/v3/science-index-1.0.md', import.meta.url));
+  assert.equal(s.created.requests.length, 2);
+  for (const request of s.created.requests) {
+    const { handoff } = requestPayload(request);
+    assert.equal(handoff.science.length, 1);
+    assert.equal(handoff.science[0].receipt.role, 'integration');
+    assert.equal(handoff.science[0].content.presentation, undefined);
+    assert.deepEqual(handoff.presentation, presentation);
+    assert.match(handoff.science[0].content.context, /Full connected science for integration/);
+    assert.deepEqual(handoff.science_index.map(item => item.role), INDEXED_ROLES);
+    for (const item of handoff.science_index) {
+      const receipt = s.handoff.science.find(entry => entry.receipt.role === item.role).receipt;
+      assert.deepEqual(item, { role: item.role, path: join(s.root, receipt.path), sha256: receipt.sha256, byte_length: receipt.byte_length });
+      assert.equal(sha(await readFile(item.path)), item.sha256);
+    }
+    assert.equal(handoff.handoff_fingerprint, s.handoff.handoff_fingerprint);
+    assert.match(request.emittedStep.arguments.message, /Science index handoff: science-index-1\.0/);
+    assert.deepEqual(request.packet.backend.configuration.science_index, { profile: 'science-index-1.0', sha256: sha(note), byte_length: note.length });
+  }
+});
+test('adopted science entries are indexed under their own artifact root', async t => {
+  const s = await setup(t);
+  const otherRoot = await mkdtemp(join(tmpdir(), 'reading-first-adopt-'));
+  t.after(() => rm(otherRoot, { recursive: true, force: true }));
+  const input = { profile: READING_FIRST_PROFILE, identity: { run_id: 'adopt-index', paper_id: 'synthetic' }, context: 'Reuse saved science', sources: s.handoff.sources, role_artifacts: [],
+    adopted_science: s.handoff.science.map(item => ({ artifact_root: s.root, artifact_id: item.receipt.artifact_id, receipt: item.receipt })) };
+  const tasks = Object.fromEntries(['en', 'zh-CN'].map(key => [key, { task_id: key, task_name: 'adopt_' + key.replaceAll('-', '_').toLowerCase(), owner_actor_id: key, role: key === 'en' ? 'english-writer' : 'chinese-writer', artifact_id: key, artifact_path: 'fresh/' + key + '.json', native_path: 'fresh-native/' + key + '.json', revision: '1' }]));
+  const control = createReadingFirstRunControl({ runId: 'adopt-index', presentationRequired: false, scientificInput: input, mainSession: { model: 'gpt-6-astra', reasoning_effort: 'high' }, authorizationId: 'synthetic', deadline: '2099-01-01T00:00:00Z', taskBindings: tasks, handoffProfile: SCIENCE_INDEX_PROFILE });
+  const broker = createOwnedArtifactBroker({ control_actor_id: 'controller', artifact_root: otherRoot, authorized_bindings: [], run_controls: [control] });
+  const handoff = await buildReadingFirstHandoff({ run: { run_id: 'adopt-index' }, dispatchContext: broker.dispatchContext, artifactRoot: otherRoot, scientificInput: input });
+  const created = createLanguageRequests({ handoff, runControl: { runId: 'adopt-index', artifactRoot: otherRoot, dispatchContext: broker.dispatchContext } });
+  assert.equal(created.ok, true, JSON.stringify(created.errors));
+  const payload = requestPayload(created.requests[0]);
+  assert.deepEqual(payload.handoff.science_index.map(item => item.role), INDEXED_ROLES);
+  for (const item of payload.handoff.science_index) {
+    const receipt = s.handoff.science.find(entry => entry.receipt.role === item.role).receipt;
+    assert.equal(item.path, join(s.root, receipt.path));
+    assert.notEqual(item.path, join(otherRoot, receipt.path));
+  }
+  assert.equal(payload.handoff.science[0].receipt.role, 'integration');
+});
+test('revision requests use the same reduced handoff', async t => {
+  const s = await setup(t, { handoffProfile: SCIENCE_INDEX_PROFILE });
+  for (const request of s.created.requests) await s.complete(request, s.view(request.language));
+  const rendered = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller: s.created.controller } });
+  const review = { overall: { complete: false, coherent: true, bilingual_consistent: true }, key_nodes: [], issues: [{ severity: 'material', kind: 'omission', detail: 'Important limitation missing', affected_languages: ['en'] }], scope: 'whole account' };
+  await s.complete(createReadingFirstReviewRequest({ controller: s.created.controller, presentation: rendered }), review);
+  const [revision] = createReadingFirstRevisionRequests({ controller: s.created.controller });
+  assert.equal(revision.task.task_id, 'en-r2');
+  const { handoff } = requestPayload(revision);
+  assert.equal(handoff.science.length, 1);
+  assert.equal(handoff.science[0].receipt.role, 'integration');
+  assert.equal(handoff.science[0].content.presentation, undefined);
+  assert.deepEqual(handoff.science_index.map(item => item.role), INDEXED_ROLES);
+  assert.match(revision.emittedStep.arguments.message, /Science index handoff: science-index-1\.0/);
+});
+
+// Simulates an edit of the note by wrapping the file read; the repository file itself is never touched.
+function changeScienceIndexNote(t) {
+  const original = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', function (path, ...rest) {
+    const bytes = original.call(this, path, ...rest);
+    return String(path?.href ?? path).endsWith('science-index-1.0.md') ? Buffer.concat([Buffer.from(bytes), Buffer.from('\nChanged.')]) : bytes;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+}
+test('changed science index note fails the next request, and legacy bindings ignore the note', async t => {
+  const s = await setup(t, { handoffProfile: SCIENCE_INDEX_PROFILE });
+  for (const request of s.created.requests) await s.complete(request, s.view(request.language));
+  const rendered = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller: s.created.controller } });
+  const legacy = await setup(t);
+  changeScienceIndexNote(t);
+  assert.throws(() => createReadingFirstReviewRequest({ controller: s.created.controller, presentation: rendered }), /READING_FIRST_SCIENCE_INDEX_NOTE_CHANGED/);
+  assert.throws(() => snapshotReadingFirstRuntime(s.created.controller), /READING_FIRST_SCIENCE_INDEX_NOTE_CHANGED/);
+  assert.doesNotThrow(() => snapshotReadingFirstRuntime(legacy.created.controller));
+});
+test('restored science index state keeps the captured note and detects a later change', async t => {
+  const s = await setup(t, { handoffProfile: SCIENCE_INDEX_PROFILE });
+  const saved = snapshotReadingFirstRuntime(s.created.controller);
+  assert.equal(saved.state.scienceIndexNote.profile, 'science-index-1.0');
+  const receipt = await commitOwnedArtifact({ artifactRoot: s.root, dispatchContext: s.broker.dispatchContext,
+    capability: s.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: 'checkpoint.json', revision: '1' }),
+    artifact: { artifact_id: 'checkpoint', content: JSON.stringify(saved) }, expectedRevision: '1' });
+  const recovered = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: receipt });
+  assert.equal(recovered.ok, true, JSON.stringify(recovered.errors));
+  assert.deepEqual(snapshotReadingFirstRuntime(recovered.controller).state.scienceIndexNote, saved.state.scienceIndexNote);
+  changeScienceIndexNote(t);
+  assert.throws(() => snapshotReadingFirstRuntime(recovered.controller), /READING_FIRST_SCIENCE_INDEX_NOTE_CHANGED/);
+});
 for (const enabled of [false, true]) test(`${enabled ? 'new' : 'legacy'} reply binding restores pending actions and preserves future requests, counts and deadline`, async t => {
   const roleReplyContract = enabled ? getRoleReplyContract() : undefined;
   const rule = loadRoleReplyContract(getRoleReplyContract());
@@ -706,5 +850,391 @@ test('explicit science repair stays limited when its owner or full repair budget
     await s.complete(createReadingFirstReviewRequest({controller,presentation:rendered}),{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[{severity:'material',kind:'scientific-gap',detail:'Allocation unclear',repair_owner:'science',affected_languages:['en'],scientific_gap:gap}],scope:'overall'});
     assert.equal(getReadingFirstState(controller).status,'completed_with_limits');
     assert.throws(()=>createReadingFirstEnrichmentRequests({controller}),/ENRICHMENT_UNAVAILABLE/);
+  }
+});
+
+// Presentation with two shared-knowledge support notes (one per language) so the rendered result carries supportNotes.
+const supportPresentation = () => ({ schema_version: 'reading-first-obsidian-1.0', bibliography: { title: 'Synthetic study', first_author: 'Tester', year: 2026 }, source_pdf: 'Raw/source.pdf', sections: [{ id: 'study', indices: { en: 0, 'zh-CN': 0 } }], visuals: [],
+  knowledge: [{ id: 'rate', kind: 'method', canonical_key: 'age-standardisation', title: { en: 'Age standardisation', 'zh-CN': '年龄标化' }, aliases: ['ASR'], paragraphs: { en: ['Background explanation.'], 'zh-CN': ['背景解释。'] }, placements: [{ section_id: 'study', after_paragraph: 0 }], source_kind: 'method-background' }],
+  map: { steps: [], findings: [], relations: [] } });
+async function renderedWithSupport(t, options = {}) {
+  const s = await setup(t, { presentation: supportPresentation(), presentationRequired: true, ...options });
+  for (const request of s.created.requests) await s.complete(request, s.view(request.language));
+  const rendered = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller: s.created.controller } });
+  assert.equal(rendered.supportNotes.length, 2);
+  return { s, rendered };
+}
+const reviewPayload = request => requestPayload(request);
+// Fingerprints of the masked overall review request, captured from the code before review support notes moved to files (2026-10-28).
+const LEGACY_REVIEW = {
+  instruction_fingerprint: 'sha256:f3adae86a57598502f2635df546df78cb09d1024e73c12d22a7b1dee0d6cb2c8',
+  configuration_fingerprint: 'sha256:3419d4dc4279a0692e7e8d9db034ab061eff40cc89f953688c080a5a390f4941',
+};
+test('legacy review requests are unchanged', async t => {
+  const { s, rendered } = await renderedWithSupport(t);
+  const request = createReadingFirstReviewRequest({ controller: s.created.controller, presentation: rendered });
+  const { instruction_fingerprint, configuration_fingerprint, message } = maskedRequest(s, request);
+  assert.deepEqual({ instruction_fingerprint, configuration_fingerprint }, LEGACY_REVIEW);
+  const payload = reviewPayload(request);
+  assert.equal(payload.presentation.supportNotes.length, 2);
+  assert.equal(payload.handoff.science.length, 6);
+  assert.equal(Object.hasOwn(payload, 'support_note_files'), false);
+  assert.doesNotMatch(message, /support_note_files|science_index/);
+});
+test('review requests write support notes to files and inline only the reduced handoff', async t => {
+  const { s, rendered } = await renderedWithSupport(t, { handoffProfile: SCIENCE_INDEX_PROFILE });
+  const request = createReadingFirstReviewRequest({ controller: s.created.controller, presentation: rendered });
+  const payload = reviewPayload(request);
+  assert.equal(Object.hasOwn(payload.presentation, 'supportNotes'), false);
+  assert.equal(payload.presentation.presentation_fingerprint, rendered.presentation_fingerprint);
+  assert.equal(payload.presentation.notes.length, rendered.notes.length);
+  assert.equal(payload.support_note_files.length, rendered.supportNotes.length);
+  for (const [index, file] of payload.support_note_files.entries()) {
+    const note = rendered.supportNotes[index], bytes = await readFile(file.path);
+    assert.equal(file.note_path, note.path);
+    assert.equal(file.path, join(s.root, 'review-inputs', 'review', ...note.path.split('/')));
+    assert.equal(bytes.toString('utf8'), note.content);
+    assert.equal(file.sha256, sha(bytes));
+    assert.equal(file.byte_length, bytes.length);
+  }
+  assert.equal(payload.handoff.science.length, 1);
+  assert.equal(payload.handoff.science[0].receipt.role, 'integration');
+  assert.deepEqual(payload.handoff.science_index.map(item => item.role), INDEXED_ROLES);
+  for (const note of rendered.supportNotes) assert.equal(request.emittedStep.arguments.message.includes(note.content), false);
+});
+test('review support note files reuse identical bytes regardless of the reuse flag and reject changed bytes', async t => {
+  for (const changed of [false, true]) {
+    const { s, rendered } = await renderedWithSupport(t, { handoffProfile: SCIENCE_INDEX_PROFILE });
+    const note = rendered.supportNotes[0], path = join(s.root, 'review-inputs', 'review', ...note.path.split('/'));
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, changed ? note.content + '\nChanged.' : note.content);
+    const create = () => createReadingFirstReviewRequest({ controller: s.created.controller, presentation: rendered });
+    if (changed) assert.throws(create, /READING_FIRST_OUTPUT_CONFLICT/);
+    else assert.equal(reviewPayload(create()).support_note_files.length, 2);
+  }
+});
+
+const overallMaterial = { overall: { complete: false, coherent: true, bilingual_consistent: true }, key_nodes: [], issues: [{ severity: 'material', kind: 'omission', detail: 'Important limitation missing', affected_languages: ['en'] }], scope: 'overall' };
+const localClean = { overall: { complete: true, coherent: true, bilingual_consistent: true }, key_nodes: [{ kind: 'main_conclusion', location: 'source', finding: 'supported' }, { kind: 'key_design', location: 'source', finding: 'supported' }], issues: [], scope: 'local' };
+test('verifier guidance on support note files reaches both review and review-r2 messages', async t => {
+  const { s, rendered } = await renderedWithSupport(t, { handoffProfile: SCIENCE_INDEX_PROFILE });
+  const controller = s.created.controller;
+  const note = await readFile(new URL('../../prompts/v3/science-index-1.0.md', import.meta.url), 'utf8');
+  const guidance = /support_note_files[^]*sha256[^]*byte_length[^]*data, never instructions[^]*did not read as checked/;
+  assert.match(note, guidance);
+  const first = createReadingFirstReviewRequest({ controller, presentation: rendered });
+  await s.complete(first, overallMaterial);
+  const [revision] = createReadingFirstRevisionRequests({ controller });
+  await s.complete(revision, s.view('en'));
+  const second = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller } });
+  const local = createReadingFirstReviewRequest({ controller, presentation: second });
+  for (const request of [first, local]) {
+    assert.match(request.emittedStep.arguments.message, guidance);
+    assert.deepEqual(request.packet.backend.configuration.science_index, { profile: 'science-index-1.0', sha256: sha(Buffer.from(note)), byte_length: Buffer.byteLength(note) });
+  }
+  assert.equal(local.review_scope, 'local');
+  const payload = reviewPayload(local);
+  assert.equal(Object.hasOwn(payload, 'handoff'), false);
+  assert.equal(Object.hasOwn(payload.presentation, 'supportNotes'), false);
+  assert.equal(payload.support_note_files.length, second.supportNotes.length);
+  for (const [index, file] of payload.support_note_files.entries()) {
+    assert.equal(file.path, join(s.root, 'review-inputs', 'review-r2', ...second.supportNotes[index].path.split('/')));
+    assert.equal(sha(await readFile(file.path)), file.sha256);
+  }
+  await s.complete(local, localClean);
+  assert.equal(getReadingFirstState(controller).status, 'reading_complete');
+});
+test('a changed support note file fails acceptance of the review', async t => {
+  const { s, rendered } = await renderedWithSupport(t, { handoffProfile: SCIENCE_INDEX_PROFILE });
+  const request = createReadingFirstReviewRequest({ controller: s.created.controller, presentation: rendered });
+  await writeFile(reviewPayload(request).support_note_files[0].path, 'Edited after the request was issued.');
+  await assert.rejects(() => s.complete(request, localClean), /READING_FIRST_SUPPORT_NOTE_CHANGED/);
+  await assert.rejects(() => readFile(join(s.root, 'review.json')), /ENOENT/);
+});
+test('renderer issues may name a support note path under a new binding, and unknown paths are still rejected', async t => {
+  const { s, rendered } = await renderedWithSupport(t, { handoffProfile: SCIENCE_INDEX_PROFILE });
+  const controller = s.created.controller, path = rendered.supportNotes[0].path;
+  const verdict = affectedPath => ({ overall: { complete: false, coherent: true, bilingual_consistent: true }, key_nodes: [], issues: [{ severity: 'material', kind: 'knowledge-accumulation', detail: 'Renderer lost the committed content', repair_owner: 'renderer', affected_paths: [affectedPath] }], scope: 'overall' });
+  const request = createReadingFirstReviewRequest({ controller, presentation: rendered });
+  assert.equal(Object.hasOwn(reviewPayload(request).presentation, 'supportNotes'), false);
+  await assert.rejects(() => s.complete(request, verdict('Wiki/methods/unknown.en.md')), /READING_FIRST_REVIEW_INVALID/);
+  await s.complete(request, verdict(path));
+  assert.equal(getReadingFirstState(controller).status, 'revision_required');
+});
+
+// Fingerprints of masked Writer requests for the existing writing modes, captured from the code before source-translation existed (2026-10-29).
+const EXISTING_MODE_WRITERS = {
+  'independent:en': { instruction_fingerprint: 'sha256:f54d7e9a82646f82c43d8782f35219ff1bcd2969d60028e520223e096c96107a', configuration_fingerprint: 'sha256:260d65b2be453ff03476f6856289755115a74223cffc463f1c34771fbeb115aa' },
+  'independent:zh-CN': { instruction_fingerprint: 'sha256:186ec07065a912ae9fbf331a198319acffa486d851dfde042fe0504d9fa3e1e1', configuration_fingerprint: 'sha256:69065e9a31cef04f3d85dc118a95768afa38bbf068d8e6f7a8c83911a581db1c' },
+  'source-first:en': { instruction_fingerprint: 'sha256:f54d7e9a82646f82c43d8782f35219ff1bcd2969d60028e520223e096c96107a', configuration_fingerprint: 'sha256:260d65b2be453ff03476f6856289755115a74223cffc463f1c34771fbeb115aa' },
+  'source-first:zh-CN': { instruction_fingerprint: 'sha256:4b85ae5514c276dfa64467bed1cbbac5224b8371348df958466e8be348606202', configuration_fingerprint: 'sha256:69065e9a31cef04f3d85dc118a95768afa38bbf068d8e6f7a8c83911a581db1c' },
+};
+const translationNoteUrl = new URL('../../prompts/v3/translation-1.0.md', import.meta.url);
+const moduleView = (language, ids = ['design-overview', 'design-steps']) => ({ language, sections: ids.map(id => ({ id, module_id: 'design', heading: (language === 'en' ? 'Design ' : '设计 ') + id, paragraphs: [language === 'en' ? 'The design supports the comparison.' : '该设计支持比较。'] })), placements: { visuals: [{ id: 'fig1', section_id: 'design-overview', after_paragraph: 0 }], knowledge: [] } });
+const modulePresentation = () => ({ schema_version: 'reading-first-obsidian-1.0', layout: 'writer-modules-1.0', modules: [{ id: 'design', label: { en: 'Study design', 'zh-CN': '研究设计' } }],
+  visuals: [{ id: 'fig1', kind: 'figure', label: { en: 'Figure 1', 'zh-CN': '图1' }, caption: { en: 'Caption.', 'zh-CN': '图注。' }, path: 'Figures/fig1.png', page: 2 }],
+  knowledge: [{ id: 'rate', kind: 'method', canonical_key: 'age-standardisation', title: { en: 'Age standardisation', 'zh-CN': '年龄标化' }, aliases: ['ASR'], paragraphs: { en: ['Background.'], 'zh-CN': ['背景。'] }, source_kind: 'method-background' }] });
+// Entry shape of the phase22 Integrator terminology ledger (subset of Schema/phase22/render-context.schema.json).
+const terminologyLedger = [{ term_id: 'asr', en_full_form: 'age-standardised rate', zh_full_form: '年龄标化率', abbreviation: 'ASR', aliases: ['age-adjusted rate'] }];
+
+test('source-translation sends science only to the source-language writer', async t => {
+  const s = await setup(t, { writingMode: 'source-translation', handoffProfile: SCIENCE_INDEX_PROFILE });
+  assert.deepEqual(s.created.requests.map(item => [item.language, item.task.role, item.packet.host_action_scope.role]), [['en', 'english-writer', 'english-writer']]);
+  const { handoff } = requestPayload(s.created.requests[0]);
+  assert.equal(handoff.science.length, 1);
+  assert.deepEqual(handoff.science_index.map(item => item.role), INDEXED_ROLES);
+  assert.throws(() => createReadingFirstDraftRequests({ controller: s.created.controller }), /READING_FIRST_SOURCE_DRAFT_PENDING/);
+});
+
+test('translation request carries the accepted source view and no science handoff', async t => {
+  const presentation = modulePresentation();
+  const s = await setup(t, { writingMode: 'source-translation', handoffProfile: SCIENCE_INDEX_PROFILE, presentation, integrationContent: { terminology: terminologyLedger } });
+  const note = await readFile(translationNoteUrl);
+  assert.equal(Object.hasOwn(s.created.requests[0].packet.backend.configuration, 'translation'), false);
+  await s.complete(s.created.requests[0], moduleView('en'));
+  const [request] = createReadingFirstDraftRequests({ controller: s.created.controller });
+  assert.equal(request.language, 'zh-CN');
+  assert.equal(request.task.role, 'translation');
+  assert.equal(request.packet.host_action_scope.role, 'translation');
+  const payload = requestPayload(request);
+  assert.equal(Object.hasOwn(payload, 'handoff'), false);
+  assert.deepEqual(payload.source_view, moduleView('en'));
+  assert.equal(payload.source_view_receipt.artifact_id, 'en');
+  assert.deepEqual(payload.translation_context, { identity: s.handoff.identity, modules: presentation.modules, visuals: [{ id: 'fig1', label: { en: 'Figure 1', 'zh-CN': '图1' } }], knowledge: [{ id: 'rate', label: { en: 'Age standardisation', 'zh-CN': '年龄标化' } }], terminology: terminologyLedger });
+  const message = request.emittedStep.arguments.message;
+  assert.ok(message.includes(note.toString('utf8')));
+  assert.doesNotMatch(message, /science-index-1\.0|science_index|Full connected science for/);
+  assert.match(requestPayloadMessage(s.created.requests[0]), /Full connected science for integration/);
+  assert.deepEqual(request.packet.backend.configuration.translation, { profile: 'translation-1.0', sha256: sha(note), byte_length: note.length });
+  assert.equal(Object.hasOwn(request.packet.backend.configuration, 'science_index'), false);
+  const result = await s.complete(request, moduleView('zh-CN'));
+  assert.equal(result.status, 'pending_review');
+});
+
+const requestPayloadMessage = request => request.emittedStep.arguments.message;
+test('translation terminology comes from the Integrator terminology, then its ledger, else stays empty', async t => {
+  for (const [integrationContent, expected] of [[{ terminology: terminologyLedger, terminology_ledger: [] }, terminologyLedger], [{ terminology_ledger: terminologyLedger }, terminologyLedger], [{}, []]]) {
+    const s = await setup(t, { writingMode: 'source-translation', integrationContent });
+    await s.complete(s.created.requests[0], s.view('en'));
+    const [request] = createReadingFirstDraftRequests({ controller: s.created.controller });
+    assert.deepEqual(requestPayload(request).translation_context.terminology, expected);
+  }
+  assert.match(await readFile(translationNoteUrl, 'utf8'), /terminology list is empty, take terms and abbreviations from the accepted source draft/);
+});
+
+test('configured writing instructions for the target language reach Translation, the writing guide does not', async t => {
+  const writingSkills = { 'humanizer-zh': { path: 'synthetic/humanizer-zh.md', content: 'ZH-GUIDE-TEXT' }, humanizer: { path: 'synthetic/humanizer.md', content: 'EN-GUIDE-TEXT' }, stss: { path: 'synthetic/stss.md', content: 'STSS-GUIDE-TEXT' } };
+  const s = await setup(t, { writingMode: 'source-translation', writingSkills });
+  const [source] = s.created.requests;
+  assert.match(requestPayloadMessage(source), /EN-GUIDE-TEXT/);
+  await s.complete(source, s.view('en'));
+  const [request] = createReadingFirstDraftRequests({ controller: s.created.controller });
+  const message = requestPayloadMessage(request);
+  assert.equal(request.task.role, 'translation');
+  assert.match(message, /ZH-GUIDE-TEXT/);
+  assert.match(message, /STSS-GUIDE-TEXT/);
+  assert.doesNotMatch(message, /EN-GUIDE-TEXT|writing_guide|Full connected science for/);
+  assert.equal(Object.hasOwn(request.packet.backend.configuration, 'writing_guide'), false);
+  assert.match(await readFile(translationNoteUrl, 'utf8'), /Apply the writing guidance supplied in this message/);
+});
+
+test('chinese papers write Chinese first and translate to English', async t => {
+  const presentation = { schema_version: 'reading-first-obsidian-1.0', bibliography: { title: 'Synthetic study', first_author: 'Tester', year: 2026 }, source_pdf: 'Raw/source.pdf', sections: [{ id: 'study', indices: { en: 0, 'zh-CN': 0 } }], visuals: [], knowledge: [], map: { steps: [], findings: [], relations: [] } };
+  const s = await setup(t, { writingMode: 'source-translation', sourceLanguage: 'zh-CN', presentation, presentationRequired: true });
+  assert.equal(s.created.requests.length, 1);
+  const [source] = s.created.requests;
+  assert.deepEqual([source.language, source.task.role], ['zh-CN', 'chinese-writer']);
+  assert.ok(Object.hasOwn(requestPayload(source), 'handoff'));
+  await s.complete(source, s.view('zh-CN'));
+  const [translation] = createReadingFirstDraftRequests({ controller: s.created.controller });
+  assert.deepEqual([translation.language, translation.task.role], ['en', 'translation']);
+  const payload = requestPayload(translation);
+  assert.equal(Object.hasOwn(payload, 'handoff'), false);
+  assert.deepEqual(payload.source_view, s.view('zh-CN'));
+  assert.deepEqual(payload.translation_context.terminology, []);
+  await s.complete(translation, s.view('en'));
+  const rendered = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller: s.created.controller } });
+  assert.match(rendered.notes.find(item => item.language === 'zh-CN').path, /^Wiki\/sources\//);
+  assert.match(rendered.notes.find(item => item.language === 'en').path, /^Wiki\/translations\//);
+});
+
+test('translation output must mirror the source sections', async t => {
+  const s = await setup(t, { writingMode: 'source-translation', presentation: modulePresentation() });
+  await s.complete(s.created.requests[0], moduleView('en'));
+  const [request] = createReadingFirstDraftRequests({ controller: s.created.controller });
+  await assert.rejects(() => s.complete(request, moduleView('zh-CN', ['design-overview'])), /READING_FIRST_VIEW_LAYOUT_INVALID/);
+  await assert.rejects(() => s.complete(request, moduleView('zh-CN', ['design-overview', 'design-steps', 'design-extra'])), /READING_FIRST_VIEW_LAYOUT_INVALID/);
+  await assert.rejects(() => s.complete(request, { ...moduleView('zh-CN'), placements: { visuals: [], knowledge: [] } }), /READING_FIRST_VIEW_LAYOUT_INVALID/);
+  await assert.rejects(() => readFile(join(s.root, 'zh-CN.json')), /ENOENT/);
+  assert.equal((await s.complete(request, moduleView('zh-CN'))).status, 'pending_review');
+});
+
+test('existing writing modes keep byte-identical requests', async t => {
+  for (const writingMode of ['independent', 'source-first']) {
+    const s = await setup(t, { writingMode });
+    const issued = [...s.created.requests];
+    if (writingMode === 'source-first') {
+      await s.complete(issued[0], s.view('en'));
+      issued.push(...createReadingFirstDraftRequests({ controller: s.created.controller }));
+    }
+    assert.deepEqual(issued.map(item => item.language), ['en', 'zh-CN']);
+    for (const request of issued) {
+      const { instruction_fingerprint, configuration_fingerprint, message } = maskedRequest(s, request);
+      assert.deepEqual({ instruction_fingerprint, configuration_fingerprint }, EXISTING_MODE_WRITERS[writingMode + ':' + request.language]);
+      assert.doesNotMatch(message, /translation-1\.0|translation_context/);
+      assert.equal(Object.hasOwn(request.packet.backend.configuration, 'translation'), false);
+    }
+    assert.equal(Object.hasOwn(snapshotReadingFirstRuntime(s.created.controller).state, 'translationNote'), false);
+  }
+});
+
+test('source-translation binding freezes the translation profile and keeps the source language first', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'reading-first-translation-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bytes = Buffer.from('Synthetic original source.');
+  await writeFile(join(root, 'source.pdf'), bytes);
+  const mainSession = { model: 'gpt-6-astra', reasoning_effort: 'high' };
+  const options = { runId: 'run', scientificInput: { identity: { paper_id: 'synthetic', run_id: 'run' }, sources: [{ path: join(root, 'source.pdf'), sha256: sha(bytes), byte_length: bytes.length }], context: 'Read all existing material as a connected account.', role_artifacts: roles }, mainSession, authorizationId: 'synthetic-only', deadline: '2099-01-01T00:00:00Z', taskBindings: {} };
+  const pair = { model: 'gpt-6-astra', reasoning_effort: 'high' };
+  const legacyRoles = Object.fromEntries(['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration', 'english-writer', 'chinese-writer', 'reading-editor', 'independent-verifier'].map(role => [role, pair]));
+  const configured = roles => ({ role_model_policy: createConfiguredApaRoleModelPolicy(mainSession, roles), ...buildConfiguredReadingInstructions({}) });
+  const translating = { ...options, writingMode: 'source-translation', configuredSetup: configured({ ...legacyRoles, translation: pair }) };
+  const binding = createReadingFirstRunControl({ ...translating, sourceLanguage: 'zh-CN' }).reading_first_binding;
+  assert.deepEqual([binding.writing_mode, binding.source_language, binding.translation_profile], ['source-translation', 'zh-CN', 'translation-1.0']);
+  assert.equal(createReadingFirstRunControl({ ...translating, sourceLanguage: 'en', firstWritingLanguage: 'en' }).reading_first_binding.first_writing_language, 'en');
+  assert.throws(() => createReadingFirstRunControl({ ...translating, sourceLanguage: 'en', firstWritingLanguage: 'zh-CN' }), /READING_FIRST_WRITING_MODE_INVALID/);
+  assert.throws(() => createReadingFirstRunControl({ ...options, writingMode: 'source-translation' }), /READING_FIRST_WRITING_MODE_INVALID/);
+  for (const writingMode of ['independent', 'source-first']) assert.equal(Object.hasOwn(createReadingFirstRunControl({ ...options, writingMode }).reading_first_binding, 'translation_profile'), false);
+  assert.throws(() => createReadingFirstRunControl({ ...options, writingMode: 'source-translation', configuredSetup: configured(legacyRoles) }), /READING_FIRST_TRANSLATION_MODEL_REQUIRED/);
+  assert.equal(createReadingFirstRunControl({ ...options, writingMode: 'source-first', configuredSetup: configured(legacyRoles) }).reading_first_binding.writing_mode, 'source-first');
+});
+
+// Simulates an edit of the note by wrapping the file read; the repository file itself is never touched.
+function changeTranslationNote(t) {
+  const original = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', function (path, ...rest) {
+    const bytes = original.call(this, path, ...rest);
+    return String(path?.href ?? path).endsWith('translation-1.0.md') ? Buffer.concat([Buffer.from(bytes), Buffer.from('\nChanged.')]) : bytes;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+}
+test('translation note is captured in state, restored from the checkpoint and checked for drift', async t => {
+  const s = await setup(t, { writingMode: 'source-translation' });
+  const note = await readFile(translationNoteUrl);
+  await s.complete(s.created.requests[0], s.view('en'));
+  const [pending] = createReadingFirstDraftRequests({ controller: s.created.controller });
+  const saved = snapshotReadingFirstRuntime(s.created.controller);
+  assert.deepEqual(saved.state.translationNote, { profile: 'translation-1.0', sha256: sha(note), byte_length: note.length });
+  const receipt = await commitOwnedArtifact({ artifactRoot: s.root, dispatchContext: s.broker.dispatchContext,
+    capability: s.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: 'checkpoint.json', revision: '1' }),
+    artifact: { artifact_id: 'checkpoint', content: JSON.stringify(saved) }, expectedRevision: '1' });
+  const recovered = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: receipt });
+  assert.equal(recovered.ok, true, JSON.stringify(recovered.errors));
+  assert.deepEqual(recovered.requests.map(item => item.emittedStep), [pending.emittedStep]);
+  assert.deepEqual(snapshotReadingFirstRuntime(recovered.controller), saved);
+  changeTranslationNote(t);
+  assert.throws(() => snapshotReadingFirstRuntime(s.created.controller), /READING_FIRST_TRANSLATION_NOTE_CHANGED/);
+  assert.throws(() => snapshotReadingFirstRuntime(recovered.controller), /READING_FIRST_TRANSLATION_NOTE_CHANGED/);
+});
+
+// Drives a run to a first review whose single material issue concerns `affected` languages.
+// Sections are numbered so a translation can be checked against the source draft it was given; the review issue carries the Writer owner a configured run requires.
+const plainView = (language, count = 1) => ({ language, sections: Array.from({ length: count }, (_, index) => ({ heading: (language === 'en' ? 'Study ' : '研究 ') + index, paragraphs: ['Body.'] })) });
+async function reviewedRun(t, options, affected) {
+  const { view = plainView, ...setupOptions } = options;
+  const s = await setup(t, setupOptions);
+  const controller = s.created.controller;
+  const drafts = [...s.created.requests];
+  for (let i = 0; i < drafts.length; i++) {
+    await s.complete(drafts[i], view(drafts[i].language));
+    if (drafts.length === 1) drafts.push(...createReadingFirstDraftRequests({ controller }));
+  }
+  const rendered = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller } });
+  const material = { overall: { complete: false, coherent: true, bilingual_consistent: true }, key_nodes: [], issues: [{ severity: 'material', kind: 'omission', detail: 'Missing design explanation', affected_languages: affected, repair_owner: 'writer' }], scope: 'whole account' };
+  await s.complete(createReadingFirstReviewRequest({ controller, presentation: rendered }), material);
+  return { s, controller };
+}
+const verdictComplete = { overall: { complete: true, coherent: true, bilingual_consistent: true }, key_nodes: [{ kind: 'main_conclusion', location: 'source', finding: 'supported' }, { kind: 'key_design', location: 'source', finding: 'supported' }], issues: [], scope: 'only repaired context' };
+const finishLocalReview = async ({ s, controller }) => {
+  const rendered = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller } });
+  await s.complete(createReadingFirstReviewRequest({ controller, presentation: rendered }), verdictComplete);
+};
+
+test('translation-only issues revise only the translation', async t => {
+  const { s, controller } = await reviewedRun(t, { writingMode: 'source-translation' }, ['zh-CN']);
+  const requests = createReadingFirstRevisionRequests({ controller });
+  assert.deepEqual(requests.map(item => [item.task.task_id, item.language, item.task.role, item.packet.host_action_scope.role]), [['zh-CN-r2', 'zh-CN', 'translation', 'translation']]);
+  const payload = requestPayload(requests[0]);
+  assert.equal(Object.hasOwn(payload, 'handoff'), false);
+  assert.deepEqual(payload.source_view, plainView('en'));
+  assert.equal(payload.source_view_receipt.artifact_id, 'en');
+  assert.deepEqual(payload.prior_view, plainView('zh-CN'));
+  assert.equal(payload.issues.length, 1);
+  assert.equal(typeof payload.revision_scope, 'string');
+  assert.deepEqual(payload.translation_context.terminology, []);
+  assert.match(requests[0].emittedStep.arguments.message, /Translation: translation-1\.0/);
+  assert.doesNotMatch(requests[0].emittedStep.arguments.message, /Full connected science for/);
+  assert.throws(() => createReadingFirstRevisionRequests({ controller }), /READING_FIRST_REVISION_UNAVAILABLE/);
+  await assert.rejects(() => s.complete(requests[0], plainView('zh-CN', 2)), /READING_FIRST_VIEW_LAYOUT_INVALID/);
+  await s.complete(requests[0], plainView('zh-CN'));
+  await finishLocalReview({ s, controller });
+  assert.equal(getReadingFirstState(controller).calls_used, 5);
+  assert.equal(getReadingFirstState(controller).status, 'reading_complete');
+});
+
+test('source issues revise the source first, then retranslate', async t => {
+  const { s, controller } = await reviewedRun(t, { writingMode: 'source-translation' }, ['en']);
+  const first = createReadingFirstRevisionRequests({ controller });
+  assert.deepEqual(first.map(item => [item.task.task_id, item.task.role]), [['en-r2', 'english-writer']]);
+  assert.ok(Object.hasOwn(requestPayload(first[0]), 'handoff'));
+  await s.complete(first[0], plainView('en', 2));
+  const second = createReadingFirstRevisionRequests({ controller });
+  assert.deepEqual(second.map(item => [item.task.task_id, item.language, item.task.role]), [['zh-CN-r2', 'zh-CN', 'translation']]);
+  const payload = requestPayload(second[0]);
+  assert.equal(Object.hasOwn(payload, 'handoff'), false);
+  assert.deepEqual(payload.source_view, plainView('en', 2));
+  assert.equal(payload.source_view_receipt.artifact_id, 'en-r2');
+  assert.deepEqual(payload.prior_view, plainView('zh-CN'));
+  assert.equal(payload.issues.length, 1);
+  // The mirror is checked against the re-accepted source view, not the first one.
+  await assert.rejects(() => s.complete(second[0], plainView('zh-CN')), /READING_FIRST_VIEW_LAYOUT_INVALID/);
+  await s.complete(second[0], plainView('zh-CN', 2));
+  await finishLocalReview({ s, controller });
+  assert.equal(getReadingFirstState(controller).calls_used, 6);
+  assert.equal(getReadingFirstState(controller).review_rounds, 2);
+  assert.equal(getReadingFirstState(controller).status, 'reading_complete');
+});
+
+test('translation revision waits for the pending source revision', async t => {
+  const { controller } = await reviewedRun(t, { writingMode: 'source-translation' }, ['en', 'zh-CN']);
+  const [first] = createReadingFirstRevisionRequests({ controller });
+  assert.equal(first.task.task_id, 'en-r2');
+  assert.throws(() => createReadingFirstRevisionRequests({ controller }), /READING_FIRST_SOURCE_DRAFT_PENDING/);
+});
+
+test('chinese source papers revise the Chinese Writer first, then the English translation', async t => {
+  const { s, controller } = await reviewedRun(t, { writingMode: 'source-translation', sourceLanguage: 'zh-CN' }, ['zh-CN']);
+  const [first] = createReadingFirstRevisionRequests({ controller });
+  assert.deepEqual([first.task.task_id, first.task.role], ['zh-CN-r2', 'chinese-writer']);
+  await s.complete(first, { language: 'zh-CN', sections: [{ heading: 'Revised', paragraphs: ['Revised.'] }] });
+  const [second] = createReadingFirstRevisionRequests({ controller });
+  assert.deepEqual([second.task.task_id, second.task.role], ['en-r2', 'translation']);
+  assert.equal(requestPayload(second).source_view_receipt.artifact_id, 'zh-CN-r2');
+});
+
+// Fingerprints of masked en-r2 Writer revision requests, captured from the code before translation revisions existed (2026-10-29).
+const EXISTING_MODE_REVISIONS = {
+  'independent:en-r2': { instruction_fingerprint: 'sha256:9eac1029610b2655cacc3f98669f8983dbdeb63b9d9065a12994e9271d4501fc', configuration_fingerprint: 'sha256:7e3a2ddf3524729b9d45ae8a47b904fc7d126bd790efe69fe1314f472d7ebd1b' },
+  'source-first:en-r2': { instruction_fingerprint: 'sha256:9eac1029610b2655cacc3f98669f8983dbdeb63b9d9065a12994e9271d4501fc', configuration_fingerprint: 'sha256:7e3a2ddf3524729b9d45ae8a47b904fc7d126bd790efe69fe1314f472d7ebd1b' },
+};
+test('existing writing modes keep byte-identical Writer revision requests', async t => {
+  for (const writingMode of ['independent', 'source-first']) {
+    const { s, controller } = await reviewedRun(t, { writingMode }, ['en']);
+    const [request] = createReadingFirstRevisionRequests({ controller });
+    assert.deepEqual([request.task.task_id, request.task.role], ['en-r2', 'english-writer']);
+    const { instruction_fingerprint, configuration_fingerprint, message } = maskedRequest(s, request);
+    assert.deepEqual({ instruction_fingerprint, configuration_fingerprint }, EXISTING_MODE_REVISIONS[writingMode + ':en-r2']);
+    assert.doesNotMatch(message, /translation-1\.0|translation_context/);
   }
 });
