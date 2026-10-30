@@ -427,7 +427,7 @@ export async function prepareReadingFirstPublication(args = {}) {
 /** Prepare a reviewed candidate completed by an external host transport without claiming native dispatch. */
 export async function prepareExternalReviewedReadingFirstPublication({
   vaultRoot, generation, evidenceMode = 'actual', resources, runRoot, candidateRoot,
-  scientificInput, candidate, presentation, review, reviewReceipt, viewReceipts, readingEditorReceipt, callsUsed = 0,
+  scientificInput, candidate, presentation, review, reviewReceipt, viewReceipts, readingEditorReceipt, readingFirstBinding, callsUsed = 0,
 } = {}) {
   const receiptValid = receipt => typeof receipt?.path === 'string' && receipt.path.length > 0
     && typeof receipt?.artifact_id === 'string' && receipt.artifact_id.length > 0;
@@ -457,12 +457,17 @@ export async function prepareExternalReviewedReadingFirstPublication({
       binding(join(runRoot, '.phase21-receipts', encodeURIComponent(receipt.artifact_id) + '.json')),
     ]),
   ].map(row => [row.path, row])).values()];
+  const editorValue = JSON.parse(readFileSync(join(runRoot, readingEditorReceipt.path), 'utf8'));
+  if (editorValue.schema_version === 'reading-editor-1.3' && !readingFirstBinding) fail('RF_PUBLICATION_EXTERNAL_BINDING_REQUIRED');
+  if (readingFirstBinding && ((readingFirstBinding.presentation_profile ?? 'reading-editor-1.0') !== editorValue.schema_version
+    || readingFirstBinding.input_fingerprint !== hash(scientificInput))) fail('RF_PUBLICATION_EXTERNAL_BINDING_INVALID');
   const sourceRecipe = {
     schema_version: 'external-reviewed-reading-first-publication-source-1.0',
     run_id: scientificInput.identity.run_id,
     identity_fingerprint: hash(scientificInput),
     reading_review_fingerprint: hash({ review, receipt: reviewReceipt, presentation: candidate.presentation_fingerprint }),
     scientific_input: clone(scientificInput),
+    ...(readingFirstBinding ? { binding: clone(readingFirstBinding), run_root: resolve(runRoot) } : {}),
     candidate: clone(candidate),
     review: clone(review),
     review_receipt: clone(reviewReceipt),
@@ -472,7 +477,7 @@ export async function prepareExternalReviewedReadingFirstPublication({
     presentation_assets: clone(candidate.presentation_assets ?? []),
     calls_used: callsUsed,
     source_bindings: sourceBindings,
-    tool_bindings: [...new Map([...tools(), ...getReadingFirstRuntimePublicationToolBindings()]
+    tool_bindings: [...new Map([...tools(), ...getReadingFirstRuntimePublicationToolBindings(readingFirstBinding)]
       .map(row => [row.path, row])).values()],
   };
   sourceRecipe.recipe_fingerprint = hash(sourceRecipe);
@@ -488,7 +493,7 @@ export async function prepareExternalReviewedReadingFirstPublication({
   record.source = source;
   record.sourceBindings = [...new Map([...sourceBindings, ...options.resources.map(row => binding(row.source_path))]
     .map(row => [row.path, row])).values()];
-  record.toolBindings = [...new Map([...tools(), ...getReadingFirstRuntimePublicationToolBindings()]
+  record.toolBindings = [...new Map([...tools(), ...getReadingFirstRuntimePublicationToolBindings(readingFirstBinding)]
     .map(row => [row.path, row])).values()];
   record.stamp = hash({ manifest: resultReview.reviewManifest, output: inventoryStamp(resultReview.outputInventory), hashes: resultReview.hashes });
   const { dryRunBilingualPublication } = await import('./phase22-publication.mjs');

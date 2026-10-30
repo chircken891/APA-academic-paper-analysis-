@@ -608,3 +608,19 @@ test('complete original captions and footnotes remain beside images before separ
     assert.ok(note.content.indexOf(captions[language]) < note.content.indexOf(language === 'en' ? '**Reading notes:**' : '**阅读说明：**'));
   });
 });
+
+test('reading editor 1.3 retains full map and navigation with no folded content', () => {
+  const data = compactInput();
+  data.presentation.map.findings.push({ id: 'other', label: { en: 'Other finding', 'zh-CN': '其他发现' }, section_id: 'findings' });
+  data.readingEditor.schema_version = 'reading-editor-1.2';
+  const old = renderReadingFirstObsidian(data).notes;
+  data.readingEditor.schema_version = 'reading-editor-1.3';
+  const next = renderReadingFirstObsidian(data).notes;
+  for (let i = 0; i < next.length; i++) {
+    assert.doesNotMatch(next[i].content, /^> \[![^\]]+\]-/m);
+    assert.doesNotMatch(next[i].content, /<details\b/i);
+    assert.doesNotMatch(next[i].content, /^#### /m);
+    assert.match(next[i].content, /other|其他发现/i);
+    assert.equal(next[i].content, old[i].content.replace(/^(> \[![^\]]+\])-/gm, '$1'));
+  }
+});

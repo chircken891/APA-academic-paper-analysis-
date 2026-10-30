@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync, mkdirSync, writeFileSync, linkSync, unlinkSync, lstatSync, cpSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync, linkSync, unlinkSync, lstatSync, cpSync, readdirSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { inspectApaConfig, resolveApaConfig } from '../lib/apa-config.mjs';
 import { createConfiguredApaRoleModelPolicy, resolveApaRoleModel, buildHostDispatchArguments } from '../apa-model-policy.mjs';
 import { SCIENCE_INDEX_PROFILE, createReadingFirstRunControl, fingerprintReadingFirst, renderReadingFirstNotes, snapshotReadingFirstRuntime } from './reading-first-runtime.mjs';
@@ -9,14 +10,31 @@ import { emitApprovedRunStep, createCurrentMineruBaselinePort } from './phase21-
 import { getRoleReplyContract, loadRoleReplyContract } from './role-reply-contract.mjs';
 import { readCommittedReadingFirstKnowledgeRegistry, assertCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
 import { readingEditorInstructions } from './reading-first-editor-contract.mjs';
+import { COMPACTION_POLICY, compactionControlBindings, assertCompactionDispatchAllowed } from './reading-compaction.mjs';
 
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
 const sectionsOf = bytes => Object.fromEntries([...String(bytes).matchAll(/^## (.+)\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/gm)].map(match => [match[1], match[2].trim()]));
 const scienceSections = { evidence: 'Evidence/Coverage Mapper', methods: 'Design/Methods Specialist', results: 'Results/Visuals Specialist', interpretation: 'Interpretation/Appraisal Specialist', 'scientific-reading': 'Scientific Reading Synthesizer', integration: 'Integrator' };
 
+export const DEFAULT_CONFIGURED_INSTRUCTION_PROFILE = 'configured-reading-2.0';
+
 /** Freeze selected guidance into the binding. Disabled skills contribute no optional instructions. */
-export function buildConfiguredReadingInstructions(writingSkills = {}) {
+export function buildConfiguredReadingInstructions(writingSkills = {}, { instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE } = {}) {
+  if (instructionProfile === 'configured-reading-2.0') {
+    const urls = ['science-configured-2.0.md', 'reading-configured-2.0.md', 'reading-editor-1.3.md'].map(name => new URL('../../prompts/v3/' + name, import.meta.url));
+    const buffers = urls.map(url => readFileSync(url));
+    const sections = sectionsOf(buffers[1]);
+    sections['Reading Editor'] = buffers[2].toString('utf8').trim();
+    const writingInstructions = Object.fromEntries(['en', 'zh-CN'].map(language => [language, Object.entries(writingSkills)
+      .filter(([key]) => key !== (language === 'en' ? 'humanizer-zh' : 'humanizer'))
+      .map(([key, guide]) => 'Selected optional writing guidance: ' + key + '\n' + JSON.stringify({ path: guide.path, sha256: sha(Buffer.from(guide.content)) })
+        + '\nApply only guidance relevant to this language and the assigned article module, within the existing APA output contract. Do not run skill workflows, commands, extra roles or review loops.\n' + guide.content).join('\n\n')]));
+    return { instruction_profile: instructionProfile, prompt_files: urls.map((url, index) => ({ path: fileURLToPath(url), sha256: sha(buffers[index]), byte_length: buffers[index].length })),
+      sections, science_sections: sectionsOf(buffers[0]), writing_instructions: writingInstructions,
+      writing_guides: Object.fromEntries(Object.entries(writingSkills).map(([key, guide]) => [key, { path: guide.path, sha256: sha(Buffer.from(guide.content)), byte_length: Buffer.byteLength(guide.content) }])) };
+  }
+  if (instructionProfile !== 'configured-reading-1.0') throw new Error('APA_CONFIGURED_INSTRUCTION_PROFILE_INVALID');
   const sections = sectionsOf(readFileSync(new URL('../../prompts/v3/reading-first-contracts.md', import.meta.url), 'utf8'));
   // Configured runs freeze their own source-translation instructions. The base
   // prompt remains byte-identical for older runs that bind its fingerprint.
@@ -70,7 +88,7 @@ export function buildConfiguredReadingInstructions(writingSkills = {}) {
 }
 
 /** Required entry for NEW configured readings. Reopening a run uses its owned binding, never this factory. */
-export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext, supportedModelPairs, ...options } = {}) {
+export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext, supportedModelPairs, instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, ...options } = {}) {
   if (sessionContext !== undefined) {
     if (!sessionContext || typeof sessionContext !== 'object' || Array.isArray(sessionContext)
       || sessionContext.effort !== undefined && sessionContext.reasoning_effort !== undefined && sessionContext.effort !== sessionContext.reasoning_effort) throw new Error('APA_CONFIGURED_SESSION_CONTEXT_INVALID');
@@ -85,6 +103,8 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
   if (!loaded.ready) throw new Error('APA_CONFIG_DEPENDENCIES_UNAVAILABLE: ' + loaded.dependencies.filter(item => item.status !== 'available').map(item => item.key + '=' + item.status).join(', '));
   if (!/^[a-zA-Z0-9_-]+$/.test(options.runId ?? '')) throw new Error('APA_CONFIGURED_RUN_ID_INVALID');
   if (!['en', 'zh-CN'].includes(options.sourceLanguage)) throw new Error('APA_CONFIGURED_SOURCE_LANGUAGE_REQUIRED');
+  // The handoff accepts only text context; reject other shapes before any science call is spent.
+  if (typeof options.scientificInput?.context !== 'string' || !options.scientificInput.context.trim()) throw new Error('READING_FIRST_CONTEXT_TEXT_REQUIRED');
   const paths = { runRoot: join(resolvedConfig.paths.runs, options.runId), parseRoot: join(resolvedConfig.paths.parse, options.runId), candidateRoot: join(resolvedConfig.paths.candidates, options.runId) };
   const parserOptions = { runtimeHome: resolvedConfig.parser.runtime_home,
     python: resolvedConfig.parser.python ?? join(resolvedConfig.parser.runtime_home, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
@@ -92,16 +112,19 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
   const configuredSetup = { schema_version: 'apa-configured-reading-1.0', config_fingerprint: loaded.fingerprint, paths, parser: parserOptions,
     knowledge_registry: { policy: 'current-shared-nodes-1.0', vault_root: resolve(repoRoot) },
     role_model_policy: createConfiguredApaRoleModelPolicy(mainSession, resolvedConfig.roles),
-    ...buildConfiguredReadingInstructions(resolvedConfig.writingSkills) };
+    ...buildConfiguredReadingInstructions(resolvedConfig.writingSkills, { instructionProfile }) };
   // The language other than the paper's original is translated from the accepted source draft; its tasks run as the translation role.
   const translationKeys = options.sourceLanguage === 'en' ? ['zh-CN', 'zh-CN-r2'] : ['en', 'en-r2'];
   // A caller-supplied role for these keys must already be translation; anything else is a conflict, not something to overwrite.
   if (Object.entries(options.taskBindings ?? {}).some(([key, task]) => translationKeys.includes(key) && task?.role !== undefined && task.role !== 'translation')) throw new Error('READING_FIRST_TRANSLATION_ROLE_REQUIRED');
   const taskBindings = options.taskBindings && Object.fromEntries(Object.entries(options.taskBindings).map(([key, task]) => [key, translationKeys.includes(key) ? { ...task, role: 'translation' } : task]));
   const runControl = createReadingFirstRunControl({ ...options, ...(taskBindings ? { taskBindings } : {}), ...(loaded.config.host ? { host: loaded.config.host } : {}), mainSession, configuredSetup, writingMode: 'source-translation',
+    compactionPolicy: COMPACTION_POLICY,
     roleReplyContract: options.roleReplyContract === undefined ? getRoleReplyContract() : options.roleReplyContract,
+    ...(instructionProfile === 'configured-reading-2.0' ? { presentationProfile: 'reading-editor-1.3' } : {}),
     firstWritingLanguage: options.sourceLanguage, presentationMode: resolvedConfig.reading.presentation_mode, handoffProfile: SCIENCE_INDEX_PROFILE });
-  return freeze({ resolvedConfig, scientificInput: structuredClone(options.scientificInput), configurationFingerprint: loaded.fingerprint, paths, parserOptions, runControl });
+  return freeze({ resolvedConfig, scientificInput: structuredClone(options.scientificInput), configurationFingerprint: loaded.fingerprint, paths, parserOptions, runControl,
+    compactionControlBindings: compactionControlBindings(runControl) });
 }
 
 function ownedPath(root, path) {
@@ -154,6 +177,13 @@ export function createConfiguredScienceRequest({ prepared, role, task, dispatchC
 
 /** Return only the approved, correlated spawn arguments; this does not invoke the host tool. */
 export function getConfiguredReadingDispatchArguments({ prepared, request } = {}) {
+  validateConfiguredReadingDispatch({ prepared, request });
+  assertCompactionDispatchAllowed(prepared.runControl.reading_first_binding, request);
+  return structuredClone(request.emittedStep.arguments);
+}
+
+/** Validate stored actions during recovery without authorizing a new host dispatch. */
+export function validateConfiguredReadingDispatch({ prepared, request } = {}) {
   const binding = prepared?.runControl?.reading_first_binding, packet = request?.packet, step = request?.emittedStep;
   if (!binding || !packet || !step || packet.run_id !== prepared.runControl.run_id
     || packet.user_approval_id !== binding.authorization_id || packet.workflow_profile !== binding.profile
@@ -179,7 +209,6 @@ export function getConfiguredReadingDispatchArguments({ prepared, request } = {}
     if (fingerprintReadingFirst(file) !== fingerprintReadingFirst(packet.backend.configuration.instruction_file)
       || sha(bytes) !== file.sha256 || bytes.length !== file.byte_length) throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH');
   } else if (packet.backend.configuration.instruction_file) throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH');
-  return structuredClone(step.arguments);
 }
 
 /** Parser packet configuration is fingerprinted by the existing approval gate. */
@@ -187,8 +216,9 @@ export function configuredMineruConfiguration(prepared) {
   return { formula: true, pipeline: 'pipeline', table: true, runtime_selection: { ...prepared.parserOptions } };
 }
 
+/** Parsing calls no model: record `requested_model: null` in the packet; historical formal names remain accepted. */
 export function createConfiguredMineruPort({ prepared, repoRoot, dependencies } = {}) {
-  const port = createCurrentMineruBaselinePort({ vaultRoot: repoRoot, dependencies });
+  const port = createCurrentMineruBaselinePort({ vaultRoot: repoRoot, dependencies, modelFreeParser: true });
   return Object.freeze({ port: port.port, run(packet, options) {
     if (resolve(packet.allowed_output_root) !== prepared.paths.parseRoot
       || fingerprintReadingFirst(packet.backend?.configuration) !== fingerprintReadingFirst(configuredMineruConfiguration(prepared))) throw new Error('APA_CONFIGURED_PARSER_BINDING_MISMATCH');
@@ -197,15 +227,26 @@ export function createConfiguredMineruPort({ prepared, repoRoot, dependencies } 
 }
 
 /** Save the same rendered Obsidian candidate through the existing self-contained exporter; grants no publication authority. */
-export async function materializeConfiguredReadingCandidate({ prepared, controller, handoff, resources, onDependencyBoundary, ...renderOptions } = {}) {
+export async function materializeConfiguredReadingCandidate({ prepared, controller, handoff, resources, onDependencyBoundary, candidateRevision = 1, reuseExisting = false, ...renderOptions } = {}) {
   const checkpoint = snapshotReadingFirstRuntime(controller);
   if (checkpoint.control_fingerprint !== fingerprintReadingFirst(prepared.runControl.reading_first_binding)
     || checkpoint.handoff_fingerprint !== handoff?.handoff_fingerprint) throw new Error('APA_CONFIGURED_CANDIDATE_BINDING_MISMATCH');
   const policy = prepared.runControl.reading_first_binding.configured_setup?.knowledge_registry;
+  const boundRoot = prepared.runControl.reading_first_binding.configured_setup?.paths?.candidateRoot;
+  if ((candidateRevision !== 1 || reuseExisting) && (typeof boundRoot !== 'string' || resolve(prepared.paths.candidateRoot) !== resolve(boundRoot))) throw new Error('APA_CONFIGURED_CANDIDATE_BINDING_MISMATCH');
+  if (![1, 2].includes(candidateRevision) || typeof reuseExisting !== 'boolean') throw new Error('APA_CONFIGURED_CANDIDATE_REVISION_INVALID');
+  const material = checkpoint.state.review?.issues?.filter(issue => issue.severity === 'material') ?? [];
+  const rendererOnly = checkpoint.state.status === 'revision_required' && material.length > 0 && material.every(issue => issue.repair_owner === 'renderer');
+  const revisionReady = checkpoint.state.reviews === 1 && checkpoint.state.review && (checkpoint.state.status === 'pending_review' || rendererOnly);
+  const recoveringReviewed = reuseExisting && checkpoint.state.reviews === 2 && checkpoint.state.review && ['reviewing', 'reading_complete', 'completed_with_limits'].includes(checkpoint.state.status);
+  if (candidateRevision === 2 && !revisionReady && !recoveringReviewed) throw new Error('APA_CONFIGURED_CANDIDATE_REVISION_INVALID');
+  const candidateRoot = candidateRevision === 2 ? prepared.paths.candidateRoot + '-r2' : prepared.paths.candidateRoot;
   if (policy?.policy === 'current-shared-nodes-1.0') {
     if (typeof policy.vault_root !== 'string' || resolve(policy.vault_root) !== policy.vault_root) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_POLICY_INVALID');
-    try { lstatSync(prepared.paths.candidateRoot); throw Object.assign(new Error('RF_PREVIEW_OUTPUT_EXISTS'), { code: 'RF_PREVIEW_OUTPUT_EXISTS' }); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    let exists = false;
+    try { lstatSync(candidateRoot); exists = true; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (exists && !reuseExisting) throw Object.assign(new Error('RF_PREVIEW_OUTPUT_EXISTS'), { code: 'RF_PREVIEW_OUTPUT_EXISTS' });
+    if (candidateRevision === 2 && recoveringReviewed && !exists) throw new Error('APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH');
     const scratch = join(policy.vault_root, '.tmp', 'reading-first-candidates');
     mkdirSync(scratch, { recursive: true });
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -222,32 +263,56 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
         const exported = await exportReadingFirstPreview({ outputRoot: stage, identity: handoff.identity,
           views: ['en', 'zh-CN'].map(language => checkpoint.state.views[language].value), presentation: handoff.presentation, resources,
           ...(checkpoint.state.readingEditor ? { readingEditor: checkpoint.state.readingEditor.value } : {}), ...options,
-          targetRegistry: candidate.targetRegistry, historicalKnowledge: { vaultRoot: policy.vault_root } });
+          targetRegistry: candidate.targetRegistry, noteLayout: prepared.runControl.reading_first_binding.note_layout, sourceLanguage: prepared.runControl.reading_first_binding.source_language,
+          historicalKnowledge: { vaultRoot: policy.vault_root } });
         if (candidate.notes.some(note => exported.notes.find(other => other.path === note.path)?.content !== note.content)
           || (candidate.supportNotes?.length ?? 0) !== (exported.supportNotes?.length ?? 0)
           || candidate.supportNotes?.some(note => exported.supportNotes.find(other => other.path === note.path)?.content !== note.content)) throw new Error('APA_CONFIGURED_CANDIDATE_RENDER_MISMATCH');
-        await onDependencyBoundary?.({ attempt, phase: 'before-finalize', stagingRoot: stage });
+        await onDependencyBoundary?.({ attempt, phase: 'before-finalize', stagingRoot: stage, candidate });
         const paths = (exported.manifest.knowledge_dependencies ?? []).map(row => row.path);
         assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: trusted, policy: policy.policy, paths });
-        mkdirSync(dirname(prepared.paths.candidateRoot), { recursive: true });
-        try { mkdirSync(prepared.paths.candidateRoot); }
+        if (exists) {
+          try {
+            const walk = (root, prefix = '') => readdirSync(join(root, prefix), { withFileTypes: true }).flatMap(entry => {
+              const relativePath = prefix ? prefix + '/' + entry.name : entry.name;
+              if (entry.isDirectory()) return walk(root, relativePath);
+              if (!entry.isFile()) throw new Error('invalid entry');
+              return [relativePath];
+            });
+            if (!lstatSync(candidateRoot).isDirectory()) throw new Error('invalid root');
+            const actual = walk(candidateRoot).sort(), expected = [...exported.files].sort();
+            if (fingerprintReadingFirst(actual) !== fingerprintReadingFirst(expected)) throw new Error('file set');
+            for (const path of expected) {
+              const oldBytes = readFileSync(join(candidateRoot, ...path.split('/'))), newBytes = readFileSync(join(stage, ...path.split('/')));
+              if (oldBytes.length !== newBytes.length || sha(oldBytes) !== sha(newBytes)) throw new Error('file bytes');
+            }
+            assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: trusted, policy: policy.policy, paths });
+          } catch (error) {
+            if (error.code === 'P23_CURRENT_CHANGED') throw error;
+            throw Object.assign(new Error('APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH'), { code: 'APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH' });
+          }
+          return { candidate, exported: { ...exported, outputRoot: candidateRoot }, staging_root: stage, reused: true };
+        }
+        mkdirSync(dirname(candidateRoot), { recursive: true });
+        try { mkdirSync(candidateRoot); }
         catch (error) { if (error.code === 'EEXIST') throw Object.assign(new Error('RF_PREVIEW_OUTPUT_EXISTS'), { code: 'RF_PREVIEW_OUTPUT_EXISTS' }); throw error; }
         try {
-          cpSync(stage, prepared.paths.candidateRoot, { recursive: true, force: false, errorOnExist: true });
-          await onDependencyBoundary?.({ attempt, phase: 'after-finalize', stagingRoot: stage, outputRoot: prepared.paths.candidateRoot });
+          cpSync(stage, candidateRoot, { recursive: true, force: false, errorOnExist: true });
+          await onDependencyBoundary?.({ attempt, phase: 'after-finalize', stagingRoot: stage, outputRoot: candidateRoot });
           assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: trusted, policy: policy.policy, paths });
         } catch (error) {
-          error.details = { ...error.details, owned_output_path: prepared.paths.candidateRoot, staging_root: stage };
+          error.details = { ...error.details, owned_output_path: candidateRoot, staging_root: stage };
           throw error;
         }
-        return { candidate, exported: { ...exported, outputRoot: prepared.paths.candidateRoot }, staging_root: stage };
+        return { candidate, exported: { ...exported, outputRoot: candidateRoot }, staging_root: stage };
       } catch (error) {
         if (error.code !== 'P23_CURRENT_CHANGED' || attempt === 2) throw error;
         // Accepted views and their receipts remain untouched; only the candidate is re-rendered.
-        try { lstatSync(prepared.paths.candidateRoot); throw error; } catch (probe) { if (probe.code !== 'ENOENT') throw probe; }
+        try { lstatSync(candidateRoot); throw error; } catch (probe) { if (probe.code !== 'ENOENT') throw probe; }
       }
     }
   }
+  if (candidateRevision !== 1 || reuseExisting) throw new Error('APA_CONFIGURED_CANDIDATE_REVISION_INVALID');
   let trusted;
   if (policy !== undefined) {
     if (!['committed-generation-1.0', 'committed-shared-nodes-1.0'].includes(policy?.policy) || typeof policy.vault_root !== 'string' || resolve(policy.vault_root) !== policy.vault_root) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_POLICY_INVALID');
@@ -264,8 +329,8 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
   };
   const candidate = renderReadingFirstNotes({ controller, ...renderOptions });
   await assertRegistryCurrent();
-  mkdirSync(dirname(prepared.paths.candidateRoot), { recursive: true });
-  const exported = await exportReadingFirstPreview({ outputRoot: prepared.paths.candidateRoot, identity: handoff.identity,
+  mkdirSync(dirname(candidateRoot), { recursive: true });
+  const exported = await exportReadingFirstPreview({ outputRoot: candidateRoot, identity: handoff.identity,
     views: ['en', 'zh-CN'].map(language => checkpoint.state.views[language].value), presentation: handoff.presentation, resources,
     ...(checkpoint.state.readingEditor ? { readingEditor: checkpoint.state.readingEditor.value } : {}), ...renderOptions,
     targetRegistry: candidate.targetRegistry,

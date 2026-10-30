@@ -4,7 +4,9 @@
 
 ## 入口与角色
 
-Controller 使用 scripts/v3/configured-reading.mjs 的 prepareConfiguredReading 读取本库答案并创建新运行。必填项或所选依赖缺失时先设置。冻结来源、有限调用预算、截止时间、模型/强度及原生/受控输出路径后派发；发出请求不代表角色完成。
+Controller 使用 [reading-session](reading-session.md) 的 `createReadingSession`、`resumeReadingSession`、`nextReadingAction` 和 `recordReadingEvent` 推进新运行及恢复。入口调用 `prepareConfiguredReading` 冻结本库答案、来源、有限调用预算、截止时间、模型/强度及原生/受控输出路径。必填项或所选依赖缺失时先设置，当前宿主及本次运行读写证据须另行通过 `reading_preflight`；发出请求不代表角色完成。
+
+新配置化运行冻结 `configured-reading-2.0` 提示；选用 Editor 时冻结 `reading-editor-1.3`。各角色完整提示与实际文件指纹在创建时绑定，只有明确启用的写作指导进入请求。历史绑定保留原提示字节和原恢复路径。
 
 | 角色 | 责任 |
 | --- | --- |
@@ -42,7 +44,7 @@ Writer 在同一次写作中使用选中的 Nature/Humanizer/stss 指导，不�
 
 ## 审查、恢复与发布
 
-完整候选先渲染，再一次整体审查，覆盖连贯性、关键双语意义、图表、知识与导航。普通风格偏好不追加调用。实质问题由责任角色局部修复，最多一次局部复核。未做原生 Obsidian 观察则如实记录，不能以字符串检查替代。
+完整候选先渲染，再一次整体审查，覆盖连贯性、关键双语意义、图表、知识与导航。普通风格偏好不追加调用。实质问题由责任角色局部修复，最多一次局部复核。新合同用 `repair_owner` 和 `repair_scope` 定位问题，首次审查的 Editor 输出作为不可变修订基线；范围外内容、顺序和身份须保留。无法定位或修订越界时保存 `completed_with_limits`，保留真实回传和已用调用，不自动重派或发出局部复核。未做原生 Obsidian 观察则如实记录，不能以字符串检查替代。
 
 reading_complete 仍是 publishable:false。经 [受控发布桥](reading-first-publication.md) 登记原笔记、共享知识及资源；用户批准精确清单后才执行 V3 事务。只有已提交代次进入索引和图谱，解析、阅读、原生显示、阶段验收与发布不可互相替代。
 

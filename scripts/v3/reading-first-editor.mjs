@@ -1,7 +1,7 @@
 import { fingerprintV3Json } from './semantic-package-validator.mjs';
 
 const languages = ['en', 'zh-CN'];
-export const READING_EDITOR_SCHEMAS = Object.freeze(['reading-editor-1.0', 'reading-editor-1.1', 'reading-editor-1.2']);
+export const READING_EDITOR_SCHEMAS = Object.freeze(['reading-editor-1.0', 'reading-editor-1.1', 'reading-editor-1.2', 'reading-editor-1.3']);
 const mapStages = {step:['design','measurement'], finding:['finding','limit']};
 const text = value => typeof value === 'string' && !!value.trim();
 const fail = (suffix, details) => { throw Object.assign(new Error('READING_FIRST_EDITOR_' + suffix), {code:'READING_FIRST_EDITOR_' + suffix, ...(details ? {details} : {})}); };
@@ -41,7 +41,7 @@ export function validateReadingFirstEditor({editor, views, presentation} = {}) {
         positions.add(heading.before_paragraph);
       }
     }
-    if (['reading-editor-1.1', 'reading-editor-1.2'].includes(editor.schema_version)) {
+    if (['reading-editor-1.1', 'reading-editor-1.2', 'reading-editor-1.3'].includes(editor.schema_version)) {
       // Reading notes move beside their figure; paragraph 0 keeps the section anchor and stays in place.
       const catalog=new Set((presentation?.visuals ?? []).map(item=>item.id)), moved=new Set();
       if (!Array.isArray(value.visuals) || new Set(value.visuals.map(item=>item.id)).size !== value.visuals.length) fail('VISUAL_INVALID');
@@ -61,12 +61,12 @@ export function validateReadingFirstEditor({editor, views, presentation} = {}) {
       item.knowledge_id !== undefined && !knowledge.has(item.knowledge_id) ||
       item.knowledge_ids !== undefined && (!Array.isArray(item.knowledge_ids) || new Set(item.knowledge_ids).size !== item.knowledge_ids.length || item.knowledge_ids.some(id=>!knowledge.has(id))))) fail('METHOD_INVALID');
   }
-  if (['reading-editor-1.1', 'reading-editor-1.2'].includes(editor.schema_version)) {
+  if (['reading-editor-1.1', 'reading-editor-1.2', 'reading-editor-1.3'].includes(editor.schema_version)) {
     // Map labels are shared across languages, so node selection, stages and emphasis are one bilingual choice.
     const map=presentation?.map ?? {steps:[],findings:[]}, kinds=new Map([...map.steps.map(node=>[node.id,'step']),...map.findings.map(node=>[node.id,'finding'])]);
     const nodes=editor.map?.nodes;
     if (!Array.isArray(nodes) || new Set(nodes.map(node=>node.id)).size !== nodes.length || nodes.some(node=>!kinds.has(node.id) || !mapStages[kinds.get(node.id)].includes(node.stage) || node.primary !== undefined && (typeof node.primary !== 'boolean' || kinds.get(node.id) !== 'finding'))) fail('MAP_INVALID');
-    if (editor.schema_version === 'reading-editor-1.2') {
+    if (['reading-editor-1.2', 'reading-editor-1.3'].includes(editor.schema_version)) {
       const selected = new Set(nodes.map(node => node.id));
       const missing_steps = map.steps.filter(node => !selected.has(node.id)).map(node => node.id);
       if (missing_steps.length) fail('MAP_INVALID', { missing_steps });

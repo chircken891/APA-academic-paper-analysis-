@@ -7,17 +7,24 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { exportPublicApa } from '../../scripts/setup/export-public-apa.mjs';
 import { inspectApaConfig } from '../../scripts/lib/apa-config.mjs';
-import { prepareConfiguredReading,createConfiguredScienceRequest, getConfiguredReadingDispatchArguments, materializeConfiguredReadingCandidate } from '../../scripts/v3/configured-reading.mjs';
+import { prepareConfiguredReading,createConfiguredScienceRequest, getConfiguredReadingDispatchArguments, materializeConfiguredReadingCandidate, createConfiguredMineruPort, configuredMineruConfiguration } from '../../scripts/v3/configured-reading.mjs';
 import { reviewedReadingFirstFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
 import { commitOwnedArtifact } from '../../scripts/v3/owned-artifact-store.mjs';
 import { ingestObservedRunStep } from '../../scripts/v3/phase21-runner.mjs';
-import { createReadingFirstRevisionRequests, createReadingFirstPresentationRequest, createReadingFirstReviewRequest, renderReadingFirstNotes, fingerprintReadingFirst, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, getReadingFirstState } from '../../scripts/v3/reading-first-runtime.mjs';
+import { createReadingFirstRevisionRequests, createReadingFirstPresentationRequest, createReadingFirstReviewRequest, renderReadingFirstNotes, fingerprintReadingFirst, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, getReadingFirstState, createReadingFirstRequests, getReadingFirstRunControlRef } from '../../scripts/v3/reading-first-runtime.mjs';
 import { readingFirstPublicationFixture, applyReadingFirstFixture } from './helpers/reading-first-publication-fixtures.mjs';
 import { readingFirstIndexFixture } from './helpers/reading-first-index-fixtures.mjs';
 import { readCommittedReadingFirstKnowledgeRegistry } from '../../scripts/v3/reading-first-knowledge-registry.mjs';
+import { validateConfiguredReadingDispatch } from '../../scripts/v3/configured-reading.mjs';
 import { applyBilingualPublication, loadBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
 import { readCommittedGeneration } from '../../scripts/v3/phase22-active-version.mjs';
 import { queryBilingualIndex } from '../../scripts/v3/phase22-search.mjs';
+
+// Inspect historical/synthetic packets without authorizing another host call.
+const inspectDispatchArguments = options => {
+  validateConfiguredReadingDispatch(options);
+  return structuredClone(options.request.emittedStep.arguments);
+};
 
 async function configuredRepo(t, enabled = false) {
   const root = await mkdtemp(join(tmpdir(), 'apa-configured-reading-'));
@@ -38,6 +45,22 @@ async function configuredRepo(t, enabled = false) {
   await writeFile(join(root, 'mineru', 'config.yaml'), 'synthetic config presence only');
   return { root, config };
 }
+
+test('new configured runs require a Controller decision while legacy bindings keep their dispatch contract', async t => {
+  const { root } = await configuredRepo(t);
+  let prepared;
+  const runId = 'run_' + 'c'.repeat(32);
+  const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId,
+    createRunControl: options => { prepared = prepareConfiguredReading({ ...options, repoRoot: root }); return prepared.runControl; } });
+  const request = createConfiguredScienceRequest({ prepared, role: 'methods', dispatchContext: fixture.broker.dispatchContext,
+    task: { task_name: 'unmanaged_methods', native_path: 'native/unmanaged-methods.json' } });
+  assert.throws(() => getConfiguredReadingDispatchArguments({ prepared, request }), /APA_COMPACTION_CONTROLLER_REQUIRED/);
+  assert.equal(prepared.runControl.reading_first_binding.compaction_policy.profile, 'boundary-reminders-1.0');
+  assert.equal(prepared.compactionControlBindings.length, 4);
+  const legacy = structuredClone(prepared);
+  delete legacy.runControl.reading_first_binding.compaction_policy;
+  assert.deepEqual(getConfiguredReadingDispatchArguments({ prepared: legacy, request }), request.emittedStep.arguments);
+});
 
 async function configuredCommittedReuseFixture(t) {
   const { root } = await configuredRepo(t);
@@ -169,9 +192,9 @@ test('new configured candidates tolerate old paper body edits while complete com
   assert.equal((await readCommittedGeneration({ vaultRoot: root })).ok, false);
   const saved = await materializeConfiguredReadingCandidate({ prepared, controller: fixture.controller, handoff: fixture.handoff, resources: fixture.resources });
   assert.equal(saved.exported.validation.status, 'passed');
-  assert.equal(prepared.runControl.reading_first_binding.presentation_profile, 'reading-editor-1.2');
+  assert.equal(prepared.runControl.reading_first_binding.presentation_profile, 'reading-editor-1.3');
   const instructions = prepared.runControl.reading_first_binding.configured_setup.sections['Reading Editor'];
-  assert.match(instructions, /reading-editor-1\.2/);
+  assert.match(instructions, /reading-editor-1\.3/);
   assert.doesNotMatch(instructions, /roughly twelve nodes/);
   assert.ok(saved.exported.manifest.files.some(row => row.kind === 'historical-navigation'));
   assert.equal(await readFile(path, 'utf8'), before.replace('Only sharedknowledgeneedle', 'Edited sharedknowledgeneedle').replace('## ', '## Edited '));
@@ -217,7 +240,7 @@ test('isolated reply resource drift blocks new bindings at creation, dispatch, c
     const s = await fixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId, completeReview: false,
       controlOptions: { maxCalls: 8 }, createRunControl: options => {
         creationOptions = options;
-        prepared = configured.prepareConfiguredReading({ ...options, repoRoot: root });
+        prepared = configured.prepareConfiguredReading({ ...options, repoRoot: root, instructionProfile: 'configured-reading-1.0' });
         if (!enabled) {
           const runControl = structuredClone(prepared.runControl);
           delete runControl.reading_first_binding.role_reply_contract;
@@ -293,7 +316,7 @@ for (const host of ['codex', 'claude-code']) for (const instructionFiles of [fal
     let prepared;
     const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId, instructionFiles,
       controlOptions: { maxCalls: 8 },
-      createRunControl: options => { prepared = prepareConfiguredReading({ ...options, repoRoot: root }); return prepared.runControl; },
+      createRunControl: options => { prepared = prepareConfiguredReading({ ...options, repoRoot: root, instructionProfile: 'configured-reading-1.0' }); return prepared.runControl; },
       review: { overall: { complete: true, coherent: true, bilingual_consistent: true },
         key_nodes: [{ kind: 'main_conclusion', location: 'findings', finding: 'Supported.' }],
         issues: [{ severity: 'material', kind: 'content', repair_owner: 'writer', affected_languages: ['en', 'zh-CN'], detail: 'Clarify both accounts.' }], scope: 'Synthetic repair.' },
@@ -326,7 +349,7 @@ for (const host of ['codex', 'claude-code']) for (const instructionFiles of [fal
       const instruction = request.instruction_file ? await readFile(request.instruction_file.path, 'utf8') : request.emittedStep.arguments[argument];
       assert.equal(instruction.split(bytes.toString('utf8')).length, 2, request.task?.task_id ?? request.packet.host_action_scope.role);
       assert.deepEqual(request.packet.backend.configuration.role_reply_contract, contract);
-      assert.deepEqual(getConfiguredReadingDispatchArguments({ prepared, request }), request.emittedStep.arguments);
+      assert.deepEqual(inspectDispatchArguments({ prepared, request }), request.emittedStep.arguments);
       assert.equal(request.packet.host_action_scope.action, host === 'codex' ? 'collaboration.spawn_agent' : 'Agent');
     }
     assert.deepEqual(await readFile(join(root, 'config/apa.local.json')), originalConfig);
@@ -353,6 +376,74 @@ test('session context supplies the main pair and rejects a conflicting explicit 
     sessionContext: { ...sessionContext, reasoning_effort: 'medium' } }), /APA_CONFIGURED_SESSION_CONTEXT_INVALID/);
 });
 
+test('configured preparation rejects non-text context before any science call', async t => {
+  const { root } = await configuredRepo(t);
+  const runId = 'run_' + '3'.repeat(32);
+  let options;
+  await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId,
+    createRunControl: input => { options = input; return prepareConfiguredReading({ ...input, repoRoot: root }).runControl; } });
+  for (const context of [{ source_scope: 'object context' }, ['list'], '  ', undefined]) {
+    assert.throws(() => prepareConfiguredReading({ ...options, repoRoot: root, scientificInput: { ...options.scientificInput, context } }), /READING_FIRST_CONTEXT_TEXT_REQUIRED/);
+  }
+});
+
+test('reading requests name the prepared proposal shape and accept the derived run control handle', async t => {
+  const { root } = await configuredRepo(t);
+  const runId = 'run_' + '4'.repeat(32);
+  let prepared;
+  const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId,
+    createRunControl: input => { prepared = prepareConfiguredReading({ ...input, repoRoot: root }); return prepared.runControl; } });
+  const rejected = createReadingFirstRequests({ handoff: fixture.handoff, runControl: prepared.runControl });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.errors[0].code, 'READING_FIRST_RUN_CONTROL_REF_REQUIRED');
+  assert.equal(createReadingFirstRequests({ handoff: fixture.handoff, runControl: prepared }).errors[0].code, 'READING_FIRST_RUN_CONTROL_REF_REQUIRED');
+  const ref = getReadingFirstRunControlRef({ prepared, broker: fixture.broker });
+  assert.deepEqual(ref, { runId, artifactRoot: prepared.paths.runRoot, dispatchContext: fixture.broker.dispatchContext });
+  assert.deepEqual(getReadingFirstRunControlRef({ prepared, dispatchContext: fixture.broker.dispatchContext }), ref);
+  // The fixture already initialized this run, so the handle passes the control check and reaches the next guard.
+  assert.equal(createReadingFirstRequests({ handoff: fixture.handoff, runControl: ref }).errors[0].code, 'READING_FIRST_RUNTIME_ALREADY_INITIALIZED');
+  assert.throws(() => getReadingFirstRunControlRef({ prepared }), /READING_FIRST_CONTROL_REQUIRED/);
+});
+
+test('a registry read from the configured binding uses its frozen policy and passes rendering', async t => {
+  const { root, fixture, prepared } = await configuredCommittedReuseFixture(t);
+  const fromBinding = await readCommittedReadingFirstKnowledgeRegistry({ binding: prepared.runControl.reading_first_binding });
+  assert.doesNotThrow(() => renderReadingFirstNotes({ controller: fixture.controller, knowledgeRegistry: fromBinding }));
+  for (const binding of [prepared, prepared.runControl]) {
+    const registry = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: root, binding });
+    assert.doesNotThrow(() => renderReadingFirstNotes({ controller: fixture.controller, knowledgeRegistry: registry }));
+  }
+  await assert.rejects(readCommittedReadingFirstKnowledgeRegistry({ binding: prepared, policy: 'committed-generation-1.0' }), /RF_KNOWLEDGE_REGISTRY_POLICY_MISMATCH/);
+  const { root: otherRoot } = await configuredRepo(t);
+  await assert.rejects(readCommittedReadingFirstKnowledgeRegistry({ binding: prepared, vaultRoot: otherRoot }), /RF_KNOWLEDGE_REGISTRY_ROOT_MISMATCH/);
+  await assert.rejects(readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: root, binding: {} }), /RF_KNOWLEDGE_REGISTRY_BINDING_POLICY_REQUIRED/);
+  // Without a binding the historical default is unchanged, and this configured run still rejects it.
+  const legacyDefault = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: root });
+  assert.throws(() => renderReadingFirstNotes({ controller: fixture.controller, knowledgeRegistry: legacyDefault }), /RF_KNOWLEDGE_REGISTRY_NOT_TRUSTED/);
+});
+
+test('configured parser packets record no requested model', async t => {
+  const { root } = await configuredRepo(t);
+  const runId = 'run_' + '5'.repeat(32);
+  let prepared;
+  await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId,
+    createRunControl: input => { prepared = prepareConfiguredReading({ ...input, repoRoot: root }); return prepared.runControl; } });
+  const source = prepared.scientificInput.sources[0];
+  const configuration = configuredMineruConfiguration(prepared);
+  const packet = { run_id: runId, user_approval_id: prepared.runControl.reading_first_binding.authorization_id, intended_evidence_tier: 'local_dispatch',
+    source: { path: source.path, sha256: source.sha256, byte_length: source.byte_length }, instruction_fingerprint: 'sha256:' + 'a'.repeat(64),
+    configuration_fingerprint: fingerprintReadingFirst(configuration), allowed_output_root: prepared.paths.parseRoot,
+    backend: { identity: 'current-mineru', version: 'simulated-1.0', runtime_configuration_version: 'synthetic', configuration },
+    endpoint: { value: null, egress: 'denied', retention: 'local_only' }, host_action_scope: { action: 'run_current_mineru', permitted_result_fields: ['parser_version', 'output_inventory'] },
+    expected_resource_fields: ['elapsed_ms'], requested_model: null, observed_model: 'unknown', estimate: { value: 1, unit: 'runs' }, approved_budget_cap: { value: 1, unit: 'runs' }, retry_allowance: 0 };
+  const port = createConfiguredMineruPort({ prepared, repoRoot: root, dependencies: {
+    checkMineruRuntime: async () => ({ ok: true, version: 'simulated-1.0', configVersion: 'synthetic' }),
+    runMineru: async ({ outputPath }) => { await mkdir(outputPath, { recursive: true }); await writeFile(join(outputPath, 'markdown.md'), 'parsed'); return 'simulated-1.0'; } } });
+  const result = await port.run(packet);
+  assert.equal(result.parser_version, 'simulated-1.0');
+  assert.equal(result.output_inventory[0].path, 'markdown.md');
+});
+
 test('configured runs freeze the science index handoff profile', async t => {
   const { root } = await configuredRepo(t);
   const runId = 'run_' + '2'.repeat(32);
@@ -367,7 +458,7 @@ test('science instruction retry reuses identical bytes and rejects conflicting c
   let prepared;
   const runId = 'run_' + '2'.repeat(32);
   const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId, instructionFiles: true,
-    createRunControl: options => { prepared = prepareConfiguredReading({ ...options, repoRoot: root }); return prepared.runControl; } });
+    createRunControl: options => { prepared = prepareConfiguredReading({ ...options, repoRoot: root, instructionProfile: 'configured-reading-1.0' }); return prepared.runControl; } });
   const args = { prepared, role: 'evidence', dispatchContext: fixture.broker.dispatchContext,
     task: { task_name: 'configured_evidence', native_path: 'native/evidence-new.json', instruction_path: 'instructions/evidence-new.txt' }, payload: { content: 'same' } };
   const first = createConfiguredScienceRequest(args);
@@ -405,7 +496,7 @@ test('dispatch arguments preserve emitted model and task and reject packet or st
   const requests = [science, ...entries.map(entry => entry.request)];
   assert.deepEqual(new Set(entries.map(entry => entry.request.packet.host_action_scope.role)), new Set(['english-writer', 'translation', 'reading-editor', 'independent-verifier']));
   for (const request of requests) {
-    const actual = getConfiguredReadingDispatchArguments({ prepared, request });
+    const actual = inspectDispatchArguments({ prepared, request });
     assert.deepEqual(actual, request.emittedStep.arguments);
     assert.notEqual(actual, request.emittedStep.arguments);
     assert.equal(actual.fork_turns, 'none');
@@ -626,7 +717,7 @@ test('local repair revises the source draft first and then retranslates it, whil
     { kind: 'key_design', location: 'design', finding: 'A supported design.' },
   ], issues: [{ severity: 'material', kind: 'content', repair_owner: 'writer', affected_languages: affected, detail: 'Clarify the method.' }], scope: 'Synthetic local repair routing.' });
   const build = (digit, affected) => reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', 'run_' + digit.repeat(32)), runId: 'run_' + digit.repeat(32),
-    createRunControl: options => prepareConfiguredReading({ ...options, repoRoot: root, sourceLanguage: 'en', maxCalls: 6,
+    createRunControl: options => prepareConfiguredReading({ ...options, repoRoot: root, instructionProfile: 'configured-reading-1.0', sourceLanguage: 'en', maxCalls: 6,
       taskBindings: Object.fromEntries(Object.entries(options.taskBindings).filter(([key]) => !key.startsWith('presentation'))) }).runControl,
     review: review(affected) });
   const sourceIssue = await build('9', ['en']);
@@ -648,7 +739,7 @@ test('a configured material review must name its owner before commit or a repair
   const { root } = await configuredRepo(t);
   const runId = 'run_' + '4'.repeat(32);
   const fixture = await reviewedReadingFirstFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId, completeReview: false,
-    createRunControl: options => prepareConfiguredReading({ ...options, repoRoot: root }).runControl });
+    createRunControl: options => prepareConfiguredReading({ ...options, repoRoot: root, instructionProfile: 'configured-reading-1.0' }).runControl });
   assert.equal(fixture.binding.repair_routing, 'owner-routed-1.0');
   assert.equal(fixture.binding.configured_setup.flow_corrections.schema_version, 'flow-corrections-1.0');
   const review = { overall: { complete: false, coherent: true, bilingual_consistent: true }, key_nodes: [],
@@ -823,7 +914,7 @@ test('a saved host dispatch shapes every configured role call and the run still 
     assert.equal(request.packet.host_action_scope.action, 'Agent');
     assert.deepEqual(Object.keys(request.emittedStep.arguments), ['description', 'prompt', 'model']);
     assert.equal(request.emittedStep.arguments.model, 'sonnet');
-    assert.deepEqual(getConfiguredReadingDispatchArguments({ prepared, request }), request.emittedStep.arguments);
+    assert.deepEqual(inspectDispatchArguments({ prepared, request }), request.emittedStep.arguments);
     const withEffort = structuredClone(request);
     withEffort.emittedStep.arguments.effort = 'high';
     assert.throws(() => getConfiguredReadingDispatchArguments({ prepared, request: withEffort }), /APA_CONFIGURED_DISPATCH_MISMATCH/);
@@ -835,7 +926,7 @@ test('a saved host dispatch shapes every configured role call and the run still 
     task: { task_name: 'host_evidence', native_path: 'native/host-evidence.json' } });
   assert.deepEqual(Object.keys(science.emittedStep.arguments), ['description', 'prompt', 'model', 'effort']);
   assert.deepEqual([science.emittedStep.arguments.description, science.emittedStep.arguments.model, science.emittedStep.arguments.effort], ['host_evidence', 'opus', 'high']);
-  assert.deepEqual(getConfiguredReadingDispatchArguments({ prepared, request: science }), science.emittedStep.arguments);
+  assert.deepEqual(inspectDispatchArguments({ prepared, request: science }), science.emittedStep.arguments);
   assert.throws(() => buildHostDispatchArguments({ ...dispatch, effort_argument: null }, { taskName: 'x', message: 'm', model: { model: 'opus', reasoning_effort: 'high' } }), /APA_HOST_EFFORT_UNSUPPORTED/);
   assert.throws(() => buildHostDispatchArguments({ ...dispatch, effort_argument: 'model' }, { taskName: 'x', message: 'm', model: { model: 'opus' } }), /APA_HOST_DISPATCH_INVALID/);
 });

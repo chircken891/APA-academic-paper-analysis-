@@ -4,6 +4,8 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Ajv from 'ajv';
 import { inspectHostCapabilities } from './apa-host-capabilities.mjs';
+import { evaluateReadingPreflight } from './reading-preflight.mjs';
+export { evaluateReadingPreflight } from './reading-preflight.mjs';
 import { deriveSetupIssues } from './apa-setup-issues.mjs';
 
 export const APA_CONFIG_VERSION = 'apa-local-config-1.0';
@@ -198,7 +200,8 @@ export function inspectApaConfig({ repoRoot = process.cwd(), capability = 'readi
   const parserDefaults = runtimeHome ? { python: path.join(runtimeHome, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'), config_path: path.join(runtimeHome, 'config.yaml') } : {};
   for (const key of ['python', 'config_path']) inspect(`parser.${key}`, snapshot.config.parser?.[key] ?? parserDefaults[key], 'file');
   for (const key of APA_WRITING_SKILLS) if (snapshot.config.writing_skills?.[key]?.enabled) inspect(`writing_skills.${key}`, snapshot.config.writing_skills[key].path, 'file');
-  return withIssues({ ...snapshot, capability, validation, dependencies, ready: validation.complete && dependencies.every(item => item.status === 'available'), model_availability: 'not_checked', ...hostCheck });
+  const inspection = { ...snapshot, capability, validation, dependencies, ready: validation.complete && dependencies.every(item => item.status === 'available'), model_availability: 'not_checked', ...hostCheck };
+  return withIssues({ ...inspection, reading_preflight: evaluateReadingPreflight({ inspection, hostProfile }) });
 }
 
 export function resolveApaConfig({ config, repoRoot = process.cwd(), mainSession, supportedModelPairs, capability = 'reading' } = {}) {

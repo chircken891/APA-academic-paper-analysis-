@@ -27,7 +27,7 @@ export function deriveSetupIssues(inspection, hostProfile) {
     const unresolved = check.status === 'unknown' || achievement?.state === 'not-found' || input?.achievement?.state === 'not-found';
     const gaps = investigationGaps(input);
     const steps = achievement?.steps ?? [];
-    if (!input?.achievement || redetect || unresolved && gaps.length) add('investigate', 'capability', check.id, `${check.label ?? check.id} 尚未完成调查。`, gaps);
+    if (!input?.achievement || redetect || unresolved && gaps.length) add('known-limit', 'capability', check.id, `${check.label ?? check.id} 尚未完成调查。`, gaps);
     else if (steps.some(step => step.actor === 'user')) add('page-choice', 'capability', check.id, achievement.summary);
     else if (achievement.state === 'needs-apa-change' || steps.some(step => step.persistent)) add('authorize', 'capability', check.id, achievement.summary);
     else if (['needs-setting', 'needs-user-action'].includes(achievement.state)) add('page-choice', 'capability', check.id, achievement.summary);
@@ -40,11 +40,6 @@ export function deriveSetupIssues(inspection, hostProfile) {
 }
 
 export function checkPageGate(issues, { ledger, profileSha256 } = {}) {
-  const investigate = issues.filter(item => item.category === 'investigate' && item.id !== 'investigate:host:no-profile').map(item => item.id);
-  if (investigate.length) return { ok: false, code: 'APA_SETUP_INVESTIGATION_INCOMPLETE', pending: investigate };
-  const authorize = issues.filter(item => item.category === 'authorize').map(item => item.id);
-  if (ledger && ledger.profile_sha256 !== profileSha256) return { ok: false, code: 'APA_ISSUE_LEDGER_STALE', pending: authorize };
-  const decided = new Set(ledger?.entries.map(item => item.id) ?? []);
-  const pending = authorize.filter(id => !decided.has(id));
-  return pending.length ? { ok: false, code: 'APA_SETUP_ISSUES_UNDECIDED', pending } : { ok: true, pending: [] };
+  if (ledger && ledger.profile_sha256 !== profileSha256) return { ok: false, code: 'APA_ISSUE_LEDGER_STALE', pending: [] };
+  return { ok: true, pending: [] };
 }

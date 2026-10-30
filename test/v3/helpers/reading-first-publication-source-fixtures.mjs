@@ -5,10 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createOwnedArtifactBroker, commitOwnedArtifact } from '../../../scripts/v3/owned-artifact-store.mjs';
 import { readCommittedReadingFirstKnowledgeRegistry } from '../../../scripts/v3/reading-first-knowledge-registry.mjs';
+import { compactionEnabled, compactionControlBindings } from '../../../scripts/v3/reading-compaction.mjs';
 import {
   acceptReadingFirstResult, buildReadingFirstHandoff, createReadingFirstDraftRequests,
   createReadingFirstPresentationRequest, createReadingFirstRequests, createReadingFirstReviewRequest,
   createReadingFirstRunControl, fingerprintReadingFirst, renderReadingFirstNotes,
+  snapshotReadingFirstRuntime, handleReadingCompactionBoundary,
 } from '../../../scripts/v3/reading-first-runtime.mjs';
 
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
@@ -68,9 +70,11 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
       knowledge_registry: { policy: 'current-shared-nodes-1.0', vault_root: options.currentRegistryRoot } } } : {}) });
   const binding = runBinding.reading_first_binding;
   const authorizedBindings = [
+    ...compactionControlBindings(runBinding),
     ...roles.map(role => ({ run_id: runId, actor_id: role, role, artifact_path: 'science/' + role + '.json', revision: '1' })),
     ...Object.values(tasks).map(task => ({ run_id: runId, actor_id: task.owner_actor_id, role: task.role, artifact_path: task.artifact_path, revision: task.revision })),
     { run_id: runId, actor_id: 'controller', role: 'control', artifact_path: 'checkpoint.json', revision: '1' },
+    ...['before-writer', 'before-review'].map(id => ({ run_id: runId, actor_id: 'controller', role: 'control', artifact_path: 'control/check-' + id + '.json', revision: '1' })),
   ];
   const broker = createOwnedArtifactBroker({ control_actor_id: 'controller', artifact_root: root,
     authorized_bindings: authorizedBindings, run_controls: [{ run_id: runId, reading_first_binding: binding }] });
@@ -83,6 +87,20 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
   const created = createReadingFirstRequests({ handoff, runControl });
   assert.equal(created.ok, true, JSON.stringify(created.errors));
   const controller = created.controller;
+  const settleCompaction = async (id, candidate) => {
+    if (!compactionEnabled(binding)) return;
+    const snapshot = snapshotReadingFirstRuntime(controller);
+    const receipt = await commitOwnedArtifact({ artifactRoot: root, dispatchContext: broker.dispatchContext,
+      capability: broker.issueCapability({ runId, actorId: 'controller', role: 'control', artifactPath: 'control/check-' + id + '.json', revision: '1' }),
+      artifact: { artifact_id: 'check-' + id, content: JSON.stringify(snapshot) }, expectedRevision: '1' });
+    const task = binding.compaction_policy.checkpoints[id].decision;
+    const result = await handleReadingCompactionBoundary({ controller, checkpointReceipt: receipt, presentation: candidate,
+      hostRequests: snapshot.state.request_entries.filter(entry => !entry.consumed).map(entry => ({ action_id: entry.request.emittedStep.action_id, status: 'prepared' })),
+      observation: { manual_compaction: { available: false, source: 'Synthetic host has no manual compaction.' } },
+      capability: broker.issueCapability({ runId, actorId: 'controller', role: 'control', artifactPath: task.artifact_path, revision: task.revision }) });
+    assert.equal(result.action, 'continue');
+  };
+  await settleCompaction('before-writer');
   const complete = async (request, value) => {
     await mkdir(join(root, 'native'), { recursive: true });
     await writeFile(join(root, request.task.native_path), JSON.stringify(value));
@@ -115,6 +133,7 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
   const renderOptions = { ...(options.targetRegistry ? { targetRegistry: options.targetRegistry } : {}), existingTargets: options.existingTargets ?? [], knowledgeRegistry };
   const candidate = renderReadingFirstNotes({ controller, ...renderOptions });
   const reviewRequest = createReadingFirstReviewRequest({ controller, presentation: candidate });
+  await settleCompaction('before-review', candidate);
   const review = options.review ?? { overall: { complete: true, coherent: true, bilingual_consistent: true }, key_nodes: [
     { kind: 'main_conclusion', location: 'findings', finding: 'The supported main conclusion and its limitation are explained.' },
     { kind: 'key_design', location: 'design', finding: 'The key design is explained.' },

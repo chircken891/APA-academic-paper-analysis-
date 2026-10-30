@@ -132,7 +132,8 @@ export function summarizeEvaluationGate(ledger) {
   });
 }
 
-export function validateEvaluationApprovalPacket(packet) {
+/** `modelFreeParser` lets a configured local MinerU packet record `requested_model: null`, since parsing calls no model. */
+export function validateEvaluationApprovalPacket(packet, { modelFreeParser = false } = {}) {
   const errors = [];
   const nonEmpty = (value, code) => {
     if (typeof value !== 'string' || !value) errors.push(code);
@@ -166,7 +167,8 @@ export function validateEvaluationApprovalPacket(packet) {
       if (packet.requested_model !== profile.model || (dispatched ? !hostDispatchArgumentsMatch(scope.dispatch, scope.arguments, profile) : scope.action === 'collaboration.spawn_agent'
         && (scope.arguments?.model !== profile.model || scope.arguments?.reasoning_effort !== profile.reasoning_effort))) errors.push('ROLE_MODEL_POLICY_MISMATCH');
     }
-  } else if (!FORMAL_APA_MODELS.includes(packet?.requested_model)) errors.push('FORMAL_MODEL_POLICY_REQUIRED');
+  } else if (!FORMAL_APA_MODELS.includes(packet?.requested_model) && !(modelFreeParser && packet?.requested_model === null
+    && packet.backend?.identity === 'current-mineru' && packet.host_action_scope?.action === 'run_current_mineru')) errors.push('FORMAL_MODEL_POLICY_REQUIRED');
   if (packet?.observed_model !== 'unknown') errors.push('OBSERVED_MODEL_MUST_REMAIN_UNKNOWN');
   const measure = value => Number.isFinite(value?.value) && value.value >= 0 && typeof value.unit === 'string' && value.unit;
   if (!measure(packet?.estimate) || !measure(packet?.approved_budget_cap)

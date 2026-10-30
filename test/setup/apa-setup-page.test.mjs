@@ -627,17 +627,16 @@ test('the page collects a group choice through its own preview and refuses a dou
   assert.match(conflict.message, /翻译.*二选一/);
 });
 
-test('page rejects legacy profile with investigation list', t => {
+test('page accepts legacy profile and shows outstanding limits', t => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-page-gate-'));
   t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
   const file = path.join(repoRoot, 'host-profile.json');
   fs.writeFileSync(file, JSON.stringify(hostProfile));
   const output = path.join(repoRoot, '.tmp/apa-setup/index.html');
   const cli = spawnSync(process.execPath, [path.resolve('scripts/apa-setup.mjs'), 'page', '--repo-root', repoRoot, '--host-profile', file], { encoding: 'utf8' });
-  assert.equal(cli.status, 1);
-  assert.match(cli.stderr, /^APA_SETUP_INVESTIGATION_INCOMPLETE: /);
-  assert.equal(cli.stderr.match(/investigate:capability:/g).length, 6);
-  assert.equal(fs.existsSync(output), false);
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.equal(fs.existsSync(output), true);
+  assert.match(fs.readFileSync(output, 'utf8'), /known-limit:capability:/);
 });
 
 test('page without profile keeps manual fallback', t => {

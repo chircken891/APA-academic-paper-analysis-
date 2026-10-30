@@ -90,3 +90,12 @@ test('legacy inventory supports optional links and rejects malformed knowledge a
   value.languages.en.methods[0].knowledge_ids='method';
   assert.throws(()=>validate(value),/METHOD_INVALID/);
 });
+
+test('reading editor 1.3 requires all registered steps',()=>{
+  const presentation={knowledge:[{id:'method'}],visuals:[],map:{steps:[{id:'step'},{id:'step-two'}],findings:[],relations:[]}};
+  const value=editor(); value.schema_version='reading-editor-1.3'; value.map={nodes:[{id:'step',stage:'design'}]};
+  for (const language of ['en','zh-CN']) value.languages[language].visuals=[];
+  assert.throws(()=>validateReadingFirstEditor({editor:value,views,presentation}),error=>error.details?.missing_steps?.includes('step-two'));
+  value.map.nodes.push({id:'step-two',stage:'measurement'});
+  assert.equal(validateReadingFirstEditor({editor:value,views,presentation}),value);
+});

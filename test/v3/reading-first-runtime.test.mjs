@@ -15,10 +15,128 @@ import { renderReaderNotes } from '../../scripts/v3/phase221-presentation.mjs';
 import { getRoleReplyContract, loadRoleReplyContract } from '../../scripts/v3/role-reply-contract.mjs';
 import { APA_CONFIGURED_ROLES, createConfiguredApaRoleModelPolicy } from '../../scripts/apa-model-policy.mjs';
 import { buildConfiguredReadingInstructions } from '../../scripts/v3/configured-reading.mjs';
+import { getConfiguredReadingDispatchArguments } from '../../scripts/v3/configured-reading.mjs';
+import * as readingApi from '../../scripts/v3/reading-first-runtime.mjs';
+import { COMPACTION_POLICY, compactionControlBindings } from '../../scripts/v3/reading-compaction.mjs';
 import { READING_FIRST_PROFILE, SCIENCE_INDEX_PROFILE, fingerprintReadingFirst, resolveReadingWorkflowProfile, acceptReadingFirstResult, createReadingFirstReviewRequest, getReadingFirstState, createReadingFirstRevisionRequests, createReadingFirstRunControl, snapshotReadingFirstRuntime, restoreReadingFirstRuntime, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstEnrichmentRequests, buildReadingFirstHandoff, observeReadingCompactionBoundary, recordReadingCompactionBoundary } from '../../scripts/v3/reading-first-runtime.mjs';
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const roles = ['evidence','methods','results','interpretation','scientific-reading','integration'];
-async function setup(t, { presentation, presentationRequired = false, writingMode = 'independent', sourceLanguage = 'en', presentationMode = 'writer', priorCalls = 0, maxTotalCalls, roleReplyContract, enrichmentPolicy, handoffProfile, legacyPresentationProfile, legacyRepairRouting = false, invalidRepairRouting = false, maxCalls = presentationMode==='reading-editor'?7:6, firstWritingLanguage, integrationContent = {}, writingSkills = {} } = {}) {
+
+const compactionObservation = () => ({ manual_compaction: { available: true, method: 'host compact action', source: 'host capability evidence' } });
+const dispatchArguments = (s, request) => getConfiguredReadingDispatchArguments({ prepared: { runControl: { run_id: 'run', reading_first_binding: s.binding }, paths: { runRoot: s.root } }, request });
+async function compactionCheckpoint(s, controller, id = 'checkpoint') {
+  return commitOwnedArtifact({ artifactRoot: s.root, dispatchContext: s.broker.dispatchContext,
+    capability: s.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: id + '.json', revision: '1' }),
+    artifact: { artifact_id: id, content: JSON.stringify(snapshotReadingFirstRuntime(controller)) }, expectedRevision: '1' });
+}
+function compactionCapability(s, id, step) {
+  const task = s.binding.compaction_policy.checkpoints[id][step];
+  return s.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: task.artifact_path, revision: task.revision });
+}
+
+test('new reading runtime requires the Writer decision and preserves pending actions through pause and resume', async t => {
+  const s = await setup(t, { compactionPolicy: COMPACTION_POLICY });
+  const { controller, requests } = s.created;
+  assert.throws(() => dispatchArguments(s, requests[0]), /APA_COMPACTION_BOUNDARY_REQUIRED/);
+  const saved = await compactionCheckpoint(s, controller);
+  const hostRequests = requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' }));
+  const pause = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: saved, hostRequests,
+    observation: compactionObservation(), capability: compactionCapability(s, 'before-writer', 'decision') });
+  assert.equal(pause.action, 'await-user');
+  assert.match(pause.message, /用量未知/);
+  assert.throws(() => dispatchArguments(s, requests[0]), /APA_COMPACTION_AWAITING_USER/);
+  const recovered = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: pause.receipt });
+  assert.equal(recovered.ok, true, JSON.stringify(recovered.errors));
+  assert.deepEqual(recovered.requests.map(request => request.emittedStep.action_id), requests.map(request => request.emittedStep.action_id));
+  assert.throws(() => dispatchArguments(s, recovered.requests[0]), /APA_COMPACTION_AWAITING_USER/);
+  const waiting = await readingApi.handleReadingCompactionBoundary({ controller: recovered.controller, checkpointReceipt: pause.receipt, hostRequests });
+  assert.equal(waiting.action, 'await-user');
+  const continued = await readingApi.handleReadingCompactionBoundary({ controller: recovered.controller, checkpointReceipt: pause.receipt, hostRequests,
+    userDecision: 'continue', capability: compactionCapability(s, 'before-writer', 'resume') });
+  assert.equal(continued.action, 'continue');
+  assert.equal(continued.record.compaction_verified, false);
+  assert.deepEqual(dispatchArguments(s, recovered.requests[0]), requests[0].emittedStep.arguments);
+  assert.equal(getReadingFirstState(recovered.controller).calls_used, getReadingFirstState(controller).calls_used);
+  const oldBoundary = await observeReadingCompactionBoundary({ controller: recovered.controller, checkpointReceipt: continued.receipt, hostRequests });
+  await assert.rejects(() => recordReadingCompactionBoundary({ controller: recovered.controller, boundary: oldBoundary, status: 'prompted', reason: 'bypass' }), /APA_COMPACTION_POLICY_DECISION_REQUIRED/);
+});
+
+test('new reading runtime gates the rendered review, permits unknown-context skip and keeps the same review action', async t => {
+  const s = await setup(t, { compactionPolicy: COMPACTION_POLICY });
+  const { controller, requests } = s.created;
+  assert.throws(() => dispatchArguments(s, requests[0]), /APA_COMPACTION_BOUNDARY_REQUIRED/);
+  const saved = await compactionCheckpoint(s, controller);
+  await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: saved,
+    hostRequests: requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' })),
+    observation: {}, capability: compactionCapability(s, 'before-writer', 'decision') });
+  for (const request of requests) await s.complete(request, s.view(request.language));
+  const presentation = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller } });
+  const review = createReadingFirstReviewRequest({ controller, presentation });
+  assert.throws(() => dispatchArguments(s, review), /APA_COMPACTION_BOUNDARY_REQUIRED/);
+  const receipt = await compactionCheckpoint(s, controller, 'checkpoint-before-review');
+  for (const status of ['running', 'unknown']) {
+    const result = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: receipt, presentation,
+      hostRequests: [{ action_id: review.emittedStep.action_id, status }], observation: compactionObservation() });
+    assert.equal(result.action, 'reconcile');
+  }
+  const result = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: receipt, presentation,
+    hostRequests: [{ action_id: review.emittedStep.action_id, status: 'prepared' }], observation: compactionObservation(),
+    capability: compactionCapability(s, 'before-review', 'decision') });
+  assert.equal(result.action, 'continue');
+  assert.deepEqual(dispatchArguments(s, review), review.emittedStep.arguments);
+  const restored = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: result.receipt });
+  assert.equal(restored.ok, true);
+  assert.deepEqual(restored.requests.map(request => request.emittedStep.action_id), [review.emittedStep.action_id]);
+  assert.deepEqual(dispatchArguments(s, restored.requests[0]), review.emittedStep.arguments);
+});
+
+test('a prompted review resumes the same request after process recovery and observed compaction', async t => {
+  const s = await setup(t, { compactionPolicy: COMPACTION_POLICY });
+  const { controller, requests } = s.created;
+  const saved = await compactionCheckpoint(s, controller);
+  await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: saved,
+    hostRequests: requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' })),
+    capability: compactionCapability(s, 'before-writer', 'decision') });
+  for (const request of requests) await s.complete(request, s.view(request.language));
+  const presentation = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller } });
+  const review = createReadingFirstReviewRequest({ controller, presentation });
+  const receipt = await compactionCheckpoint(s, controller, 'checkpoint-before-review');
+  const hostRequests = [{ action_id: review.emittedStep.action_id, status: 'prepared' }];
+  const at = new Date().toISOString();
+  const pause = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: receipt, presentation, hostRequests, sessionId: 'main',
+    observation: { ...compactionObservation(), session_id: 'main', observed_at: at,
+      context: { tokens: 180000, kind: 'last-request-input', measured_at: at, fresh: true, source: 'host usage' } },
+    progress: { remaining_work: { multiple_responses: true, reason: 'Review and possible repair remain.' }, growth: { substantial: true, reason: 'Bilingual candidate expanded context.' } },
+    capability: compactionCapability(s, 'before-review', 'decision') });
+  assert.equal(pause.action, 'await-user');
+  const restored = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: pause.receipt });
+  assert.equal(restored.ok, true, JSON.stringify(restored.errors));
+  const recoveredPresentation = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller: restored.controller } });
+  const observedAt = new Date().toISOString();
+  const resumed = await readingApi.handleReadingCompactionBoundary({ controller: restored.controller, checkpointReceipt: pause.receipt,
+    presentation: recoveredPresentation, hostRequests, sessionId: 'main', userDecision: 'continue',
+    observation: { session_id: 'main', observed_at: observedAt, last_compaction: { id: 'host-event', session_id: 'main', status: 'succeeded', occurred_at: observedAt, source: 'host event log' } },
+    capability: compactionCapability(s, 'before-review', 'resume') });
+  assert.equal(resumed.record.status, 'completed');
+  assert.deepEqual(dispatchArguments(s, restored.requests[0]), review.emittedStep.arguments);
+  assert.deepEqual(snapshotReadingFirstRuntime(restored.controller).state.requestLog, snapshotReadingFirstRuntime(controller).state.requestLog);
+});
+
+test('a failed reading reminder save cannot expose a prompt or leave dispatch unlocked', async t => {
+  const s = await setup(t, { compactionPolicy: COMPACTION_POLICY });
+  const { controller, requests } = s.created;
+  assert.throws(() => dispatchArguments(s, requests[0]), /APA_COMPACTION_BOUNDARY_REQUIRED/);
+  const saved = await compactionCheckpoint(s, controller);
+  await assert.rejects(() => readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: saved,
+    hostRequests: requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' })),
+    observation: compactionObservation(), capability: {} }));
+  assert.throws(() => dispatchArguments(s, requests[0]), /COMPACTION_RESTORE_REQUIRED/);
+  const restored = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: saved });
+  assert.equal(restored.ok, true);
+  assert.throws(() => dispatchArguments(s, restored.requests[0]), /APA_COMPACTION_BOUNDARY_REQUIRED/);
+});
+
+async function setup(t, { presentation, presentationRequired = false, writingMode = 'independent', sourceLanguage = 'en', presentationMode = 'writer', priorCalls = 0, maxTotalCalls, roleReplyContract, enrichmentPolicy, handoffProfile, legacyPresentationProfile, legacyRepairRouting = false, invalidRepairRouting = false, maxCalls = presentationMode==='reading-editor'?7:6, firstWritingLanguage, integrationContent = {}, writingSkills = {}, compactionPolicy } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'reading-first-'));
   t.after(() => rm(root, {recursive:true,force:true}));
   const sourceBytes=Buffer.from('Synthetic original source: design, result and limitation.');
@@ -29,8 +147,8 @@ async function setup(t, { presentation, presentationRequired = false, writingMod
   const input={identity:{paper_id:presentation ? 'pap_'+'a'.repeat(32) : 'synthetic',run_id:'run'},sources:[{...(enrichmentPolicy ? {id:'main'} : {}),path:join(root,'source.pdf'),sha256:sha(sourceBytes),byte_length:sourceBytes.length}],context:'Read all existing material as a connected account.',role_artifacts:roles};
   // source-translation takes its writing rules only from a configured setup, so those runs use a configured fixture with all eleven roles.
   const configuredSetup=writingMode==='source-translation' ? {schema_version:'apa-configured-reading-1.0',config_fingerprint:sha(Buffer.from('config')),paths:{runRoot:root},
-    role_model_policy:createConfiguredApaRoleModelPolicy({model:'gpt-6-astra',reasoning_effort:'high'},Object.fromEntries(APA_CONFIGURED_ROLES.map(role=>[role,{model:'gpt-6-astra',reasoning_effort:'high'}]))),...buildConfiguredReadingInstructions(writingSkills)} : undefined;
-  const runBinding=createReadingFirstRunControl({configuredSetup,presentationMode,writingMode,sourceLanguage,firstWritingLanguage,presentationRequired,priorCalls,maxTotalCalls,roleReplyContract,enrichmentPolicy,handoffProfile,runId:'run',scientificInput:input,mainSession:{model:'gpt-6-astra',reasoning_effort:'high'},authorizationId:'synthetic-only',maxCalls,deadline:'2099-01-01T00:00:00Z',taskBindings:tasks});
+    role_model_policy:createConfiguredApaRoleModelPolicy({model:'gpt-6-astra',reasoning_effort:'high'},Object.fromEntries(APA_CONFIGURED_ROLES.map(role=>[role,{model:'gpt-6-astra',reasoning_effort:'high'}]))),...buildConfiguredReadingInstructions(writingSkills,{instructionProfile:'configured-reading-1.0'})} : undefined;
+  const runBinding=createReadingFirstRunControl({configuredSetup,presentationMode,writingMode,sourceLanguage,firstWritingLanguage,presentationRequired,priorCalls,maxTotalCalls,roleReplyContract,enrichmentPolicy,handoffProfile,compactionPolicy,runId:'run',scientificInput:input,mainSession:{model:'gpt-6-astra',reasoning_effort:'high'},authorizationId:'synthetic-only',maxCalls,deadline:'2099-01-01T00:00:00Z',taskBindings:tasks});
   const binding=structuredClone(runBinding.reading_first_binding);
   if (legacyPresentationProfile) {
     if (legacyPresentationProfile === 'reading-editor-1.0') delete binding.presentation_profile;
@@ -41,6 +159,8 @@ async function setup(t, { presentation, presentationRequired = false, writingMod
   if (invalidRepairRouting) binding.repair_routing='unknown-routing';
   bindings.push({run_id:'run',actor_id:'controller',role:'control',artifact_path:'checkpoint.json',revision:'1'});
   bindings.push({run_id:'run',actor_id:'controller',role:'control',artifact_path:'checkpoint-compaction.json',revision:'1'});
+  bindings.push(...compactionControlBindings(runBinding));
+  bindings.push({run_id:'run',actor_id:'controller',role:'control',artifact_path:'checkpoint-before-review.json',revision:'1'});
   const fingerprints=Object.fromEntries(['source','parser_tool','permission','parent_revision','policy','authorization'].map(key=>[key,sha(Buffer.from(key))]));
   const required=roles.map(role=>({artifact_id:role,owner_actor_id:role,path:'science/'+role+'.json'}));
   // Legacy delivery slots remain unfulfilled; scientific storage is not legacy delivery.
@@ -64,7 +184,7 @@ async function setup(t, { presentation, presentationRequired = false, writingMod
     return acceptReadingFirstResult({controller:created.controller,request,observation:{action_id:step.action_id,run_id:'run',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:JSON.stringify({agent_id:'synthetic-'+request.task.task_id})},capability:broker.issueCapability({runId:'run',actorId:request.task.owner_actor_id,role:request.task.role,artifactPath:request.task.artifact_path,revision:request.task.revision})});
   };
   const view=language=>({language,sections:[{heading:language==='en'?'Study':'研究',paragraphs:[language==='en'?'The study design produced the main finding; its limitation bounds the conclusion.':'研究设计产生主要发现，研究限制界定结论。']} ]});
-  return {root,broker,handoff,created,complete,view,runControl};
+  return {root,broker,handoff,created,complete,view,runControl,binding};
 }
 test('new runs default to reading first while existing legacy binding is preserved',()=>{
   assert.equal(resolveReadingWorkflowProfile({newRun:true}),READING_FIRST_PROFILE);
@@ -1163,7 +1283,7 @@ test('source-translation binding freezes the translation profile and keeps the s
   const options = { runId: 'run', scientificInput: { identity: { paper_id: 'synthetic', run_id: 'run' }, sources: [{ path: join(root, 'source.pdf'), sha256: sha(bytes), byte_length: bytes.length }], context: 'Read all existing material as a connected account.', role_artifacts: roles }, mainSession, authorizationId: 'synthetic-only', deadline: '2099-01-01T00:00:00Z', taskBindings: {} };
   const pair = { model: 'gpt-6-astra', reasoning_effort: 'high' };
   const legacyRoles = Object.fromEntries(['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration', 'english-writer', 'chinese-writer', 'reading-editor', 'independent-verifier'].map(role => [role, pair]));
-  const configured = roles => ({ role_model_policy: createConfiguredApaRoleModelPolicy(mainSession, roles), ...buildConfiguredReadingInstructions({}) });
+  const configured = roles => ({ role_model_policy: createConfiguredApaRoleModelPolicy(mainSession, roles), ...buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-1.0'}) });
   const translating = { ...options, writingMode: 'source-translation', configuredSetup: configured({ ...legacyRoles, translation: pair }) };
   const binding = createReadingFirstRunControl({ ...translating, sourceLanguage: 'zh-CN' }).reading_first_binding;
   assert.deepEqual([binding.writing_mode, binding.source_language, binding.translation_profile], ['source-translation', 'zh-CN', 'translation-1.0']);

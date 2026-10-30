@@ -60,12 +60,12 @@ export function validateReadingFirstPreviewFiles(files) {
 }
 
 /** Export a new self-contained candidate only after all resources and local links pass. */
-export async function exportReadingFirstPreview({ outputRoot, identity, views, presentation, targetRegistry, knowledgeRegistry = [], resources = [], readingEditor, historicalKnowledge } = {}) {
+export async function exportReadingFirstPreview({ outputRoot, identity, views, presentation, targetRegistry, existingTargets = [], knowledgeRegistry = [], resources = [], readingEditor, historicalKnowledge, noteLayout, sourceLanguage } = {}) {
   if (typeof outputRoot !== 'string' || !path.isAbsolute(outputRoot) || !Array.isArray(resources)) fail('RF_PREVIEW_INPUT_INVALID');
   const root = path.resolve(outputRoot);
   try { await lstat(root); fail('RF_PREVIEW_OUTPUT_EXISTS', { outputRoot: root }); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const history = historicalKnowledge === undefined ? null : inspectCommittedReadingFirstRegistry({ vaultRoot: historicalKnowledge.vaultRoot, registry: knowledgeRegistry });
-  const rendered = renderReadingFirstObsidian({ identity, views, presentation, targetRegistry, knowledgeRegistry, readingEditor });
+  const rendered = renderReadingFirstObsidian({ identity, views, presentation, targetRegistry, existingTargets, knowledgeRegistry, readingEditor, noteLayout, sourceLanguage });
   const files = [], paths = new Set();
   function add(relative, bytes, kind) {
     localPath(relative);

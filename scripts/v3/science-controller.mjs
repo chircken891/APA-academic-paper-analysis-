@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, rename, writeFile, link, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { createConfiguredScienceRequest, getConfiguredReadingDispatchArguments } from './configured-reading.mjs';
+import { createConfiguredScienceRequest, getConfiguredReadingDispatchArguments, validateConfiguredReadingDispatch } from './configured-reading.mjs';
 import { createOwnedArtifactBroker, commitOwnedArtifact, readOwnedArtifact, repairOwnedArtifactReceipt } from './owned-artifact-store.mjs';
 import { ingestObservedRunStep } from './phase21-runner.mjs';
 import { fingerprintReadingFirst, buildReadingFirstHandoff, createReadingFirstRequests, snapshotReadingFirstRuntime, restoreReadingFirstRuntime } from './reading-first-runtime.mjs';
+import { compactionEnabled, compactionControlBindings, evaluateCompactionBoundary, assertCompactionSettled, registerCompactionDispatch } from './reading-compaction.mjs';
 
 const roles = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'];
 const dependencies = { evidence: [], methods: ['evidence'], results: ['evidence'], interpretation: ['evidence', 'methods', 'results'], 'scientific-reading': ['evidence', 'methods', 'results', 'interpretation'], integration: ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading'] };
@@ -14,11 +15,29 @@ const hash = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex
 const same = (a, b) => fingerprintReadingFirst(a) === fingerprintReadingFirst(b);
 const fail = code => { const error = new Error(code); error.code = code; throw error; };
 const promptPath = new URL('../../prompts/v3/phase21-scientific-contracts.md', import.meta.url);
+function configuredPromptFiles(prepared) {
+  const setup = prepared.runControl.reading_first_binding.configured_setup;
+  if (setup?.instruction_profile !== 'configured-reading-2.0') return null;
+  if (!Array.isArray(setup.prompt_files) || !setup.prompt_files.length
+    || setup.prompt_files.some(file => !isAbsolute(file.path ?? '') || !/^sha256:[a-f0-9]{64}$/.test(file.sha256 ?? '')
+      || !Number.isSafeInteger(file.byte_length) || file.byte_length < 1)) fail('SCIENCE_PROMPT_BINDING_INVALID');
+  return setup.prompt_files;
+}
 function ownedPath(root, path) {
   if (typeof path !== 'string' || !path || isAbsolute(path)) fail('SCIENCE_PATH_INVALID');
   const target = resolve(root, path), rel = relative(root, target);
   if (!rel || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) fail('SCIENCE_PATH_INVALID');
   return target;
+}
+// A role whose payload names the committed registry input reads that file; it must exist before the request is emitted or dispatched.
+async function assertRegistryInput(data, role) {
+  const path = data.payloads[role]?.committed_knowledge_registry;
+  if (path === undefined) return;
+  let info = null;
+  if (typeof path === 'string' && path) {
+    try { info = await lstat(resolve(data.prepared.paths.runRoot, path)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  if (!info?.isFile()) fail('SCIENCE_KNOWLEDGE_REGISTRY_INPUT_REQUIRED');
 }
 function controllerState(controller) {
   const state = controllers.get(controller);
@@ -58,7 +77,14 @@ function validateCorrection(data, statePath, role, correction) {
 async function validateCurrent(state, { deadline = true } = {}) {
   const { data } = state, binding = data.prepared.runControl.reading_first_binding;
   if (deadline && Date.now() >= Date.parse(binding.deadline)) fail('SCIENCE_DEADLINE_EXPIRED');
-  if (hash(await readFile(promptPath)) !== data.prompt_sha256) fail('SCIENCE_PROMPT_CHANGED');
+  const promptFiles = configuredPromptFiles(data.prepared);
+  if (promptFiles) {
+    if (!same(data.prompt_files, promptFiles)) fail('SCIENCE_PROMPT_BINDING_INVALID');
+    for (const file of promptFiles) {
+      const bytes = await readFile(file.path);
+      if (hash(bytes) !== file.sha256 || bytes.length !== file.byte_length) fail('SCIENCE_PROMPT_CHANGED');
+    }
+  } else if (hash(await readFile(promptPath)) !== data.prompt_sha256) fail('SCIENCE_PROMPT_CHANGED');
   for (const source of data.prepared.scientificInput.sources) {
     const bytes = await readFile(source.path);
     if (hash(bytes) !== source.sha256 || bytes.length !== source.byte_length) fail('SCIENCE_SOURCE_CHANGED');
@@ -69,7 +95,8 @@ async function validateCurrent(state, { deadline = true } = {}) {
     for (const entry of [original, ...(original.correction ? [original.correction] : [])]) {
       const task = entry === original ? data.tasks[role] : entry.task;
       if (entry.request) {
-        const args = getConfiguredReadingDispatchArguments({ prepared: data.prepared, request: entry.request });
+        validateConfiguredReadingDispatch({ prepared: data.prepared, request: entry.request });
+        const args = entry.request.emittedStep.arguments;
         if (entry !== original) {
           const nameArgument = binding.host ? binding.host.dispatch.task_name_argument : 'task_name';
           if (entry.request.packet.host_action_scope.output_path !== ownedPath(data.prepared.paths.runRoot, task.native_path)
@@ -153,6 +180,12 @@ function validateSetup(prepared, tasks, brokerConfig, statePath) {
     if (ids.has(task.artifact_id)) fail('SCIENCE_OUTPUT_CONFLICT'); ids.add(task.artifact_id);
   }
   const stateTarget = resolve(statePath);
+  for (const expected of compactionControlBindings(prepared.runControl)) {
+    if (!brokerConfig.authorized_bindings.some(row => same(row, expected))) fail('SCIENCE_COMPACTION_CHECKPOINT_UNAUTHORIZED');
+    const target = ownedPath(prepared.paths.runRoot, expected.artifact_path).normalize('NFC').toLowerCase();
+    if (paths.has(target) || target === stateTarget.normalize('NFC').toLowerCase()) fail('SCIENCE_OUTPUT_CONFLICT');
+    paths.add(target);
+  }
   const stateRelative = relative(resolve(prepared.paths.runRoot), stateTarget);
   if (!stateRelative || stateRelative === '..' || stateRelative.startsWith('..' + sep) || isAbsolute(stateRelative) || stateRelative.split(sep)[0].toLowerCase() === '.phase21-receipts' || paths.has(stateTarget.normalize('NFC').toLowerCase())) fail('SCIENCE_STATE_PATH_INVALID');
 }
@@ -163,7 +196,11 @@ function makeController(path, data) {
 }
 export async function createScienceController({ prepared, tasks, payloads = {}, brokerConfig, statePath } = {}) {
   validateSetup(prepared, tasks, brokerConfig, statePath);
-  const data = { version: 0, prepared: copy(prepared), tasks: copy(tasks), payloads: copy(payloads), brokerConfig: copy(brokerConfig), prompt_sha256: hash(await readFile(promptPath)), entries: Object.fromEntries(roles.map(role => [role, {}])), handoff: null };
+  // Same shape the later handoff requires; failing here spends no science call.
+  if (typeof prepared.scientificInput.context !== 'string' || !prepared.scientificInput.context.trim()) fail('READING_FIRST_CONTEXT_TEXT_REQUIRED');
+  const promptFiles = configuredPromptFiles(prepared);
+  const data = { version: 0, prepared: copy(prepared), tasks: copy(tasks), payloads: copy(payloads), brokerConfig: copy(brokerConfig),
+    ...(promptFiles ? { prompt_files: copy(promptFiles) } : { prompt_sha256: hash(await readFile(promptPath)) }), entries: Object.fromEntries(roles.map(role => [role, {}])), handoff: null };
   const controller = makeController(statePath, data), state = controllerState(controller);
   await validateCurrent(state); await save(state, true); return controller;
 }
@@ -198,6 +235,7 @@ function scienceCompactionBoundary(state) {
 /** Persist an observed reminder outcome in the existing durable science state. */
 export async function recordScienceCompactionBoundary({ controller, id, status, reason } = {}) {
   const state = controllerState(controller);
+  if (compactionEnabled(state.data.prepared.runControl.reading_first_binding)) fail('APA_COMPACTION_POLICY_DECISION_REQUIRED');
   return serial(state, async () => {
     await validateCurrent(state, { deadline: false });
     const boundary = scienceCompactionBoundary(state);
@@ -210,6 +248,36 @@ export async function recordScienceCompactionBoundary({ controller, id, status, 
     await save(state);
     return scienceCompactionBoundary(state);
   });
+}
+/** Assess and durably record the common policy; returning await-user means the save succeeded. */
+export async function handleScienceCompactionBoundary({ controller, observation, sessionId, progress, userDecision } = {}) {
+  const state = controllerState(controller);
+  return serial(state, async () => {
+    await validateCurrent(state);
+    const binding = state.data.prepared.runControl.reading_first_binding;
+    if (!compactionEnabled(binding)) fail('APA_COMPACTION_POLICY_REQUIRED');
+    const result = evaluateCompactionBoundary({ boundary: scienceCompactionBoundary(state), observation, sessionId, progress, userDecision,
+      history: state.data.compaction_reminders, startedAt: binding.compaction_policy.started_at });
+    if (result.record) {
+      const boundary = scienceCompactionBoundary(state);
+      state.data.compaction_reminders ??= {};
+      state.data.compaction_reminders[boundary.id] = result.record;
+      await save(state);
+    }
+    return copy(result);
+  });
+}
+
+function assertScienceCompactionDispatch(state, role) {
+  if (!compactionEnabled(state.data.prepared.runControl.reading_first_binding)) return;
+  if (state.poisoned || !same(state.data, state.saved)) fail('SCIENCE_CONTROLLER_RESTORE_REQUIRED');
+  const id = ['methods', 'results'].includes(role) ? 'evidence-accepted'
+    : ['interpretation', 'scientific-reading', 'integration'].includes(role) ? 'methods-results-accepted'
+    : scienceCompactionBoundary(state)?.id;
+  assertCompactionSettled(state.data.compaction_reminders, id);
+}
+function registerScienceRequest(state, request) {
+  return registerCompactionDispatch(request, () => assertScienceCompactionDispatch(state, request.packet.host_action_scope.role));
 }
 /** Retrieve the immutable original action and actual observation history for host reconciliation. */
 export function getScienceRequest({ controller, role } = {}) {
@@ -241,7 +309,9 @@ export async function prepareScienceRequests({ controller } = {}) {
   const state = controllerState(controller);
   return serial(state, async () => {
     await validateCurrent(state);
+    assertScienceCompactionDispatch(state);
     const selected = roles.filter(role => !activeEntry(state.data, role).request && dependencies[role].every(dep => activeEntry(state.data, dep).receipt));
+    for (const role of selected) await assertRegistryInput(state.data, role);
     if (selected.length) {
       for (const role of selected) {
         const upstream = {};
@@ -254,18 +324,21 @@ export async function prepareScienceRequests({ controller } = {}) {
       }
       await save(state);
     }
-    return copy(roles.filter(role => activeEntry(state.data, role).request && !activeEntry(state.data, role).intent).map(role => ({ role, request: activeEntry(state.data, role).request })));
+    return roles.filter(role => activeEntry(state.data, role).request && !activeEntry(state.data, role).intent)
+      .map(role => ({ role, request: registerScienceRequest(state, copy(activeEntry(state.data, role).request)) }));
   });
 }
 export async function recordScienceDispatchIntent({ controller, role } = {}) {
   const state = controllerState(controller);
   return serial(state, async () => {
     await validateCurrent(state);
+    assertScienceCompactionDispatch(state, role);
     const entry = activeEntry(state.data, role);
     if (!entry?.request || entry.intent) fail('SCIENCE_DISPATCH_UNAVAILABLE');
+    await assertRegistryInput(state.data, role);
     const maxScienceCalls = roles.map(key => state.data.entries[key].correction?.authorization.maxScienceCalls).find(Boolean) ?? 6;
     if (scienceCalls(state.data) >= maxScienceCalls) fail('SCIENCE_BUDGET_EXHAUSTED');
-    const args = getConfiguredReadingDispatchArguments({ prepared: state.data.prepared, request: entry.request });
+    const args = getConfiguredReadingDispatchArguments({ prepared: state.data.prepared, request: registerScienceRequest(state, entry.request) });
     entry.intent = { action_id: entry.request.emittedStep.action_id, action: entry.request.emittedStep.action, arguments: args, recorded_at: new Date().toISOString() };
     await save(state); return copy(entry.intent);
   });
@@ -275,13 +348,27 @@ export async function recordScienceHostObservation({ controller, role, observati
   return serial(state, async () => {
     await validateCurrent(state);
     const entry = activeEntry(state.data, role);
-    if (!entry?.intent || entry.receipt) fail('SCIENCE_OBSERVATION_UNAVAILABLE');
+    if (!entry?.intent) fail('SCIENCE_OBSERVATION_UNAVAILABLE');
     if (observation?.kind === 'host_update') {
       if (entry.observation?.status !== 'observed' || observation.action_id !== entry.intent.action_id || observation.agent_id !== entry.observation.agent_id || typeof observation.raw_result_text !== 'string' || !observation.tool_call || typeof observation.tool_call.name !== 'string' || !observation.tool_call.arguments || typeof observation.tool_call.arguments !== 'object') fail('SCIENCE_HOST_UPDATE_INVALID');
+      const previous = (entry.host_updates ?? []).find(update => observation.host_event_id
+        ? update.host_event_id === observation.host_event_id : !update.host_event_id && same(update, observation));
+      if (previous) {
+        if (!same(previous, observation)) fail('SCIENCE_HOST_EVENT_CONFLICT');
+        return copy(previous);
+      }
+      if (entry.receipt) fail('SCIENCE_OBSERVATION_UNAVAILABLE');
       const update = copy(observation); (entry.host_updates ??= []).push(update); await save(state); return update;
     }
+    if (entry.observation?.status === 'observed' && same(entry.raw_observation, observation)) return copy(entry.observation);
+    if (entry.observation?.status === 'observed') fail('SCIENCE_HOST_EVENT_CONFLICT');
+    if (entry.receipt) fail('SCIENCE_OBSERVATION_UNAVAILABLE');
     const request = entry.request;
     const checked = ingestObservedRunStep({ packet: request.packet, emittedStep: request.emittedStep, observation, run: { run_id: state.data.prepared.runControl.run_id } });
+    if (entry.raw_observation && same(entry.raw_observation, observation) && same(entry.observation, checked)) {
+      if (checked.status !== 'observed') fail('SCIENCE_OBSERVATION_INVALID');
+      return copy(checked);
+    }
     if (entry.observation?.agent_id && checked.agent_id && entry.observation.agent_id !== checked.agent_id) fail('SCIENCE_HOST_HANDLE_MISMATCH');
     entry.raw_observation = copy(observation); entry.observation = copy(checked);
     (entry.observations ??= []).push({ raw: copy(observation), validated: copy(checked) });

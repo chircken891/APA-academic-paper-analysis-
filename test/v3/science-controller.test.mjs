@@ -5,32 +5,160 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { createReadingFirstRunControl, acceptReadingFirstResult, getReadingFirstState, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, createReadingFirstDraftRequests } from '../../scripts/v3/reading-first-runtime.mjs';
+import { createReadingFirstRunControl, acceptReadingFirstResult, getReadingFirstState, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, createReadingFirstDraftRequests, handleReadingCompactionBoundary } from '../../scripts/v3/reading-first-runtime.mjs';
 import { commitOwnedArtifact } from '../../scripts/v3/owned-artifact-store.mjs';
 import { createApaRoleModelPolicy } from '../../scripts/apa-model-policy.mjs';
-import { buildConfiguredReadingInstructions, prepareConfiguredReading } from '../../scripts/v3/configured-reading.mjs';
+import { buildConfiguredReadingInstructions, prepareConfiguredReading, getConfiguredReadingDispatchArguments } from '../../scripts/v3/configured-reading.mjs';
+import * as scienceApi from '../../scripts/v3/science-controller.mjs';
+import { COMPACTION_POLICY, compactionControlBindings } from '../../scripts/v3/reading-compaction.mjs';
 import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, prepareScienceCorrection, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, getScienceRequest, createScienceHandoff, recordScienceCompactionBoundary } from '../../scripts/v3/science-controller.mjs';
 import { ingestObservedRunStep } from '../../scripts/v3/phase21-runner.mjs';
 const roles = ['evidence','methods','results','interpretation','scientific-reading','integration'];
 const sha = b => 'sha256:' + createHash('sha256').update(b).digest('hex');
-async function fixture(t) {
+
+async function acceptCompactionBatch(f, controller) {
+  for (const { role, request } of await prepareScienceRequests({ controller })) {
+    const args = getConfiguredReadingDispatchArguments({ prepared: f.options.prepared, request });
+    const intent = await recordScienceDispatchIntent({ controller, role });
+    assert.deepEqual(intent.arguments, args);
+    await recordScienceHostObservation({ controller, role, observation: { action_id: request.emittedStep.action_id, run_id: 'run',
+      input_fingerprint: request.emittedStep.input_fingerprint, port: 'current-collaboration',
+      tool_call: { name: request.emittedStep.action, arguments: args }, raw_result_text: JSON.stringify({ agent_id: 'host-' + role }) } });
+    await writeFile(join(f.root, f.tasks[role].native_path), JSON.stringify({ role, text: 'accepted source' }));
+    await acceptScienceResult({ controller, role });
+  }
+}
+
+test('new science boundaries block dispatch until evaluated and retain the pause across restore', async t => {
+  const f = await fixture(t, { compactionPolicy: COMPACTION_POLICY });
+  let controller = await createScienceController(f.options);
+  await acceptCompactionBatch(f, controller);
+  await assert.rejects(() => prepareScienceRequests({ controller }), /APA_COMPACTION_BOUNDARY_REQUIRED/);
+  const skipped = await scienceApi.handleScienceCompactionBoundary({ controller });
+  assert.equal(skipped.action, 'continue');
+  assert.equal(getScienceState(controller).compaction_boundary.reminder.status, 'skipped');
+  await acceptCompactionBatch(f, controller);
+  const at = new Date().toISOString();
+  const input = { controller, sessionId: 'main', observation: { session_id: 'main', observed_at: at,
+    manual_compaction: { available: true, method: 'compact in host', source: 'host tool contract' },
+    context: { tokens: 190000, kind: 'current-context', measured_at: at, fresh: true, source: 'host meter' } },
+    progress: { remaining_work: { multiple_responses: true, reason: 'Science and writing remain.' }, growth: { substantial: true, reason: 'Methods and Results added evidence.' } } };
+  const pause = await scienceApi.handleScienceCompactionBoundary(input);
+  assert.equal(pause.action, 'await-user');
+  assert.match(pause.message, /compact in host/);
+  const before = getScienceState(controller);
+  await assert.rejects(() => prepareScienceRequests({ controller }), /APA_COMPACTION_AWAITING_USER/);
+  const restored = await restoreScienceController(f.options); controller = restored;
+  assert.equal((await scienceApi.handleScienceCompactionBoundary({ controller })).action, 'await-user');
+  await assert.rejects(() => recordScienceCompactionBoundary({ controller, id: 'methods-results-accepted', status: 'skipped', reason: 'bypass' }), /APA_COMPACTION_POLICY_DECISION_REQUIRED/);
+  const resumed = await scienceApi.handleScienceCompactionBoundary({ controller, userDecision: 'continue' });
+  assert.equal(resumed.action, 'continue');
+  assert.equal(resumed.record.compaction_verified, false);
+  const after = getScienceState(controller);
+  assert.equal(after.reserved_calls, before.reserved_calls);
+  assert.equal(after.deadline, before.deadline);
+  assert.deepEqual(after.roles, before.roles);
+  assert.deepEqual((await prepareScienceRequests({ controller })).map(row => row.role), ['interpretation']);
+});
+
+test('a live science process continues after skip and carries reminder history into Writer', async t => {
+  const f = await fixture(t, { compactionPolicy: COMPACTION_POLICY });
+  const controller = await createScienceController(f.options);
+  await acceptCompactionBatch(f, controller);
+  const at = new Date().toISOString();
+  const pause = await scienceApi.handleScienceCompactionBoundary({ controller, sessionId: 'main',
+    observation: { session_id: 'main', observed_at: at,
+      manual_compaction: { available: true, method: 'host action', source: 'host contract' },
+      context: { tokens: 180000, kind: 'current-context', measured_at: at, fresh: true, source: 'meter' } },
+    progress: { remaining_work: { multiple_responses: true, reason: 'Science and writing remain.' }, growth: { substantial: true, reason: 'Evidence increased context.' } } });
+  assert.equal(pause.action, 'await-user');
+  const before = getScienceState(controller);
+  assert.equal((await scienceApi.handleScienceCompactionBoundary({ controller, userDecision: 'skip' })).record.reason, 'user-skipped');
+  assert.equal((await scienceApi.handleScienceCompactionBoundary({ controller })).record, null);
+  assert.equal(getScienceState(controller).deadline, before.deadline);
+  await acceptCompactionBatch(f, controller);
+  await scienceApi.handleScienceCompactionBoundary({ controller });
+  for (let i = 0; i < 3; i++) await acceptCompactionBatch(f, controller);
+  const created = await createScienceHandoff({ controller, checkpointTask: f.checkpointTask });
+  const task = f.options.prepared.runControl.reading_first_binding.compaction_policy.checkpoints['before-writer'].decision;
+  const decision = await handleReadingCompactionBoundary({ controller: created.controller, checkpointReceipt: created.checkpointReceipt,
+    hostRequests: created.requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' })),
+    observation: { manual_compaction: { available: true, method: 'host action', source: 'host contract' } },
+    capability: created.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: task.artifact_path, revision: task.revision }) });
+  assert.equal(decision.action, 'continue');
+  assert.equal(decision.record.reason, 'unknown-context-fallback-not-due');
+  assert.deepEqual(getConfiguredReadingDispatchArguments({ prepared: f.options.prepared, request: created.requests[0] }), created.requests[0].emittedStep.arguments);
+});
+
+test('failed science reminder save never returns a prompt or unlocks a stale controller', async t => {
+  const f = await fixture(t, { compactionPolicy: COMPACTION_POLICY });
+  const controller = await createScienceController(f.options);
+  await acceptCompactionBatch(f, controller);
+  await assert.rejects(() => prepareScienceRequests({ controller }), /APA_COMPACTION_BOUNDARY_REQUIRED/);
+  const stale = await restoreScienceController(f.options);
+  await scienceApi.handleScienceCompactionBoundary({ controller });
+  await assert.rejects(() => scienceApi.handleScienceCompactionBoundary({ controller: stale }), /SCIENCE_STATE_CONFLICT/);
+  await assert.rejects(() => prepareScienceRequests({ controller: stale }), /SCIENCE_CONTROLLER_RESTORE_REQUIRED/);
+});
+
+async function fixture(t, { context = 'synthetic', compactionPolicy, promptFiles } = {}) {
   const root = await mkdtemp(join(tmpdir(),'science-controller-')); t.after(() => rm(root,{recursive:true,force:true}));
   const source = Buffer.from('synthetic source'); await writeFile(join(root,'paper.pdf'),source);
   const tasks = Object.fromEntries(roles.map(role=>[role,{task_id:role,task_name:role.replace('-','_'),owner_actor_id:role,role,artifact_id:role,artifact_path:'science/'+role+'.json',native_path:'native/'+role+'.json',...(role==='evidence'?{instruction_path:'instructions/evidence.txt'}:{}),revision:'1'}]));
   const downstream = Object.fromEntries(['en','zh-CN','review'].map(key=>[key,{task_id:key,task_name:'writer_'+key.replace('-','_').toLowerCase(),owner_actor_id:key,role:key==='en'?'english-writer':key==='zh-CN'?'chinese-writer':'independent-verifier',artifact_id:key,artifact_path:'writer/'+key+'.json',native_path:'native/'+key+'.json',...(key==='en'?{instruction_path:'instructions/en.txt'}:{}),revision:'1'}]));
-  const scientificInput = {profile:'reading-first-1.0',identity:{paper_id:'synthetic',run_id:'run'},sources:[{path:join(root,'paper.pdf'),sha256:sha(source),byte_length:source.length}],context:'synthetic',role_artifacts:roles};
+  const scientificInput = {profile:'reading-first-1.0',identity:{paper_id:'synthetic',run_id:'run'},sources:[{path:join(root,'paper.pdf'),sha256:sha(source),byte_length:source.length}],context,role_artifacts:roles};
   const mainSession={model:'gpt-6-astra',reasoning_effort:'high'};
-  const configuredSetup={schema_version:'apa-configured-reading-1.0',config_fingerprint:sha(Buffer.from('config')),paths:{runRoot:root},role_model_policy:createApaRoleModelPolicy(mainSession),...buildConfiguredReadingInstructions({})};
-  const runControl=createReadingFirstRunControl({runId:'run',scientificInput,mainSession,configuredSetup,authorizationId:'synthetic',deadline:'2099-01-01T00:00:00Z',taskBindings:downstream,writingMode:'source-first',maxCalls:6,priorCalls:6,maxTotalCalls:12});
+  const configuredSetup={schema_version:'apa-configured-reading-1.0',config_fingerprint:sha(Buffer.from('config')),paths:{runRoot:root},role_model_policy:createApaRoleModelPolicy(mainSession),...buildConfiguredReadingInstructions({}),...(promptFiles ? {instruction_profile:'configured-reading-2.0',prompt_files:promptFiles} : {})};
+  const runControl=createReadingFirstRunControl({runId:'run',scientificInput,mainSession,configuredSetup,authorizationId:'synthetic',deadline:'2099-01-01T00:00:00Z',taskBindings:downstream,writingMode:'source-first',maxCalls:6,priorCalls:6,maxTotalCalls:12,compactionPolicy});
   const prepared={runControl,scientificInput,configurationFingerprint:sha(Buffer.from('config')),paths:{runRoot:root}};
   const authorized_bindings=[...Object.values(tasks),...Object.values(downstream)].map(task=>({run_id:'run',actor_id:task.owner_actor_id,role:task.role,artifact_path:task.artifact_path,revision:task.revision}));
   const checkpointTask={artifact_id:'checkpoint',artifact_path:'control/checkpoint.json',revision:'1',owner_actor_id:'controller',role:'control'};
   authorized_bindings.push({run_id:'run',actor_id:'controller',role:'control',artifact_path:checkpointTask.artifact_path,revision:'1'});
   authorized_bindings.push({run_id:'run',actor_id:'controller',role:'control',artifact_path:'control/checkpoint-r2.json',revision:'2'});
+  authorized_bindings.push(...compactionControlBindings(runControl));
   const brokerConfig={control_actor_id:'controller',artifact_root:root,authorized_bindings,run_controls:[runControl]};
   const options={prepared,tasks,brokerConfig,statePath:join(root,'state.json')};
   await mkdir(join(root,'native')); return {root,options,tasks,checkpointTask};
 }
+
+test('configured science freezes actual versioned prompt files and verifies them on restore', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'science-prompt-version-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const prompt = join(directory, 'science-configured-2.0.md'), bytes = Buffer.from('Synthetic versioned science contract.');
+  await writeFile(prompt, bytes);
+  const promptFiles = [{ path: prompt, sha256: sha(bytes), byte_length: bytes.length }];
+  const f = await fixture(t, { promptFiles });
+  await createScienceController(f.options);
+  const saved = JSON.parse(await readFile(f.options.statePath, 'utf8'));
+  assert.deepEqual(saved.data.prompt_files, promptFiles);
+  assert.equal(Object.hasOwn(saved.data, 'prompt_sha256'), false);
+  await restoreScienceController(f.options);
+  await writeFile(prompt, 'Changed science contract.');
+  await assert.rejects(() => restoreScienceController(f.options), /SCIENCE_PROMPT_CHANGED/);
+});
+
+test('science observations and progress updates are idempotent and reject conflicting event identities', async t => {
+  const f = await fixture(t), controller = await createScienceController(f.options);
+  const [{ request }] = await prepareScienceRequests({ controller });
+  await recordScienceDispatchIntent({ controller, role: 'evidence' });
+  const step = request.emittedStep;
+  const observation = { action_id: step.action_id, run_id: 'run', input_fingerprint: step.input_fingerprint,
+    port: 'current-collaboration', tool_call: { name: step.action, arguments: step.arguments }, raw_result_text: JSON.stringify({ agent_id: 'same-host-task' }) };
+  const accepted = await recordScienceHostObservation({ controller, role: 'evidence', observation });
+  const version = getScienceState(controller).version;
+  assert.deepEqual(await recordScienceHostObservation({ controller, role: 'evidence', observation }), accepted);
+  assert.equal(getScienceState(controller).version, version);
+  const update = { kind: 'host_update', action_id: step.action_id, agent_id: 'same-host-task', host_event_id: 'progress-1',
+    tool_call: { name: 'host.wait', arguments: { id: 'same-host-task' } }, raw_result_text: 'running' };
+  await recordScienceHostObservation({ controller, role: 'evidence', observation: update });
+  const restored = await restoreScienceController(f.options);
+  await recordScienceHostObservation({ controller: restored, role: 'evidence', observation: update });
+  assert.equal(getScienceRequest({ controller: restored, role: 'evidence' }).host_updates.length, 1);
+  await assert.rejects(() => recordScienceHostObservation({ controller: restored, role: 'evidence', observation: { ...update, raw_result_text: 'different same event' } }), /SCIENCE_HOST_EVENT_CONFLICT/);
+  await recordScienceHostObservation({ controller: restored, role: 'evidence', observation: { ...update, host_event_id: 'progress-2', raw_result_text: 'still running' } });
+  assert.equal(getScienceRequest({ controller: restored, role: 'evidence' }).host_updates.length, 2);
+  await assert.rejects(() => recordScienceHostObservation({ controller: restored, role: 'evidence', observation: { ...observation, raw_result_text: JSON.stringify({ agent_id: 'different' }) } }), /SCIENCE_HOST_EVENT_CONFLICT/);
+});
 
 async function failedFinalDispatch(t, { maxTotalCalls = 14, maxCalls = 6 } = {}) {
   const f = await fixture(t);
@@ -63,6 +191,37 @@ async function failedFinalDispatch(t, { maxTotalCalls = 14, maxCalls = 6 } = {})
   const grant = { role: 'integration', task, authorizationId: 'explicit-correction', maxScienceCalls: 7, maxTotalCalls, deadline: '2099-01-01T00:00:00Z' };
   return { ...f, controller, original, grant };
 }
+
+test('science controller rejects non-text context before any science request', async t => {
+  const f = await fixture(t, { context: { source_scope: 'object context' } });
+  await assert.rejects(() => createScienceController(f.options), /READING_FIRST_CONTEXT_TEXT_REQUIRED/);
+  await assert.rejects(() => readFile(f.options.statePath), { code: 'ENOENT' });
+});
+
+test('a role naming the committed registry input is not emitted or dispatched before that file exists', async t => {
+  const f = await fixture(t);
+  const registry = 'inputs/committed-knowledge-registry.json';
+  f.options.payloads = { methods: { committed_knowledge_registry: registry } };
+  let controller = await createScienceController(f.options);
+  const [{ request }] = await prepareScienceRequests({ controller });
+  await recordScienceDispatchIntent({ controller, role: 'evidence' });
+  const step = request.emittedStep;
+  await recordScienceHostObservation({ controller, role: 'evidence', observation: { action_id: step.action_id, run_id: 'run', input_fingerprint: step.input_fingerprint, port: 'current-collaboration', tool_call: { name: step.action, arguments: step.arguments }, raw_result_text: JSON.stringify({ agent_id: 'evidence-agent' }) } });
+  await writeFile(join(f.root, f.tasks.evidence.native_path), JSON.stringify({ role: 'evidence', text: 'source' }));
+  await acceptScienceResult({ controller, role: 'evidence' });
+  await assert.rejects(() => prepareScienceRequests({ controller }), /SCIENCE_KNOWLEDGE_REGISTRY_INPUT_REQUIRED/);
+  assert.equal(getScienceState(controller).roles.methods.status, 'waiting');
+  await mkdir(join(f.root, 'inputs'));
+  await writeFile(join(f.root, registry), '[]');
+  assert.deepEqual((await prepareScienceRequests({ controller })).map(item => item.role), ['methods', 'results']);
+  // The precondition is checked again at the dispatch boundary.
+  await rm(join(f.root, registry));
+  controller = await restoreScienceController(f.options);
+  await assert.rejects(() => recordScienceDispatchIntent({ controller, role: 'methods' }), /SCIENCE_KNOWLEDGE_REGISTRY_INPUT_REQUIRED/);
+  await recordScienceDispatchIntent({ controller, role: 'results' });
+  await writeFile(join(f.root, registry), '[]');
+  await recordScienceDispatchIntent({ controller, role: 'methods' });
+});
 
 test('authorized correction retains a rejected original, counts both calls, and survives restore', async t => {
   const f = await failedFinalDispatch(t);
@@ -356,7 +515,7 @@ for (const hostStyle of ['codex','mapped']) test(`configured reading binds and r
   await writeFile(join(configRoot,'config/apa.local.json'),JSON.stringify(config));
   const old=f.options.prepared, binding=old.runControl.reading_first_binding;
   const prepared=prepareConfiguredReading({repoRoot:configRoot,runId:'run',scientificInput:old.scientificInput,sessionContext:hostStyle==='mapped'?{model:'sonnet'}:{model:'gpt-6-astra',effort:'high'},authorizationId:'synthetic',deadline:binding.deadline,sourceLanguage:'en',taskBindings:{...binding.task_bindings,'zh-CN':{...binding.task_bindings['zh-CN'],role:'translation'}},maxCalls:6,priorCalls:6,maxTotalCalls:12});
-  const brokerConfig={...f.options.brokerConfig,artifact_root:prepared.paths.runRoot,run_controls:[prepared.runControl]};
+  const brokerConfig={...f.options.brokerConfig,artifact_root:prepared.paths.runRoot,authorized_bindings:[...f.options.brokerConfig.authorized_bindings,...prepared.compactionControlBindings],run_controls:[prepared.runControl]};
   const options={...f.options,prepared,brokerConfig,statePath:join(prepared.paths.runRoot,'state.json')};
   const controller=await createScienceController(options); const [{request}]=await prepareScienceRequests({controller});
   const intent=await recordScienceDispatchIntent({controller,role:'evidence'});
@@ -441,7 +600,7 @@ test('claude-code science observations keep the agentId from result text across 
   await writeFile(join(configRoot,'config/apa.local.json'),JSON.stringify(config));
   const old=f.options.prepared, binding=old.runControl.reading_first_binding;
   const prepared=prepareConfiguredReading({repoRoot:configRoot,runId:'run',scientificInput:old.scientificInput,sessionContext:{model:'sonnet'},authorizationId:'synthetic',deadline:binding.deadline,sourceLanguage:'en',taskBindings:{...binding.task_bindings,'zh-CN':{...binding.task_bindings['zh-CN'],role:'translation'}},maxCalls:6,priorCalls:6,maxTotalCalls:12});
-  const brokerConfig={...f.options.brokerConfig,artifact_root:prepared.paths.runRoot,run_controls:[prepared.runControl]};
+  const brokerConfig={...f.options.brokerConfig,artifact_root:prepared.paths.runRoot,authorized_bindings:[...f.options.brokerConfig.authorized_bindings,...prepared.compactionControlBindings],run_controls:[prepared.runControl]};
   const options={...f.options,prepared,brokerConfig,statePath:join(prepared.paths.runRoot,'state.json')};
   const controller=await createScienceController(options); const [{request}]=await prepareScienceRequests({controller});
   assert.deepEqual(request.packet.host_action_scope.result_bindings.agent_id,resultHandle);

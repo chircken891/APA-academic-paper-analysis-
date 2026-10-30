@@ -78,8 +78,8 @@ async function inventoryRawFiles(root) {
   return files.sort((left, right) => left.path.localeCompare(right.path));
 }
 
-function validatedPacket(packet, { mineruOnly = false } = {}) {
-  const validation = validateEvaluationApprovalPacket(packet);
+function validatedPacket(packet, { mineruOnly = false, modelFreeParser = false } = {}) {
+  const validation = validateEvaluationApprovalPacket(packet, { modelFreeParser: mineruOnly && modelFreeParser });
   if (!validation.ok) fail(`APPROVAL_PACKET_INVALID:${validation.errors.join(',')}`);
   if (!mineruOnly && packet.backend.identity === 'current-collaboration') {
     validateHostScope(validation.packet);
@@ -183,8 +183,9 @@ function observedAgentId(raw, path) {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
-/** Dependencies are constructor-only local-test seams; packets select no commands or backends. */
-export function createCurrentMineruBaselinePort({ vaultRoot, dependencies = {} } = {}) {
+/** Dependencies are constructor-only local-test seams; packets select no commands or backends.
+ * `modelFreeParser` (configured reading only) also accepts `requested_model: null`; the historical default is unchanged. */
+export function createCurrentMineruBaselinePort({ vaultRoot, dependencies = {}, modelFreeParser = false } = {}) {
   if (typeof vaultRoot !== 'string' || !vaultRoot) fail('VAULT_ROOT_REQUIRED');
   const root = resolve(vaultRoot);
   const checkMineruRuntime = dependencies.checkMineruRuntime ?? publicCheckMineruRuntime;
@@ -193,7 +194,7 @@ export function createCurrentMineruBaselinePort({ vaultRoot, dependencies = {} }
   return Object.freeze({
     port: 'current-mineru',
     async run(packet, { signal } = {}) {
-      const approved = validatedPacket(packet, { mineruOnly: true });
+      const approved = validatedPacket(packet, { mineruOnly: true, modelFreeParser });
       const sourcePath = resolve(approved.source.path);
       const outputPath = resolve(approved.allowed_output_root);
       await assertExistingPathIsNotLink(root, sourcePath, 'SOURCE_PATH_OUTSIDE_VAULT');

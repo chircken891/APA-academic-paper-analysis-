@@ -36,8 +36,17 @@ export function assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot, regist
   }
 }
 
-/** Build reuse candidates from the committed inventory, never from a vault-wide scan. */
-export async function readCommittedReadingFirstKnowledgeRegistry({ vaultRoot, policy = 'committed-generation-1.0' } = {}) {
+/** Build reuse candidates from the committed inventory, never from a vault-wide scan.
+ * A supplied `binding` (reading_first_binding, run control or prepared run) supplies its frozen policy and vault root. */
+export async function readCommittedReadingFirstKnowledgeRegistry({ vaultRoot, policy, binding } = {}) {
+  if (binding !== undefined) {
+    const frozen = (binding?.runControl?.reading_first_binding ?? binding?.reading_first_binding ?? binding)?.configured_setup?.knowledge_registry;
+    if (!frozen) fail('RF_KNOWLEDGE_REGISTRY_BINDING_POLICY_REQUIRED');
+    if (policy !== undefined && policy !== frozen.policy) fail('RF_KNOWLEDGE_REGISTRY_POLICY_MISMATCH');
+    if (vaultRoot !== undefined && typeof frozen.vault_root === 'string' && resolve(vaultRoot) !== resolve(frozen.vault_root)) fail('RF_KNOWLEDGE_REGISTRY_ROOT_MISMATCH');
+    policy = frozen.policy; vaultRoot ??= frozen.vault_root;
+  }
+  policy ??= 'committed-generation-1.0';
   if (typeof vaultRoot !== 'string' || !vaultRoot) fail('RF_KNOWLEDGE_REGISTRY_ROOT_REQUIRED');
   if (!['committed-generation-1.0', 'committed-shared-nodes-1.0', 'current-shared-nodes-1.0'].includes(policy)) fail('RF_KNOWLEDGE_REGISTRY_POLICY_INVALID');
   const root = resolve(vaultRoot);

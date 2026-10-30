@@ -57,7 +57,8 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
   if (p.knowledge_layout && !sharedKnowledge) fail('RF_OBSIDIAN_KNOWLEDGE_LAYOUT_INVALID');
   const editor = readingEditor === undefined ? undefined : validateReadingFirstEditor({ editor: readingEditor, views, presentation });
   // Editor 1.1: three heading levels, folded catalogues/captions, figure notes beside figures and a staged map.
-  const compact = ['reading-editor-1.1', 'reading-editor-1.2'].includes(editor?.schema_version);
+  const compact = ['reading-editor-1.1', 'reading-editor-1.2', 'reading-editor-1.3'].includes(editor?.schema_version);
+  const fold = editor?.schema_version !== 'reading-editor-1.3';
   const writerLayout = p.layout === 'writer-modules-1.0';
   if (editor && !writerLayout) fail('RF_OBSIDIAN_EDITOR_LAYOUT_INVALID');
   if (p.layout && !writerLayout) fail('RF_OBSIDIAN_LAYOUT_INVALID');
@@ -226,7 +227,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     const visualLink = id => editor && !compact ? headingHref(visualHeadings.get(id)) : '#^rf-visual-' + id;
     const sectionLink = (id, text) => md(text, editor ? headingHref(sectionHeadings.get(id)) : `#^${anchor(id)}`);
     const sectionLinks = ids => ids.map(id => sectionLink(id, view.sections.find(section => section.id === id).heading)).join(' · ');
-    const callout = (kind, title, text, folded = false) => `> [!${kind}]${folded ? '-' : ''} ${title}\n` + text.split('\n').map(line => '> ' + line).join('\n') + '\n\n';
+    const callout = (kind, title, text, folded = false) => `> [!${kind}]${folded && fold ? '-' : ''} ${title}\n` + text.split('\n').map(line => '> ' + line).join('\n') + '\n\n';
     const methodInventory = () => `### ${inventoryHeading}\n\n` + edits.methods.map((method, index) => {
       const ids = [...new Set([...(method.knowledge_ids ?? []), ...(method.knowledge_id ? [method.knowledge_id] : [])])];
       const shared = ids.map(id => {
@@ -285,7 +286,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
       researchMap += '  classDef primary fill:#1d4ed8,stroke:#1e3a8a,stroke-width:3px,color:#ffffff\n  classDef secondary fill:#f1f5f9,stroke:#94a3b8,color:#1e293b\n';
       for (const [kind, rows] of [['primary', selected.filter(node => node.primary)], ['secondary', selected.filter(node => !node.primary)]]) if (rows.length) researchMap += `  class ${rows.map(node => mermaidId(node.id)).join(',')} ${kind}\n`;
       researchMap += '```\n\n';
-      if (editor.schema_version === 'reading-editor-1.2') {
+      if (['reading-editor-1.2', 'reading-editor-1.3'].includes(editor.schema_version)) {
         if (drawn.size !== ids.size || [...ids].some(id => !drawn.has(id))) fail('RF_RESEARCH_MAP_INCOMPLETE');
         const omitted = map.findings.filter(node => !ids.has(node.id));
         if (omitted.length) researchMap += `${en ? 'Findings not shown in the map: ' : '未画入导图的发现：'}`

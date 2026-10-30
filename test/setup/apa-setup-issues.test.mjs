@@ -30,12 +30,12 @@ const allCapabilities = overrides => Object.fromEntries(['on_demand_reading', 'd
 const issuesFor = (t, hostProfile) => inspectApaConfig({ repoRoot: temporary(t), capability: 'query', hostProfile }).setup_issues;
 const ids = issues => issues.map(item => item.id);
 
-test('unknown capability without search is investigate', t => {
+test('unknown capability without search is a known limit', t => {
   const unknown = capability({ status: 'unknown', achievement: { state: 'not-found', summary: 'none', steps: [] } });
   delete unknown.investigation;
-  const issue = issuesFor(t, profile(allCapabilities({ threshold_compaction: unknown }))).find(item => item.id === 'investigate:capability:threshold_compaction');
+  const issue = issuesFor(t, profile(allCapabilities({ threshold_compaction: unknown }))).find(item => item.id === 'known-limit:capability:threshold_compaction');
   assert.ok(issue);
-  assert.equal(issue.category, 'investigate');
+  assert.equal(issue.category, 'known-limit');
   assert.deepEqual(issue.detail, REQUIRED_SEARCH_SOURCES);
 });
 
@@ -106,7 +106,7 @@ test('legacy profile still loads', t => {
   fs.writeFileSync(modern, JSON.stringify(profile(allCapabilities({ manual_compaction: capability({ evidence: [{ source: 'runtime-log', reference: 'session.jsonl:1' }, { source: 'installed-software', reference: 'host --help' }] }) }))));
   assert.doesNotThrow(() => loadHostProfile(modern));
   const legacyIssues = ids(issuesFor(t, loadHostProfile(legacy)));
-  assert.equal(legacyIssues.filter(id => id.startsWith('investigate:capability:')).length, 6);
+  assert.equal(legacyIssues.filter(id => id.startsWith('known-limit:capability:')).length, 6);
 });
 
 const sha = 'a'.repeat(64);
@@ -114,13 +114,13 @@ const ledger = (entries, profileSha256 = sha) => ({ schema_version: 'apa-setup-i
 const decision = id => ({ id, disposition: 'deferred', note: '用户稍后处理', decided_by: 'user' });
 const authorize = { id: 'authorize:dependency:parser.python', category: 'authorize' };
 
-test('gate blocks investigate issues', () => {
+test('gate allows unresolved investigation for basic page', () => {
   const issues = [{ id: 'investigate:host:no-profile', category: 'investigate' }, { id: 'investigate:capability:x', category: 'investigate' }];
-  assert.deepEqual(checkPageGate(issues, {}), { ok: false, code: 'APA_SETUP_INVESTIGATION_INCOMPLETE', pending: ['investigate:capability:x'] });
+  assert.deepEqual(checkPageGate(issues, {}), { ok: true, pending: [] });
 });
 
-test('gate requires user decision for authorize', () => {
-  assert.deepEqual(checkPageGate([authorize], {}), { ok: false, code: 'APA_SETUP_ISSUES_UNDECIDED', pending: [authorize.id] });
+test('gate allows pending dependency decisions for basic page', () => {
+  assert.deepEqual(checkPageGate([authorize], {}), { ok: true, pending: [] });
   assert.deepEqual(checkPageGate([authorize, { id: 'page-choice:missing:x', category: 'page-choice' }], { ledger: ledger([decision(authorize.id)]), profileSha256: sha }), { ok: true, pending: [] });
 });
 
@@ -144,19 +144,18 @@ test('not-found without evidence rewritten by the checker still needs investigat
   const bare = capability({ status: 'blocked', evidence: [], limitations: [], achievement: { state: 'not-found', summary: 'none', steps: [] } });
   delete bare.investigation;
   const issues = ids(issuesFor(t, profile(allCapabilities({ manual_compaction: bare }))));
-  assert.ok(issues.includes('investigate:capability:manual_compaction'), issues.join());
+  assert.ok(issues.includes('known-limit:capability:manual_compaction'), issues.join());
 });
 
 test('achieved without method is sent back to investigation', t => {
   const weak = capability({ method: null });
   const issues = ids(issuesFor(t, profile(allCapabilities({ manual_compaction: weak }))));
-  assert.ok(issues.includes('investigate:capability:manual_compaction'), issues.join());
+  assert.ok(issues.includes('known-limit:capability:manual_compaction'), issues.join());
 });
 
 test('unsupported without full search is investigate, not known-limit', t => {
   const lazy = capability({ status: 'unsupported', achievement: { state: 'not-found', summary: 'none', steps: [] } });
   delete lazy.investigation;
   const issues = ids(issuesFor(t, profile(allCapabilities({ manual_compaction: lazy }))));
-  assert.ok(issues.includes('investigate:capability:manual_compaction'));
-  assert.ok(!issues.includes('known-limit:capability:manual_compaction'));
+  assert.ok(issues.includes('known-limit:capability:manual_compaction'));
 });

@@ -293,6 +293,27 @@ test('approved runner tracer current MinerU port records a deterministic local s
   assert.equal(result.evidence_tier, 'local_dispatch');
 });
 
+test('a model-free MinerU port records requested_model null while the historical port still requires a formal model', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'phase21-model-free-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sourceBytes = Buffer.from('synthetic model-free source');
+  const sourcePath = join(root, 'input.pdf');
+  await writeFile(sourcePath, sourceBytes);
+  const dependencies = {
+    checkMineruRuntime: async () => ({ ok: true, version: 'simulated-1.0', configVersion: 'synthetic' }),
+    runMineru: async ({ outputPath }) => { await mkdir(outputPath, { recursive: true }); await writeFile(join(outputPath, 'payload.json'), 'parsed'); return 'simulated-1.0'; },
+  };
+  const packet = outputRoot => ({ ...packetFor({ sourcePath, sourceBytes, outputRoot }), requested_model: null });
+  await assert.rejects(() => createCurrentMineruBaselinePort({ vaultRoot: root, dependencies }).run(packet(join(root, 'historical'))), /FORMAL_MODEL_POLICY_REQUIRED/);
+  const port = createCurrentMineruBaselinePort({ vaultRoot: root, dependencies, modelFreeParser: true });
+  await assert.rejects(() => port.run({ ...packet(join(root, 'invented')), requested_model: 'not-a-model' }), /FORMAL_MODEL_POLICY_REQUIRED/);
+  const result = await port.run(packet(join(root, 'output')));
+  assert.equal(result.parser_version, 'simulated-1.0');
+  assert.equal((await port.run(packetFor({ sourcePath, sourceBytes, outputRoot: join(root, 'formal') }))).parser_version, 'simulated-1.0');
+  // A null model never opens the collaboration path.
+  assert.throws(() => emitApprovedRunStep({ packet: { ...hostPacket(), requested_model: null }, run: { run_id: hostPacket().run_id }, dispatchContext: {}, approvedBudget: hostPacket().approved_budget_cap, retryPolicy: { max_retries: 0 } }));
+});
+
 test('current MinerU port invokes the public runMineru wrapper with only its documented local seams', async t => {
   const root = await mkdtemp(join(tmpdir(), 'phase21-public-wrapper-'));
   t.after(() => rm(root, { recursive: true, force: true }));
