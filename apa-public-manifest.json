@@ -403,7 +403,7 @@
     },
     {
       "path": "scripts/setup/apa-setup-page.mjs",
-      "sha256": "8940cfac0975b28f8d07bdf93e6fa80f35f80ccc734fc7f672de6378c16e90f9"
+      "sha256": "981e3d4dc7137f7cb212050692b1f8e690069d9750464c821c04ca07bb2def0a"
     },
     {
       "path": "scripts/setup/bootstrap-windows.ps1",
@@ -787,11 +787,11 @@
     },
     {
       "path": "Templates/apa-setup/page.css",
-      "sha256": "c4fad034ff2b545a88a041f81ebdadfd26b8c9ed2097f4994e9c458c4809e588"
+      "sha256": "ae08b4820eded9ff8e5a9aa7f68cdeea20e284d0c81bacbd54cf135cdb9dbca1"
     },
     {
       "path": "Templates/apa-setup/page.js",
-      "sha256": "9eac9f18b4759003759e1fc4d19be2554a0c86852820538480461729be5b84f2"
+      "sha256": "7d590f629398a9ea9ccdfca6fada47ed04cf0ab5d6e409f75ac8b23eadc3d79d"
     },
     {
       "path": "Templates/apa-v3/apa-readable.css",

@@ -407,7 +407,8 @@ export function renderSetupIssues(document, container, issues) {
 }
 
 // Reported capabilities are informational; they never enter the user's configuration operation.
-export function renderCapabilityCheck(document, container, report) {
+// A featured container lifts the threshold choice out of the capability grid so it is seen early.
+export function renderCapabilityCheck(document, container, report, featured = null) {
   const make = (tag, text) => {
     const element = document.createElement(tag);
     if (text !== undefined) element.textContent = text;
@@ -463,7 +464,10 @@ export function renderCapabilityCheck(document, container, report) {
       more.append(make('p', '检测依据：'), list);
     }
     item.append(more);
-    container.append(item);
+    if (featured && check.id === 'threshold_compaction') {
+      item.classList?.add('capability-featured');
+      featured.append(item);
+    } else container.append(item);
   }
 }
 
@@ -504,7 +508,8 @@ export function mountApaSetup(document, snapshot, inspection, queryInspection, h
   byId('readiness').textContent = readiness.reading;
   byId('query-readiness').textContent = readiness.query;
   renderSetupIssues(document, byId('setup-issues'), inspection?.setup_issues ?? []);
-  renderCapabilityCheck(document, byId('capability-check'), inspection?.capability_check);
+  renderCapabilityCheck(document, byId('capability-check'), inspection?.capability_check, byId('threshold-pick'));
+  byId('threshold-step').hidden = !byId('threshold-pick').children.length;
   const dependencies = inspection?.dependencies || [];
   const dependencyStatus = { available: '文件或目录可找到', missing: '未找到，请检查路径或安装情况', 'wrong-type': '路径类型不符，请检查填的是文件还是目录', unavailable: '暂时无法读取' };
   byId('dependencies').textContent = dependencies.length ? dependencies.map(item => `${fieldLabel(item.key)}：${dependencyStatus[item.status] || item.status}\n${item.path || ''}`).join('\n\n') : '尚无可检查的依赖路径。填写解析器和已启用技能的位置后，由助手回读检查。';
