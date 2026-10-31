@@ -174,8 +174,25 @@ test('CLI export creates owner parent and refuses to replace an existing export'
   assert.equal(JSON.parse(first.stdout).output, output);
   const bytes = fs.readFileSync(output);
   assert.equal(JSON.parse(bytes).schema_version, 'apa-config-export-1.0');
-  assert.notEqual(run().status, 0);
+  const refused = run();
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /APA_SETUP_EXPORT_EXISTS/);
+  assert.ok(refused.stderr.includes(output));
   assert.deepEqual(fs.readFileSync(output), bytes);
+});
+test('CLI export replaces an existing export only with --overwrite', t => {
+  const repoRoot = temporary(t);
+  const output = path.join(repoRoot, 'config/backups/example-owner/export.json');
+  fs.mkdirSync(path.dirname(output), { recursive: true });
+  fs.writeFileSync(output, 'old');
+  const cli = path.resolve('scripts/apa-setup.mjs');
+  const replaced = spawnSync(process.execPath, [cli, 'export', '--repo-root', repoRoot, '--output', output, '--overwrite'], { encoding: 'utf8' });
+  assert.equal(replaced.status, 0, replaced.stderr);
+  assert.deepEqual(JSON.parse(replaced.stdout), { output, replaced: true });
+  assert.equal(JSON.parse(fs.readFileSync(output, 'utf8')).schema_version, 'apa-config-export-1.0');
+  for (const args of [['export', '--overwrite'], ['inspect', '--overwrite'], ['export', '--output', output, '--overwrite', '--overwrite']]) {
+    assert.notEqual(spawnSync(process.execPath, [cli, ...args, '--repo-root', repoRoot], { encoding: 'utf8' }).status, 0, args.join(' '));
+  }
 });
 
 test('inspection reports missing existing runtime dependencies without probing network or installing', t => {

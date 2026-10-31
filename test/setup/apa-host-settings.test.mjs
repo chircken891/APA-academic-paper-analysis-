@@ -10,16 +10,17 @@ const script = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..
 const temporary = t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-host-settings-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  return { root, file: ext => path.join(root, `settings.${ext}`), backups: path.join(root, 'backups') };
+  return { root, file: ext => path.join(root, `settings.${ext}`) };
 };
 const run = (args) => {
   const result = spawnSync(process.execPath, [script, ...args], { encoding: 'utf8' });
   const parse = text => { try { return JSON.parse(text); } catch { return null; } };
   return { status: result.status, out: parse(result.stdout), err: parse(result.stderr), stdout: result.stdout, stderr: result.stderr };
 };
-const claudeArgs = (command, dir, tokens = '200000', extra = []) => [command, '--host', 'claude-code', '--capability', 'threshold_compaction', '--scope', 'project', '--tokens', tokens, '--settings-file', dir.file('json'), '--backup-dir', dir.backups, ...extra];
-const codexArgs = (command, dir, tokens = '200000', extra = []) => [command, '--host', 'codex', '--capability', 'threshold_compaction', '--scope', 'user', '--tokens', tokens, '--settings-file', dir.file('toml'), '--backup-dir', dir.backups, ...extra];
-const backupFiles = dir => fs.existsSync(dir.backups) ? fs.readdirSync(dir.backups) : [];
+const claudeArgs = (command, dir, tokens = '200000', extra = []) => [command, '--host', 'claude-code', '--capability', 'threshold_compaction', '--scope', 'project', '--tokens', tokens, '--settings-file', dir.file('json'), ...extra];
+const codexArgs = (command, dir, tokens = '200000', extra = []) => [command, '--host', 'codex', '--capability', 'threshold_compaction', '--scope', 'user', '--tokens', tokens, '--settings-file', dir.file('toml'), ...extra];
+// The script keeps no backup: nothing but the settings file may appear beside it.
+const backupFiles = dir => fs.readdirSync(dir.root).filter(name => !name.startsWith('settings.'));
 
 test('plan previews without writing', t => {
   const dir = temporary(t);
@@ -30,37 +31,17 @@ test('plan previews without writing', t => {
   assert.equal(result.out.target, dir.file('json'));
   assert.equal(result.out.before.value, 150000);
   assert.equal(result.out.after.value, 200000);
-  assert.match(path.basename(result.out.backup_path), /^host-settings-claude-code-\d{8}-\d{6}-\d{3}\.json$/);
-  assert.equal(path.dirname(result.out.backup_path), dir.backups);
+  assert.equal('backup_path' in result.out, false);
   assert.deepEqual(result.out.alternatives, ['/autocompact 200000', 'claude --autocompact 200000']);
   assert.equal(fs.readFileSync(dir.file('json'), 'utf8'), original);
   assert.deepEqual(backupFiles(dir), []);
 });
 
-test('plan chooses each host backup directory and never writes it', t => {
-  const dir = temporary(t);
-  const repoRoot = path.resolve(path.dirname(script), '../..');
-  for (const [host, owner, ext, content, args] of [
-    ['claude-code', 'claude', 'json', '{"autoCompactWindow":150000}', claudeArgs],
-    ['codex', 'codex', 'toml', 'model_auto_compact_token_limit = 150000\n', codexArgs],
-  ]) {
-    fs.writeFileSync(dir.file(ext), content);
-    const input = args('plan', dir);
-    input.splice(input.indexOf('--backup-dir'), 2);
-    const result = run(input);
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(path.dirname(result.out.backup_path), path.join(repoRoot, 'config', 'backups', owner), host);
-    assert.equal(fs.existsSync(result.out.backup_path), false);
-    assert.equal(fs.readFileSync(dir.file(ext), 'utf8'), content);
-  }
-});
-
-test('plan for a missing file creates only the key and has no backup', t => {
+test('plan for a missing file creates only the key', t => {
   const dir = temporary(t);
   const result = run(claudeArgs('plan', dir));
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.out.before.exists, false);
-  assert.equal(result.out.backup_path, null);
   assert.equal(fs.existsSync(dir.file('json')), false);
   const applied = run(claudeArgs('apply', dir, '200000', ['--confirm']));
   assert.equal(applied.status, 0, applied.stderr);
@@ -68,7 +49,7 @@ test('plan for a missing file creates only the key and has no backup', t => {
   assert.deepEqual(backupFiles(dir), []);
 });
 
-test('apply requires confirm and backs up first', t => {
+test('apply requires confirm and keeps no backup', t => {
   const dir = temporary(t);
   const original = '{\n  "model": "opus",\n  "env": { "A": "1" },\n  "hooks": {}\n}\n';
   fs.writeFileSync(dir.file('json'), original);
@@ -82,8 +63,8 @@ test('apply requires confirm and backs up first', t => {
   assert.equal(applied.status, 0, applied.stderr);
   assert.equal(applied.out.applied, true);
   assert.equal(applied.out.verified, true);
-  assert.equal(fs.readFileSync(applied.out.backup_path, 'utf8'), original);
-  assert.equal(backupFiles(dir).length, 1);
+  assert.equal('backup_path' in applied.out, false);
+  assert.deepEqual(backupFiles(dir), []);
   assert.equal(fs.readFileSync(dir.file('json'), 'utf8'), '{\n  "model": "opus",\n  "env": { "A": "1" },\n  "hooks": {},\n  "autoCompactWindow": 200000\n}\n');
 });
 
@@ -112,7 +93,7 @@ test('insert follows the file indent and EOL; empty and one-line objects are han
   }
 });
 
-test('an unchanged value writes nothing and takes no backup', t => {
+test('an unchanged value writes nothing', t => {
   const dir = temporary(t);
   const original = '{"autoCompactWindow":200000}';
   fs.writeFileSync(dir.file('json'), original);
@@ -181,52 +162,6 @@ test('a comment marker inside a string is not a comment', t => {
   assert.equal(fs.readFileSync(dir.file('json'), 'utf8'), '{\n  "url": "http://example.test/*x*/",\n  "autoCompactWindow": 200000\n}\n');
 });
 
-test('restore returns the exact original bytes', t => {
-  const dir = temporary(t);
-  const original = Buffer.from('{\r\n  "model": "opus",\r\n  "note": "中文"\r\n}\r\n', 'utf8');
-  fs.writeFileSync(dir.file('json'), original);
-  const applied = run(claudeArgs('apply', dir, '200000', ['--confirm']));
-  assert.equal(applied.status, 0, applied.stderr);
-  assert.notDeepEqual(fs.readFileSync(dir.file('json')), original);
-
-  const refused = run(['restore', '--host', 'claude-code', '--backup', applied.out.backup_path, '--settings-file', dir.file('json'), '--backup-dir', dir.backups]);
-  assert.equal(refused.err.error.code, 'APA_HOST_SETTINGS_CONFIRM_REQUIRED');
-
-  const restored = run(['restore', '--host', 'claude-code', '--backup', applied.out.backup_path, '--settings-file', dir.file('json'), '--backup-dir', dir.backups, '--confirm']);
-  assert.equal(restored.status, 0, restored.stderr);
-  assert.deepEqual(fs.readFileSync(dir.file('json')), original);
-  // Restoring first backs up the file it replaces, so the restore itself is reversible.
-  assert.equal(backupFiles(dir).length, 2);
-});
-
-test('restore rejects a missing or unrecognised backup', t => {
-  const dir = temporary(t);
-  fs.writeFileSync(dir.file('json'), '{}');
-  const other = path.join(dir.root, 'notes.txt');
-  fs.writeFileSync(other, 'x');
-  for (const backup of [path.join(dir.backups, 'host-settings-claude-code-19700101-000000-000.json'), other]) {
-    const result = run(['restore', '--host', 'claude-code', '--backup', backup, '--settings-file', dir.file('json'), '--backup-dir', dir.backups, '--confirm']);
-    assert.equal(result.status, 1);
-    assert.match(result.err.error.code, /^APA_HOST_SETTINGS_BACKUP_(MISSING|NOT_RECOGNIZED)$/);
-  }
-  assert.equal(fs.readFileSync(dir.file('json'), 'utf8'), '{}');
-});
-
-test('backups never overwrite an existing file', t => {
-  const dir = temporary(t);
-  fs.writeFileSync(dir.file('json'), '{"a":1}');
-  fs.mkdirSync(dir.backups);
-  const planned = run(claudeArgs('plan', dir)).out.backup_path;
-  // Occupy every millisecond slot the next backups could use.
-  const stamp = planned.match(/(\d{8}-\d{6})-(\d{3})\.json$/);
-  for (let ms = 0; ms < 1000; ms += 1) fs.writeFileSync(path.join(dir.backups, `host-settings-claude-code-${stamp[1]}-${String(ms).padStart(3, '0')}.json`), `sentinel-${ms}`);
-  const before = fs.readdirSync(dir.backups).map(name => [name, fs.readFileSync(path.join(dir.backups, name), 'utf8')]);
-  const applied = run(claudeArgs('apply', dir, '200000', ['--confirm']));
-  // Either a later second was used or the write refused; an existing backup is never replaced.
-  for (const [name, content] of before) assert.equal(fs.readFileSync(path.join(dir.backups, name), 'utf8'), content);
-  if (applied.status === 0) assert.equal(fs.readFileSync(applied.out.backup_path, 'utf8'), '{"a":1}');
-});
-
 test('Codex: updates only the top-level line and keeps every other byte', t => {
   const dir = temporary(t);
   const original = '# top\r\nmodel = "gpt"\r\nmodel_auto_compact_token_limit = 150000 # keep\r\n\r\n[profiles.x]\r\nmodel_auto_compact_token_limit = 1\r\n';
@@ -234,14 +169,13 @@ test('Codex: updates only the top-level line and keeps every other byte', t => {
   const plan = run(codexArgs('plan', dir));
   assert.equal(plan.status, 0, plan.stderr);
   assert.equal(plan.out.before.value, 150000);
-  assert.match(path.basename(plan.out.backup_path), /^host-settings-codex-\d{8}-\d{6}-\d{3}\.toml$/);
   assert.ok(plan.out.alternatives.includes('codex -c model_auto_compact_token_limit=200000'));
   assert.ok(plan.out.notes.some(note => note.includes('258400')));
   assert.equal(fs.readFileSync(dir.file('toml'), 'utf8'), original);
   const applied = run(codexArgs('apply', dir, '200000', ['--confirm']));
   assert.equal(applied.status, 0, applied.stderr);
   assert.equal(fs.readFileSync(dir.file('toml'), 'utf8'), original.replace('= 150000 # keep', '= 200000 # keep'));
-  assert.equal(fs.readFileSync(applied.out.backup_path, 'utf8'), original);
+  assert.deepEqual(backupFiles(dir), []);
 });
 
 test('Codex: inserts before the first table, after top-level content', t => {
@@ -352,6 +286,8 @@ test('rejects unknown host, capability and arguments', t => {
   assert.equal(run(withCapability).err.error.code, 'APA_HOST_SETTINGS_CAPABILITY_UNSUPPORTED');
   assert.equal(run([...claudeArgs('plan', dir), '--bogus', '1']).err.error.code, 'APA_HOST_SETTINGS_UNKNOWN_ARGUMENT');
   assert.equal(run(['frobnicate']).err.error.code, 'APA_HOST_SETTINGS_UNKNOWN_COMMAND');
+  assert.equal(run(['restore', '--host', 'claude-code', '--confirm']).err.error.code, 'APA_HOST_SETTINGS_UNKNOWN_COMMAND');
+  assert.equal(run([...claudeArgs('plan', dir), '--backup-dir', dir.root]).err.error.code, 'APA_HOST_SETTINGS_UNKNOWN_ARGUMENT');
 });
 
 test('default targets resolve without touching any file', async () => {
@@ -363,7 +299,7 @@ test('default targets resolve without touching any file', async () => {
 
 // compact_hook: SessionStart/compact entry in the project settings.
 const hookCommand = 'node "$CLAUDE_PROJECT_DIR/scripts/setup/apa-compact-context.mjs"';
-const hookArgs = (command, dir, extra = []) => [command, '--host', 'claude-code', '--capability', 'compact_hook', '--scope', 'project', '--settings-file', dir.file('json'), '--backup-dir', dir.backups, ...extra];
+const hookArgs = (command, dir, extra = []) => [command, '--host', 'claude-code', '--capability', 'compact_hook', '--scope', 'project', '--settings-file', dir.file('json'), ...extra];
 // The entry as JSON.stringify(entry, null, unit) renders it, first line without indent, later lines at `indent`.
 const compactEntry = { matcher: 'compact', hooks: [{ type: 'command', command: hookCommand, timeout: 10 }] };
 const entryText = (indent, unit = '  ', eol = '\n') => JSON.stringify(compactEntry, null, unit).replaceAll('\n', eol + indent);
@@ -378,7 +314,6 @@ test('compact_hook: plan previews, a missing file is created and apply needs --c
   assert.equal(plan.out.change, 'create-file');
   assert.deepEqual(plan.out.after.value, compactEntry);
   assert.ok(plan.out.notes.some(note => note.includes('$CLAUDE_PROJECT_DIR') && note.includes('Git Bash')));
-  assert.equal(plan.out.backup_path, null);
   assert.equal(fs.existsSync(dir.file('json')), false);
   const refused = run(hookArgs('apply', dir));
   assert.equal(refused.err.error.code, 'APA_HOST_SETTINGS_CONFIRM_REQUIRED');
@@ -411,7 +346,6 @@ test('compact_hook: adds the entry once, keeps every other key and hook, and is 
   const applied = run(hookArgs('apply', dir, ['--confirm']));
   assert.equal(applied.status, 0, applied.stderr);
   assert.equal(applied.out.changed, true);
-  assert.equal(fs.readFileSync(applied.out.backup_path, 'utf8'), original);
   const updated = fs.readFileSync(dir.file('json'), 'utf8');
   const expected = original.replace('echo start" }] }\n    ]', `echo start" }] },\n      ${entryText('      ')}\n    ]`);
   assert.notEqual(expected, original);
@@ -428,12 +362,10 @@ test('compact_hook: adds the entry once, keeps every other key and hook, and is 
   assert.equal(again.out.changed, false);
   assert.equal(again.out.change, 'unchanged');
   assert.equal(again.out.verified, true);
-  assert.equal(again.out.backup_path, null);
   assert.equal(fs.readFileSync(dir.file('json'), 'utf8'), updated);
-  assert.equal(backupFiles(dir).length, 1);
+  assert.deepEqual(backupFiles(dir), []);
   const plan = run(hookArgs('plan', dir));
   assert.equal(plan.out.change, 'unchanged');
-  assert.equal(plan.out.backup_path, null);
 });
 
 test('compact_hook: an equal entry among other compact entries is found; a different compact entry is kept and ours added', t => {
@@ -534,15 +466,4 @@ test('compact_hook: only Claude Code with the project scope, and it takes no --t
   assert.equal(run(noScope).err.error.code, 'APA_HOST_SETTINGS_SCOPE_UNSUPPORTED');
   assert.equal(run([...hookArgs('plan', dir), '--tokens', '200000']).err.error.code, 'APA_HOST_SETTINGS_TOKENS_UNEXPECTED');
   assert.equal(fs.existsSync(dir.file('json')), false);
-});
-
-test('compact_hook: restore returns the exact original bytes', t => {
-  const dir = temporary(t);
-  const original = '{\r\n  "model": "opus"\r\n}\r\n';
-  fs.writeFileSync(dir.file('json'), original);
-  const applied = run(hookArgs('apply', dir, ['--confirm']));
-  assert.notEqual(fs.readFileSync(dir.file('json'), 'utf8'), original);
-  const restored = run(['restore', '--host', 'claude-code', '--scope', 'project', '--settings-file', dir.file('json'), '--backup-dir', dir.backups, '--backup', applied.out.backup_path, '--confirm']);
-  assert.equal(restored.status, 0, restored.stderr);
-  assert.equal(fs.readFileSync(dir.file('json'), 'utf8'), original);
 });

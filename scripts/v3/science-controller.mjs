@@ -257,7 +257,14 @@ export async function handleScienceCompactionBoundary({ controller, observation,
     const binding = state.data.prepared.runControl.reading_first_binding;
     if (!compactionEnabled(binding)) fail('APA_COMPACTION_POLICY_REQUIRED');
     const result = evaluateCompactionBoundary({ boundary: scienceCompactionBoundary(state), observation, sessionId, progress, userDecision,
-      history: state.data.compaction_reminders, startedAt: binding.compaction_policy.started_at });
+      history: state.data.compaction_reminders, startedAt: binding.compaction_policy.started_at, policy: binding.compaction_policy,
+      continuation: { run_id: state.data.prepared.runControl.run_id, paper_id: state.data.prepared.scientificInput.identity.paper_id,
+        run_root: state.data.prepared.paths.runRoot, checkpoint_path: state.path, binding_source: state.path + '#data.prepared.runControl.reading_first_binding',
+        binding, calls_used: scienceCalls(state.data), sources: state.data.prepared.scientificInput.sources,
+        accepted_artifacts: roles.filter(role => activeEntry(state.data, role).receipt).map(role => {
+          const receipt = activeEntry(state.data, role).receipt;
+          return { role, path: resolve(state.data.prepared.paths.runRoot, receipt.path), sha256: receipt.sha256 };
+        }) } });
     if (result.record) {
       const boundary = scienceCompactionBoundary(state);
       state.data.compaction_reminders ??= {};

@@ -6,6 +6,7 @@ import { inspectApaConfig, checkHostProfile, evaluateReadingPreflight } from '..
 import { prepareConfiguredReading, getConfiguredReadingDispatchArguments, materializeConfiguredReadingCandidate } from './configured-reading.mjs';
 import { buildReadingSessionTasks } from './reading-session-tasks.mjs';
 import { ingestObservedRunStep } from './phase21-runner.mjs';
+import { COMPACTION_POLICY } from './reading-compaction.mjs';
 import { createOwnedArtifactBroker, commitOwnedArtifact, readOwnedArtifact } from './owned-artifact-store.mjs';
 import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, getScienceRequest, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, createScienceHandoff, handleScienceCompactionBoundary } from './science-controller.mjs';
 import { fingerprintReadingFirst, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, getReadingFirstPendingRequests, getReadingFirstState, recordReadingFirstRequestEvent, getReadingFirstRequestEvents, acceptReadingFirstResult, createReadingFirstEnrichmentRequests, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstReviewRequest, createReadingFirstRevisionRequests, validateReadingFirstRenderRepair, handleReadingCompactionBoundary, captureReadingFirstPublicationSource } from './reading-first-runtime.mjs';
@@ -19,6 +20,9 @@ const stateOf = session => { const state = sessions.get(session); if (!state) fa
 const capability = (state, task) => state.broker.issueCapability({ runId: state.prepared.runControl.run_id, actorId: task.owner_actor_id, role: task.role, artifactPath: task.artifact_path, revision: task.revision });
 const controlPath = root => join(root, 'control', 'science-state.json');
 const wrap = state => { const session = Object.freeze({ profile: 'reading-session-1.0' }); sessions.set(session, state); return session; };
+const usesCompactionObservation = state => ['boundary-reminders-1.1', COMPACTION_POLICY].includes(state.prepared.runControl.reading_first_binding.compaction_policy?.profile);
+const needsCompactionObservation = (state, reminder) => usesCompactionObservation(state)
+  && reminder?.status !== 'prompted' && !state.compactionInput?.observation && state.compactionInput?.userDecision === undefined;
 function evaluateSessionPreflight(state) {
   const inspection = clone(state.frozenInspection);
   const frozenPolicy = state.prepared.runControl.reading_first_binding.role_model_policy;
@@ -105,7 +109,7 @@ export async function createReadingSession(options = {}) {
   const presentationMode = inspection.config?.reading?.presentation_mode;
   if (options.presentationMode !== undefined && options.presentationMode !== presentationMode) fail('READING_SESSION_PRESENTATION_CONFLICT');
   const tasks = buildReadingSessionTasks({ runId, scientificInput, sourceLanguage, checkpointCount: maxControlCheckpoints, controllerActorId: options.controllerActorId, taskOverrides: options.taskOverrides, scienceTaskOverrides: options.scienceTaskOverrides, includeRepairs: options.includeRepairs === true, presentationMode, enrichmentPolicy: options.enrichmentPolicy });
-  const prepared = prepareConfiguredReading({ repoRoot, runId, scientificInput, sourceLanguage, authorizationId, deadline, maxCalls, maxTotalCalls, priorCalls: 6, sessionContext, taskBindings: tasks.taskBindings, controllerActorId: options.controllerActorId, ...(options.enrichmentPolicy !== undefined ? { enrichmentPolicy: options.enrichmentPolicy, enrichmentSessionProfile: 'reading-session-enrichment-1.0' } : {}) });
+  const prepared = prepareConfiguredReading({ repoRoot, runId, scientificInput, sourceLanguage, authorizationId, deadline, maxCalls, maxTotalCalls, priorCalls: 6, sessionContext, hostProfile, taskBindings: tasks.taskBindings, controllerActorId: options.controllerActorId, ...(options.enrichmentPolicy !== undefined ? { enrichmentPolicy: options.enrichmentPolicy, enrichmentSessionProfile: 'reading-session-enrichment-1.0' } : {}) });
   const configBytes = await readFile(join(repoRoot, 'config', 'apa.local.json'));
   if (createHash('sha256').update(configBytes).digest('hex') !== prepared.configurationFingerprint || !same(JSON.parse(configBytes), inspection.config)) fail('READING_SESSION_CONFIG_CHANGED');
   const actor = prepared.runControl.reading_first_binding.controller_actor_id;
@@ -203,6 +207,7 @@ export async function nextReadingAction(session) {
     if (current.expired) return { action: 'reconcile', code: 'READING_SESSION_DEADLINE_EXPIRED' };
     const boundary = current.compaction_boundary;
     if (boundary && !['skipped', 'completed'].includes(boundary.reminder.status)) {
+      if (needsCompactionObservation(state, boundary.reminder)) return { action: 'provide-input', kind: 'compaction-observation', boundary_id: boundary.id };
       const decision = await handleScienceCompactionBoundary({ controller: state.science, ...(state.compactionInput ?? {}) });
       state.compactionInput = null;
       if (decision.action !== 'continue') return decision;
@@ -302,12 +307,15 @@ export async function nextReadingAction(session) {
   // Reserve the intent, initial host return, result event and terminal snapshot.
   if (state.nextCheckpoint >= state.checkpoints.length - 3) return { action: 'reconcile', code: 'CONTROL_CHECKPOINT_CAPACITY' };
   const firstWriter = request.language === state.prepared.runControl.reading_first_binding.source_language && !request.task.task_id.endsWith('-r2');
-  const firstReview = request.task.role === 'independent-verifier' && current.review_rounds === 0;
+  const firstReview = request.task.role === 'independent-verifier'
+    && (usesCompactionObservation(state)
+      ? request.task.task_id === state.prepared.runControl.reading_first_binding.task_bindings.review.task_id : current.review_rounds === 0);
   if (firstWriter || firstReview) {
     const boundaryId = firstReview ? 'before-review' : 'before-writer';
     const snapshot = snapshotReadingFirstRuntime(state.reading);
     const reminder = snapshot.state.compaction_reminders?.[boundaryId];
     if (!reminder || !['completed', 'skipped'].includes(reminder.status)) {
+      if (needsCompactionObservation(state, reminder)) return { action: 'provide-input', kind: 'compaction-observation', boundary_id: boundaryId };
       const slot = state.prepared.runControl.reading_first_binding.compaction_policy.checkpoints[boundaryId][reminder?.status === 'prompted' ? 'resume' : 'decision'];
       const decision = await handleReadingCompactionBoundary({ controller: state.reading, checkpointReceipt: state.checkpointReceipt, hostRequests: pending.map(item => ({ action_id: item.emittedStep.action_id, status: 'prepared' })), ...(firstReview ? { presentation: state.presentation } : {}), capability: capability(state, slot), ...(state.compactionInput ?? {}) });
       state.compactionInput = null; state.checkpointReceipt = decision.receipt;

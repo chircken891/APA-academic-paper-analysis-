@@ -86,13 +86,13 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 
 下载操作 JSON 与复制同一 JSON 等价。将用户自行选择的文件、路径或粘贴内容交给助手并明确要求应用。剪贴板受限时手动选择文本复制。单独导出或按明确范围挖空配置可使用相应 CLI，无须打开页面。助手应用后回读并报告缺项和依赖，不自行修正缺项。
 
-操作格式为 apa-config-operation-1.0，包含 base_fingerprint 及 patch/remove/import 动作。页面生成的操作还带 repo_root（用户在第一步确认的项目绝对路径），apply 时与 `--repo-root` 不一致即以 APA_CONFIG_REPO_MISMATCH 拒绝；其他合法操作可不带此字段。页面阈值压缩卡片中填写的候选阈值，作为可选的 `host_settings: { threshold_compaction: { host, tokens } }` 随 patch 操作一起导出（页面提示推荐范围 250000–300000 token，不预填）。apply 只校验这一项，不写入个人配置，并在结果的 `pending_host_settings` 中返回，由助手预览后再按单独确认写入宿主设置。指纹过期被拒绝；须重新读取配置并展示新差异，由用户确认后生成新操作，禁止改旧指纹绕过拒绝。`node scripts/apa-setup.mjs apply --file <操作文件>` 应用；无 --file 时读标准输入。`inspect` 只报告状态，需读取 ready、validation、dependencies，不能把正常退出视作就绪。
+操作格式为 apa-config-operation-1.0，包含 base_fingerprint 及 patch/remove/import 动作。页面生成的操作还带 repo_root（用户在第一步确认的项目绝对路径），apply 时与 `--repo-root` 不一致即以 APA_CONFIG_REPO_MISMATCH 拒绝；其他合法操作可不带此字段。页面阈值压缩卡片中填写的候选阈值，作为可选的 `host_settings: { threshold_compaction: { host, tokens } }` 随 patch 操作一起导出（页面提示推荐范围 250000–300000 token，不预填）。apply 只校验这一项，不写入个人配置，并在结果的 `pending_host_settings` 中返回，由助手预览后再按单独确认写入宿主设置。页面“自检遗留问题”中选择的处理方式，作为可选的 `issue_choices`（遗留问题 id → `investigate`、`prepare`、`accept-limit` 或 `defer`，按问题类别限定）随 patch 操作导出；apply 同样只校验、不写入个人配置，在 `pending_issue_choices` 中返回，由助手按所选处理。指纹过期被拒绝；须重新读取配置并展示新差异，由用户确认后生成新操作，禁止改旧指纹绕过拒绝。`node scripts/apa-setup.mjs apply --file <操作文件>` 应用；无 --file 时读标准输入。`inspect` 只报告状态，需读取 ready、validation、dependencies，不能把正常退出视作就绪。
 
 `node scripts/apa-setup.mjs inspect --capability query` 检查查询配置；`--capability reading` 或不传选项沿用阅读检查。两者的 `ready` 都只是对应配置/文件的就绪状态，`model_availability: 'not_checked'` 表示未检查当前宿主模型、未执行模型任务。页面分别展示查询和阅读状态，因此查询配置就绪与阅读依赖缺失可以同时成立。
 
 阅读运行另用 `evaluateReadingPreflight({inspection,hostProfile,evidence})` 计算 `reading_preflight.status`，值为 `pass`、`blocked` 或 `unknown`。必需条件包括配置与依赖、当前宿主与保存声明一致、实际派发工具及独立上下文、模型与推理强度，以及本次 `file_read`、`control_write`、`input` 的通过证据和引用。静态 `inspect` 不具备全部运行证据时保持未知；会话入口写入并回读控制产物后补入证据，派发前要求全部通过。六项可选高级能力不进入这一门槛。恢复仍核对当前运行条件，并沿用原冻结来源、模型和预算。详见[会话接口](apa-v3/reading-session.md)。
 
-`node scripts/apa-setup.mjs export --output <新文件>` 导出答案并拒绝覆盖现有文件，CLI 会创建目标父目录。助手按技能规则确定完整目标，再传给 `--output`：用户指定路径或文件名时优先采用；仅指定文件名或未指定时使用 `config/backups/<owner>/`，默认文件名为 `apa-config-backup-YYYYMMDD-HHmmss-SSS.json`。`owner` 根据 agent 身份及归属证据确定，不从所选模型推断。CLI 未传 `--output` 时只输出 JSON，相对路径按当前命令目录解析。配置导出不包含代码或论文。完善、字段去除、导出及差异导入均处理 `models.query` 与 `query` 偏好；仅选择查询字段的操作保留科学角色、解析器和目录原值。
+`node scripts/apa-setup.mjs export --output <新文件>` 导出答案，CLI 会创建目标父目录。目标已存在时以 `APA_SETUP_EXPORT_EXISTS: <路径>` 拒绝；助手报告该路径并询问用户，同意覆盖时追加 `--overwrite` 直接替换（结果中 `replaced: true`），不覆盖时由用户另行命名后重新导出。助手按技能规则确定完整目标，再传给 `--output`：用户指定路径或文件名时优先采用；仅指定文件名或未指定时使用 `config/backups/<owner>/`，默认文件名为 `apa-config-backup-YYYYMMDD-HHmmss-SSS.json`。`owner` 根据 agent 身份及归属证据确定，不从所选模型推断。CLI 未传 `--output` 时只输出 JSON，相对路径按当前命令目录解析。配置导出不包含代码或论文。完善、字段去除、导出及差异导入均处理 `models.query` 与 `query` 偏好；仅选择查询字段的操作保留科学角色、解析器和目录原值。
 
 ## 安装与固定规则
 

@@ -11,7 +11,7 @@
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/controller-apis.md",
-      "sha256": "d3d7e8671d2cc0b4ba02a67ab5349f0094698f8d1ca28adc6a53dc44612ab29f"
+      "sha256": "6130e56ba1c7f8af446e08935bd6ffb610b12242835fb9f301ceefe4ecb427a2"
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/evaluation.md",
@@ -19,7 +19,7 @@
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/execution-and-recovery.md",
-      "sha256": "b78c3381e81a0c7d422558d0eed847dbc7b209d6e62bcbd0bdca99f1ef81f29f"
+      "sha256": "25d11bb06c849dfc05147655acda1057161e878d106b6aa21d3338356c16f02d"
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/presentation-and-reading-review.md",
@@ -31,7 +31,7 @@
     },
     {
       "path": ".agents/skills/academic-paper-analysis/SKILL.md",
-      "sha256": "bf1060928c3dbd20c5cfe73b00e26ab683380325c065ed1e7a4a8013d0fa688a"
+      "sha256": "df3123f95c677755c18152750a0c46491f99e0510fb088e3e8a52d1419aa8835"
     },
     {
       "path": ".agents/skills/apa-query/agents/openai.yaml",
@@ -67,11 +67,11 @@
     },
     {
       "path": ".agents/skills/apa-setup/references/host-detection.md",
-      "sha256": "5f7ee93135cb3df369874f73bc13a7685d4e4e8ed7bb232076a9306d374f44a1"
+      "sha256": "90c8c41ffbcb419ed4a06a9161d3b21eac6d4ba10c1722e2fd6681f086d6e351"
     },
     {
       "path": ".agents/skills/apa-setup/SKILL.md",
-      "sha256": "e5575748ee7a1d82d926bed1e8f7c11adc44831adccaa2187b29fa5d2bccc63d"
+      "sha256": "316e75f0e9736becafc194fbb1912e4a9b42b75359d0f2d4172efa434d636d00"
     },
     {
       "path": ".gitattributes",
@@ -119,7 +119,7 @@
     },
     {
       "path": "docs/apa-v3/reading-session.md",
-      "sha256": "54f0ce2f4176136c6412f91930359b8b747f9aa0a4dce7ae776c1ac811bbd712"
+      "sha256": "81b0400745acbe1742b1d154efd389605fae908ef617a431fcb415316d4cf602"
     },
     {
       "path": "docs/apa-v3/scientific-writing-modules.md",
@@ -127,7 +127,7 @@
     },
     {
       "path": "docs/CONFIGURATION.md",
-      "sha256": "6640a4832724072eef52a7151b09a3488784d6be22cde878da15e9e95c862528"
+      "sha256": "f33da8beed626e3b0a69752f7ed000a2c69a148f11b127b356afa51999863650"
     },
     {
       "path": "Figures/.gitkeep",
@@ -211,7 +211,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "5c61dfe8d0a03e5001812b2d5b1df3bb10276b61ff5289980508a822dfcab94c"
+      "sha256": "05a7ea6a26c46ae372a25cc1c3e3d40917edd25c9b810ec7e89391c96389f4fe"
     },
     {
       "path": "Schema/config/apa-config.schema.json",
@@ -347,7 +347,7 @@
     },
     {
       "path": "scripts/apa-setup.mjs",
-      "sha256": "9d06943a757e139c723c66ad6101a58892c9f874734bc98ef92cd4b8db51a7d4"
+      "sha256": "a55d841c62db1a0aba063cd6621f9dccb0129bfb422a6db138b7ed0ee0310d8f"
     },
     {
       "path": "scripts/check-bm25-index.mjs",
@@ -355,7 +355,7 @@
     },
     {
       "path": "scripts/lib/apa-config.mjs",
-      "sha256": "1ee02b88bd7cfd874d482734e3b3091d384c02accdb4ccaca0c0c1fde862c2db"
+      "sha256": "a85011c6d5c2d8058d9cd7357cdb7f452329ef64bdb16257503e885b9c3cba27"
     },
     {
       "path": "scripts/lib/apa-host-achievement.mjs",
@@ -367,7 +367,7 @@
     },
     {
       "path": "scripts/lib/apa-host-recipes.mjs",
-      "sha256": "a3422916f5e2e4637febe2fbdd2b288ed6c32e17aae5da8c98eeb28b95cf2eff"
+      "sha256": "5165e20dea9f9bbb18207654e0fb3b96d2b348b0a572ea357dbc82e21d6dc543"
     },
     {
       "path": "scripts/lib/apa-setup-issues.mjs",
@@ -399,7 +399,7 @@
     },
     {
       "path": "scripts/setup/apa-host-settings.mjs",
-      "sha256": "8e11dcf5d3a682a0bf90e2166a9ee0547c176c6a3e468ba96e0b2ce122f7186c"
+      "sha256": "3648c86e4456b211d81fc0ba0ae276533d030c02f036a6990fd89acaef98cc17"
     },
     {
       "path": "scripts/setup/apa-setup-page.mjs",
@@ -459,7 +459,7 @@
     },
     {
       "path": "scripts/v3/configured-reading.mjs",
-      "sha256": "1bce16ec3b85c94981d2e88404be3dd27fbc4966a6a4cd13b2ecdd59c6a4ed91"
+      "sha256": "f41fbac5608b9a28bf3d8e91a3a355825f93b99ddeaee0bbd7703f6aa469287a"
     },
     {
       "path": "scripts/v3/contract-validator.mjs",
@@ -639,7 +639,7 @@
     },
     {
       "path": "scripts/v3/reading-compaction.mjs",
-      "sha256": "896516e02ca6e61c98a792739bb0770ed1e510a6a87b73caa54446a3766e10a6"
+      "sha256": "6ebf10467ffab319d679f4be61bca4cc91640acb847d1ed3099d6c108f1c7e90"
     },
     {
       "path": "scripts/v3/reading-first-editor-contract.mjs",
@@ -671,7 +671,7 @@
     },
     {
       "path": "scripts/v3/reading-first-publication.mjs",
-      "sha256": "922b65907f03d3291ea7576df55d5394d00f3b831f99f1de84d44465ae3a4600"
+      "sha256": "3b79d5df6ad4f56d005454cade6d306e0393611cfb44c1053e5bf54556907733"
     },
     {
       "path": "scripts/v3/reading-first-repair-scope.mjs",
@@ -679,7 +679,7 @@
     },
     {
       "path": "scripts/v3/reading-first-runtime.mjs",
-      "sha256": "8f6988afa72930bc23b6906cc7df072504c43a1e024616319b547fd9b0e8da35"
+      "sha256": "8b12e72f0666eb0c76960e9fb431b726bf25b6fd65174d69d1f2c4871204fe76"
     },
     {
       "path": "scripts/v3/reading-session-tasks.mjs",
@@ -687,7 +687,7 @@
     },
     {
       "path": "scripts/v3/reading-session.mjs",
-      "sha256": "c0d9970c09c011a68fa9be84780d573eabc519fc0e148a9c6ccfbb9c7ce93eb5"
+      "sha256": "cf1f4299a34dd2110334cddd20635ed4c84eaa92bc6a7f061bb159481d960b26"
     },
     {
       "path": "scripts/v3/render-pdf-regions.py",
@@ -699,7 +699,7 @@
     },
     {
       "path": "scripts/v3/science-controller.mjs",
-      "sha256": "03b551f8441dfc64eb1aa061a4c6330fcef707378a3f4571969aeef748f75325"
+      "sha256": "ab0ed45705db034425e00496b58ad9905b73efe585faa5f8243fa3a9743d9ca5"
     },
     {
       "path": "scripts/v3/scientific-input-validator.mjs",
@@ -791,7 +791,7 @@
     },
     {
       "path": "Templates/apa-setup/page.js",
-      "sha256": "7d590f629398a9ea9ccdfca6fada47ed04cf0ab5d6e409f75ac8b23eadc3d79d"
+      "sha256": "2215341be7a16e10bb9ec43a2cd3f447d5e834ca1aa6b019b1a8a0f1eb5f8c47"
     },
     {
       "path": "Templates/apa-v3/apa-readable.css",
@@ -807,7 +807,7 @@
     },
     {
       "path": "test/setup/apa-config-core.test.mjs",
-      "sha256": "d2eae183d2f32b57274dcdb09e57c2e42cb4070735933aea5347a168271ae929"
+      "sha256": "f2570dba7e7fb8bd41c30b2412cf00ed3604564b2691d83674baae6e2e2a5665"
     },
     {
       "path": "test/setup/apa-configuration.test.mjs",
@@ -819,7 +819,7 @@
     },
     {
       "path": "test/setup/apa-host-settings.test.mjs",
-      "sha256": "fc51e4768bff1d521f2379a4712f5bac9e49174bebf114a5cf031f98131582f4"
+      "sha256": "c5e70208fbd7d9d049477b4403fcf51911f647d0bf44be63cf1e2bea8c09b6ef"
     },
     {
       "path": "test/setup/apa-setup-issues.test.mjs",
@@ -827,7 +827,7 @@
     },
     {
       "path": "test/setup/apa-setup-page.test.mjs",
-      "sha256": "1db10bf60d521f2d740621365c59e49784de45d8dc90d0d14f310e21149fbe72"
+      "sha256": "a6bc5d06664c04ace34b326266c21d88dda9803bb914939a94f80ec59664ea37"
     },
     {
       "path": "test/setup/bootstrap-execution.test.mjs",
@@ -859,7 +859,7 @@
     },
     {
       "path": "test/v3/configured-reading.test.mjs",
-      "sha256": "d87b8fb8a1d972f875dc57e38667b96da58d2aae65aeb78a12f91115d0a6b56e"
+      "sha256": "bb5686b13e88c06f2c4dd5fa5166aa87c7cb3371a8a06b35614e86968b8d97e2"
     },
     {
       "path": "test/v3/current-vault-content.test.mjs",
@@ -919,7 +919,7 @@
     },
     {
       "path": "test/v3/helpers/reading-first-publication-source-fixtures.mjs",
-      "sha256": "6f0db3020d967760523b4f7da50c3c70e48d60fb18622fc6466d66d16887581f"
+      "sha256": "b2651455561dc91f681bf13ee7d465162d93f7b81e4fea983e4f5658fc2ec56a"
     },
     {
       "path": "test/v3/helpers/topic-fixtures.mjs",
@@ -975,7 +975,7 @@
     },
     {
       "path": "test/v3/reading-compaction.test.mjs",
-      "sha256": "949f0b5c615a75b51b168e9fce04544e1b96eade98c611e3263f3c25bf2d0d1d"
+      "sha256": "9c1b524d0f2ec4ef4015dbaef2f63294df8ed1ff963e8f02db1d64ab5992da52"
     },
     {
       "path": "test/v3/reading-first-consolidation.test.mjs",
@@ -1027,7 +1027,7 @@
     },
     {
       "path": "test/v3/reading-first-runtime.test.mjs",
-      "sha256": "d1690d2efb7817d862461aea81a2246886125acc6143bd1f9cb13cbceab9af3a"
+      "sha256": "dc8daf533536022dc30cf903b31651ec6b35a2dcb029cd1db1ef5010ffbca55d"
     },
     {
       "path": "test/v3/reading-first-source-labels.test.mjs",
@@ -1035,15 +1035,15 @@
     },
     {
       "path": "test/v3/reading-first-visual-provenance.test.mjs",
-      "sha256": "6732ece244d771fad1ac780a0c5ef74f2a823f0eb8163ae067657faef0719dda"
+      "sha256": "3c397698ddbaa7353b90e46803e9d34bf09f31104972b4ade1290eab6b0c2854"
     },
     {
       "path": "test/v3/reading-session.test.mjs",
-      "sha256": "dd46228957109c67eb64d87f8c0b041f6ff3e59ef94a68da687fd4a6cbb6e804"
+      "sha256": "e3065806590729f61fc16010ca0e798083c52b918a5fc93bbfd8150ed0ffcd4b"
     },
     {
       "path": "test/v3/science-controller.test.mjs",
-      "sha256": "07cc6be3242d6617719e887509b29511a9f0a8983eaf39130966eb6444c4e4b1"
+      "sha256": "f77d991eca8eb9feddf258f9fa74ce143c598b35d74963c30ba303cd20dc16e1"
     },
     {
       "path": "test/v3/topic-cancellation.test.mjs",

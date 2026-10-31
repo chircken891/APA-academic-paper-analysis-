@@ -73,14 +73,17 @@ description: Use for APA configuration requests such as 完善配置、为我配
 
 页面的阈值压缩卡片提示“推荐阈值范围 250000–300000 token”，这只是参考，不会自动填入；页面不预填数值，你也不能替用户选值。用户在卡片中输入的候选阈值，会以 `host_settings.threshold_compaction`（`host`、`tokens`）写进复制或下载的操作 JSON，不需要用户另行转告。
 
+页面“自检遗留问题”为每项给出处理方式：“需要在本页选择”类注明在哪一页、可选什么；仍待调查、授权事项和已知限制各有下拉选择（继续调查、准备精确预览、接受限制或暂缓）。所选处理以 `issue_choices`（遗留问题 id → 处理方式）写进“完善配置”的操作 JSON，不写入个人配置；未选择的项保持现状，你不能替用户选。
+
 用户在页面完成选择后，只核对其提交的操作，展示项目绝对路径、修改前后差异及未完成项，等待明确应用确认。核对时，`host_settings` 必须作为单独一项列出：它的 `host` 与本次档案的宿主不一致时停止并报告，不改写成当前宿主；用户明确要求先保存已选部分时，也按相同预览与确认流程处理。已有明确选择无需重复询问，但不能从“你决定”或“全部按推荐”推导答案。
 
 ## 5. 应用、导出与导入
 
 - 应用用户明确要求执行的操作：读取用户提供的文件或完整 JSON，核对目标、动作、字段和预览，然后运行 `node scripts/apa-setup.mjs apply --file <operation.json>`（按第 0 步追加已确认的 `--repo-root`）。用户粘贴 JSON 需要暂存时，使用仓库 `.tmp/apa-public-setup/` 下的任务文件。用户自行提交完整操作并明确要求应用时，不重复询问已确定的目标与字段；这不授权添加任何未选择的设置。不改动操作中的指纹；遇 stale 重新读取配置、展示更新后的差异并取得用户确认，再生成新操作，不能重建操作绕过拒绝。应用后再运行一次第 2 步的 `inspect`，以回读结果为准，报告实际的缺项和不可用依赖。
 - 宿主设置候选：`apply` 只校验 `host_settings`，不写入 `config/apa.local.json`，并在结果的 `pending_host_settings` 中原样返回。出现这一项时，必须在应用报告中写明候选值和目标宿主，接着处理：`apa-host-settings` 已支持该宿主时，运行 `plan --host <host> --capability threshold_compaction --tokens <tokens>` 展示目标文件、键和值，等用户确认后再 `apply --confirm`，然后回读；不支持时，报告缺少受控工具，需要哪项授权，以及写入后怎样核实。在用户确认前都保持未写入，不得静默丢弃、改值，也不得改用其他宿主的设置代替。应用个人配置不等于批准写入宿主设置。
+- 遗留问题处理：`apply` 只校验 `issue_choices`，在结果的 `pending_issue_choices` 中原样返回，应用报告逐项列出。`investigate` 按 `references/host-detection.md` 只读补查该能力并重新生成页面；`prepare` 展示精确目标和变化，等用户确认后才执行；`accept-limit` 与 `defer` 只记入报告，不再追问。任何处理都不扩大为未选择的操作。
 - 挖空或去除配置：不强制打开 HTML。先核对用户明确要求去除的全部答案或具体字段，展示目标和范围，再按明确授权使用既有 `remove` 操作及 `apply` CLI，回读确认结果；范围不清时先澄清。不删除笔记、补丁或依赖。
-- 导出配置备份：`node scripts/apa-setup.mjs export --output <file.json>`。用户指定路径时使用该路径；只指定文件名时使用该文件名并保存至 `config/backups/<owner>/`。未指定时使用该目录及 `apa-config-backup-YYYYMMDD-HHmmss-SSS.json` 文件名。`owner` 是当前 agent 的 kebab-case 归属标识，按身份及证据确定，不从所选模型推断；将完整目标传给现有 `--output`，由 CLI 创建父目录。不覆盖已有文件，也不放进 `.tmp/` 或其他临时目录。该目录由 `.gitignore` 排除，不进入公开工程导出。导出后核对内容与当前配置一致，并返回完整路径。页面上的下载由浏览器决定保存位置。
+- 导出配置备份：`node scripts/apa-setup.mjs export --output <file.json>`。用户指定路径时使用该路径；只指定文件名时使用该文件名并保存至 `config/backups/<owner>/`。未指定时使用该目录及 `apa-config-backup-YYYYMMDD-HHmmss-SSS.json` 文件名。`owner` 是当前 agent 的 kebab-case 归属标识，按身份及证据确定，不从所选模型推断；将完整目标传给现有 `--output`，由 CLI 创建父目录。目标已存在时 CLI 以 `APA_SETUP_EXPORT_EXISTS: <路径>` 拒绝；向用户报告该完整路径并询问是否覆盖：用户同意覆盖时对同一目标追加 `--overwrite` 直接替换；不覆盖时请用户提供新的文件名或路径，按上述规则重新确定目标后导出。不自行改名、追加序号或默认覆盖，每次覆盖都需用户对该路径的明确回答。备份不放进 `.tmp/` 或其他临时目录。该目录由 `.gitignore` 排除，不进入公开工程导出。导出后核对内容与当前配置一致，并返回完整路径。页面上的下载由浏览器决定保存位置。
 - 导出格式和应用操作格式不同。导入配置须打开 HTML，由用户选择导入项目、预览前后差异并生成操作，再确认应用；未选择、未改变或未提供的字段保持原值。其他电脑的路径与选择不能自动采用。
 
 ## 边界

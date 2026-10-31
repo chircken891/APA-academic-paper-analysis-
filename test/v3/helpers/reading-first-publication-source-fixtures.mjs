@@ -45,7 +45,14 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
     knowledge: [{ id: 'method', canonical_key: 'synthetic-method', kind: 'method', source_kind: 'method-background', title: { en: 'Synthetic method', 'zh-CN': '合成方法' }, aliases: ['SyntheticMethodAlias'], paragraphs: { en: ['An independent reusable explanation with supportonlytoken.'], 'zh-CN': ['可独立理解的通用解释，包含仅知识页词。'] } }],
     map: { steps: [{ id: 'design-step', section_id: 'design', label: { en: 'Design', 'zh-CN': '设计' } }], findings: [{ id: 'main-finding', section_id: 'findings', label: { en: 'Finding', 'zh-CN': '发现' } }], relations: [{ step_id: 'design-step', finding_id: 'main-finding' }] },
   };
-  if (options.visualProvenance) Object.assign(presentation.visuals[0], {
+  const ownedVisualResources = options.visualProvenance === 'owned-absolute' ? [{
+    path: presentation.visuals[0].path, source_id: source.id, source_path: source.path, source_sha256: source.sha256,
+    sha256: figure.sha256, byte_length: figure.byte_length,
+  }] : null;
+  if (ownedVisualResources) {
+    presentation.sources = [{ id: source.id, path: presentation.source_pdf, kind: 'main' }];
+    presentation.visuals[0].source_id = source.id;
+  } else if (options.visualProvenance) Object.assign(presentation.visuals[0], {
     source_id: source.id, source_path: presentation.source_pdf, source_sha256: source.sha256,
     sha256: figure.sha256, byte_length: figure.byte_length,
   });
@@ -80,7 +87,8 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
     authorized_bindings: authorizedBindings, run_controls: [{ run_id: runId, reading_first_binding: binding }] });
   for (const role of roles) await commitOwnedArtifact({ artifactRoot: root, dispatchContext: broker.dispatchContext,
     capability: broker.issueCapability({ runId, actorId: role, role, artifactPath: 'science/' + role + '.json', revision: '1' }),
-    artifact: { artifact_id: role, content: JSON.stringify({ context: 'Registered synthetic scientific output for ' + role, ...(role === 'integration' ? { presentation } : {}) }) }, expectedRevision: '1' });
+    artifact: { artifact_id: role, content: JSON.stringify({ context: 'Registered synthetic scientific output for ' + role,
+      ...(role === 'integration' ? { presentation, ...(ownedVisualResources ? { visual_resources: ownedVisualResources } : {}) } : {}) }) }, expectedRevision: '1' });
   const scientificInput = { ...input, profile: 'reading-first-1.0' };
   const handoff = await buildReadingFirstHandoff({ run: { run_id: runId }, dispatchContext: broker.dispatchContext, artifactRoot: root, scientificInput });
   const runControl = { runId, artifactRoot: root, dispatchContext: broker.dispatchContext };
@@ -98,7 +106,14 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
       hostRequests: snapshot.state.request_entries.filter(entry => !entry.consumed).map(entry => ({ action_id: entry.request.emittedStep.action_id, status: 'prepared' })),
       observation: { manual_compaction: { available: false, source: 'Synthetic host has no manual compaction.' } },
       capability: broker.issueCapability({ runId, actorId: 'controller', role: 'control', artifactPath: task.artifact_path, revision: task.revision }) });
-    assert.equal(result.action, 'continue');
+    if (result.action === 'await-user') {
+      const resume = binding.compaction_policy.checkpoints[id].resume;
+      const continued = await handleReadingCompactionBoundary({ controller, checkpointReceipt: result.receipt, presentation: candidate,
+        hostRequests: snapshot.state.request_entries.filter(entry => !entry.consumed).map(entry => ({ action_id: entry.request.emittedStep.action_id, status: 'prepared' })),
+        userDecision: 'skip', capability: broker.issueCapability({ runId, actorId: 'controller', role: 'control', artifactPath: resume.artifact_path, revision: resume.revision }) });
+      assert.equal(continued.action, 'continue');
+      assert.equal(continued.record.reason, 'user-skipped');
+    } else assert.equal(result.action, 'continue');
   };
   await settleCompaction('before-writer');
   const complete = async (request, value) => {

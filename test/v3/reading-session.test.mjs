@@ -6,8 +6,22 @@ import { createHash } from 'node:crypto';
 import { inspectReadingFirstPublicationSource } from '../../scripts/v3/reading-first-runtime.mjs';
 import { readingFirstViewsFingerprint } from '../../scripts/v3/reading-first-editor.mjs';
 import { buildReadingSessionTasks } from '../../scripts/v3/reading-session-tasks.mjs';
-import { createReadingSession, resumeReadingSession, nextReadingAction, recordReadingEvent } from '../../scripts/v3/reading-session.mjs';
+import { createReadingSession, resumeReadingSession, nextReadingAction as nextAction, recordReadingEvent } from '../../scripts/v3/reading-session.mjs';
 import { reviewedReadingFirstFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
+
+// Synthetic scenarios explicitly choose to continue at each reminder.
+async function nextReadingAction(session) {
+  let action = await nextAction(session);
+  if (action.action === 'provide-input' && action.kind === 'compaction-observation') {
+    await recordReadingEvent(session, { kind: 'compaction', input: { observation: { manual_compaction: { available: false, source: 'synthetic host has no manual entry' } } } });
+    action = await nextAction(session);
+  }
+  if (action.action === 'await-user') {
+    await recordReadingEvent(session, { kind: 'compaction', input: { userDecision: 'skip' } });
+    action = await nextAction(session);
+  }
+  return action;
+}
 
 test('generates distinct authorized tasks and bounded checkpoint slots from the input identities', () => {
   const input = { role_artifacts: ['a', 'b', 'c', 'd', 'e', 'f'] };
@@ -132,7 +146,20 @@ test('synthetic host runs both drafts, editor, candidate and review through the 
   const source = f.options.scientificInput.sources[0];
   const resources = [{ path: template.presentationCatalog.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length }, template.resources[1]];
   await recordReadingEvent(session, { kind: 'render-assets', resources, renderOptions: {} });
-  action = await nextReadingAction(session);
+  const reviewBoundary = await nextAction(session);
+  assert.deepEqual(reviewBoundary, { action: 'provide-input', kind: 'compaction-observation', boundary_id: 'before-review' });
+  assert.deepEqual(await nextAction(session), reviewBoundary);
+  await recordReadingEvent(session, { kind: 'compaction', input: { observation: { manual_compaction: { available: false, source: 'synthetic host has no manual entry' } } } });
+  action = await nextAction(session);
+  assert.equal(action.action, 'await-user'); assert.match(action.message, /推荐.*压缩/);
+  assert.ok(action.compaction_prompt.includes('before-review'));
+  assert.ok(action.compaction_prompt.includes(JSON.stringify(resources[0].source_path)));
+  const reviewCapsule = JSON.parse(action.compaction_prompt.split('\n\n').find(part => part.startsWith('{')));
+  assert.equal(reviewCapsule.presentation_profile, 'reading-editor-1.3');
+  assert.equal(reviewCapsule.candidate_paths.length, 2);
+  assert.equal((await nextAction(session)).action, 'await-user');
+  await recordReadingEvent(session, { kind: 'compaction', input: { userDecision: 'skip' } });
+  action = await nextAction(session);
   assert.equal(action.stage, 'reading');
   await accept(action, 'review', template.review);
   const done = await nextReadingAction(session);
@@ -211,12 +238,101 @@ test('before-writer compaction pause is recovered from the owned decision checkp
   }
   const now = new Date().toISOString();
   await recordReadingEvent(session, { kind: 'compaction', input: { sessionId: 'main', observation: { session_id: 'main', observed_at: now, context: { tokens: 190000, kind: 'current-context', measured_at: now, fresh: true, source: 'synthetic meter' }, manual_compaction: { available: true, method: 'synthetic compact', source: 'synthetic host' } }, progress: { remaining_work: { multiple_responses: true, reason: 'writing remains' }, growth: { substantial: true, reason: 'science grew' } } } });
-  assert.equal((await nextReadingAction(session)).action, 'await-user');
+  assert.equal((await nextAction(session)).action, 'await-user');
   session = await resumeReadingSession({ runRoot });
   await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
-  assert.equal((await nextReadingAction(session)).action, 'await-user');
+  assert.equal((await nextAction(session)).action, 'await-user');
   await recordReadingEvent(session, { kind: 'compaction', input: { userDecision: 'skip' } });
   assert.equal((await nextReadingAction(session)).action, 'dispatch');
+});
+
+test('1.2 freezes the evidenced host entry and waits at science and Writer boundaries', async t => {
+  const f = await configuredFixture(t);
+  const entry = { status: 'detected', method: '/compact', scope: 'current-session', evidence: [{ source: 'host-docs', reference: 'synthetic host manual entry' }], limitations: [] };
+  f.profile.capabilities = { manual_compaction: entry };
+  let session = await createReadingSession(f.options);
+  const runRoot = join(f.root, 'runs', 'run'); await mkdir(join(runRoot, 'native'), { recursive: true });
+  const saved = JSON.parse(await readFile(join(runRoot, 'control', 'science-state.json'), 'utf8'));
+  const policy = saved.data.prepared.runControl.reading_first_binding.compaction_policy;
+  assert.equal(policy.profile, 'boundary-reminders-1.2');
+  assert.equal(policy.manual_compaction.method, '/compact');
+  assert.deepEqual(policy.manual_compaction.evidence, entry.evidence);
+  entry.method = 'changed after binding';
+  const boundaries = [];
+  for (let i = 0; i < 6; i++) {
+    let action = await nextAction(session);
+    if (action.action === 'provide-input') {
+      assert.equal(action.kind, 'compaction-observation'); boundaries.push(action.boundary_id);
+      assert.deepEqual(await nextAction(session), action);
+      await recordReadingEvent(session, { kind: 'compaction', input: { observation: { observed_at: new Date().toISOString() } } });
+      action = await nextAction(session);
+      assert.equal(action.action, 'await-user'); assert.match(action.message, /推荐.*压缩/);
+      assert.equal((await nextAction(session)).action, 'await-user');
+      await recordReadingEvent(session, { kind: 'compaction', input: { userDecision: 'skip' } });
+      action = await nextAction(session);
+    }
+    assert.equal(action.action, 'dispatch');
+    const observation = { action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port, tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-' + action.role }) };
+    await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
+    await writeFile(join(runRoot, 'native', action.role + '.json'), JSON.stringify({ role: action.role, text: 'synthetic' }));
+    await recordReadingEvent(session, { kind: 'result', action_id: action.action_id });
+  }
+  const missing = await nextAction(session);
+  assert.equal(missing.action, 'provide-input'); assert.equal(missing.boundary_id, 'before-writer');
+  await recordReadingEvent(session, { kind: 'compaction', input: { observation: { observed_at: new Date().toISOString() } } });
+  const paused = await nextAction(session);
+  assert.equal(paused.action, 'await-user'); assert.match(paused.message, /\/compact/);
+  assert.ok(paused.compaction_prompt.includes('before-writer'));
+  assert.ok(paused.compaction_prompt.includes(JSON.stringify(join(runRoot, 'control', 'compaction-before-writer-decision.json'))));
+  assert.deepEqual(boundaries, ['evidence-accepted', 'methods-results-accepted']);
+  const checkpointPath = join(runRoot, 'control', 'compaction-before-writer-decision.json');
+  const checkpoint = await readFile(checkpointPath);
+  assert.equal(JSON.parse(checkpoint.toString()).state.compaction_reminders['before-writer'].compaction_prompt, paused.compaction_prompt);
+  session = await resumeReadingSession({ runRoot });
+  await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+  assert.equal((await nextAction(session)).action, 'await-user');
+  assert.deepEqual(await readFile(checkpointPath), checkpoint);
+  await recordReadingEvent(session, { kind: 'compaction', input: { userDecision: 'skip' } });
+  const writer = await nextAction(session); assert.equal(writer.action, 'dispatch'); assert.equal(writer.stage, 'reading');
+  const pending = await nextAction(session); assert.equal(pending.action, 'reconcile'); assert.equal(pending.action_id, writer.action_id);
+});
+
+test('1.2 never freezes an unsupported, unproven or different-host entry as available', async t => {
+  for (const scenario of ['unknown', 'unsupported', 'missing-evidence', 'different-host']) {
+    const f = await configuredFixture(t);
+    f.profile.capabilities = { manual_compaction: { status: ['unknown', 'unsupported'].includes(scenario) ? scenario : 'detected', method: '/compact', scope: 'current-session', evidence: scenario === 'missing-evidence' ? [] : [{ source: 'host-docs', reference: 'host manual entry' }], limitations: [] } };
+    if (scenario === 'different-host') f.profile.host = 'different-host';
+    await createReadingSession(f.options);
+    const saved = JSON.parse(await readFile(join(f.root, 'runs', 'run', 'control', 'science-state.json'), 'utf8'));
+    assert.equal(saved.data.prepared.runControl.reading_first_binding.compaction_policy.manual_compaction.available, false, scenario);
+  }
+});
+
+test('1.2 with an unknown entry persists a mandatory reminder and waits through recovery', async t => {
+  const f = await configuredFixture(t);
+  let session = await createReadingSession(f.options);
+  const runRoot = join(f.root, 'runs', 'run'); await mkdir(join(runRoot, 'native'), { recursive: true });
+  const action = await nextAction(session);
+  await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation: { action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port, tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-evidence' }) } });
+  await writeFile(join(runRoot, 'native', 'evidence.json'), JSON.stringify({ role: 'evidence', text: 'synthetic' }));
+  await recordReadingEvent(session, { kind: 'result', action_id: action.action_id });
+  assert.deepEqual(await nextAction(session), { action: 'provide-input', kind: 'compaction-observation', boundary_id: 'evidence-accepted' });
+  await recordReadingEvent(session, { kind: 'compaction', input: { observation: {} } });
+  const prompted = await nextAction(session);
+  assert.equal(prompted.action, 'await-user'); assert.match(prompted.message, /推荐.*压缩/);
+  assert.match(prompted.message, /入口.*未.*核实/); assert.doesNotMatch(prompted.message, /\/compact/);
+  assert.ok(prompted.compaction_prompt.includes(JSON.stringify(runRoot))); assert.ok(prompted.compaction_prompt.includes('evidence-accepted'));
+  const statePath = join(runRoot, 'control', 'science-state.json');
+  const saved = JSON.parse(await readFile(statePath, 'utf8'));
+  assert.equal(saved.data.compaction_reminders['evidence-accepted'].status, 'prompted');
+  assert.equal(saved.data.compaction_reminders['evidence-accepted'].compaction_prompt, prompted.compaction_prompt);
+  session = await resumeReadingSession({ runRoot });
+  await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+  assert.equal((await nextAction(session)).action, 'await-user');
+  await recordReadingEvent(session, { kind: 'compaction', input: { userDecision: 'continue' } });
+  assert.equal((await nextAction(session)).role, 'methods');
+  const continued = JSON.parse(await readFile(statePath, 'utf8')).data.compaction_reminders['evidence-accepted'];
+  assert.equal(continued.reason, 'continued-without-observed-compaction'); assert.equal(continued.compaction_verified, false);
 });
 
 test('control slot exhaustion blocks dispatch without changing the model-call budget', async t => {

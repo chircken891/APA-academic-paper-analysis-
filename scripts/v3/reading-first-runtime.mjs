@@ -42,9 +42,9 @@ export function resolveReadingWorkflowProfile({existingBinding, newRun = false} 
 }
 
 /** Controller proposal factory. Freeze this returned control in the existing broker. */
-export function createReadingFirstRunControl({runId, scientificInput, mainSession, authorizationId, deadline, maxCalls = 6, taskBindings, enrichmentPolicy, enrichmentSessionProfile, maxTotalCalls, priorCalls = 0, hostResultAgentIdPath = ['agent_id'], existingBinding, controllerActorId = 'controller', presentationRequired = true, writingMode = 'independent', sourceLanguage = 'en', firstWritingLanguage, presentationMode = 'writer', presentationProfile = READING_EDITOR_PROFILE, noteLayout = 'source-language-1.0', configuredSetup, host, roleReplyContract, handoffProfile, compactionPolicy} = {}) {
+export function createReadingFirstRunControl({runId, scientificInput, mainSession, authorizationId, deadline, maxCalls = 6, taskBindings, enrichmentPolicy, enrichmentSessionProfile, maxTotalCalls, priorCalls = 0, hostResultAgentIdPath = ['agent_id'], existingBinding, controllerActorId = 'controller', presentationRequired = true, writingMode = 'independent', sourceLanguage = 'en', firstWritingLanguage, presentationMode = 'writer', presentationProfile = READING_EDITOR_PROFILE, noteLayout = 'source-language-1.0', configuredSetup, host, roleReplyContract, handoffProfile, compactionPolicy, manualCompaction} = {}) {
   if (existingBinding !== undefined) fail('READING_FIRST_EXISTING_BINDING_PRESERVED');
-  if (compactionPolicy !== undefined && compactionPolicy !== COMPACTION_POLICY) fail('APA_COMPACTION_POLICY_INVALID');
+  if (compactionPolicy !== undefined && !compactionEnabled({ compaction_policy: { profile: compactionPolicy } })) fail('APA_COMPACTION_POLICY_INVALID');
   loadRoleReplyContract(roleReplyContract);
   if (host !== undefined && (!host || Object.keys(host).sort().join() !== 'dispatch,name' || !text(host.name) || !validHostDispatch(host.dispatch))) fail('READING_FIRST_HOST_INVALID');
   if (!text(runId) || scientificInput?.identity?.run_id !== runId || !text(authorizationId)
@@ -70,7 +70,7 @@ export function createReadingFirstRunControl({runId, scientificInput, mainSessio
   }
   const input = {...copy(scientificInput), profile: resolveReadingWorkflowProfile({newRun:true})};
   return freeze({run_id:runId, reading_first_binding:{profile:input.profile, repair_routing:OWNER_REPAIR_ROUTING, ...(presentationMode === 'reading-editor' ? {presentation_mode:presentationMode, presentation_profile:presentationProfile, ...(loadReadingEditorContract(presentationProfile) ? {presentation_contract:loadReadingEditorContract(presentationProfile).metadata} : {})} : {}), presentation_required:presentationRequired, writing_mode:writingMode, source_language:sourceLanguage, ...(firstWritingLanguage !== undefined ? {first_writing_language:firstWritingLanguage} : {}), ...(writingMode === 'source-translation' ? {translation_profile:TRANSLATION_PROFILE} : {}), note_layout:noteLayout, ...(handoffProfile !== undefined ? {handoff_profile:handoffProfile} : {}), input_fingerprint:fingerprintV3Json(input),
-    role_model_policy:configuredSetup?.role_model_policy ?? createApaRoleModelPolicy(mainSession), ...(configuredSetup ? {configured_setup:copy(configuredSetup)} : {}), ...(roleReplyContract !== undefined ? {role_reply_contract:copy(roleReplyContract)} : {}), ...(compactionPolicy ? {compaction_policy:createCompactionPolicy(controllerActorId)} : {}), authorization_id:authorizationId, controller_actor_id:controllerActorId, host_result_agent_id_path:copy(hostResultAgentIdPath), deadline, max_calls:maxCalls, task_bindings:copy(taskBindings), ...(priorCalls ? {prior_calls:priorCalls} : {}), ...(maxTotalCalls !== undefined ? {max_total_calls:maxTotalCalls} : {}), ...(enrichmentPolicy ? {enrichment_policy:copy(enrichmentPolicy)} : {}), ...(enrichmentSessionProfile !== undefined ? {enrichment_session_profile:enrichmentSessionProfile} : {}), ...(host !== undefined ? {host:copy(host)} : {})}});
+    role_model_policy:configuredSetup?.role_model_policy ?? createApaRoleModelPolicy(mainSession), ...(configuredSetup ? {configured_setup:copy(configuredSetup)} : {}), ...(roleReplyContract !== undefined ? {role_reply_contract:copy(roleReplyContract)} : {}), ...(compactionPolicy ? {compaction_policy:createCompactionPolicy(controllerActorId, undefined, { profile: compactionPolicy, manualCompaction })} : {}), authorization_id:authorizationId, controller_actor_id:controllerActorId, host_result_agent_id_path:copy(hostResultAgentIdPath), deadline, max_calls:maxCalls, task_bindings:copy(taskBindings), ...(priorCalls ? {prior_calls:priorCalls} : {}), ...(maxTotalCalls !== undefined ? {max_total_calls:maxTotalCalls} : {}), ...(enrichmentPolicy ? {enrichment_policy:copy(enrichmentPolicy)} : {}), ...(enrichmentSessionProfile !== undefined ? {enrichment_session_profile:enrichmentSessionProfile} : {}), ...(host !== undefined ? {host:copy(host)} : {})}});
 }
 
 function sourceCurrent(sources) {
@@ -715,7 +715,13 @@ export async function handleReadingCompactionBoundary({controller, checkpointRec
   if (!compactionEnabled(state.binding)) fail('APA_COMPACTION_POLICY_REQUIRED');
   const boundary = await observeReadingCompactionBoundary({controller, checkpointReceipt, hostRequests, presentation});
   const result = evaluateCompactionBoundary({boundary, observation, sessionId, progress, userDecision,
-    history:state.compaction_reminders, startedAt:state.binding.compaction_policy.started_at});
+    history:state.compaction_reminders, startedAt:state.binding.compaction_policy.started_at, policy:state.binding.compaction_policy,
+    continuation:{run_id:state.runControl.runId,paper_id:state.handoff.identity.paper_id,run_root:state.runControl.artifactRoot,
+      checkpoint_path:resolve(state.runControl.artifactRoot,state.binding.compaction_policy.checkpoints[boundary.id].decision.artifact_path),
+      binding_source:'state.binding in the owned checkpoint',binding:state.binding,calls_used:state.callsUsed,sources:state.handoff.sources,
+      accepted_artifacts:[...state.handoff.science,...Object.values(state.views),...(state.readingEditor?[state.readingEditor]:[])].map(item=>({
+        role:item.receipt.role,path:nativePath(item.artifact_root??state.runControl.artifactRoot,item.receipt.path),sha256:item.receipt.sha256})),
+      candidate_paths:(presentation?.notes??[]).map(note=>note.path)}});
   if (!result.record) return {...result, receipt:checkpointReceipt};
   const step = boundary.reminder.status === 'prompted' ? 'resume' : 'decision';
   const task = state.binding.compaction_policy.checkpoints[boundary.id][step];

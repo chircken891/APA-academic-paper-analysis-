@@ -34,6 +34,26 @@ function compactionCapability(s, id, step) {
   return s.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: task.artifact_path, revision: task.revision });
 }
 
+for (const profile of ['boundary-reminders-1.0', 'boundary-reminders-1.1']) test(`a bound ${profile} runtime preserves the unavailable decision checkpoint bytes across restore`, async t => {
+  const s = await setup(t, { compactionPolicy: profile });
+  const { controller, requests } = s.created;
+  assert.equal(s.binding.compaction_policy.profile, profile);
+  assert.equal(s.binding.compaction_policy.manual_compaction, undefined);
+  const checkpoint = await compactionCheckpoint(s, controller);
+  const hostRequests = requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' }));
+  const first = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: checkpoint, hostRequests,
+    capability: compactionCapability(s, 'before-writer', 'decision') });
+  assert.equal(first.action, 'continue'); assert.equal(first.record.reason, 'manual-compaction-unavailable');
+  const path = join(s.root, s.binding.compaction_policy.checkpoints['before-writer'].decision.artifact_path);
+  const bytes = await readFile(path);
+  const restored = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: first.receipt });
+  assert.equal(restored.ok, true, JSON.stringify(restored.errors));
+  const repeated = await readingApi.handleReadingCompactionBoundary({ controller: restored.controller, checkpointReceipt: first.receipt, hostRequests });
+  assert.equal(repeated.action, 'continue'); assert.equal(repeated.record, null);
+  assert.deepEqual(await readFile(path), bytes);
+  assert.doesNotThrow(() => dispatchArguments(s, restored.requests[0]));
+});
+
 test('new reading runtime requires the Writer decision and preserves pending actions through pause and resume', async t => {
   const s = await setup(t, { compactionPolicy: COMPACTION_POLICY });
   const { controller, requests } = s.created;
@@ -66,9 +86,14 @@ test('new reading runtime gates the rendered review, permits unknown-context ski
   const { controller, requests } = s.created;
   assert.throws(() => dispatchArguments(s, requests[0]), /APA_COMPACTION_BOUNDARY_REQUIRED/);
   const saved = await compactionCheckpoint(s, controller);
-  await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: saved,
-    hostRequests: requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' })),
+  const writerRequests = requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' }));
+  const writerPause = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: saved,
+    hostRequests: writerRequests,
     observation: {}, capability: compactionCapability(s, 'before-writer', 'decision') });
+  assert.equal(writerPause.action, 'await-user');
+  assert.throws(() => dispatchArguments(s, requests[0]), /APA_COMPACTION_AWAITING_USER/);
+  await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: writerPause.receipt, hostRequests: writerRequests,
+    userDecision: 'skip', capability: compactionCapability(s, 'before-writer', 'resume') });
   for (const request of requests) await s.complete(request, s.view(request.language));
   const presentation = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller } });
   const review = createReadingFirstReviewRequest({ controller, presentation });
@@ -82,9 +107,14 @@ test('new reading runtime gates the rendered review, permits unknown-context ski
   const result = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: receipt, presentation,
     hostRequests: [{ action_id: review.emittedStep.action_id, status: 'prepared' }], observation: compactionObservation(),
     capability: compactionCapability(s, 'before-review', 'decision') });
-  assert.equal(result.action, 'continue');
+  assert.equal(result.action, 'await-user');
+  assert.throws(() => dispatchArguments(s, review), /APA_COMPACTION_AWAITING_USER/);
+  const continued = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: result.receipt, presentation,
+    hostRequests: [{ action_id: review.emittedStep.action_id, status: 'prepared' }], userDecision: 'skip',
+    capability: compactionCapability(s, 'before-review', 'resume') });
+  assert.equal(continued.action, 'continue');
   assert.deepEqual(dispatchArguments(s, review), review.emittedStep.arguments);
-  const restored = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: result.receipt });
+  const restored = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: continued.receipt });
   assert.equal(restored.ok, true);
   assert.deepEqual(restored.requests.map(request => request.emittedStep.action_id), [review.emittedStep.action_id]);
   assert.deepEqual(dispatchArguments(s, restored.requests[0]), review.emittedStep.arguments);
@@ -94,9 +124,14 @@ test('a prompted review resumes the same request after process recovery and obse
   const s = await setup(t, { compactionPolicy: COMPACTION_POLICY });
   const { controller, requests } = s.created;
   const saved = await compactionCheckpoint(s, controller);
-  await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: saved,
-    hostRequests: requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' })),
+  const writerRequests = requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' }));
+  const writerPause = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: saved,
+    hostRequests: writerRequests,
     capability: compactionCapability(s, 'before-writer', 'decision') });
+  assert.equal(writerPause.action, 'await-user');
+  assert.throws(() => dispatchArguments(s, requests[0]), /APA_COMPACTION_AWAITING_USER/);
+  await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: writerPause.receipt, hostRequests: writerRequests,
+    userDecision: 'skip', capability: compactionCapability(s, 'before-writer', 'resume') });
   for (const request of requests) await s.complete(request, s.view(request.language));
   const presentation = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller } });
   const review = createReadingFirstReviewRequest({ controller, presentation });

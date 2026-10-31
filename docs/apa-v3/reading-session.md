@@ -60,7 +60,9 @@ await recordReadingEvent(session, {
 
 真实宿主进度可以通过 `host_update` 记录。提供宿主事件 ID 时放在事件的 `host_event_id`；缺少事件 ID 时使用观察内容指纹去重。进度观察需要原 action、可核对的宿主任务句柄、实际查询工具及原始回传。相同事件重复提交保持幂等，同一 ID 的不同内容会被拒绝。
 
-在压缩边界，`compaction` 事件的 `input` 接受现有压缩处理器的 `observation`、`sessionId`、`progress` 和 `userDecision`。返回 `await-user` 时结束当前回复；用户决定后重新记录 `compaction` 并继续，检查点和原额度保持不变。
+新配置化运行冻结 `boundary-reminders-1.2` 和本宿主有依据的手动压缩入口；既有 1.0 和 1.1 绑定沿用原合同。1.2 在四个安全边界保存状态后均返回 `await-user`，向用户推荐压缩，等待用户明确选择后继续。入口未知或不可用、用量低或未知、此前已压缩或提示均不自动跳过；入口未知时说明未知。四个压缩边界缺少临时观测时，`nextReadingAction` 返回 `provide-input`、`kind:'compaction-observation'` 和 `boundary_id`。调用方从当前宿主及可信运行记录收集一次观测，以 `recordReadingEvent(session, {kind:'compaction', input:{observation, sessionId, progress}})` 回传，并立即调用 `nextReadingAction`；观测和用量测量须在 60 秒内，无法取得的字段保持未知。缺少临时入口观测时使用绑定中本宿主已有证据的入口，不能跨宿主套用。
+
+返回 `await-user` 时展示消息与可复制的阶段压缩提示词并结束当前回复；用户决定后重新记录 `compaction` 并继续，检查点和原额度保持不变。提示词包含可用的运行和论文身份、原预算与期限、来源及产物引用、检查点和绑定路径等续接元数据，并要求压缩时保留已完成阶段、下一步、关键科学结论及证据、限制、待决事项和真实任务句柄；完整角色模型策略按需从绑定路径回读。未知字段标明未知，原文及角色全文不写入提示词。Evidence 后突出设计和证据，Methods/Results 后突出关键方法、结果、数值与限制，Writer 前突出综合主线、分歧及写作、翻译、呈现下一步，整体审查前突出候选路径、呈现版本、审查范围及最多一次局部复核。生成提示词不增加模型调用。边界若记录 `skipped`，从已保存的 science-state `data.compaction_reminders` 或 owned 阅读检查点 `state.compaction_reminders` 读取原因并向用户简短说明。自动压缩事件只有关联当前主会话且有实际成功证据时才能记录；无成功事件时保留未核实状态。
 
 渲染前的 `provide-input` 会要求 `render-assets`。资源必须绑定实际来源文件及其 SHA-256、字节长度；按既有预览合同提供资源和可选渲染参数：
 

@@ -41,7 +41,11 @@
 
 ### Compaction boundary decisions
 
-四个边界继续使用已绑定的压缩规则：Evidence 完成、Methods/Results 完成、Writer 前、整体审查前。收到 await-user 时结束本轮；恢复后核对原进程、真实任务和检查点。等待期间原预算与截止时间不变，压缩或跳过不增加调用。未知或不可用能力按原合同记录限制。
+四个边界使用绑定的压缩规则：Evidence 完成、Methods/Results 完成、Writer 前、整体审查前。新配置化运行冻结 `boundary-reminders-1.2` 和当前宿主有证据的手动压缩入口；既有 1.0 和 1.1 绑定保持原规则和检查点字节。1.2 在四个安全边界保存状态后均返回 `await-user` 并推荐压缩，由用户明确选择继续或跳过，是否压缩由用户决定；入口不可用或未知、用量低或未知、之前已经压缩或提醒，都不自动跳过。
+
+会话返回 `provide-input`、`kind:'compaction-observation'` 和 `boundary_id` 时，从当前宿主能力与可信运行记录收集一次实际观测，使用 `recordReadingEvent(session, {kind:'compaction', input:{observation, sessionId, progress}})` 回传后立即调用 `nextReadingAction`。观测及其用量时间的有效期为 60 秒；未知的会话 ID、用量和压缩事件保持未知，不以其他会话或累计用量代替。已冻结且有依据的手动入口可在没有临时入口观测时使用，Claude Code 的入口依据不能套用于 Codex。
+
+返回 `await-user` 时展示实际消息及可复制的阶段压缩提示词并结束本轮；恢复后核对原进程、真实任务和检查点，记录用户选择再继续。提示词包含可用的运行与论文身份、原预算和截止时间、来源及产物引用、检查点和绑定路径等续接元数据，并要求压缩时保留已完成阶段、下一步、科学结论和证据、关键限制、待决事项及真实任务句柄；完整角色模型策略按需从绑定路径回读。未知字段标明未知，不塞入原文及角色全文。四阶段重点分别为：Evidence 后保留已提取设计和证据；Methods/Results 后保留关键方法、结果、数值和限制；Writer 前保留综合主线、分歧及 Writer、翻译、呈现的下一步；整体审查前保留候选路径、呈现版本、审查范围和最多一次局部复核。提示词由已有状态生成，不增加模型调用。每当边界记为 `skipped`，从已保存的 science-state `data.compaction_reminders` 或阅读 owned 检查点 `state.compaction_reminders` 读取对应原因，用一句话告知用户。等待期间原预算与截止时间不变，压缩或跳过不增加调用。成功压缩仅在实际事件能关联当前主会话时记录；无法核实时保留未核实状态。
 
 ## 底层接口和历史绑定
 

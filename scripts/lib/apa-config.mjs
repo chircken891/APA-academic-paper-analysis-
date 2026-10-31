@@ -95,7 +95,7 @@ function merge(target, source) {
 }
 
 export function applyApaConfigOperation({ repoRoot = process.cwd(), operation }) {
-  const allowed = ['schema_version', 'base_fingerprint', 'repo_root', 'action', 'set', 'remove', 'all', 'answers', 'host_settings'];
+  const allowed = ['schema_version', 'base_fingerprint', 'repo_root', 'action', 'set', 'remove', 'all', 'answers', 'host_settings', 'issue_choices'];
   if (!operation || Object.keys(operation).some(key => !allowed.includes(key)) || operation.schema_version !== 'apa-config-operation-1.0' || !['patch', 'remove', 'import'].includes(operation.action)) throw error('APA_CONFIG_OPERATION_INVALID');
   // host_settings carries the user's page choice for host settings; it is reported back, never written to the config.
   const hostSettings = operation.host_settings;
@@ -104,6 +104,13 @@ export function applyApaConfigOperation({ repoRoot = process.cwd(), operation })
     const keys = threshold && typeof threshold === 'object' ? Object.keys(threshold).sort().join(',') : '';
     if (operation.action !== 'patch' || !hostSettings || typeof hostSettings !== 'object' || Array.isArray(hostSettings) || Object.keys(hostSettings).join(',') !== 'threshold_compaction'
       || keys !== 'host,tokens' || typeof threshold.host !== 'string' || !threshold.host.trim() || !Number.isSafeInteger(threshold.tokens) || threshold.tokens < 1) throw error('APA_CONFIG_OPERATION_INVALID');
+  }
+  // issue_choices carries how the user wants each setup issue handled; like host_settings it is reported back only.
+  const issueChoices = operation.issue_choices;
+  if (issueChoices !== undefined) {
+    const valid = { investigate: ['investigate', 'defer'], authorize: ['prepare', 'defer'], 'known-limit': ['investigate', 'accept-limit'] };
+    if (operation.action !== 'patch' || !issueChoices || typeof issueChoices !== 'object' || Array.isArray(issueChoices) || !Object.keys(issueChoices).length
+      || Object.entries(issueChoices).some(([id, choice]) => !valid[id.split(':')[0]]?.includes(choice))) throw error('APA_CONFIG_OPERATION_INVALID');
   }
   // Page operations carry the project folder the user confirmed; applying them to another checkout is refused.
   if (operation.repo_root !== undefined) {
@@ -135,7 +142,7 @@ export function applyApaConfigOperation({ repoRoot = process.cwd(), operation })
     fs.renameSync(temporary, snapshot.path);
   } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
   const applied = loadApaConfig({ repoRoot });
-  return hostSettings ? { ...applied, pending_host_settings: clone(hostSettings) } : applied;
+  return { ...applied, ...(hostSettings ? { pending_host_settings: clone(hostSettings) } : {}), ...(issueChoices ? { pending_issue_choices: clone(issueChoices) } : {}) };
 }
 
 export function exportApaConfig(config) {

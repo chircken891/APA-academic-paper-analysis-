@@ -73,7 +73,7 @@
 
 先只读检查已有适配的归属及证据。可验证复用有效的自有补丁；需要新补丁时，只在 `config/backups/<owner>/adapters/<adapter-id>/` 新建独立目录，`owner` 为 agent 归属标识，`owner` 和 `adapter-id` 使用 kebab-case，避免与已有目录碰撞；依据 agent 身份及归属证据确定 `owner`，不从所选模型推断。说明须记录所属 agent、宿主、入口、用途、证据和验证方法。其他 agent、归属不明以及既有适配和脚本只读保留，不覆盖、改造、重命名或移动；自适配不修改公共核心。档案可选 `adapters` 数组，项含 `id`、`owner`、`host`、`root`、`entrypoints` 和 `evidence`；`root` 严格为上述归属目录，`entrypoints` 是该目录内非空相对路径数组，`evidence` 记录来源位置。`inspect` 只检查宿主一致、目录归属结构及入口存在与路径范围，显示 `available` 或 `blocked`，不执行入口，也不证明身份或实际效果。既有适配保留原路径，既存个人档案不自动重写。
 
-补丁源码的准备与启用、写入宿主设置分开。宿主设置使用现有工具 `node scripts/setup/apa-host-settings.mjs plan|apply|restore --host <host> --capability threshold_compaction|compact_hook ...`：`plan` 只读，展示目标文件、键和值；`apply` 须 `--confirm`，写入前自动备份到 `config/backups/<owner>/` 并回读；`restore --backup <path> --confirm` 回滚。工具已支持的宿主，阈值和压缩钩子的达成方式应写成调用该工具的步骤，不得因档案缺少命令模板就报“未找到”。只修改用户选定的设置，未选择的值保持占位。检测不修改宿主设置，也不启动模型试验。
+补丁源码的准备与启用、写入宿主设置分开。宿主设置使用现有工具 `node scripts/setup/apa-host-settings.mjs plan|apply --host <host> --capability threshold_compaction|compact_hook ...`：`plan` 只读，展示目标文件、键和值；`apply` 须 `--confirm`，写入后回读；工具不保留宿主设置文件的备份，也不提供回滚命令，写入前须让用户核对 `plan` 展示的改动。工具已支持的宿主，阈值和压缩钩子的达成方式应写成调用该工具的步骤，不得因档案缺少命令模板就报“未找到”。只修改用户选定的设置，未选择的值保持占位。检测不修改宿主设置，也不启动模型试验。
 
 根据实际使用范围检查并报告：
 

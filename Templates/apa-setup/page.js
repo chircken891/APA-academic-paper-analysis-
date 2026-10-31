@@ -115,7 +115,8 @@ export function describeChanges(snapshot, payload) {
   const threshold = payload.host_settings?.threshold_compaction;
   return [
     ...Object.entries(payload.set).map(([key, value]) => `${fieldLabel(key)}：${describeValue(getValue(snapshot.config, key), key)} → ${describeValue(value, key)}`),
-    ...(threshold ? [`宿主压缩阈值（${threshold.host}）：候选 ${threshold.tokens} token → 不写入个人配置；助手应用时据此生成宿主设置预览，你确认后才写入`] : [])
+    ...(threshold ? [`宿主压缩阈值（${threshold.host}）：候选 ${threshold.tokens} token → 不写入个人配置；助手应用时据此生成宿主设置预览，你确认后才写入`] : []),
+    ...Object.entries(payload.issue_choices ?? {}).map(([id, choice]) => `自检遗留问题 ${id}：${issueChoiceOptions[id.split(':')[0]]?.[choice] || choice} → 不写入个人配置；交给助手按此处理`)
   ];
 }
 
@@ -163,11 +164,11 @@ export function configDifferences(before, after) {
   return Object.keys(right).filter(key => JSON.stringify(left[key]) !== JSON.stringify(right[key])).map(key => ({ key, before: left[key], after: right[key] }));
 }
 
-export function createOperation(snapshot, { action = 'patch', set = {}, remove = [], all = false, hostSettings = null } = {}) {
+export function createOperation(snapshot, { action = 'patch', set = {}, remove = [], all = false, hostSettings = null, issueChoices = {} } = {}) {
   // repo_root binds a page-generated operation to the project folder the user confirmed on the first page.
   const base = { schema_version: 'apa-config-operation-1.0', base_fingerprint: snapshot.fingerprint, ...(snapshot.repo_root ? { repo_root: snapshot.repo_root } : {}), action };
   if (action === 'remove') return all ? { ...base, all: true } : { ...base, remove: [...new Set(remove)] };
-  return { ...base, set, ...(remove.length ? { remove: [...new Set(remove)] } : {}), ...(hostSettings ? { host_settings: hostSettings } : {}) };
+  return { ...base, set, ...(remove.length ? { remove: [...new Set(remove)] } : {}), ...(hostSettings ? { host_settings: hostSettings } : {}), ...(Object.keys(issueChoices).length ? { issue_choices: issueChoices } : {}) };
 }
 
 export function serializePayload(payload) {
@@ -385,25 +386,58 @@ function renderAchievement(make, check) {
   return box;
 }
 
-// Issues left after the agent's investigation; the page only lists them.
-export function renderSetupIssues(document, container, issues) {
+// Handling choices per issue category; page-choice items are answered by the matching setting instead.
+export const issueChoiceOptions = {
+  investigate: { investigate: '请助手继续调查，补查后重新生成本页', defer: '暂缓，先不处理' },
+  authorize: { prepare: '请助手准备精确预览，我确认后再执行', defer: '暂缓，保持现状' },
+  'known-limit': { investigate: '请助手继续调查，补查后重新生成本页', 'accept-limit': '接受限制，暂不使用这项能力' }
+};
+
+// Where a page-choice issue is answered; the page offers the actual options there.
+function issueChoiceLocation(item) {
+  if (item.subject === 'threshold_compaction') return '在上方“上下文压缩阈值”卡片填写候选值；不填写即保持现状。';
+  if (['differs', 'missing', 'science_recovery'].includes(item.subject) || item.id.startsWith('page-choice:host')) return '在“完善配置 → 运行宿主与派发”页选择：采用本次检测结果，或不勾选以保留已保存的声明（相关能力保持受阻）。';
+  const field = fields.find(entry => entry.key === item.subject.split(':')[0]);
+  const page = field && setupPages.find(entry => entry.id === field.group);
+  return page ? `在“完善配置 → ${page.title}”页填写“${field.label}”。` : '在“完善配置”中对应的设置项选择。';
+}
+
+// Issues left after the agent's investigation, each with how it can be handled; returns the chosen handling.
+export function renderSetupIssues(document, container, issues, { onChange = () => {} } = {}) {
   const make = (tag, text) => {
     const element = document.createElement(tag);
     if (text !== undefined) element.textContent = text;
     return element;
   };
+  const selects = [];
   if (!Array.isArray(issues) || !issues.length) {
     container.append(make('p', '自检没有遗留问题。'));
-    return;
+    return () => ({});
   }
+  container.append(make('p', '每项都可选择处理方式。所选处理随“完善配置”的结果 JSON 交给助手，不写入个人配置；未选择的项保持现状。'));
   const groups = [['investigate', '仍待调查'], ['page-choice', '需要在本页选择'], ['authorize', '已与助手讨论的授权事项'], ['known-limit', '已知限制']];
   for (const [category, title] of groups) {
     const items = issues.filter(item => item.category === category);
     if (!items.length) continue;
     const list = make('ul');
-    for (const item of items) list.append(make('li', category === 'authorize' ? `${item.summary}（已与助手讨论）` : item.summary));
+    for (const item of items) {
+      const entry = make('li', category === 'authorize' ? `${item.summary}（已与助手讨论）` : item.summary);
+      if (category === 'page-choice') entry.append(make('p', `处理：${issueChoiceLocation(item)}`));
+      else {
+        const label = make('label', '处理方式：');
+        const select = make('select');
+        select.name = 'issue-choice';
+        for (const [value, text] of [['', '暂不决定'], ...Object.entries(issueChoiceOptions[category])]) { const option = make('option', text); option.value = value; select.append(option); }
+        select.value = '';
+        select.addEventListener('change', onChange);
+        label.append(select); entry.append(label);
+        selects.push([item.id, select]);
+      }
+      list.append(entry);
+    }
     container.append(make('h4', title), list);
   }
+  return () => Object.fromEntries(selects.filter(([, select]) => select.value).map(([id, select]) => [id, select.value]));
 }
 
 // Reported capabilities are informational; they never enter the user's configuration operation.
@@ -507,7 +541,7 @@ export function mountApaSetup(document, snapshot, inspection, queryInspection, h
   byId('host-readiness').textContent = readiness.host;
   byId('readiness').textContent = readiness.reading;
   byId('query-readiness').textContent = readiness.query;
-  renderSetupIssues(document, byId('setup-issues'), inspection?.setup_issues ?? []);
+  const issueChoices = renderSetupIssues(document, byId('setup-issues'), inspection?.setup_issues ?? [], { onChange: () => clearResult('edit') });
   renderCapabilityCheck(document, byId('capability-check'), inspection?.capability_check, byId('threshold-pick'));
   byId('threshold-step').hidden = !byId('threshold-pick').children.length;
   const dependencies = inspection?.dependencies || [];
@@ -665,7 +699,7 @@ export function mountApaSetup(document, snapshot, inspection, queryInspection, h
     const groupSelections = Object.fromEntries(groupControls.filter(item => item.selected.checked).map(({ group, inputs }) => [group.id, Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value]))]));
     Object.assign(set, collectModelSet({ config: snapshot.config, hostProfile, groupSelections, roleSelections }));
     const hostSettings = thresholdHostSetting(thresholdInput()?.value, inspection?.capability_check?.host || hostProfile?.host);
-    return createOperation(snapshot, { set, hostSettings });
+    return createOperation(snapshot, { set, hostSettings, issueChoices: issueChoices() });
   };
   const thresholdInput = () => document.querySelector('input[name="threshold-threshold_compaction"]');
   thresholdInput()?.addEventListener('input', () => clearResult('edit'));

@@ -5,15 +5,19 @@ import { loadApaConfig, inspectApaConfig, applyApaConfigOperation, exportApaConf
 import { checkPageGate } from './lib/apa-setup-issues.mjs';
 
 function options(argv) {
-  const [command, ...rest] = argv;
-  if (!['inspect', 'page', 'apply', 'export'].includes(command)) throw new Error('Usage: apa-setup inspect|page|apply|export [--repo-root path] [--file path] [--output path] [--host-profile path] [--ledger path]');
-  const result = { command, repoRoot: process.cwd() };
+  let [command, ...rest] = argv;
+  if (!['inspect', 'page', 'apply', 'export'].includes(command)) throw new Error('Usage: apa-setup inspect|page|apply|export [--repo-root path] [--file path] [--output path] [--overwrite] [--host-profile path] [--ledger path]');
+  const result = { command, repoRoot: process.cwd(), overwrite: rest.includes('--overwrite') };
+  if (rest.filter(item => item === '--overwrite').length > 1) throw new Error('APA_SETUP_ARGUMENT_INVALID');
+  rest = rest.filter(item => item !== '--overwrite');
   for (let index = 0; index < rest.length; index += 2) {
     const key = { '--repo-root': 'repoRoot', '--file': 'file', '--output': 'output', '--capability': 'capability', '--host-profile': 'hostProfile', '--ledger': 'ledger' }[rest[index]];
     if (!key || !rest[index + 1] || rest[index + 1].startsWith('--') || result[key] && key !== 'repoRoot') throw new Error('APA_SETUP_ARGUMENT_INVALID');
     result[key] = rest[index + 1];
   }
   if (result.file && command !== 'apply' || result.output && !['page', 'export'].includes(command)) throw new Error('APA_SETUP_ARGUMENT_INVALID');
+  // Replacing an existing backup needs the user's answer, passed explicitly.
+  if (result.overwrite && (command !== 'export' || !result.output)) throw new Error('APA_SETUP_ARGUMENT_INVALID');
   if (result.hostProfile && !['inspect', 'page'].includes(command)) throw new Error('APA_SETUP_ARGUMENT_INVALID');
   if (result.ledger && (command !== 'page' || !result.hostProfile)) throw new Error('APA_SETUP_ARGUMENT_INVALID');
   if (result.capability && (command !== 'inspect' || !['query', 'reading'].includes(result.capability))) throw new Error('APA_SETUP_ARGUMENT_INVALID');
@@ -36,8 +40,10 @@ try {
     if (args.output) {
       const output = path.resolve(args.output);
       fs.mkdirSync(path.dirname(output), { recursive: true });
-      fs.writeFileSync(output, `${JSON.stringify(result, null, 2)}\n`, { flag: 'wx' });
-      result = { output };
+      const replaced = fs.existsSync(output);
+      if (replaced && !args.overwrite) throw new Error(`APA_SETUP_EXPORT_EXISTS: ${output}`);
+      fs.writeFileSync(output, `${JSON.stringify(result, null, 2)}\n`, { flag: args.overwrite ? 'w' : 'wx' });
+      result = { output, replaced };
     }
   }
   if (args.command === 'page') {

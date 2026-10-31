@@ -88,7 +88,7 @@ export function buildConfiguredReadingInstructions(writingSkills = {}, { instruc
 }
 
 /** Required entry for NEW configured readings. Reopening a run uses its owned binding, never this factory. */
-export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext, supportedModelPairs, instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, ...options } = {}) {
+export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext, hostProfile, supportedModelPairs, instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, ...options } = {}) {
   if (sessionContext !== undefined) {
     if (!sessionContext || typeof sessionContext !== 'object' || Array.isArray(sessionContext)
       || sessionContext.effort !== undefined && sessionContext.reasoning_effort !== undefined && sessionContext.effort !== sessionContext.reasoning_effort) throw new Error('APA_CONFIGURED_SESSION_CONTEXT_INVALID');
@@ -118,8 +118,15 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
   // A caller-supplied role for these keys must already be translation; anything else is a conflict, not something to overwrite.
   if (Object.entries(options.taskBindings ?? {}).some(([key, task]) => translationKeys.includes(key) && task?.role !== undefined && task.role !== 'translation')) throw new Error('READING_FIRST_TRANSLATION_ROLE_REQUIRED');
   const taskBindings = options.taskBindings && Object.fromEntries(Object.entries(options.taskBindings).map(([key, task]) => [key, translationKeys.includes(key) ? { ...task, role: 'translation' } : task]));
+  const manual = hostProfile?.host === loaded.config.host?.name ? hostProfile?.capabilities?.manual_compaction : null;
+  const evidence = structuredClone(manual?.evidence ?? []);
+  const source = evidence.filter(item => typeof item.source === 'string' && item.source.trim() && typeof item.reference === 'string' && item.reference.trim())
+    .map(item => item.source + ': ' + item.reference).join('; ');
+  const manualCompaction = { host: loaded.config.host?.name ?? null, status: manual?.status ?? 'unknown',
+    available: manual?.status === 'detected' && manual.scope === 'current-session' && typeof manual.method === 'string' && !!manual.method.trim() && !!source,
+    method: manual?.method ?? null, source: source || null, scope: manual?.scope ?? 'unknown', evidence };
   const runControl = createReadingFirstRunControl({ ...options, ...(taskBindings ? { taskBindings } : {}), ...(loaded.config.host ? { host: loaded.config.host } : {}), mainSession, configuredSetup, writingMode: 'source-translation',
-    compactionPolicy: COMPACTION_POLICY,
+    compactionPolicy: COMPACTION_POLICY, manualCompaction,
     roleReplyContract: options.roleReplyContract === undefined ? getRoleReplyContract() : options.roleReplyContract,
     ...(instructionProfile === 'configured-reading-2.0' ? { presentationProfile: 'reading-editor-1.3' } : {}),
     firstWritingLanguage: options.sourceLanguage, presentationMode: resolvedConfig.reading.presentation_mode, handoffProfile: SCIENCE_INDEX_PROFILE });

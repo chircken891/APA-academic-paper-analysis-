@@ -116,3 +116,106 @@ test('a previously saved successful compaction invalidates an older usage readin
   assert.equal(result.record.observation.context.status, 'unknown');
   assert.equal(result.record.observation.context.reason, 'measurement-precedes-compaction');
 });
+
+test('1.1 uses its frozen manual entry when the host cannot identify the session or measure context', () => {
+  const result = assess('before-writer', {
+    sessionId: undefined, observation: { observed_at: new Date(now).toISOString() },
+    policy: { profile: 'boundary-reminders-1.1', manual_compaction: { available: true, method: '/compact', source: 'Claude Code host docs' } },
+  });
+  assert.equal(result.action, 'await-user');
+  assert.equal(result.record.reason, 'before-writer-context-unknown');
+  assert.equal(result.record.observation.context.status, 'unknown');
+  assert.equal(result.record.observation.session_id, null);
+  assert.match(result.message, /\/compact/);
+});
+
+test('1.0 keeps the exact unavailable-entry decision even if a newer frozen entry is supplied', () => {
+  const result = assess('before-writer', { sessionId: undefined, observation: undefined,
+    policy: { profile: 'boundary-reminders-1.0', manual_compaction: { available: true, method: '/compact', source: 'host docs' } } });
+  assert.equal(api.compactionEnabled({ compaction_policy: { profile: 'boundary-reminders-1.0' } }), true);
+  assert.equal(result.action, 'continue');
+  assert.equal(JSON.stringify(result.record), '{"status":"skipped","reason":"manual-compaction-unavailable","observation":{"session_id":null,"observed_at":null,"context":{"status":"unknown","reason":"session-unavailable-or-mismatched"},"manual_compaction":{"available":false,"method":null,"source":null},"last_compaction":null},"recorded_at":"2026-10-30T08:00:00.000Z"}');
+});
+
+test('1.1 retains a current unavailable entry and rejects unrelated automatic compaction evidence', () => {
+  const policy = { profile: 'boundary-reminders-1.1', manual_compaction: { available: true, method: '/compact', source: 'host docs' } };
+  const unavailable = assess('before-writer', { policy, observation: { manual_compaction: { available: false, source: 'current host confirms no entry' } } });
+  assert.equal(unavailable.record.reason, 'manual-compaction-unavailable');
+  const observed = { ...observation(), manual_compaction: undefined, context: undefined,
+    last_compaction: { id: 'auto', session_id: 'main-session', status: 'succeeded', occurred_at: new Date(now - 500).toISOString(), source: 'host event' } };
+  assert.equal(assess('before-writer', { policy, observation: observed }).action, 'continue');
+  observed.last_compaction.session_id = 'different-session';
+  const unrelated = assess('before-writer', { policy, observation: observed });
+  assert.equal(unrelated.action, 'await-user');
+  assert.equal(unrelated.record.observation.last_compaction, null);
+  observed.observed_at = new Date(now - 61000).toISOString();
+  observed.context = observation().context;
+  const stale = assess('before-writer', { policy, observation: observed });
+  assert.equal(stale.record.observation.context.status, 'unknown');
+  assert.equal(stale.record.observation.last_compaction, null);
+});
+
+test('1.2 requires a recommendation at every saved boundary regardless of entry, usage or earlier compaction', () => {
+  const policy = { profile: 'boundary-reminders-1.2' };
+  for (const id of ['evidence-accepted', 'methods-results-accepted', 'before-writer', 'before-review']) {
+    const small = observation(); small.context.tokens = 10;
+    const unavailable = observation(); unavailable.manual_compaction = { available: false };
+    const compacted = observation(); delete compacted.context;
+    compacted.last_compaction = { id: 'auto', session_id: 'main-session', status: 'succeeded', occurred_at: new Date(now - 500).toISOString(), source: 'host event' };
+    for (const changes of [
+      { observation: undefined, sessionId: undefined },
+      { observation: unavailable },
+      { observation: small, progress: {} },
+      { observation: compacted },
+      { observation: undefined, history: { earlier: { status: 'completed', prompted_at: startedAt } } },
+    ]) {
+      const result = assess(id, { policy, ...changes });
+      assert.equal(result.action, 'await-user', id);
+      assert.equal(result.record.reason, 'boundary-reminder-required');
+      assert.match(result.message, /推荐.*压缩/);
+      assert.match(result.message, /跳过并继续/);
+      assert.throws(() => api.assertCompactionSettled({ [id]: result.record }, id), /APA_COMPACTION_AWAITING_USER/);
+      if (!changes.observation?.manual_compaction?.available) assert.match(result.message, /入口.*未.*核实/);
+    }
+  }
+});
+
+test('1.2 waits for an explicit decision and preserves verified and unverified continuation outcomes', () => {
+  const policy = { profile: 'boundary-reminders-1.2' };
+  const first = assess('before-writer', { policy, observation: undefined });
+  assert.equal(first.action, 'await-user');
+  const waiting = { policy, history: { 'before-writer': first.record } };
+  const repeated = assess('before-writer', waiting);
+  assert.equal(repeated.action, 'await-user'); assert.equal(repeated.message, null); assert.equal(repeated.record, null);
+  const skipped = assess('before-writer', { ...waiting, userDecision: 'skip' });
+  assert.equal(skipped.action, 'continue'); assert.equal(skipped.record.reason, 'user-skipped');
+  const continued = assess('before-writer', { ...waiting, userDecision: 'continue' });
+  assert.equal(continued.record.reason, 'continued-without-observed-compaction'); assert.equal(continued.record.compaction_verified, false);
+  const value = observation(); value.observed_at = new Date(now + 2000).toISOString();
+  value.last_compaction = { id: 'manual', session_id: 'main-session', status: 'succeeded', occurred_at: new Date(now + 1000).toISOString(), source: 'host event' };
+  const completed = assess('before-writer', { ...waiting, userDecision: 'continue', observation: value, now: now + 2000 });
+  assert.equal(completed.record.status, 'completed'); assert.equal(completed.record.compaction_verified, true);
+  assert.equal(assess('before-writer', { policy, history: { 'before-writer': skipped.record } }).record, null);
+});
+
+test('1.2 supplies a copyable stage-specific prompt with the actual recovery anchors', () => {
+  const continuation = { run_id: 'actual-run', paper_id: 'actual-paper', run_root: '/vault/run',
+    checkpoint_path: '/vault/run/control/decision.json', binding: { deadline: '2099-01-01T00:00:00Z', max_total_calls: 14, max_calls: 8,
+      role_model_policy: { main_session: { model: 'frozen-model', reasoning_effort: 'high' } } }, calls_used: 6,
+    sources: [{ path: '/vault/Raw/paper.pdf', sha256: 'sha256:actual-source' }],
+    accepted_artifacts: [{ role: 'evidence', path: '/vault/run/science/evidence.json', sha256: 'sha256:actual-evidence' }],
+    candidate_paths: ['Wiki/sources/paper.en.md'] };
+  const stages = { 'evidence-accepted': /研究设计.*Methods.*Results/s, 'methods-results-accepted': /方法.*结果.*数值/s,
+    'before-writer': /综合.*Writer.*Translation/s, 'before-review': /候选.*整体审查.*一次局部复核/s };
+  for (const [id, focus] of Object.entries(stages)) {
+    const result = assess(id, { policy: { profile: 'boundary-reminders-1.2' }, continuation });
+    assert.match(result.compaction_prompt, focus);
+    for (const value of ['actual-run', 'actual-paper', '/vault/run/control/decision.json', '2099-01-01', 'frozen-model', '/vault/Raw/paper.pdf', 'sha256:actual-evidence']) assert.ok(result.compaction_prompt.includes(value), value);
+    assert.match(result.compaction_prompt, /预算.*截止时间.*模型/s);
+    assert.match(result.compaction_prompt, /证据.*限制/s);
+    assert.ok(result.message.includes(result.compaction_prompt));
+    assert.equal(result.record.compaction_prompt, result.compaction_prompt);
+    const continued = assess(id, { policy: { profile: 'boundary-reminders-1.2' }, history: { [id]: result.record }, userDecision: 'skip' });
+    assert.equal(continued.record.compaction_prompt, result.compaction_prompt);
+  }
+});

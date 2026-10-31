@@ -49,10 +49,10 @@ function common(id, row) {
 function claudeCode(id, row, profile, savedHost) {
   const shared = common(id, row);
   if (shared) return shared;
-  if (id === 'manual_compaction') return result('needs-user-action', '压缩需用户在会话中执行 /compact；APA 在合格边界提供现成文本，压缩后的运行状态可由可选的 SessionStart 钩子自动重新注入（安装前预览，经确认才写入）。', [
-    step('apa', '在 APA 合格边界由 Controller 输出 /compact 保留说明（运行根、已接收结果、checkpoint 路径、下一步等）。', { verify: '边界处看到完整的保留说明文本。' }),
+  if (id === 'manual_compaction') return result('needs-user-action', '压缩需用户在 Claude Code 会话中执行 /compact；新 APA 1.2 运行冻结该宿主档案中已检测且有依据的入口，四个安全边界保存状态后均推荐压缩，由用户决定压缩或跳过。压缩后的运行状态可由可选的 SessionStart 钩子自动重新注入（安装前预览，经确认才写入）。', [
+    step('apa', '在 APA 安全边界由 Controller 输出可复制的阶段压缩提示词，包含可用的运行身份、预算期限和恢复路径，并要求保留阶段结果、下一步、关键证据与限制；角色模型策略按绑定路径回读。', { verify: '边界处看到完整的保留说明文本。' }),
     step('user', '把 Controller 给出的文本粘贴到会话并执行；压缩后若上下文缺少运行状态，再按 checkpoint 路径恢复。', { command: '/compact 保留 APA 运行 <run_id>：…', verify: '压缩完成后询问当前运行的下一步，确认运行状态仍在。' }),
-    step('script', '可选：预览把只读钩子（SessionStart、matcher compact，运行 scripts/setup/apa-compact-context.mjs，命令经 $CLAUDE_PROJECT_DIR 定位，超时 10 秒）加入已被 git 忽略的项目 .claude/settings.json；确认后用 apply --confirm 写入，写前备份，已有钩子与其他键保持不变。', { command: 'node scripts/setup/apa-host-settings.mjs plan --host claude-code --capability compact_hook --scope project', scope: 'project-settings', persistent: true, verify: '真实压缩后的注入效果为 not_run，须在下次获批运行中观察；新会话后确认 .claude/settings.json 的 hooks.SessionStart 含 matcher compact。' }),
+    step('script', '可选：预览把只读钩子（SessionStart、matcher compact，运行 scripts/setup/apa-compact-context.mjs，命令经 $CLAUDE_PROJECT_DIR 定位，超时 10 秒）加入已被 git 忽略的项目 .claude/settings.json；确认后用 apply --confirm 写入，不保留备份，已有钩子与其他键保持不变。', { command: 'node scripts/setup/apa-host-settings.mjs plan --host claude-code --capability compact_hook --scope project', scope: 'project-settings', persistent: true, verify: '真实压缩后的注入效果为 not_run，须在下次获批运行中观察；新会话后确认 .claude/settings.json 的 hooks.SessionStart 含 matcher compact。' }),
   ]);
   if (id === 'science_recovery') {
     // Achieved only when the saved host segment, which new runs actually freeze, carries the handle; a detected profile alone is not enough.
@@ -73,8 +73,8 @@ function claudeCode(id, row, profile, savedHost) {
     return result('needs-user-action', `阈值由用户选择并执行，APA 不预设数值；以下方式依据官方文档（未实测）。${incompatible(row)}${value === null ? '尚未给出有效数值，命令保留 <N>。' : ''}`, [
       step('user', `在会话中输入 /autocompact 立即生效并存入用户设置。${scale}桌面端是否支持该命令待用户试一次确认。`, { command: fill('/autocompact <N>', value), scope: 'current-session', persistent: true, range, verify: '输入后宿主应确认已设置；不确认则改用下一种方式。' }),
       step('user', `单次启动不写设置。${scale}`, { command: fill('claude --autocompact <N>', value), scope: 'new-session', range, verify: '以官方文档或本机 `claude --help` 核实该参数。' }),
-      step('script', `只对本项目持久：脚本预览、备份后，经确认写入已被 git 忽略的 .claude/settings.json 的 autoCompactWindow；新会话生效。${scale}`, { command: fill('node scripts/setup/apa-host-settings.mjs plan --host claude-code --capability threshold_compaction --scope project --tokens <N>', value), scope: 'project-settings', persistent: true, range, verify: '新开会话后检查 autoCompactWindow 已为所选值；优先级低于环境变量 CLAUDE_CODE_AUTO_COMPACT_WINDOW（2.1.278 只接受纯数字 token）与 /autocompact。' }),
-      step('script', '对所有项目持久：同样经脚本预览、备份、确认后写入 ~/.claude/settings.json 的 autoCompactWindow；影响所有项目，不作为默认选择。', { command: fill('node scripts/setup/apa-host-settings.mjs plan --host claude-code --capability threshold_compaction --scope user --tokens <N>', value), scope: 'user-settings', persistent: true, range, verify: '确认用户设置中该键只在你明确同意的值上。' }),
+      step('script', `只对本项目持久：脚本预览后，经确认写入已被 git 忽略的 .claude/settings.json 的 autoCompactWindow；新会话生效。${scale}`, { command: fill('node scripts/setup/apa-host-settings.mjs plan --host claude-code --capability threshold_compaction --scope project --tokens <N>', value), scope: 'project-settings', persistent: true, range, verify: '新开会话后检查 autoCompactWindow 已为所选值；优先级低于环境变量 CLAUDE_CODE_AUTO_COMPACT_WINDOW（2.1.278 只接受纯数字 token）与 /autocompact。' }),
+      step('script', '对所有项目持久：同样经脚本预览、确认后写入 ~/.claude/settings.json 的 autoCompactWindow；影响所有项目，不作为默认选择。', { command: fill('node scripts/setup/apa-host-settings.mjs plan --host claude-code --capability threshold_compaction --scope user --tokens <N>', value), scope: 'user-settings', persistent: true, range, verify: '确认用户设置中该键只在你明确同意的值上。' }),
     ]);
   }
   return null;
@@ -84,8 +84,8 @@ function codex(id, row, profile) {
   if (id === 'science_recovery') return result('needs-apa-change', 'APA 的配置 host 请求只在档案声明 dispatch.result_handle 时提取任务句柄，否则把 result_bindings.agent_id 写为 null；Codex 的真实任务句柄绑定补进代码前不能续接科学阶段。', [
     step('apa', '让配置 host 请求写入 Codex 派发返回的真实任务句柄到 result_bindings.agent_id；取不到时记为 null 并在运行记录说明。', { scope: 'new-session', verify: '新配置化运行的请求记录中 result_bindings.agent_id 为真实句柄；原宿主可访问时可续接。' }),
   ]);
-  if (id === 'manual_compaction') return result('needs-user-action', '阶段压缩需用户在 Codex 中使用手动压缩入口；APA 在合格边界提供保留说明文本，入口须先核实。', [
-    step('apa', '在 APA 合格边界由 Controller 输出保留说明（运行根、已接收结果、checkpoint 路径、下一步等）。', { verify: '边界处看到完整的保留说明文本。' }),
+  if (id === 'manual_compaction') return result('needs-user-action', '阶段压缩由用户使用 Codex 已核实的手动入口执行；新 APA 1.2 运行仅冻结该宿主自身有依据的入口，在四个安全边界保存状态后均推荐压缩，由用户决定压缩或跳过；入口未知时说明未知。', [
+    step('apa', '在 APA 安全边界由 Controller 输出可复制的阶段压缩提示词，包含可用的运行身份、预算期限和恢复路径，并要求保留阶段结果、下一步、关键证据与限制；角色模型策略按绑定路径回读。', { verify: '边界处看到完整的保留说明文本。' }),
     step('user', '在当前 Codex 宿主确认手动压缩入口（如 /compact）可用，并把文本交给它；入口名称以本机帮助为准。', { command: '/compact', verify: '压缩后询问当前运行的下一步，确认运行状态仍在。' }),
   ]);
   if (id === 'threshold_compaction') {
@@ -95,7 +95,7 @@ function codex(id, row, profile) {
     const scale = `数值由用户选择，不超过检测到的模型窗口${Number.isInteger(window) ? `（${window}）` : '（尚未检测到）'}；窗口为 258400 的模型余量很小；越小压缩越早、保留的上下文越少。现有桌面会话不受影响，须新开会话。`;
     return result('needs-user-action', `阈值由用户选择并执行，APA 不预设数值；键名有效性须先用 codex --strict-config 核验，核验前不标为已达成。${incompatible(row)}${value === null ? '尚未给出有效数值，命令保留 <N>。' : ''}`, [
       step('user', `单次启动传入配置。${scale}`, { command: fill('codex -c model_auto_compact_token_limit=<N>', value), scope: 'new-session', range, verify: '加 --strict-config 启动，键名无效会报错；有效后再依赖该方式。' }),
-      step('script', `持久：脚本预览、备份后，经确认写入 ~/.codex/config.toml 的 model_auto_compact_token_limit。${scale}`, { command: fill('node scripts/setup/apa-host-settings.mjs plan --host codex --capability threshold_compaction --scope user --tokens <N>', value), scope: 'user-settings', persistent: true, range, verify: '新开会话后检查该键为所选值，并以 --strict-config 启动无报错。' }),
+      step('script', `持久：脚本预览后，经确认写入 ~/.codex/config.toml 的 model_auto_compact_token_limit。${scale}`, { command: fill('node scripts/setup/apa-host-settings.mjs plan --host codex --capability threshold_compaction --scope user --tokens <N>', value), scope: 'user-settings', persistent: true, range, verify: '新开会话后检查该键为所选值，并以 --strict-config 启动无报错。' }),
     ]);
   }
   return common(id, row);

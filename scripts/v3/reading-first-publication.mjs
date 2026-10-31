@@ -1,6 +1,6 @@
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import { readFileSync, lstatSync, realpathSync } from 'node:fs';
-import { resolve, dirname, join } from 'node:path';
+import { resolve, dirname, join, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual as same } from 'node:util';
 import YAML from 'yaml';
@@ -14,6 +14,7 @@ import { captureReadingFirstPublicationSource, createExternalReadingFirstPublica
   getReadingFirstRuntimePublicationToolBindings, inspectReadingFirstPublicationSource,
   restoreReadingFirstPublicationSource } from './reading-first-runtime.mjs';
 import { createPhase22ContractValidator } from './phase22-contract-loader.mjs';
+import { readOwnedArtifact } from './owned-artifact-store.mjs';
 
 const records = new WeakMap();
 let contractValidator;
@@ -142,10 +143,21 @@ async function baseFor(root, currentPolicy = false) {
   return { snapshot, generation: clone(snapshot.generation), index: clone(snapshot.index),
     files: new Map(snapshot.generation.objects.map(row => [row.path, regularBytes(root, row.path)])) };
 }
-function resourceBindings(data, resources) {
+async function integratorVisualResources(data) {
+  if (data.recipe.schema_version !== 'reading-first-publication-source-1.0') return [];
+  const artifacts = await Promise.all(data.recipe.scientific_input.role_artifacts.map(artifactId =>
+    readOwnedArtifact({ artifactRoot: data.recipe.artifact_root, artifactId })));
+  const integrated = artifacts.filter(row => row?.receipt.role === 'integration' && row.receipt.run_id === data.identity.run_id);
+  if (integrated.length !== 1) return [];
+  const value = JSON.parse(integrated[0].bytes);
+  return Array.isArray(value.visual_resources) ? value.visual_resources : [];
+}
+
+async function resourceBindings(data, resources) {
   if (!Array.isArray(resources)) fail('RF_PUBLICATION_RESOURCES_REQUIRED');
   const registered = [...data.sources, ...data.presentation_assets, ...data.enrichment_sources];
   const paths = new Set(), result = [];
+  let ownedVisuals;
   for (const resource of resources) {
     safePath(resource.path);
     if (paths.has(resource.path) || !/^(Raw|Figures)\//.test(resource.path) || typeof resource.source_path !== 'string') fail('RF_PUBLICATION_RESOURCE_INVALID');
@@ -153,13 +165,22 @@ function resourceBindings(data, resources) {
     const found = registered.find(row => resolve(row.path) === resolve(resource.source_path)
       && row.sha256 === resource.sha256 && row.byte_length === resource.byte_length);
     if (!found) {
-      // Integrator-owned visual metadata is also frozen into the reviewed candidate.
-      // It binds the image bytes and the exact registered PDF from which they came.
-      const visuals = (data.candidate.visual_resources ?? []).filter(row => row.path === resource.path
+      // Use the reviewed catalogue or its accepted Integrator artifact to bind
+      // image bytes and the exact registered parent PDF without changing the candidate.
+      let visuals = (data.candidate.visual_resources ?? []).filter(row => row.path === resource.path
         && row.sha256 === resource.sha256 && row.byte_length === resource.byte_length);
+      if (!visuals.length) {
+        ownedVisuals ??= await integratorVisualResources(data);
+        const shown = (data.candidate.visual_resources ?? []).find(row => row.path === resource.path);
+        visuals = ownedVisuals.filter(row => row.path === resource.path && row.sha256 === resource.sha256
+          && row.byte_length === resource.byte_length && shown?.source_id === row.source_id);
+      }
       const visual = visuals.length === 1 ? visuals[0] : null;
       const parent = visual && data.sources.find(row => row.id === visual.source_id && row.sha256 === visual.source_sha256);
-      const parentResource = parent && resources.find(row => row.path === visual.source_path
+      const parentTarget = parent && typeof visual.source_path === 'string' && isAbsolute(visual.source_path)
+        && resolve(visual.source_path) === resolve(parent.path)
+        ? (data.presentation.sources ?? []).find(row => row.id === parent.id)?.path : visual?.source_path;
+      const parentResource = parent && resources.find(row => row.path === parentTarget
         && typeof row.source_path === 'string' && resolve(row.source_path) === resolve(parent.path)
         && row.sha256 === parent.sha256 && row.byte_length === parent.byte_length);
       if (!parentResource) fail('RF_PUBLICATION_RESOURCE_UNREGISTERED', { path: resource.path });
@@ -192,7 +213,7 @@ export async function buildReadingFirstPublicationReview({ source, vaultRoot, ge
   const policy = data.recipe.binding?.configured_setup?.knowledge_registry;
   const currentPolicy = policy?.policy === 'current-shared-nodes-1.0' && resolve(policy.vault_root) === root;
   const base = await baseFor(root, currentPolicy);
-  const options = { vaultRoot: root, generation, evidenceMode, resources: resourceBindings(data, resources),
+  const options = { vaultRoot: root, generation, evidenceMode, resources: await resourceBindings(data, resources),
     ...(knowledgeMetadataMigrations === undefined ? {} : { knowledgeMetadataMigrations: clone(knowledgeMetadataMigrations) }) };
   return buildReview({ source, data, options, base, preimages: null });
 }
@@ -408,7 +429,7 @@ export async function rebuildRegisteredReadingFirstReview(recipe, proof) {
   if (recipe?.schema_version !== 'reading-first-publication-registration-1.0') fail('RF_PUBLICATION_RECIPE_INVALID');
   assertRegisteredProof(recipe, proof);
   const source = await restoreReadingFirstPublicationSource(recipe.source), data = await inspectReadingFirstPublicationSource(source);
-  const options = { ...clone(recipe.options), resources: resourceBindings(data, recipe.options.resources) };
+  const options = { ...clone(recipe.options), resources: await resourceBindings(data, recipe.options.resources) };
   return buildReview({ source, data, options,
     base: { snapshot: null, generation: recipe.base.generation, index: recipe.base.index, files: decodeFiles(recipe.base.files),
       carryHistoricalDocuments: recipe.base.carryHistoricalDocuments === true },
@@ -484,7 +505,7 @@ export async function prepareExternalReviewedReadingFirstPublication({
   let source = createExternalReadingFirstPublicationSource(sourceRecipe);
   let data = await inspectReadingFirstPublicationSource(source);
   const base = await baseFor(root);
-  const options = { vaultRoot: root, generation, evidenceMode, resources: resourceBindings(data, resources) };
+  const options = { vaultRoot: root, generation, evidenceMode, resources: await resourceBindings(data, resources) };
   const resultReview = await buildReview({ source, data, options, base, preimages: null });
   source = createExternalReadingFirstPublicationSource(sourceRecipe);
   data = await inspectReadingFirstPublicationSource(source);

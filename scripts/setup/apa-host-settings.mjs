@@ -1,9 +1,9 @@
-import { closeSync, constants, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Previews, backs up and (only with --confirm) writes one host setting.
+// Previews and (only with --confirm) writes one host setting; it keeps no backup of the file it changes.
 // threshold_compaction: Claude Code "autoCompactWindow" in settings.json; Codex top-level "model_auto_compact_token_limit"
 // in config.toml. Nothing here chooses a number: --tokens is required and is never defaulted or clamped.
 // compact_hook: adds the SessionStart/compact entry that runs scripts/setup/apa-compact-context.mjs to the Claude Code
@@ -24,7 +24,7 @@ const hosts = {
   'claude-code': { key: 'autoCompactWindow', ext: 'json', scopes: ['project', 'user'] },
   codex: { key: CODEX_KEY, ext: 'toml', scopes: ['user'] },
 };
-const valueFlags = new Set(['host', 'capability', 'scope', 'tokens', 'settings-file', 'backup-dir', 'backup']);
+const valueFlags = new Set(['host', 'capability', 'scope', 'tokens', 'settings-file']);
 const booleanFlags = new Set(['confirm']);
 
 export class HostSettingsError extends Error {
@@ -37,7 +37,7 @@ export class HostSettingsError extends Error {
 
 function parseArguments(argv) {
   const [command, ...rest] = argv;
-  if (!['plan', 'apply', 'restore'].includes(command)) throw new HostSettingsError('APA_HOST_SETTINGS_UNKNOWN_COMMAND', `Unknown command ${command ?? '(none)'}; use plan, apply or restore.`);
+  if (!['plan', 'apply'].includes(command)) throw new HostSettingsError('APA_HOST_SETTINGS_UNKNOWN_COMMAND', `Unknown command ${command ?? '(none)'}; use plan or apply.`);
   const options = {};
   for (let index = 0; index < rest.length; index += 1) {
     const argument = rest[index];
@@ -322,34 +322,6 @@ function editToml(source, key, tokens) {
   return { before: null, text: bom + raw.slice(0, at) + line + eol + (at === 0 ? eol : '') + raw.slice(at), change: 'add-key' };
 }
 
-function backupStamp(date) {
-  const two = number => String(number).padStart(2, '0');
-  return `${date.getFullYear()}${two(date.getMonth() + 1)}${two(date.getDate())}-${two(date.getHours())}${two(date.getMinutes())}${two(date.getSeconds())}-${String(date.getMilliseconds()).padStart(3, '0')}`;
-}
-
-const backupName = (host, date) => `host-settings-${host.name}-${backupStamp(date)}.${host.ext}`;
-
-// One helper for plan and apply. dryRun returns the first free name; otherwise copies with COPYFILE_EXCL so an
-// existing backup is never replaced, retrying the next millisecond name on a clash.
-function claimBackup(host, target, backupDir, { dryRun = false } = {}) {
-  if (!dryRun) mkdirSync(backupDir, { recursive: true });
-  const now = new Date();
-  for (let attempt = 0; attempt < 5000; attempt += 1) {
-    const candidate = join(backupDir, backupName(host, new Date(now.getTime() + attempt)));
-    if (dryRun) {
-      if (!existsSync(candidate)) return candidate;
-      continue;
-    }
-    try {
-      copyFileSync(target, candidate, constants.COPYFILE_EXCL);
-      return candidate;
-    } catch (cause) {
-      if (cause.code !== 'EEXIST') throw cause;
-    }
-  }
-  throw new HostSettingsError('APA_HOST_SETTINGS_BACKUP_NAME_EXHAUSTED', 'No free backup file name was found; nothing was written.');
-}
-
 function writeAtomic(target, content) {
   mkdirSync(dirname(target), { recursive: true });
   const temporary = `${target}.apa-${process.pid}.tmp`;
@@ -388,7 +360,6 @@ const notesFor = host => isHookHost(host)
 
 function buildPlan(host, options) {
   const target = resolveTarget({ host: host.name, scope: host.scope, settingsFile: options['settings-file'] });
-  const backupDir = resolve(options['backup-dir'] ?? join(defaultRepoRoot, 'config', 'backups', host.name === 'claude-code' ? 'claude' : host.name));
   const raw = readTarget(target);
   const edit = isHookHost(host) ? editHook : host.ext === 'json' ? editJson : editToml;
   const base = {
@@ -400,20 +371,18 @@ function buildPlan(host, options) {
     result = edit(raw, host.key, host.tokens);
   } catch (cause) {
     if (!(cause instanceof HostSettingsError && cause.fileProblem)) throw cause;
-    return { ...base, before: { exists: true, value: null }, after: null, change: null, backup_path: null, problem: { code: cause.code, message: cause.message }, error: cause };
+    return { ...base, before: { exists: true, value: null }, after: null, change: null, problem: { code: cause.code, message: cause.message }, error: cause };
   }
-  const changed = result.change !== 'unchanged';
   return {
     ...base,
     before: { exists: raw !== null, value: result.before },
     after: { exists: true, value: isHookHost(host) ? hookEntry() : host.tokens },
     change: result.change,
-    backup_path: raw !== null && changed ? claimBackup(host, target, backupDir, { dryRun: true }) : null,
-    content: result.text, raw, backupDir,
+    content: result.text,
   };
 }
 
-const publicPlan = ({ content, raw, backupDir, error, ...plan }) => plan;
+const publicPlan = ({ content, error, ...plan }) => plan;
 
 // Reads the written file back and reports whether it now holds what was requested.
 function readBack(host, target) {
@@ -429,39 +398,20 @@ function readBack(host, target) {
 
 export function execute(argv) {
   const { command, options } = parseArguments(argv);
-  if (command === 'restore') return restore(options);
   const host = validateHost(options, { needTokens: options.capability !== 'compact_hook', needCapability: true });
   const plan = buildPlan(host, options);
   if (command === 'plan') return { exitCode: plan.problem ? 1 : 0, output: publicPlan(plan) };
   if (!options.confirm) throw new HostSettingsError('APA_HOST_SETTINGS_CONFIRM_REQUIRED', 'apply writes a settings file and needs --confirm; run plan first and review the change.');
   if (plan.error) throw plan.error;
   if (plan.change === 'unchanged') return { exitCode: 0, output: { applied: false, changed: false, ...publicPlan(plan), verified: readBack(host, plan.target) } };
-  const backupPath = plan.raw !== null ? claimBackup(host, plan.target, plan.backupDir) : null;
   writeAtomic(plan.target, plan.content);
   let verified;
   try {
     verified = readBack(host, plan.target);
   } catch (cause) {
-    throw new HostSettingsError('APA_HOST_SETTINGS_VERIFY_FAILED', `The file was written but could not be read back (${cause.message}); restore it from the backup ${backupPath ?? '(none: the file did not exist before)'}.`);
+    throw new HostSettingsError('APA_HOST_SETTINGS_VERIFY_FAILED', `The file was written but could not be read back (${cause.message}); check it by hand.`);
   }
-  return { exitCode: verified ? 0 : 1, output: { applied: true, changed: true, ...publicPlan({ ...plan, backup_path: backupPath }), verified } };
-}
-
-function restore(options) {
-  const host = validateHost(options, { needTokens: false, needCapability: false });
-  if (!options.confirm) throw new HostSettingsError('APA_HOST_SETTINGS_CONFIRM_REQUIRED', 'restore overwrites the settings file and needs --confirm.');
-  if (!options.backup) throw new HostSettingsError('APA_HOST_SETTINGS_BACKUP_REQUIRED', '--backup <path> is required for restore.');
-  const backup = resolve(options.backup);
-  if (!existsSync(backup) || !statSync(backup).isFile()) throw new HostSettingsError('APA_HOST_SETTINGS_BACKUP_MISSING', `Backup file ${backup} does not exist.`);
-  const name = basename(backup);
-  if (!name.startsWith(`host-settings-${host.name}-`) || !name.endsWith(`.${host.ext}`)) {
-    throw new HostSettingsError('APA_HOST_SETTINGS_BACKUP_NOT_RECOGNIZED', `${name} is not a host-settings backup for ${host.name} (host-settings-${host.name}-*.${host.ext}).`);
-  }
-  const target = resolveTarget({ host: host.name, scope: host.scope, settingsFile: options['settings-file'] });
-  const backupDir = resolve(options['backup-dir'] ?? join(defaultRepoRoot, 'config', 'backups', host.name === 'claude-code' ? 'claude' : host.name));
-  const replaced = existsSync(target) ? claimBackup(host, target, backupDir) : null;
-  writeAtomic(target, readFileSync(backup));
-  return { exitCode: 0, output: { restored: true, target, from: backup, replaced_file_backup: replaced } };
+  return { exitCode: verified ? 0 : 1, output: { applied: true, changed: true, ...publicPlan(plan), verified } };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(scriptPath)) {

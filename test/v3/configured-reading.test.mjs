@@ -55,7 +55,7 @@ test('new configured runs require a Controller decision while legacy bindings ke
   const request = createConfiguredScienceRequest({ prepared, role: 'methods', dispatchContext: fixture.broker.dispatchContext,
     task: { task_name: 'unmanaged_methods', native_path: 'native/unmanaged-methods.json' } });
   assert.throws(() => getConfiguredReadingDispatchArguments({ prepared, request }), /APA_COMPACTION_CONTROLLER_REQUIRED/);
-  assert.equal(prepared.runControl.reading_first_binding.compaction_policy.profile, 'boundary-reminders-1.0');
+  assert.equal(prepared.runControl.reading_first_binding.compaction_policy.profile, 'boundary-reminders-1.2');
   assert.equal(prepared.compactionControlBindings.length, 4);
   const legacy = structuredClone(prepared);
   delete legacy.runControl.reading_first_binding.compaction_policy;

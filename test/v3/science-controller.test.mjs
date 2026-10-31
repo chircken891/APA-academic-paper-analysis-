@@ -34,7 +34,10 @@ test('new science boundaries block dispatch until evaluated and retain the pause
   let controller = await createScienceController(f.options);
   await acceptCompactionBatch(f, controller);
   await assert.rejects(() => prepareScienceRequests({ controller }), /APA_COMPACTION_BOUNDARY_REQUIRED/);
-  const skipped = await scienceApi.handleScienceCompactionBoundary({ controller });
+  const firstPause = await scienceApi.handleScienceCompactionBoundary({ controller });
+  assert.equal(firstPause.action, 'await-user');
+  await assert.rejects(() => prepareScienceRequests({ controller }), /APA_COMPACTION_AWAITING_USER/);
+  const skipped = await scienceApi.handleScienceCompactionBoundary({ controller, userDecision: 'skip' });
   assert.equal(skipped.action, 'continue');
   assert.equal(getScienceState(controller).compaction_boundary.reminder.status, 'skipped');
   await acceptCompactionBatch(f, controller);
@@ -77,7 +80,9 @@ test('a live science process continues after skip and carries reminder history i
   assert.equal((await scienceApi.handleScienceCompactionBoundary({ controller })).record, null);
   assert.equal(getScienceState(controller).deadline, before.deadline);
   await acceptCompactionBatch(f, controller);
-  await scienceApi.handleScienceCompactionBoundary({ controller });
+  assert.equal((await scienceApi.handleScienceCompactionBoundary({ controller })).action, 'await-user');
+  await assert.rejects(() => prepareScienceRequests({ controller }), /APA_COMPACTION_AWAITING_USER/);
+  assert.equal((await scienceApi.handleScienceCompactionBoundary({ controller, userDecision: 'skip' })).record.reason, 'user-skipped');
   for (let i = 0; i < 3; i++) await acceptCompactionBatch(f, controller);
   const created = await createScienceHandoff({ controller, checkpointTask: f.checkpointTask });
   const task = f.options.prepared.runControl.reading_first_binding.compaction_policy.checkpoints['before-writer'].decision;
@@ -85,8 +90,13 @@ test('a live science process continues after skip and carries reminder history i
     hostRequests: created.requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' })),
     observation: { manual_compaction: { available: true, method: 'host action', source: 'host contract' } },
     capability: created.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: task.artifact_path, revision: task.revision }) });
-  assert.equal(decision.action, 'continue');
-  assert.equal(decision.record.reason, 'unknown-context-fallback-not-due');
+  assert.equal(decision.action, 'await-user');
+  assert.throws(() => getConfiguredReadingDispatchArguments({ prepared: f.options.prepared, request: created.requests[0] }), /APA_COMPACTION_AWAITING_USER/);
+  const resume = f.options.prepared.runControl.reading_first_binding.compaction_policy.checkpoints['before-writer'].resume;
+  const continued = await handleReadingCompactionBoundary({ controller: created.controller, checkpointReceipt: decision.receipt,
+    hostRequests: created.requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' })), userDecision: 'skip',
+    capability: created.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: resume.artifact_path, revision: resume.revision }) });
+  assert.equal(continued.record.reason, 'user-skipped');
   assert.deepEqual(getConfiguredReadingDispatchArguments({ prepared: f.options.prepared, request: created.requests[0] }), created.requests[0].emittedStep.arguments);
 });
 
