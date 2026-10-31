@@ -5,6 +5,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as progress from '../../scripts/v3/reading-translation-progress.mjs';
 
+test('2.2 permits one unexplained zero-progress continuation and distinguishes capacity evidence', () => {
+  const current = { completed_sections:{}, completed_knowledge:{}, remaining_sections:['a'], remaining_knowledge:['k'] };
+  const first = progress.evaluateTranslationContinuation({progress:current});
+  assert.equal(first.action, 'continue');
+  assert.equal(first.unknown_zero_progress_retry, true);
+  assert.equal(progress.evaluateTranslationContinuation({progress:current, priorUnknownZeroProgress:1}).action, 'reconcile');
+  const advanced = {...current,completed_sections:{a:{translation_fingerprint:'a'}},remaining_sections:[]};
+  assert.equal(progress.evaluateTranslationContinuation({progress:advanced,previousProgress:current,priorUnknownZeroProgress:1}).action, 'continue');
+  const role = progress.evaluateTranslationContinuation({progress:current,stopReason:{kind:'role_report',detail:'role reports capacity reached'}});
+  assert.equal(role.reason_kind, 'role_report');
+  assert.throws(() => progress.evaluateTranslationContinuation({progress:current,stopReason:{kind:'host_confirmed',detail:'capacity'}}), /STOP_REASON_INVALID/);
+  const host = progress.evaluateTranslationContinuation({progress:current,stopReason:{kind:'host_confirmed',detail:'capacity',source_reference:'host-log:123'}});
+  assert.equal(host.reason_kind, 'host_confirmed');
+  assert.equal(progress.evaluateTranslationContinuation({progress:{...advanced,remaining_knowledge:[]}}).action, 'complete');
+});
+
 test('translation input references and partial progress retain source and completed fragments', () => {
   const artifactRoot = mkdtempSync(join(tmpdir(), 'apa-translation-'));
   const task = { task_id:'zh-CN', source_view_path:'inputs/zh/source.json', translation_context_path:'inputs/zh/context.json', progress_path:'inputs/zh/progress.json', native_path:'native/zh.json' };

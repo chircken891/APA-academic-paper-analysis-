@@ -6,15 +6,18 @@ import { inspectApaConfig, checkHostProfile, evaluateReadingPreflight } from '..
 import { prepareConfiguredReading, getConfiguredReadingDispatchArguments, materializeConfiguredReadingCandidate, DEFAULT_CONFIGURED_INSTRUCTION_PROFILE } from './configured-reading.mjs';
 import { resolveHostContinuation } from '../lib/apa-host-capabilities.mjs';
 import { buildReadingActionSummary } from './reading-action-summary.mjs';
-import { checkTranslationProgress } from './reading-translation-progress.mjs';
+import { checkTranslationProgress, evaluateTranslationContinuation } from './reading-translation-progress.mjs';
 import { usesExecutionLedger } from './reading-execution-budget.mjs';
 import { getScienceBudgetSummary, getSciencePendingContinuations, getScienceContinuation, reserveScienceContinuation, markScienceContinuationDispatched, recordScienceContinuationReceipt, recordScienceComputerControlObservation, getScienceComputerControlReport } from './science-controller.mjs';
 import { getReadingBudgetSummary, getReadingPendingContinuations, reserveReadingContinuation, markReadingContinuationDispatched, recordReadingContinuationReceipt } from './reading-first-runtime.mjs';
 import { buildReadingSessionTasks } from './reading-session-tasks.mjs';
 import { ingestObservedRunStep } from './phase21-runner.mjs';
 import { COMPACTION_POLICY } from './reading-compaction.mjs';
+import { validateHostReceiptEvidence, normalizeHostReceipt } from './reading-host-evidence.mjs';
+import { inspectReadingRuntime, validateRuntimeRepairApproval, validateHistoricalRuntimeRepairApproval } from './reading-runtime-binding.mjs';
+import { validateReadingResources } from './reading-resources.mjs';
 import { createOwnedArtifactBroker, commitOwnedArtifact, readOwnedArtifact } from './owned-artifact-store.mjs';
-import { recoverReadingFirstRejectedEditor } from './reading-first-runtime.mjs';
+import { recoverReadingFirstRejectedEditor, authorizeReadingFirstRepairContinuation } from './reading-first-runtime.mjs';
 import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, getScienceRequest, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, createScienceHandoff, handleScienceCompactionBoundary } from './science-controller.mjs';
 import { fingerprintReadingFirst, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, getReadingFirstPendingRequests, getReadingFirstState, recordReadingFirstRequestEvent, getReadingFirstRequestEvents, acceptReadingFirstResult, createReadingFirstEnrichmentRequests, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstReviewRequest, createReadingFirstRevisionRequests, validateReadingFirstRenderRepair, handleReadingCompactionBoundary, captureReadingFirstPublicationSource } from './reading-first-runtime.mjs';
 
@@ -22,10 +25,86 @@ const sessions = new WeakMap();
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const text = value => typeof value === 'string' && !!value.trim();
 const clone = value => structuredClone(value);
+const validRenderOptions = value => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => ['targetRegistry', 'existingTargets', 'knowledgeRegistry'].includes(key));
+const modern = state => state.prepared.runControl.reading_first_binding.configured_setup?.instruction_profile === 'configured-reading-2.2';
 const same = (a, b) => fingerprintReadingFirst(a) === fingerprintReadingFirst(b);
 const stateOf = session => { const state = sessions.get(session); if (!state) fail('READING_SESSION_REQUIRED'); return state; };
 const capability = (state, task) => state.broker.issueCapability({ runId: state.prepared.runControl.run_id, actorId: task.owner_actor_id, role: task.role, artifactPath: task.artifact_path, revision: task.revision });
 const controlPath = root => join(root, 'control', 'science-state.json');
+async function runtimeCheckpoint(state) {
+  const science = JSON.parse(await readFile(controlPath(state.prepared.paths.runRoot), 'utf8'));
+  const receipts = [];
+  for (const task of state.checkpoints) {
+    const found = await existingControl(state, task);
+    if (found) receipts.push({ path: task.artifact_path, sha256: found.receipt.sha256 });
+  }
+  const compaction = Object.values(state.prepared.runControl.reading_first_binding.compaction_policy?.checkpoints ?? {}).flatMap(steps => Object.values(steps));
+  for (const task of compaction) {
+    const found = await existingControl(state, task);
+    if (found) receipts.push({ path: task.artifact_path, sha256: found.receipt.sha256 });
+  }
+  return fingerprintReadingFirst({ science: science.fingerprint, receipts });
+}
+const sessionBindings = (brokerConfig, runId, actorId) => brokerConfig.authorized_bindings.filter(row => row.run_id === runId && row.actor_id === actorId && row.role === 'control' && /^control\/session-state-\d+\.json$/.test(row.artifact_path)).map(row => ({ artifact_id: `session-state-${row.revision}`, artifact_path: row.artifact_path, revision: row.revision, owner_actor_id: actorId, role: 'control' })).sort((a, b) => Number(a.revision) - Number(b.revision));
+async function readSessionMetadata(state) {
+  let latest = null, gap = false;
+  for (const task of state.sessionCheckpoints) {
+    const found = await existingControl(state, task);
+    if (!found) { gap = true; continue; }
+    if (gap) fail('READING_SESSION_METADATA_CONFLICT');
+    const value = JSON.parse(found.bytes);
+    if (value.schema_version !== 'reading-session-state-2.2' || value.run_id !== state.prepared.runControl.run_id || !Array.isArray(value.approvals)
+      || latest && (value.approvals.length < latest.approvals.length || latest.approvals.some((item, index) => !same(item, value.approvals[index])))) fail('READING_SESSION_METADATA_CONFLICT');
+    latest = value; state.nextSessionCheckpoint++;
+  }
+  const initial = state.prepared.runControl.reading_first_binding.configured_setup.runtime_binding;
+  let prior = initial;
+  for (const item of latest?.approvals ?? []) {
+    if (!item || !same(item.previous, prior) || item.approval?.previous_runtime_fingerprint !== prior.fingerprint || item.approval?.current_runtime_fingerprint !== item.current?.fingerprint) fail('READING_SESSION_METADATA_CONFLICT');
+    if (!validateHistoricalRuntimeRepairApproval({ approval: item.approval, runId: state.prepared.runControl.run_id, checkpointFingerprint: item.approval.checkpoint_fingerprint, previous: item.previous, current: item.current }).valid) fail('READING_SESSION_APPROVAL_INVALID');
+    prior = item.current;
+  }
+  state.runtimeBinding = prior;
+  state.approvals = clone(latest?.approvals ?? []);
+  state.runtimeRestartRequired = state.approvals.at(-1)?.restart_process_id === process.pid;
+  if (latest?.render_options !== undefined && !validRenderOptions(latest.render_options)) fail('READING_SESSION_METADATA_CONFLICT');
+  state.renderOptions = latest?.render_options === undefined ? undefined : clone(latest.render_options);
+  state.rendererRepairReady = latest?.renderer_repair_ready === true;
+  state.translationStop = clone(latest?.translation_stop ?? null);
+}
+async function refreshSessionResources(state) {
+  if (!modern(state) || !state.reading) return;
+  const spec = state.prepared.runControl.reading_first_binding.configured_setup.results_resources;
+  const ref = state.visualHandoff?.resource_manifest;
+  const root = state.prepared.paths.runRoot;
+  if (!spec || !ref || ref.path !== resolve(root, spec.manifest_task.artifact_path) || ref.resources_root !== resolve(root, spec.output_root)) fail('READING_SESSION_RESOURCE_MANIFEST_INVALID');
+  const owned = await readOwnedArtifact({ artifactRoot: root, artifactId: spec.manifest_task.artifact_id });
+  if (!owned || owned.receipt.path !== spec.manifest_task.artifact_path || owned.receipt.run_id !== state.prepared.runControl.run_id
+    || owned.receipt.owner_actor_id !== spec.manifest_task.owner_actor_id || owned.receipt.role !== 'results' || owned.receipt.revision !== spec.manifest_task.revision
+    || owned.receipt.sha256 !== ref.sha256 || owned.receipt.byte_length !== ref.byte_length || !same(owned.receipt, state.visualHandoff.receipt)) fail('READING_SESSION_RESOURCE_MANIFEST_INVALID');
+  const sources = state.prepared.scientificInput.sources;
+  if (!same(sources, state.visualHandoff.sources)) fail('READING_SESSION_RESOURCE_MANIFEST_INVALID');
+  const rows = validateReadingResources({ manifest: JSON.parse(owned.bytes), resourcesRoot: ref.resources_root, sources });
+  const integration = await readOwnedArtifact({ artifactRoot: root, artifactId: state.tasks.integration.artifact_id });
+  if (!integration || integration.receipt.role !== 'integration' || integration.receipt.run_id !== state.prepared.runControl.run_id) fail('READING_SESSION_RESOURCE_MANIFEST_INVALID');
+  const value = JSON.parse(integration.bytes);
+  if (!same(value.visual_handoff?.resource_manifest, ref) || !Array.isArray(value.presentation?.sources)) fail('READING_SESSION_RESOURCE_MANIFEST_INVALID');
+  const registered = value.presentation.sources.map(item => {
+    const source = sources.find(row => row.id === item.id);
+    if (!source || sources.filter(row => row.id === item.id).length !== 1 || typeof item.path !== 'string' || !/^Raw\//.test(item.path)) fail('READING_SESSION_RESOURCE_MANIFEST_INVALID');
+    return { path: item.path, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length };
+  });
+  state.resources = [...registered, ...rows.map(row => ({ path: row.path, source_path: row.source_path, sha256: row.sha256, byte_length: row.byte_length }))];
+}
+async function saveSessionMetadata(state) {
+  const task = state.sessionCheckpoints[state.nextSessionCheckpoint];
+  if (!task) fail('CONTROL_CHECKPOINT_CAPACITY');
+  const value = { schema_version: 'reading-session-state-2.2', run_id: state.prepared.runControl.run_id, approvals: clone(state.approvals),
+    ...(state.renderOptions !== undefined ? { render_options: clone(state.renderOptions) } : {}), renderer_repair_ready: state.rendererRepairReady === true, ...(state.translationStop ? { translation_stop: clone(state.translationStop) } : {}) };
+  try { await commitControl(state, task, value); } catch (error) { state.poisoned = true; throw error; }
+  state.nextSessionCheckpoint++;
+}
+
 const wrap = state => { const session = Object.freeze({ profile: 'reading-session-1.0' }); sessions.set(session, state); return session; };
 const usesCompactionObservation = state => ['boundary-reminders-1.1', COMPACTION_POLICY].includes(state.prepared.runControl.reading_first_binding.compaction_policy?.profile);
 const needsCompactionObservation = (state, reminder) => usesCompactionObservation(state)
@@ -45,7 +124,7 @@ function evaluateSessionPreflight(state) {
     } catch (error) { return { ...item, status: error.code === 'ENOENT' ? 'missing' : 'unavailable' }; }
   });
   if (state.hostProfile) inspection.host_check = checkHostProfile(inspection.config, state.hostProfile);
-  const result = evaluateReadingPreflight({ inspection, hostProfile: state.hostProfile, evidence: state.evidence });
+  const result = evaluateReadingPreflight({ inspection, hostProfile: state.hostProfile, evidence: state.evidence, instructionProfile: state.prepared.runControl.reading_first_binding.configured_setup?.instruction_profile });
   const observed = state.hostProfile?.session, frozen = state.prepared.runControl.reading_first_binding.role_model_policy.main_session;
   const inherited = state.prepared.runControl.reading_first_binding.host?.dispatch.model_argument === null;
   const mustMatch = state.needsInitialSessionMatch || inherited;
@@ -57,13 +136,14 @@ function evaluateSessionPreflight(state) {
 }
 async function sealInitialPreflight(state) {
   if (!state.needsInitialSessionMatch || state.preflight.status !== 'pass') return;
-  await commitControl(state, state.checkpoints[1], { schema_version: 'reading-session-preflight-1.0', run_id: state.prepared.runControl.run_id, configuration_fingerprint: state.prepared.configurationFingerprint, main_session: state.prepared.runControl.reading_first_binding.role_model_policy.main_session, host: state.hostProfile.host, session_evidence: state.hostProfile.session });
+  await commitControl(state, state.checkpoints[1], { schema_version: 'reading-session-preflight-1.0', run_id: state.prepared.runControl.run_id, configuration_fingerprint: state.prepared.configurationFingerprint, main_session: state.prepared.runControl.reading_first_binding.role_model_policy.main_session, host: state.hostProfile.host, session_evidence: state.hostProfile.session, ...(modern(state) ? { evidence: clone(state.evidence) } : {}) });
   state.needsInitialSessionMatch = false;
 }
 const checkpointBindings = (brokerConfig, runId, actorId) => brokerConfig.authorized_bindings.filter(row => row.run_id === runId && row.actor_id === actorId && row.role === 'control' && /^control\/reading-checkpoint-\d+\.json$/.test(row.artifact_path)).map(row => ({ artifact_id: `reading-checkpoint-${row.revision}`, artifact_path: row.artifact_path, revision: row.revision, owner_actor_id: actorId, role: 'control' })).sort((a, b) => Number(a.revision) - Number(b.revision));
 function extendsSnapshot(later, earlier) {
   const a = later.state, b = earlier.state;
   if (a.callsUsed < b.callsUsed || a.reviews < b.reviews) return false;
+  if (b.repairContinuation && (!a.repairContinuation || !same(a.repairContinuation,b.repairContinuation))) return false;
   if (b.executionLedger) {
     if (!a.executionLedger || a.executionLedger.length < b.executionLedger.length) return false;
     const rank = { prepared: 0, issued: 1, observed: 2 };
@@ -71,7 +151,7 @@ function extendsSnapshot(later, earlier) {
       const { status: oldStatus, receipt: oldReceipt, ...oldRow } = b.executionLedger[i];
       const { status: newStatus, receipt: newReceipt, ...newRow } = a.executionLedger[i];
       if (!same(oldRow, newRow) || rank[newStatus] < rank[oldStatus]
-        || oldReceipt && !same(oldReceipt, newReceipt) && !(oldReceipt.status === 'outcome_unknown' && newReceipt?.status === 'observed')) return false;
+        || oldReceipt && (!newReceipt || !same(oldReceipt, newReceipt)) && !(oldReceipt.status === 'outcome_unknown' && newReceipt && newReceipt.status !== 'outcome_unknown')) return false;
     }
   }
   for (const key of ['observations', 'requestLog', 'enrichmentRecords', 'enrichmentSources', 'repairRecoveries']) {
@@ -83,7 +163,10 @@ function extendsSnapshot(later, earlier) {
   for (const prior of b.request_entries) {
     const next = a.request_entries.find(row => row.key === prior.key);
     if (!next || !same(next.request, prior.request) || prior.consumed && !next.consumed) return false;
-    for (const [key, event] of Object.entries(prior.events ?? {})) if (!next.events?.[key] || !same(next.events[key], event)) return false;
+    for (const [key, event] of Object.entries(prior.events ?? {})) {
+      const newer = next.events?.[key];
+      if (!newer || !same(newer, event) && !(key === 'host_observation' && event.payload?.status === 'outcome_unknown' && newer.payload?.status !== 'outcome_unknown')) return false;
+    }
   }
   for (const [key, prior] of Object.entries(b.compaction_reminders ?? {})) {
     const next = a.compaction_reminders?.[key];
@@ -134,7 +217,7 @@ export async function createReadingSession(options = {}) {
   const brokerConfig = { control_actor_id: actor, artifact_root: prepared.paths.runRoot, authorized_bindings: [...tasks.authorizedBindings, ...prepared.compactionControlBindings], run_controls: [prepared.runControl] };
   const broker = createOwnedArtifactBroker(brokerConfig);
   const frozenInspection = { config: clone(inspection.config), validation: clone(inspection.validation), dependencies: clone(inspection.dependencies) };
-  const state = { prepared, broker, brokerConfig, tasks: tasks.scienceTasks, checkpoints: tasks.checkpoints, nextCheckpoint: 3, reading: null, handoff: null, checkpointReceipt: null, evidence: clone(evidence), hostProfile: clone(hostProfile), sciencePayloads: clone(sciencePayloads), presentation: null, resources: null, frozenInspection, needsInitialSessionMatch: true };
+  const state = { prepared, runtimeBinding: prepared.runControl.reading_first_binding.configured_setup?.runtime_binding, sessionCheckpoints: tasks.sessionCheckpoints ?? [], nextSessionCheckpoint: 0, approvals: [], broker, brokerConfig, tasks: tasks.scienceTasks, checkpoints: tasks.checkpoints, nextCheckpoint: 3, reading: null, handoff: null, checkpointReceipt: null, evidence: clone(evidence), hostProfile: clone(hostProfile), sciencePayloads: clone(sciencePayloads), presentation: null, resources: null, frozenInspection, needsInitialSessionMatch: true };
   const bootReceipt = await commitControl(state, tasks.checkpoints[0], { schema_version: 'reading-session-bootstrap-1.0', run_id: runId, science_state: controlPath(prepared.paths.runRoot), config_text: configBytes.toString('utf8'), inspection: frozenInspection });
   state.evidence.control_write = { status: 'pass', reference: `owned:${bootReceipt.artifact_id}` };
   state.preflight = evaluateSessionPreflight(state);
@@ -151,12 +234,21 @@ export async function resumeReadingSession({ runRoot } = {}) {
   const data = envelope.data;
   if (!data?.prepared || resolve(data.prepared.paths.runRoot) !== root) fail('READING_SESSION_STATE_INVALID');
   const { prepared, tasks, brokerConfig, payloads = {} } = data;
-  const science = await restoreScienceController({ statePath, prepared, tasks, payloads, brokerConfig });
   const actor = prepared.runControl.reading_first_binding.controller_actor_id;
   const checkpoints = checkpointBindings(brokerConfig, prepared.runControl.run_id, actor);
   if (checkpoints.length < 4 || checkpoints.some((row, index) => Number(row.revision) !== index + 1 || row.artifact_path !== `control/reading-checkpoint-${index + 1}.json`)) fail('READING_SESSION_STATE_INVALID');
   const broker = createOwnedArtifactBroker(brokerConfig);
-  const state = { prepared, broker, brokerConfig, tasks, checkpoints, science, sciencePayloads: payloads, nextCheckpoint: 3, reading: null, handoff: null, checkpointReceipt: null, preflight: { status: 'unknown', reasons: ['current runtime evidence required'] }, evidence: {}, hostProfile: null, presentation: null, resources: null, needsInitialSessionMatch: true };
+  const state = { prepared, runtimeBinding: prepared.runControl.reading_first_binding.configured_setup?.runtime_binding, sessionCheckpoints: sessionBindings(brokerConfig, prepared.runControl.run_id, actor), nextSessionCheckpoint: 0, approvals: [], broker, brokerConfig, tasks, checkpoints, science: null, sciencePayloads: payloads, nextCheckpoint: 3, reading: null, handoff: null, checkpointReceipt: null, preflight: { status: 'unknown', reasons: ['current runtime evidence required'] }, evidence: {}, hostProfile: null, presentation: null, resources: null, needsInitialSessionMatch: true };
+  if (modern(state)) {
+    if (state.sessionCheckpoints.length !== checkpoints.length || state.sessionCheckpoints.some((row, index) => Number(row.revision) !== index + 1)) fail('READING_SESSION_STATE_INVALID');
+    await readSessionMetadata(state);
+    const drift = inspectReadingRuntime({ manifest: state.runtimeBinding });
+    if (drift.status === 'drift') { state.resumed = true; return wrap(state); }
+    const last = state.approvals.at(-1);
+    if (last && !validateRuntimeRepairApproval({ approval: last.approval, runId: prepared.runControl.run_id, checkpointFingerprint: last.approval.checkpoint_fingerprint, previous: last.previous, current: last.current }).valid) fail('READING_SESSION_APPROVAL_INVALID');
+  }
+  const science = await restoreScienceController({ statePath, prepared, tasks, payloads, brokerConfig });
+  state.science = science;
   const boot = await existingControl(state, checkpoints[0]);
   const bootValue = boot && JSON.parse(boot.bytes);
   if (!boot || bootValue.schema_version !== 'reading-session-bootstrap-1.0' || bootValue.run_id !== prepared.runControl.run_id || bootValue.science_state !== statePath || typeof bootValue.config_text !== 'string' || createHash('sha256').update(bootValue.config_text).digest('hex') !== prepared.configurationFingerprint || !bootValue.inspection?.config || !same(JSON.parse(bootValue.config_text), bootValue.inspection.config) || !Array.isArray(bootValue.inspection.dependencies)) fail('READING_SESSION_BOOTSTRAP_INVALID');
@@ -166,12 +258,14 @@ export async function resumeReadingSession({ runRoot } = {}) {
   if (seal) {
     const value = JSON.parse(seal.bytes);
     if (value.schema_version !== 'reading-session-preflight-1.0' || value.run_id !== prepared.runControl.run_id || value.configuration_fingerprint !== prepared.configurationFingerprint || !same(value.main_session, prepared.runControl.reading_first_binding.role_model_policy.main_session) || !text(value.host) || !value.session_evidence || value.session_evidence.model !== value.main_session.model || (value.session_evidence.reasoning_effort ?? null) !== (value.main_session.reasoning_effort ?? null)) fail('READING_SESSION_PREFLIGHT_INVALID');
+    if (modern(state) && (!value.evidence?.results_tools || !value.evidence?.control_write)) fail('READING_SESSION_PREFLIGHT_INVALID');
     state.needsInitialSessionMatch = false;
   }
   const scienceState = getScienceState(science);
   if (!seal && (scienceState.reserved_calls || scienceState.handoff)) fail('READING_SESSION_PREFLIGHT_INVALID');
   if (scienceState.handoff) {
     const transferred = await createScienceHandoff({ controller: science, checkpointTask: checkpoints[2] });
+    if (modern(state)) state.visualHandoff = clone(transferred.visual_handoff);
     if (transferred.controller) { state.reading = transferred.controller; state.handoff = transferred.handoff; state.broker = transferred.broker; state.checkpointReceipt = transferred.checkpointReceipt; }
     else {
       state.handoff = transferred.handoff; state.broker = transferred.broker; state.checkpointReceipt = transferred.checkpointReceipt;
@@ -199,6 +293,7 @@ export async function resumeReadingSession({ runRoot } = {}) {
       if (reviewEntry) state.reviewedPresentation = clone(reviewEntry.payload.presentation);
     }
   }
+  if (modern(state) && state.reading) await refreshSessionResources(state);
   state.resumed = true;
   return wrap(state);
 }
@@ -230,6 +325,7 @@ export async function nextReadingAction(session) {
   const state = stateOf(session);
   return sessionQueue(state, async () => {
     const action = await nextSessionAction(session);
+    if (!state.science || action.kind === 'runtime-drift' || action.code === 'READING_SESSION_RUNTIME_RESTART_REQUIRED') return action;
     const snapshot = state.reading ? snapshotReadingFirstRuntime(state.reading) : null;
     const task = snapshot?.state.request_entries.find(row => row.request.emittedStep.action_id === action.original_action_id || row.request.emittedStep.action_id === action.action_id)?.request.task;
     const budget = state.reading ? getReadingBudgetSummary({ controller: state.reading }) : getScienceBudgetSummary({ controller: state.science });
@@ -245,7 +341,17 @@ export async function nextReadingAction(session) {
 async function nextSessionAction(session) {
   const state = stateOf(session);
   if (state.poisoned) return { action: 'reconcile', code: 'READING_SESSION_RESTORE_REQUIRED' };
+  if (modern(state)) {
+    const drift = inspectReadingRuntime({ manifest: state.runtimeBinding });
+    if (drift.status === 'drift') return { action: 'reconcile', kind: 'runtime-drift', code: 'READING_SESSION_RUNTIME_DRIFT', runtime: drift, checkpoint_fingerprint: await runtimeCheckpoint(state) };
+  }
+  if (state.runtimeRestartRequired) return { action: 'reconcile', code: 'READING_SESSION_RUNTIME_RESTART_REQUIRED' };
+  if (!state.science) return { action: 'reconcile', code: 'READING_SESSION_RESTORE_REQUIRED' };
   if (state.preflight.status !== 'pass') return { action: 'provide-input', kind: 'runtime-evidence', preflight: clone(state.preflight) };
+  if (modern(state) && state.translationStop) {
+    const decision = state.translationStop.decision;
+    return decision.action === 'complete' ? { ...clone(decision), action: 'provide-input', kind: 'accept-translation' } : clone(decision);
+  }
   const continuation = pendingContinuations(state)[0];
   if (continuation) {
     if (Date.now() >= Date.parse(state.prepared.runControl.reading_first_binding.deadline)) return { action: 'reconcile', code: 'READING_SESSION_DEADLINE_EXPIRED' };
@@ -274,12 +380,14 @@ async function nextSessionAction(session) {
     if (current.accepted_results === 6) {
       const result = await createScienceHandoff({ controller: state.science, checkpointTask: state.checkpoints[2] });
       state.broker = result.broker; state.handoff = result.handoff; state.checkpointReceipt = result.checkpointReceipt;
+      if (modern(state)) state.visualHandoff = clone(result.visual_handoff);
       if (result.controller) state.reading = result.controller;
       else {
         const restored = await restoreReadingFirstRuntime({ handoff: result.handoff, runControl: result.runControl, checkpointReceipt: result.checkpointReceipt });
         if (!restored.ok) fail(restored.errors[0].code);
         state.reading = restored.controller;
       }
+      if (modern(state)) await refreshSessionResources(state);
       return nextSessionAction(session);
     }
     const unknown = Object.entries(current.roles).find(([, item]) => item.status === 'outcome_unknown');
@@ -298,6 +406,7 @@ async function nextSessionAction(session) {
     }
     return { action: 'reconcile', code: 'SCIENCE_ACTION_UNAVAILABLE' };
   }
+  if (modern(state)) await refreshSessionResources(state);
   const current = getReadingFirstState(state.reading);
   if (current.status === 'completed_with_limits') return { action: 'complete', status: current.status, publishable: false };
   if (current.status === 'reading_complete') {
@@ -356,7 +465,7 @@ async function nextSessionAction(session) {
         if ((await readdir(join(state.prepared.paths.runRoot, request.task.source_root))).length) return { action: 'reconcile', stage: 'reading', action_id: request.emittedStep.action_id, code: 'READING_SESSION_ENRICHMENT_RESULT_PENDING' };
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
-    if (!events.host_observation) return { action: 'reconcile', stage: 'reading', action_id: request.emittedStep.action_id };
+    if (!events.host_observation || modern(state) && events.host_observation.payload?.status === 'outcome_unknown') return { action: 'reconcile', stage: 'reading', action_id: request.emittedStep.action_id, code: 'HOST_OBSERVATION_OUTCOME_UNKNOWN' };
     const observed = ingestObservedRunStep({ packet: request.packet, emittedStep: request.emittedStep, run: { run_id: state.prepared.runControl.run_id }, observation: events.host_observation.payload });
     const host = state.prepared.runControl.reading_first_binding.host;
     const handle = host && !host.dispatch.result_handle ? null : observed.agent_id;
@@ -412,7 +521,7 @@ async function continuationIntent(state, event) {
     if (!same(existing.context?.continuation_request, requestIdentity)) fail('READING_SESSION_CONTINUATION_CONFLICT');
     return { recorded: true, execution_id: existing.execution_id, status: existing.status };
   }
-  let handle, taskId, role, entry, progress;
+  let handle, taskId, role, entry, progress, translationDecision;
   if (state.reading) {
     entry = snapshotReadingFirstRuntime(state.reading).state.request_entries.find(row => row.request.emittedStep.action_id === event.action_id);
     if (!entry || entry.consumed || !entry.events?.host_observation) fail('READING_SESSION_CONTINUATION_INVALID');
@@ -428,6 +537,16 @@ async function continuationIntent(state, event) {
   if (entry?.request.task.role === 'translation') {
     try { progress = await readingProgress(state, entry); }
     catch (error) { if (error.message === 'READING_TRANSLATION_PROGRESS_RECONCILE') return { action: 'reconcile', code: error.message, action_id: event.action_id }; throw error; }
+    if (modern(state)) {
+      const rows = (snapshotReadingFirstRuntime(state.reading).state.executionLedger ?? []).filter(row => row.kind === 'continuation' && row.task_id === taskId && row.status === 'observed');
+      translationDecision = evaluateTranslationContinuation({ progress, previousProgress: rows.at(-1)?.context?.translation_progress, priorUnknownZeroProgress: rows.filter(row => row.context?.translation_decision?.unknown_zero_progress_retry).length, stopReason: event.stop_reason });
+      if (translationDecision.action !== 'continue') {
+        state.translationStop = { action_id: event.action_id, execution_id: event.execution_id, decision: clone(translationDecision), stop_reason: clone(event.stop_reason ?? { kind: 'unknown' }) };
+        await saveSessionMetadata(state);
+        return translationDecision.action === 'complete' ? { ...translationDecision, action: 'provide-input', kind: 'accept-translation' } : translationDecision;
+      }
+    }
+    if (state.translationStop) { state.translationStop = null; await saveSessionMetadata(state); }
     message += '\nRead the original frozen input references from ' + entry.request.instruction_file.path
       + '. Preserve every completed translation fragment. Translate only the following remaining IDs, then finalize and validate the complete original output JSON.\n'
       + JSON.stringify({ remaining_sections: progress.remaining_sections, remaining_knowledge: progress.remaining_knowledge,
@@ -436,7 +555,7 @@ async function continuationIntent(state, event) {
   const host = resolveHostContinuation(state.hostProfile, { hostName: binding.host?.name ?? state.hostProfile?.host, handle, message });
   if (host.status !== 'detected') return { action: 'provide-input', kind: 'host-continuation', code: host.code };
   const input = { executionId: event.execution_id, actionId: `${event.action_id}:continuation:${event.execution_id}`, handle, tool: host.host_action,
-    arguments: host.arguments, context: { continuation_request: requestIdentity, host_evidence: host.evidence, ...(progress ? { translation_progress: progress } : {}) } };
+    arguments: host.arguments, context: { continuation_request: requestIdentity, host_evidence: host.evidence, ...(progress ? { translation_progress: progress } : {}), ...(translationDecision ? { translation_decision: translationDecision, stop_reason: clone(event.stop_reason ?? { kind: 'unknown' }) } : {}) } };
   let row;
   if (state.reading) {
     if (state.nextCheckpoint >= state.checkpoints.length - 3) return { action: 'reconcile', code: 'CONTROL_CHECKPOINT_CAPACITY' };
@@ -471,6 +590,24 @@ export async function recordReadingEvent(session, event = {}) {
 async function recordSessionEvent(session, event = {}) {
   const state = stateOf(session);
   if (state.poisoned) fail('READING_SESSION_RESTORE_REQUIRED');
+  if (modern(state) && event.kind === 'runtime-repair-approval') {
+    const drift = inspectReadingRuntime({ manifest: state.runtimeBinding });
+    const checkpointFingerprint = await runtimeCheckpoint(state);
+    const checked = validateRuntimeRepairApproval({ approval: event.approval, runId: state.prepared.runControl.run_id, checkpointFingerprint, previous: state.runtimeBinding, current: drift.current });
+    if (!checked.valid) fail('READING_SESSION_APPROVAL_INVALID');
+    const restart = drift.changed_files.some(row => /\.[cm]?js$/i.test(row.path));
+    state.approvals.push({ approval: clone(event.approval), previous: clone(state.runtimeBinding), current: clone(drift.current), ...(restart ? { restart_process_id: process.pid } : {}) });
+    await saveSessionMetadata(state); state.runtimeBinding = drift.current; state.runtimeRestartRequired = restart;
+    if (!state.science && !restart) { const resumed = await resumeReadingSession({ runRoot: state.prepared.paths.runRoot }); sessions.set(session, stateOf(resumed)); }
+    return { recorded: true, runtime_fingerprint: drift.current.fingerprint, ...(restart ? { action: 'reconcile', code: 'READING_SESSION_RUNTIME_RESTART_REQUIRED' } : {}) };
+  }
+  if (state.runtimeRestartRequired) fail('READING_SESSION_RUNTIME_RESTART_REQUIRED');
+  if (modern(state) && !['runtime-repair-approval', 'runtime-evidence'].includes(event.kind)) {
+    const drift = inspectReadingRuntime({ manifest: state.runtimeBinding });
+    if (drift.status === 'drift') fail('READING_SESSION_RUNTIME_DRIFT');
+  }
+  if (modern(state) && ['host_observation', 'continuation-receipt'].includes(event.kind)) event = { ...event, observation: normalizeHostReceipt(event.observation, { strict: true }) };
+  if (modern(state) && ['host_update', 'result'].includes(event.kind)) { validateHostReceiptEvidence(event.observation, { strict: true }); if (event.observation?.status === 'outcome_unknown') fail('READING_SESSION_EVENT_OBSERVATION_REQUIRED'); }
   if (event.kind === 'continuation-intent') return continuationIntent(state, event);
   if (event.kind === 'continuation-receipt') return continuationReceipt(state, event);
   if (event.kind === 'computer-control-observation') return recordScienceComputerControlObservation({ controller: state.science, observation: event.observation });
@@ -482,6 +619,13 @@ async function recordSessionEvent(session, event = {}) {
     return clone(state.preflight);
   }
   if (event.kind === 'compaction') { state.compactionInput = clone(event.input ?? {}); return { recorded: true }; }
+  if (event.kind === 'authorize-repair-continuation') {
+    if (!state.reading || state.preflight.status!=='pass') fail('READING_SESSION_RECOVERY_PREFLIGHT_REQUIRED');
+    if (state.nextCheckpoint>=state.checkpoints.length-1) return {action:'reconcile',code:'CONTROL_CHECKPOINT_CAPACITY'};
+    const result=await authorizeReadingFirstRepairContinuation({controller:state.reading,checkpointReceipt:state.checkpointReceipt,authorization:event.authorization});
+    await saveReading(state);
+    return result;
+  }
   if (event.kind === 'recover-rejected-editor') {
     if (!state.reading || state.preflight.status!=='pass') fail('READING_SESSION_RECOVERY_PREFLIGHT_REQUIRED');
     if (state.nextCheckpoint>=state.checkpoints.length-1) return { action:'reconcile', code:'CONTROL_CHECKPOINT_CAPACITY' };
@@ -489,11 +633,16 @@ async function recordSessionEvent(session, event = {}) {
     state.presentation=null;
     return result;
   }
-  if (event.kind === 'render-assets') { state.resources = clone(event.resources); state.renderOptions = clone(event.renderOptions ?? {}); return { recorded: true }; }
+  if (event.kind === 'render-assets') {
+    if (modern(state) && (event.resources !== undefined || !validRenderOptions(event.renderOptions ?? {}))) fail('READING_SESSION_RESOURCE_INPUT_INVALID');
+    state.resources = modern(state) ? state.resources : clone(event.resources); state.renderOptions = clone(event.renderOptions ?? {}); if (modern(state)) await saveSessionMetadata(state); return { recorded: true };
+  }
   if (event.kind === 'renderer-repair') {
+    if (modern(state) && (event.resources !== undefined || event.renderOptions !== undefined && !validRenderOptions(event.renderOptions))) fail('READING_SESSION_RESOURCE_INPUT_INVALID');
     if (event.resources !== undefined) state.resources = clone(event.resources);
     if (event.renderOptions !== undefined) state.renderOptions = clone(event.renderOptions);
     state.rendererRepairReady = true;
+    if (modern(state)) await saveSessionMetadata(state);
     return { recorded: true };
   }
   if (!text(event.action_id) || !['host_observation', 'host_update', 'result'].includes(event.kind)) fail('READING_SESSION_EVENT_INVALID');
@@ -525,16 +674,17 @@ async function recordSessionEvent(session, event = {}) {
   const prior = getReadingFirstRequestEvents({ controller: state.reading, request });
   if (!prior.intent) fail('READING_SESSION_EVENT_INTENT_REQUIRED');
   const key = requestEventKey(event), payload = event.observation;
-  if (prior[key]) {
+  const upgradeUnknown = modern(state) && key === 'host_observation' && prior[key]?.payload?.status === 'outcome_unknown' && payload?.status !== 'outcome_unknown';
+  if (prior[key] && !upgradeUnknown) {
     if (!same(prior[key].payload, payload)) fail('READING_FIRST_REQUEST_EVENT_CONFLICT');
     if (event.kind !== 'result') return clone(prior[key].payload);
   }
-  if (event.kind === 'result' && !prior.host_observation) fail('READING_SESSION_EVENT_OBSERVATION_REQUIRED');
+  if (event.kind === 'result' && (!prior.host_observation || modern(state) && prior.host_observation.payload?.status === 'outcome_unknown')) fail('READING_SESSION_EVENT_OBSERVATION_REQUIRED');
   if (event.kind === 'result' && !same(prior.host_observation.payload, payload)) fail('READING_SESSION_OBSERVATION_CONFLICT');
-  if (event.kind === 'host_observation' || event.kind === 'result') {
+  if ((event.kind === 'host_observation' || event.kind === 'result') && payload?.status !== 'outcome_unknown') {
     const checked = ingestObservedRunStep({ packet: request.packet, emittedStep: request.emittedStep, run: { run_id: state.prepared.runControl.run_id }, observation: payload });
     if (checked.status !== 'observed') fail(checked.blocked_reason);
-    if (prior.host_observation) {
+    if (prior.host_observation && prior.host_observation.payload?.status !== 'outcome_unknown') {
       const original = ingestObservedRunStep({ packet: request.packet, emittedStep: request.emittedStep, run: { run_id: state.prepared.runControl.run_id }, observation: prior.host_observation.payload });
       if (original.agent_id !== checked.agent_id) fail('READING_SESSION_HOST_HANDLE_MISMATCH');
     }
@@ -545,7 +695,7 @@ async function recordSessionEvent(session, event = {}) {
     if (!original || !original.agent_id || host && !host.dispatch.result_handle || payload?.action_id !== event.action_id || payload?.agent_id !== original.agent_id || typeof payload?.raw_result_text !== 'string' || !text(payload?.tool_call?.name) || !payload?.tool_call?.arguments) fail('READING_SESSION_HOST_UPDATE_INVALID');
   }
   if (state.nextCheckpoint >= state.checkpoints.length - (event.kind === 'result' ? 1 : 2)) return { action: 'reconcile', code: 'CONTROL_CHECKPOINT_CAPACITY' };
-  if (!prior[key]) {
+  if (!prior[key] || upgradeUnknown) {
     recordReadingFirstRequestEvent({ controller: state.reading, request, eventKey: key, payload });
     await saveReading(state);
   }
@@ -554,5 +704,6 @@ async function recordSessionEvent(session, event = {}) {
   if (result.checkpoint_required === false && result.status === 'completed_with_limits') return result;
   recordReadingFirstRequestEvent({ controller: state.reading, request, eventKey: 'terminal', payload: result });
   await saveReading(state);
+  if (modern(state) && state.translationStop?.action_id === event.action_id) { state.translationStop = null; await saveSessionMetadata(state); }
   return result;
 }

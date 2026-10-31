@@ -17,7 +17,8 @@ test('new instruction profile freezes complete prompts and editor contract', () 
 });
 
 test('new configured instruction profile is the default and old selection remains available', () => {
-  assert.equal(buildConfiguredReadingInstructions().instruction_profile, 'configured-reading-2.1');
+  assert.equal(buildConfiguredReadingInstructions().instruction_profile, 'configured-reading-2.2');
+  assert.equal(buildConfiguredReadingInstructions({}, { instructionProfile: 'configured-reading-2.1' }).instruction_profile, 'configured-reading-2.1');
   assert.equal(buildConfiguredReadingInstructions({}, { instructionProfile: 'configured-reading-2.0' }).instruction_profile, 'configured-reading-2.0');
   const legacy = buildConfiguredReadingInstructions({}, { instructionProfile: 'configured-reading-1.0' });
   assert.equal(legacy.instruction_profile, undefined);

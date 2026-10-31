@@ -106,7 +106,10 @@ test('legacy profile still loads', t => {
   fs.writeFileSync(modern, JSON.stringify(profile(allCapabilities({ manual_compaction: capability({ evidence: [{ source: 'runtime-log', reference: 'session.jsonl:1' }, { source: 'installed-software', reference: 'host --help' }] }) }))));
   assert.doesNotThrow(() => loadHostProfile(modern));
   const legacyIssues = ids(issuesFor(t, loadHostProfile(legacy)));
-  assert.equal(legacyIssues.filter(id => id.startsWith('known-limit:capability:')).length, 6);
+  assert.deepEqual(legacyIssues.filter(id => id.startsWith('known-limit:capability:')).sort(), [
+    'concise_replies', 'delegated_diagnostics', 'manual_compaction', 'on_demand_reading',
+    'science_recovery', 'task_continuation', 'threshold_compaction',
+  ].map(id => 'known-limit:capability:' + id));
 });
 
 const sha = 'a'.repeat(64);

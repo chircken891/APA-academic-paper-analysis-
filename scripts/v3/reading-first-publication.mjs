@@ -15,6 +15,7 @@ import { captureReadingFirstPublicationSource, createExternalReadingFirstPublica
   restoreReadingFirstPublicationSource } from './reading-first-runtime.mjs';
 import { createPhase22ContractValidator } from './phase22-contract-loader.mjs';
 import { readOwnedArtifact } from './owned-artifact-store.mjs';
+import { validateReadingResources } from './reading-resources.mjs';
 
 const records = new WeakMap();
 let contractValidator;
@@ -71,7 +72,7 @@ function currentBindings(bindings) {
   for (const row of bindings) if (!same(row, binding(row.path))) fail('P22_REGISTERED_DEPENDENCY_CHANGED', { path: row.path });
 }
 function tools() {
-  return ['./reading-first-publication.mjs', './phase22-publication.mjs', './phase22-review.mjs',
+  return ['./reading-first-publication.mjs', './reading-resources.mjs', './phase22-publication.mjs', './phase22-review.mjs',
     './phase22-active-version.mjs', './phase22-search.mjs', './reading-first-index.mjs', './phase22-managed-markdown.mjs',
     '../../Schema/phase22/active-index.schema.json', '../../Schema/phase22/reading-first-publication.schema.json',
     '../../Schema/phase22/review-manifest.schema.json'].map(path => binding(fileURLToPath(new URL(path, import.meta.url))));
@@ -143,15 +144,57 @@ async function baseFor(root, currentPolicy = false) {
   return { snapshot, generation: clone(snapshot.generation), index: clone(snapshot.index),
     files: new Map(snapshot.generation.objects.map(row => [row.path, regularBytes(root, row.path)])) };
 }
-async function integratorVisualResources(data) {
+async function integratorVisualResources(data, resources) {
   if (data.recipe.schema_version !== 'reading-first-publication-source-1.0') return [];
   const artifacts = await Promise.all(data.recipe.scientific_input.role_artifacts.map(artifactId =>
     readOwnedArtifact({ artifactRoot: data.recipe.artifact_root, artifactId })));
   const integrated = artifacts.filter(row => row?.receipt.role === 'integration' && row.receipt.run_id === data.identity.run_id);
-  if (integrated.length !== 1) return [];
+  if (integrated.length !== 1) {
+    if (data.recipe.binding?.configured_setup?.results_resources) fail('RF_PUBLICATION_RESOURCE_MANIFEST_INVALID');
+    return [];
+  }
   const value = JSON.parse(integrated[0].bytes);
+  const spec = data.recipe.binding?.configured_setup?.results_resources;
+  if (spec) {
+    const task = spec.manifest_task, ref = value.visual_handoff?.resource_manifest;
+    if (!task || !ref || !data.recipe.artifact_root) fail('RF_PUBLICATION_RESOURCE_MANIFEST_INVALID');
+    const root = resolve(data.recipe.artifact_root), expected = resolve(root, task.artifact_path);
+    const output = resolve(root, spec.output_root);
+    if (ref.path !== expected || ref.resources_root !== output) fail('RF_PUBLICATION_RESOURCE_MANIFEST_INVALID');
+    const owned = await readOwnedArtifact({ artifactRoot: root, artifactId: task.artifact_id });
+    if (!owned || owned.receipt.path !== task.artifact_path || owned.receipt.role !== task.role
+      || owned.receipt.owner_actor_id !== task.owner_actor_id || owned.receipt.revision !== task.revision
+      || owned.receipt.run_id !== data.identity.run_id || owned.receipt.sha256 !== ref.sha256
+      || owned.receipt.byte_length !== ref.byte_length
+      || !data.source_bindings.some(row => row.path === expected && row.sha256 === ref.sha256 && row.byte_length === ref.byte_length)) fail('RF_PUBLICATION_RESOURCE_MANIFEST_INVALID');
+    const rows = validateReadingResources({ manifest: JSON.parse(owned.bytes), resourcesRoot: output, sources: data.sources });
+    return rows.map(row => ({ id: row.id, locator: row.locator, path: row.path, source_id: row.source_id, source_path: row.parent.path,
+      source_sha256: row.parent.sha256, sha256: row.sha256, byte_length: row.byte_length, image_source_path: row.source_path }));
+  }
   if (Array.isArray(value.visual_resources)) return value.visual_resources;
-  if (!Array.isArray(value.resource_handoff?.asset_mapping)) return [];
+  if (!Array.isArray(value.resource_handoff?.asset_mapping)) {
+    if (!Array.isArray(value.visual_handoff?.registered_resources)) return [];
+    return value.visual_handoff.registered_resources.flatMap(row => {
+      const declarations = [[row.source_pdf, row.source_sha256], [row.source_docx, row.source_docx_sha256]]
+        .filter(([path, digest]) => typeof path === 'string' && isAbsolute(path)
+          && typeof digest === 'string' && /^(?:sha256:)?[a-f0-9]{64}$/.test(digest));
+      if (declarations.length !== 1) return [];
+      const [parentPath, digest] = declarations[0];
+      const parentHash = digest.startsWith('sha256:') ? digest : 'sha256:' + digest;
+      const parents = data.sources.filter(source => resolve(source.path) === resolve(parentPath)
+        && source.sha256 === parentHash && (row.source_id === undefined || row.source_id === source.id));
+      if (parents.length !== 1) return [];
+      const parent = parents[0];
+      const targets = resources.filter(resource => /^Raw\//.test(resource.path)
+        && typeof resource.source_path === 'string' && isAbsolute(resource.source_path)
+        && resolve(resource.source_path) === resolve(parent.path)
+        && resource.sha256 === parent.sha256 && resource.byte_length === parent.byte_length);
+      if (targets.length !== 1) return [];
+      return [{ path: row.path, source_id: parent.id, source_path: targets[0].path,
+        source_sha256: parent.sha256, sha256: row.sha256, byte_length: row.byte_length,
+        image_source_path: row.source_path ?? null }];
+    });
+  }
   return value.resource_handoff.asset_mapping.map(row => {
     const parent = data.sources.find(source => source.id === row.source_id && source.sha256 === row.source_pdf_sha256);
     return { path: row.target_path, source_id: row.source_id, source_path: parent?.path,
@@ -160,11 +203,52 @@ async function integratorVisualResources(data) {
   });
 }
 
-async function resourceBindings(data, resources) {
+function presentationAssetRegistrations(data, resources, approvals = []) {
+  try {
+    if (!Array.isArray(approvals)) throw new Error('approval references required');
+    const checked = ref => {
+      if (!ref || typeof ref.path !== 'string' || !isAbsolute(ref.path)) throw new Error('absolute approval path required');
+      const current = binding(ref.path);
+      if (current.sha256 !== ref.sha256 || current.byte_length !== ref.byte_length) throw new Error('approval bytes changed');
+      return current;
+    };
+    const paths = new Set();
+    return approvals.map(ref => {
+      const approvalBinding = checked(ref);
+      const value = JSON.parse(readFileSync(approvalBinding.path, 'utf8'));
+      const candidateBinding = checked(value.approved_candidate);
+      const candidate = JSON.parse(readFileSync(candidateBinding.path, 'utf8'));
+      const { resource, scientific_parent: parent } = value;
+      if (value.schema_version !== 'reading-first-presentation-asset-approval-1.0'
+        || !identifier(value.authorization_id) || typeof value.user_reply !== 'string' || !value.user_reply.trim()
+        || value.run_id !== data.identity.run_id || value.presentation_fingerprint !== data.candidate.presentation_fingerprint
+        || candidate.run_id !== value.run_id || !same(candidate.resource, resource) || !same(candidate.scientific_parent, parent)
+        || !resource || !/^Raw\/.+\.pdf$/i.test(resource.path) || paths.has(resource.path)
+        || typeof resource.source_path !== 'string' || !isAbsolute(resource.source_path)
+        || !data.candidate.assetPaths.includes(resource.path) || resource.path === data.presentation.source_pdf
+        || !data.presentation.sources?.some(row => row.id === parent?.source_id && row.path === resource.path)
+        || !resources.some(row => same(row, resource))) throw new Error('approval scope mismatch');
+      const parents = data.sources.filter(row => row.id === parent.source_id && row.sha256 === parent.sha256
+        && typeof parent.path === 'string' && isAbsolute(parent.path) && resolve(row.path) === resolve(parent.path));
+      if (parents.length !== 1) throw new Error('scientific parent mismatch');
+      const targets = resources.filter(row => /^Raw\//.test(row.path) && typeof row.source_path === 'string'
+        && isAbsolute(row.source_path) && resolve(row.source_path) === resolve(parents[0].path)
+        && row.sha256 === parents[0].sha256 && row.byte_length === parents[0].byte_length);
+      if (targets.length !== 1) throw new Error('original source resource required');
+      paths.add(resource.path);
+      return { ...value, approved_candidate: candidateBinding, approval_binding: approvalBinding, parent_resource_path: targets[0].path };
+    });
+  } catch { fail('RF_PUBLICATION_PRESENTATION_ASSET_APPROVAL_INVALID'); }
+}
+
+async function resourceBindings(data, resources, approvedAssets = []) {
   if (!Array.isArray(resources)) fail('RF_PUBLICATION_RESOURCES_REQUIRED');
-  const registered = [...data.sources, ...data.presentation_assets, ...data.enrichment_sources];
-  const paths = new Set(), result = [];
+  const registered = [...data.sources, ...data.presentation_assets, ...data.enrichment_sources,
+    ...approvedAssets.map(row => ({ ...row.resource, path: row.resource.source_path }))];
+  const paths = new Set(), parentPaths = new Set(approvedAssets.map(row => row.parent_resource_path)), result = [];
   let ownedVisuals;
+  const manifestRequired = Boolean(data.recipe.binding?.configured_setup?.results_resources);
+  if (manifestRequired) ownedVisuals = await integratorVisualResources(data, resources);
   for (const resource of resources) {
     safePath(resource.path);
     if (paths.has(resource.path) || !/^(Raw|Figures)\//.test(resource.path) || typeof resource.source_path !== 'string') fail('RF_PUBLICATION_RESOURCE_INVALID');
@@ -174,13 +258,14 @@ async function resourceBindings(data, resources) {
     if (!found) {
       // Use the reviewed catalogue or its accepted Integrator artifact to bind
       // image bytes and the exact registered parent PDF without changing the candidate.
-      let visuals = (data.candidate.visual_resources ?? []).filter(row => row.path === resource.path
+      let visuals = manifestRequired ? [] : (data.candidate.visual_resources ?? []).filter(row => row.path === resource.path
         && row.sha256 === resource.sha256 && row.byte_length === resource.byte_length);
       if (!visuals.length) {
-        ownedVisuals ??= await integratorVisualResources(data);
+        ownedVisuals ??= await integratorVisualResources(data, resources);
         const shown = (data.candidate.visual_resources ?? []).find(row => row.path === resource.path);
         visuals = ownedVisuals.filter(row => row.path === resource.path && row.sha256 === resource.sha256
           && row.byte_length === resource.byte_length && shown?.source_id === row.source_id
+          && (!manifestRequired || shown.id === row.id && same(shown.locator, row.locator))
           && (row.image_source_path === undefined || typeof row.image_source_path === 'string' && isAbsolute(row.image_source_path)
             && resolve(row.image_source_path) === resolve(resource.source_path)));
       }
@@ -193,12 +278,13 @@ async function resourceBindings(data, resources) {
         && typeof row.source_path === 'string' && resolve(row.source_path) === resolve(parent.path)
         && row.sha256 === parent.sha256 && row.byte_length === parent.byte_length);
       if (!parentResource) fail('RF_PUBLICATION_RESOURCE_UNREGISTERED', { path: resource.path });
+      parentPaths.add(parentResource.path);
     }
     const current = binding(resource.source_path);
     if (current.sha256 !== resource.sha256 || current.byte_length !== resource.byte_length) fail('RF_PUBLICATION_RESOURCE_CHANGED', { path: resource.path });
     result.push({ ...clone(resource), source_path: current.path });
   }
-  const expected = [...new Set(data.candidate.assetPaths ?? [])].sort();
+  const expected = [...new Set([...(data.candidate.assetPaths ?? []), ...parentPaths])].sort();
   if (!same([...paths].sort(), expected)) fail('RF_PUBLICATION_RESOURCE_INVENTORY_INCOMPLETE');
   return result;
 }
@@ -209,20 +295,37 @@ function publicationCitation(data, resources) {
   const source = resource && data.sources.find(row => resolve(row.path) === resource.source_path
     && row.sha256 === resource.sha256 && row.byte_length === resource.byte_length);
   if (!source) fail('RF_PUBLICATION_CITATION_SOURCE_UNREGISTERED');
+  if (data.recipe.binding?.configured_setup?.instruction_profile === 'configured-reading-2.2') {
+    const ids = [...new Set([source.id, ...(catalog.visuals ?? []).map(row => row.source_id ?? source.id)])];
+    return { bibliography: clone(catalog.bibliography), sources: ids.map(id => {
+      const original = data.sources.find(row => row.id === id);
+      const path = id === source.id ? catalog.source_pdf : catalog.sources?.find(row => row.id === id)?.path;
+      const target = resources.find(row => row.path === path && original && resolve(row.source_path) === resolve(original.path)
+        && row.sha256 === original.sha256 && row.byte_length === original.byte_length);
+      if (!target) fail('RF_PUBLICATION_CITATION_SOURCE_UNREGISTERED');
+      return {source_id:id,path:target.path,sha256:original.sha256,byte_length:original.byte_length,
+        source_version:typeof original.version === 'string' ? original.version : null,
+        locators:(catalog.visuals ?? []).filter(row => (row.source_id ?? source.id) === id).map(row => ({kind:row.kind,id:row.id,label:clone(row.label),
+          ...(row.locator?.kind === 'docx-figure' ? {locator:clone(row.locator)} : {page:row.locator?.kind === 'pdf-page' ? row.locator.page : row.page})}))};
+    }) };
+  }
+  const visuals = catalog.visuals ?? [];
   return { bibliography: clone(catalog.bibliography), sources: [{ source_id: source.id, path: resource.path,
     sha256: resource.sha256, byte_length: resource.byte_length, source_version: typeof source.version === 'string' ? source.version : null,
-    locators: (catalog.visuals ?? []).map(row => ({ kind: row.kind, id: row.id, page: row.page, label: clone(row.label) })) }] };
+    locators: visuals.map(row => ({ kind: row.kind, id: row.id, page: row.locator?.kind === 'pdf-page' ? row.locator.page : row.page, label: clone(row.label) })) }] };
 }
 
 /** Prepare the exact accepted reading output for the existing V3 publication transaction. */
-export async function buildReadingFirstPublicationReview({ source, vaultRoot, generation, evidenceMode = 'actual', resources, knowledgeMetadataMigrations } = {}) {
+export async function buildReadingFirstPublicationReview({ source, vaultRoot, generation, evidenceMode = 'actual', resources, knowledgeMetadataMigrations, presentationAssetRegistrations: assetApprovals } = {}) {
   const data = await inspectReadingFirstPublicationSource(source);
   if (data.origin !== 'live') fail('RF_PUBLICATION_LIVE_SOURCE_REQUIRED');
   const root = rootPath(vaultRoot);
   const policy = data.recipe.binding?.configured_setup?.knowledge_registry;
   const currentPolicy = policy?.policy === 'current-shared-nodes-1.0' && resolve(policy.vault_root) === root;
   const base = await baseFor(root, currentPolicy);
-  const options = { vaultRoot: root, generation, evidenceMode, resources: await resourceBindings(data, resources),
+  const approvedAssets = presentationAssetRegistrations(data, resources, assetApprovals);
+  const options = { vaultRoot: root, generation, evidenceMode, resources: await resourceBindings(data, resources, approvedAssets),
+    ...(approvedAssets.length ? { presentationAssetRegistrations: approvedAssets } : {}),
     ...(knowledgeMetadataMigrations === undefined ? {} : { knowledgeMetadataMigrations: clone(knowledgeMetadataMigrations) }) };
   return buildReview({ source, data, options, base, preimages: null });
 }
@@ -317,6 +420,7 @@ async function buildReview({ source, data, options, base, preimages }) {
   }
   const dependencies = { scientific_input: data.scientific_input_fingerprint,
     reading_review: data.reading_review_fingerprint, presentation: candidate.presentation_fingerprint };
+  if (options.presentationAssetRegistrations?.length) dependencies.presentation_asset_registrations = hash(options.presentationAssetRegistrations);
   const manifestPath = '.apa-v3/reading-first/presentation/' + identity.run_id + '-' + hash(identity).slice(7, 31) + '.json';
   const presentation = { schema_version: 'reading-first-publication-1.0', profile, identity,
     presentation_fingerprint: candidate.presentation_fingerprint, scientific_input_fingerprint: data.scientific_input_fingerprint,
@@ -359,7 +463,9 @@ async function buildReview({ source, data, options, base, preimages }) {
   const scientificReviewHash = hash({ input: data.scientific_input_fingerprint, reading_review: data.reading_review_fingerprint,
     review_receipt: data.review_receipt, view_receipts: data.view_receipts,
     ...(data.reading_editor_receipt ? { reading_editor_receipt: data.reading_editor_receipt } : {}), presentation: candidate.presentation_fingerprint });
-  const toolBindings = tools(), sourceBindings = [...new Map([...data.source_bindings, ...options.resources.map(row => binding(row.source_path))]
+  const assetApprovals = options.presentationAssetRegistrations ?? [];
+  const toolBindings = tools(), sourceBindings = [...new Map([...data.source_bindings, ...options.resources.map(row => binding(row.source_path)),
+    ...assetApprovals.flatMap(row => [row.approval_binding, row.approved_candidate])]
     .map(row => [row.path, row])).values()];
   const status = options.evidenceMode === 'actual' ? 'review_ready' : 'synthetic_prepared';
   const reviewManifest = { schema_version: 'phase22/review-manifest-1.0', profile, identity, status,
@@ -367,7 +473,10 @@ async function buildReview({ source, data, options, base, preimages }) {
     reading_accepted: true, native_presentation: clone(data.native_presentation), scientific_review_hash: scientificReviewHash,
     generation, previous_generation: base.generation?.generation_id ?? null, previews,
     support_notes: supportTargets.map(row => ({ ...row, ...(migrations.has(row.path) ? { metadata_migration: migrations.get(row.path) } : {}) })),
-    assets: options.resources.map(({ path, sha256, byte_length }) => ({ path, byte_sha256: sha256, byte_length })),
+    assets: options.resources.map(({ path, sha256, byte_length }) => {
+      const approval = assetApprovals.find(row => row.resource.path === path);
+      return { path, byte_sha256: sha256, byte_length, ...(approval ? { presentation_asset_registration: clone(approval) } : {}) };
+    }),
     read_dependencies: readDependencies, dependencies, tools: Object.fromEntries(toolBindings.map(row => [row.path, row.sha256])),
     index: { path: pairPaths.index, byte_sha256: built.sha256 }, active: { path: pairPaths.active, byte_sha256: sha(jsonBytes(built.generation)) },
     write_set: output.map(({ bytes, ...row }) => row), diagnostics: [],
@@ -438,7 +547,10 @@ export async function rebuildRegisteredReadingFirstReview(recipe, proof) {
   if (recipe?.schema_version !== 'reading-first-publication-registration-1.0') fail('RF_PUBLICATION_RECIPE_INVALID');
   assertRegisteredProof(recipe, proof);
   const source = await restoreReadingFirstPublicationSource(recipe.source), data = await inspectReadingFirstPublicationSource(source);
-  const options = { ...clone(recipe.options), resources: await resourceBindings(data, recipe.options.resources) };
+  const approvedAssets = presentationAssetRegistrations(data, recipe.options.resources,
+    recipe.options.presentationAssetRegistrations?.map(row => row.approval_binding));
+  const options = { ...clone(recipe.options), resources: await resourceBindings(data, recipe.options.resources, approvedAssets),
+    ...(approvedAssets.length ? { presentationAssetRegistrations: approvedAssets } : {}) };
   return buildReview({ source, data, options,
     base: { snapshot: null, generation: recipe.base.generation, index: recipe.base.index, files: decodeFiles(recipe.base.files),
       carryHistoricalDocuments: recipe.base.carryHistoricalDocuments === true },

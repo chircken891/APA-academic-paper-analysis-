@@ -302,6 +302,26 @@ test('visual page links use registered main and supplement sources in both langu
   }
 });
 
+test('DOCX visual links use figure locator without a page fragment', () => {
+  const data = writerInput();
+  data.presentation.sources.push({ id: 'supplement', path: 'Raw/supplement.docx', kind: 'supplement' });
+  Object.assign(data.presentation.visuals[0], { source_id: 'supplement', locator: { kind: 'docx-figure', figure: 'S4', paragraph: 4 } });
+  delete data.presentation.visuals[0].page;
+  const result = renderReadingFirstObsidian(data);
+  for (const note of result.notes) {
+    assert.match(note.content, /Raw\/supplement\.docx\)/);
+    assert.doesNotMatch(note.content, /supplement\.docx#page=/);
+    assert.match(note.content, /S4/);
+  }
+});
+
+test('PDF visual can use a physical-page locator', () => {
+  const data = writerInput();
+  data.presentation.visuals[0].locator = { kind: 'pdf-page', page: 3 };
+  delete data.presentation.visuals[0].page;
+  for (const note of renderReadingFirstObsidian(data).notes) assert.match(note.content, /Raw\/paper\.pdf#page=3/);
+});
+
 for (const [name, source] of [
   ['unknown source id', { source_id: 'missing' }],
   ['unregistered source path', { source_path: 'Raw/unregistered.pdf' }],

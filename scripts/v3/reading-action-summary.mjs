@@ -19,7 +19,8 @@ export function buildReadingActionSummary({ runId, stage, status, action, taskId
   const summary = { run_id: short(runId), stage: short(stage), status: short(status), next_action: short(action), task: { id: short(taskId), handle: short(handle) },
     budget: { status: known ? 'known' : 'unknown', task_calls_used: numeric(budget.task_calls_used),
       initial_dispatches: numeric(budget.initial_dispatches), continuations: numeric(budget.continuations), total_used: numeric(budget.total_used),
-      reserved: numeric(budget.reserved), occupied: numeric(budget.occupied), total_limit: numeric(budget.total_limit), remaining_total: numeric(budget.remaining_total) },
+      reserved: numeric(budget.reserved), occupied: numeric(budget.occupied), total_limit: numeric(budget.total_limit), remaining_total: numeric(budget.remaining_total),
+      ...(budget.original_total_limit===undefined ? {} : {original_total_limit:numeric(budget.original_total_limit),additional_limit:numeric(budget.additional_limit),additional_used:numeric(budget.additional_used)}) },
     block_code: short(blockCode), artifacts: [], authorization: { ...authorization }, truncated: false, state_ref: statePath };
   for (const row of artifacts) {
     if (summary.artifacts.length >= 8) { truncated = true; break; }

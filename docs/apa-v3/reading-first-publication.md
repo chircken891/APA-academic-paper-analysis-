@@ -28,11 +28,17 @@ const registration = await registerBilingualPublication({
 });
 ```
 
-这里的 `resources` 是 `{path, source_path, sha256, byte_length}` 数组：`path` 为笔记使用的 `Raw/` 或 `Figures/` 库内相对路径，`source_path` 指向已登记源文件，哈希带 `sha256:` 前缀。资源路径集合必须与审阅候选的 `assetPaths` 完全一致。PDF、图片均须保留来源与指纹；资源缺失、字节变化或目标处存在不同的原始文件时，先修正具体绑定。不能通过扫描目录自动收录未登记文件。合成测试使用 `evidenceMode:'synthetic'` 及系统临时库，不能写入生产知识库。
+这里的 `resources` 是 `{path, source_path, sha256, byte_length}` 数组：`path` 为笔记使用的 `Raw/` 或 `Figures/` 库内相对路径，`source_path` 指向已登记源文件，哈希带 `sha256:` 前缀。资源路径集合必须包含审阅候选的 `assetPaths`，以及所采用已登记图表必需的原始父资源；除此之外不收录其他文件。PDF、图片均须保留来源与指纹；资源缺失、字节变化或目标处存在不同的原始文件时，先修正具体绑定。不能通过扫描目录自动收录未登记文件。合成测试使用 `evidenceMode:'synthetic'` 及系统临时库，不能写入生产知识库。
 
 图表也可来自 Integrator 的真实 owned 输出：若其已审查 `visual_resources` 精确登记了图表路径、SHA-256、字节数以及父 PDF 的 `source_id`、`source_path`、`source_sha256`，发布接口会核对这些冻结字段与当前资源、登记 PDF 的对应关系。仅在临时目录找到图片或调用方另给一个哈希仍不足以入库；原候选和原审查不因此改写。
 
 既有 owned Integrator 使用 `resource_handoff.asset_mapping` 时，发布消费者也可直接读取该登记：`target_path` 对应图表目标，`source_path` 为源图片的绝对路径，`source_id`、`source_pdf_sha256` 对应原登记父 PDF，`sha256`、`byte_length` 对应图片字节。接口继续核对唯一匹配、实际源图片路径、父 PDF、候选图目录及字节；原 owned 产物、候选和审查保持原样。顶层 `visual_resources` 已存在时保留原消费路径。
+
+owned Integrator 使用 `visual_handoff.registered_resources` 时，消费者读取 `path`、图片绝对 `source_path`、图片 `sha256` 和 `byte_length`。父资源可由 `source_pdf` 与 `source_sha256`，或 `source_docx` 与 `source_docx_sha256` 精确指定；父哈希支持带 `sha256:` 前缀或64位十六进制。父路径必须为绝对路径，并与本次科学输入中唯一已登记来源的路径和哈希一致；显式 `source_id` 也须一致，缺省时只从该唯一匹配解析。原始父资源必须在 `resources` 中唯一绑定到 `Raw/` 目标，且当前字节仍与登记一致。DOCX 补图的来源继续绑定原 DOCX，单独的展示 PDF 必须具有自己的有效来源登记；已有原图登记和临时展示文件均不会自动授予该 PDF 发布资格。
+
+用户明确批准既有派生展示 PDF 的精确登记候选后，可向 `prepareReadingFirstPublication` 传入 `presentationAssetRegistrations`。每项为批准记录文件的 `{path, sha256, byte_length}`，路径为绝对路径。记录使用 `schema_version:'reading-first-presentation-asset-approval-1.0'`，包含实际 `authorization_id`、`user_reply`、`run_id`、已审 `presentation_fingerprint`、获批候选文件的 `approved_candidate:{path,sha256,byte_length}`、`resource:{path,source_path,sha256,byte_length}` 和 `scientific_parent:{source_id,path,sha256}`。获批候选须保存相同的 run_id、resource 和 scientific_parent。来源身份仍由原科学输入校验，PDF 必须是已审导航中的 Raw PDF 目标，且原始父文件也在精确清单中。
+
+接口读取并核对批准记录及候选原字节，将登记事实写入对应审阅资源的 `presentation_asset_registration` 和发布依赖哈希；两份记录文件纳入现有来源指纹及文件身份校验，并随 Controller 签名登记保留。记录变化会阻止后续注册或重载。该参数仅消费已有明确来源登记授权，不能代替用户决定；原科学输入、Writer、Editor、科学审查及其指纹保持。正式发布仍使用清单和两个精确哈希的单独批准。未传此参数的旧调用保留原行为。
 
 准备阶段校验原审查、文件与人工区域，列出本次批准的文件及目标，并生成必要登记与索引。新注册保存签名清单和本次输出的独立文件；这些文件用于直接完成或恢复本次复制，不包含上一代全库副本或整包重建配方。注册阶段不执行正式笔记写入。保留返回的 Controller trust anchor，跨进程读取时通过现有 `trustAnchor` 参数或 `APA_V3_PUBLICATION_TRUST_ANCHOR` 传递，不从待验证的注册文件自取信任锚。
 

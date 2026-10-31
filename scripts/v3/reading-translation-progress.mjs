@@ -58,6 +58,24 @@ export function writeTranslationProgress({ artifactRoot, task, runId, sourceView
   return checkTranslationProgress({artifactRoot,task,runId,sourceView,nativeOutput});
 }
 
+/** Decide only from checked fragment progress and separately attributed stop evidence. */
+export function evaluateTranslationContinuation({ progress, previousProgress, priorUnknownZeroProgress = 0, stopReason } = {}) {
+  if (!progress || !Array.isArray(progress.remaining_sections) || !Array.isArray(progress.remaining_knowledge)) fail();
+  const kind = stopReason?.kind ?? 'unknown';
+  if (!['unknown', 'role_report', 'host_confirmed'].includes(kind)
+    || kind !== 'unknown' && (typeof stopReason.detail !== 'string' || !stopReason.detail.trim())
+    || kind === 'host_confirmed' && (typeof stopReason.source_reference !== 'string' || !stopReason.source_reference.trim())) {
+    throw new Error('READING_TRANSLATION_STOP_REASON_INVALID');
+  }
+  const count = value => Object.keys(value?.completed_sections ?? {}).length + Object.keys(value?.completed_knowledge ?? {}).length;
+  const result = { reason_kind:kind, completed_sections:progress.completed_sections, completed_knowledge:progress.completed_knowledge,
+    remaining_sections:progress.remaining_sections, remaining_knowledge:progress.remaining_knowledge };
+  if (!progress.remaining_sections.length && !progress.remaining_knowledge.length) return { ...result, action:'complete', unknown_zero_progress_retry:false };
+  const unexplained = kind === 'unknown' && count(progress) <= count(previousProgress);
+  if (unexplained && priorUnknownZeroProgress > 0) return { ...result, action:'reconcile', code:'READING_TRANSLATION_ZERO_PROGRESS', unknown_zero_progress_retry:false };
+  return { ...result, action:'continue', unknown_zero_progress_retry:unexplained };
+}
+
 export function prepareTranslationInputs({artifactRoot,task,runId,payload} = {}) {
   const {source_view, language, ...context} = payload;
   const ref = (name, value) => {

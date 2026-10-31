@@ -3,6 +3,9 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { buildConfiguredReadingInstructions } from '../../../scripts/v3/configured-reading.mjs';
 import { createOwnedArtifactBroker, commitOwnedArtifact } from '../../../scripts/v3/owned-artifact-store.mjs';
 import { readCommittedReadingFirstKnowledgeRegistry } from '../../../scripts/v3/reading-first-knowledge-registry.mjs';
 import { compactionEnabled, compactionControlBindings } from '../../../scripts/v3/reading-compaction.mjs';
@@ -11,6 +14,7 @@ import {
   createReadingFirstPresentationRequest, createReadingFirstRequests, createReadingFirstReviewRequest,
   createReadingFirstRunControl, fingerprintReadingFirst, renderReadingFirstNotes,
   snapshotReadingFirstRuntime, handleReadingCompactionBoundary,
+  recordReadingFirstRequestEvent,
 } from '../../../scripts/v3/reading-first-runtime.mjs';
 
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
@@ -29,12 +33,34 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
   const runId = options.runId ?? 'run_' + 'a'.repeat(32);
   const paperId = options.paperId ?? 'pap_' + 'a'.repeat(32);
   await mkdir(root, { recursive: true });
-  const pdf = Buffer.from(options.sourceText ?? 'Synthetic original source: supported design, finding and limitation.');
-  const image = Buffer.from('Synthetic registered figure bytes.');
+  let pdf = Buffer.from(options.sourceText ?? 'Synthetic original source: supported design, finding and limitation.');
+  let image = Buffer.from('Synthetic registered figure bytes.');
   await writeFile(join(root, 'source.pdf'), pdf);
   await writeFile(join(root, 'figure.png'), image);
+  const registeredDocx = options.visualProvenance === 'owned-registered-docx' || options.manifestDocx;
+  let supplementBytes = Buffer.from('Synthetic original DOCX with a registered supplementary figure.');
+  if (options.manifestDocx) {
+    const script = `import sys,fitz,zipfile,base64
+d=fitz.open(); d.new_page(); d.save(sys.argv[1])
+with zipfile.ZipFile(sys.argv[2],'w') as z:
+ z.writestr('[Content_Types].xml','<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+ z.writestr('_rels/.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+ z.writestr('word/document.xml','<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:t>Figure S4</w:t></w:r></w:p><w:p><w:r><w:pict><v:shape><v:imagedata r:id="rId1"/></v:shape></w:pict></w:r></w:p></w:body></w:document>')
+ z.writestr('word/_rels/document.xml.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/></Relationships>')
+ z.writestr('word/media/image1.png',base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aX8AAAAASUVORK5CYII='))`;
+    const result = spawnSync('python', ['-c', script, join(root,'source.pdf'), join(root,'supplement.docx')], {encoding:'utf8'});
+    assert.equal(result.status,0,result.stderr);
+    pdf=await readFile(join(root,'source.pdf')); supplementBytes=await readFile(join(root,'supplement.docx'));
+  }
   const source = { id: 'paper', path: join(root, 'source.pdf'), sha256: sha(pdf), byte_length: pdf.length };
-  const figure = { path: join(root, 'figure.png'), sha256: sha(image), byte_length: image.length };
+  let figure = { path: join(root, 'figure.png'), sha256: sha(image), byte_length: image.length };
+  const displayBytes = Buffer.from('Synthetic supplementary figure display PDF.');
+  const supplement = { id: 'supplement', path: join(root, 'supplement.docx'), sha256: sha(supplementBytes), byte_length: supplementBytes.length };
+  const display = { path: join(root, 'display.pdf'), sha256: sha(displayBytes), byte_length: displayBytes.length };
+  if (registeredDocx) {
+    if (!options.manifestDocx) await writeFile(supplement.path, supplementBytes);
+    await writeFile(display.path, displayBytes);
+  }
   const presentation = options.presentation ?? {
     schema_version: 'reading-first-obsidian-1.0', layout: 'writer-modules-1.0',
     knowledge_layout: 'shared-bilingual-1.0',
@@ -45,13 +71,29 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
     knowledge: [{ id: 'method', canonical_key: 'synthetic-method', kind: 'method', source_kind: 'method-background', title: { en: 'Synthetic method', 'zh-CN': '合成方法' }, aliases: ['SyntheticMethodAlias'], paragraphs: { en: ['An independent reusable explanation with supportonlytoken.'], 'zh-CN': ['可独立理解的通用解释，包含仅知识页词。'] } }],
     map: { steps: [{ id: 'design-step', section_id: 'design', label: { en: 'Design', 'zh-CN': '设计' } }], findings: [{ id: 'main-finding', section_id: 'findings', label: { en: 'Finding', 'zh-CN': '发现' } }], relations: [{ step_id: 'design-step', finding_id: 'main-finding' }] },
   };
-  const ownedVisualResources = ['owned-absolute', 'owned-asset-mapping'].includes(options.visualProvenance) ? [{
+  let manifestRef, manifestBytes;
+  const manifestTask={task_id:'results-resources',artifact_id:'results-resources',artifact_path:'science/results-resources.json',native_path:'native/results-resources.json',revision:'1',owner_actor_id:'results',role:'results'};
+  if (options.manifestDocx) {
+    const resourceRoot=join(root,'resources','results'); await mkdir(resourceRoot,{recursive:true});
+    const request={source_id:supplement.id,source_path:supplement.path,resources_root:resourceRoot,items:[{id:'fig-one',locator:{kind:'docx-figure',figure:'S4',paragraph:1},media:'word/media/image1.png',filename:'figure.png',path:presentation.visuals[0].path}]};
+    const result=spawnSync('python',[fileURLToPath(new URL('../../../scripts/lib/reading-resource-tool.py',import.meta.url))],{input:JSON.stringify(request),encoding:'utf8'});
+    assert.equal(result.status,0,result.stderr); manifestBytes=Buffer.from(result.stdout.trim());
+    const row=JSON.parse(manifestBytes).resources[0]; image=await readFile(row.source_path); figure={path:row.source_path,sha256:row.sha256,byte_length:row.byte_length};
+    manifestRef={path:join(root,manifestTask.artifact_path),resources_root:resourceRoot,sha256:sha(manifestBytes),byte_length:manifestBytes.length};
+    presentation.sources=[{id:source.id,path:presentation.source_pdf,kind:'main'},{id:supplement.id,path:'Raw/supplement.docx',kind:'supplementary'}];
+    Object.assign(presentation.visuals[0],{source_id:supplement.id,locator:row.locator}); delete presentation.visuals[0].page;
+  }
+  const ownedVisualResources = ['owned-absolute', 'owned-asset-mapping', 'owned-registered-pdf', 'owned-registered-docx'].includes(options.visualProvenance) ? [{
     path: presentation.visuals[0].path, source_id: source.id, source_path: source.path, source_sha256: source.sha256,
     sha256: figure.sha256, byte_length: figure.byte_length,
   }] : null;
   if (ownedVisualResources) {
     presentation.sources = [{ id: source.id, path: presentation.source_pdf, kind: 'main' }];
     presentation.visuals[0].source_id = source.id;
+    if (registeredDocx) {
+      presentation.sources.push({ id: supplement.id, path: 'Raw/supplement-display.pdf', kind: 'supplementary' });
+      presentation.visuals[0].source_id = supplement.id;
+    }
   } else if (options.visualProvenance) Object.assign(presentation.visuals[0], {
     source_id: source.id, source_path: presentation.source_pdf, source_sha256: source.sha256,
     sha256: figure.sha256, byte_length: figure.byte_length,
@@ -67,12 +109,14 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
   }]));
   const input = {
     identity: { paper_id: paperId, run_id: runId, ...(options.analysisRevision ? { analysis_revision: options.analysisRevision } : {}) },
-    sources: [source], ...(options.omitPresentationAssets ? {} : { presentation_assets: [figure] }),
+    sources: [source, ...(registeredDocx ? [supplement] : [])],
+    presentation_assets: [...(options.omitPresentationAssets || options.manifestDocx ? [] : [figure]), ...(registeredDocx && !options.manifestDocx && !options.unregisteredDisplay ? [display] : [])],
     context: 'Explain the registered source as one connected scientific account.', role_artifacts: roles,
   };
   const runBinding = (options.createRunControl ?? createReadingFirstRunControl)({ runId, scientificInput: input, mainSession: { model: 'gpt-6-astra', reasoning_effort: 'high' },
     authorizationId: 'synthetic-publication-source-only', deadline: options.deadline ?? '2099-01-01T00:00:00Z', maxCalls: 7,
     writingMode: 'source-first', sourceLanguage: 'en', presentationMode: 'reading-editor', taskBindings: tasks, ...options.controlOptions,
+    ...(options.manifestDocx ? {maxTotalCalls:20,presentationProfile:'reading-editor-1.3',configuredSetup:{...buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-2.2'}),paths:{runRoot:root},results_resources:{output_root:'resources/results',manifest_task:manifestTask}}} : {}),
     ...(options.currentRegistryRoot ? { configuredSetup: { paths: { runRoot: root }, writing_instructions: { en: '', 'zh-CN': '' },
       knowledge_registry: { policy: 'current-shared-nodes-1.0', vault_root: options.currentRegistryRoot } } } : {}) });
   const binding = runBinding.reading_first_binding;
@@ -80,6 +124,7 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
     ...compactionControlBindings(runBinding),
     ...roles.map(role => ({ run_id: runId, actor_id: role, role, artifact_path: 'science/' + role + '.json', revision: '1' })),
     ...Object.values(tasks).map(task => ({ run_id: runId, actor_id: task.owner_actor_id, role: task.role, artifact_path: task.artifact_path, revision: task.revision })),
+    ...(options.manifestDocx ? [{run_id:runId,actor_id:'results',role:'results',artifact_path:manifestTask.artifact_path,revision:'1'}] : []),
     { run_id: runId, actor_id: 'controller', role: 'control', artifact_path: 'checkpoint.json', revision: '1' },
     ...['before-writer', 'before-review'].map(id => ({ run_id: runId, actor_id: 'controller', role: 'control', artifact_path: 'control/check-' + id + '.json', revision: '1' })),
   ];
@@ -89,8 +134,16 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
     id: presentation.visuals[0].id, target_path: row.path, source_id: row.source_id,
     source_path: figure.path, source_pdf_sha256: row.source_sha256, sha256: row.sha256, byte_length: row.byte_length,
   })) : null;
-  const ownedRegistration = assetMapping ? { resource_handoff: { asset_mapping: options.assetMappingChange ? options.assetMappingChange(assetMapping) : assetMapping } }
+  const registeredResources = ['owned-registered-pdf', 'owned-registered-docx'].includes(options.visualProvenance) ? [{
+    id: presentation.visuals[0].id, path: presentation.visuals[0].path, source_path: figure.path,
+    sha256: figure.sha256, byte_length: figure.byte_length,
+    ...(registeredDocx ? { source_id: supplement.id, source_docx: supplement.path, source_docx_sha256: supplement.sha256.slice(7) }
+      : { source_pdf: source.path, source_sha256: source.sha256.slice(7) }),
+  }] : null;
+  const ownedRegistration = options.manifestDocx ? {visual_handoff:{resource_manifest:manifestRef}} : registeredResources ? { visual_handoff: { registered_resources: options.registeredResourcesChange ? options.registeredResourcesChange(registeredResources) : registeredResources } }
+    : assetMapping ? { resource_handoff: { asset_mapping: options.assetMappingChange ? options.assetMappingChange(assetMapping) : assetMapping } }
     : ownedVisualResources ? { visual_resources: ownedVisualResources } : {};
+  if (options.manifestDocx) await commitOwnedArtifact({artifactRoot:root,dispatchContext:broker.dispatchContext,capability:broker.issueCapability({runId,actorId:'results',role:'results',artifactPath:manifestTask.artifact_path,revision:'1'}),artifact:{artifact_id:manifestTask.artifact_id,content:manifestBytes},expectedRevision:'1'});
   for (const role of roles) await commitOwnedArtifact({ artifactRoot: root, dispatchContext: broker.dispatchContext,
     capability: broker.issueCapability({ runId, actorId: role, role, artifactPath: 'science/' + role + '.json', revision: '1' }),
     artifact: { artifact_id: role, content: JSON.stringify({ context: 'Registered synthetic scientific output for ' + role,
@@ -98,7 +151,7 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
   const scientificInput = { ...input, profile: 'reading-first-1.0' };
   const handoff = await buildReadingFirstHandoff({ run: { run_id: runId }, dispatchContext: broker.dispatchContext, artifactRoot: root, scientificInput });
   const runControl = { runId, artifactRoot: root, dispatchContext: broker.dispatchContext };
-  const created = createReadingFirstRequests({ handoff, runControl });
+  const created = createReadingFirstRequests({ handoff, runControl, ...(options.manifestDocx ? {executionLedger:[]} : {}) });
   assert.equal(created.ok, true, JSON.stringify(created.errors));
   const controller = created.controller;
   const settleCompaction = async (id, candidate) => {
@@ -126,10 +179,18 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
     await mkdir(join(root, 'native'), { recursive: true });
     await writeFile(join(root, request.task.native_path), JSON.stringify(value));
     const step = request.emittedStep;
-    return acceptReadingFirstResult({ controller, request, observation: {
+    const raw=JSON.stringify({ agent_id: 'synthetic-' + request.task.task_id });
+    const observation={
       action_id: step.action_id, run_id: runId, input_fingerprint: step.input_fingerprint, port: 'current-collaboration',
-      tool_call: { name: step.action, arguments: step.arguments }, raw_result_text: JSON.stringify({ agent_id: 'synthetic-' + request.task.task_id }),
-    }, capability: broker.issueCapability({ runId, actorId: request.task.owner_actor_id, role: request.task.role, artifactPath: request.task.artifact_path, revision: request.task.revision }) });
+      tool_call: { name: step.action, arguments: step.arguments }, raw_result_text: raw,
+    };
+    if (options.manifestDocx) {
+      const evidencePath=join(root,'native','evidence-'+request.task.task_id+'.txt'); await writeFile(evidencePath,raw);
+      observation.evidence={kind:'raw',capture:'direct',sha256:sha(Buffer.from(raw)).slice(7),source_reference:evidencePath};
+      recordReadingFirstRequestEvent({controller,request,eventKey:'intent',payload:{action_id:step.action_id}});
+      recordReadingFirstRequestEvent({controller,request,eventKey:'host_observation',payload:observation});
+    }
+    return acceptReadingFirstResult({ controller, request, observation, capability: broker.issueCapability({ runId, actorId: request.task.owner_actor_id, role: request.task.role, artifactPath: request.task.artifact_path, revision: request.task.revision }) });
   };
   const views = languages.map(language => ({ language,
     sections: modules.map((id, index) => ({ id, module_id: id, heading: titles[language][index], paragraphs: [options.findingText ?? (language === 'en' ? 'The supported ' + id + ' explains the synthetic result and its limits.' : '有依据的' + titles[language][index] + '说明合成研究结果及其限制。')] })),
@@ -163,6 +224,10 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
   const resources = [
     { path: presentation.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length },
     { path: presentation.visuals[0].path, source_path: figure.path, sha256: figure.sha256, byte_length: figure.byte_length },
+    ...(registeredDocx ? [
+      { path: 'Raw/supplement.docx', source_path: supplement.path, sha256: supplement.sha256, byte_length: supplement.byte_length },
+      ...(!options.manifestDocx ? [{ path: 'Raw/supplement-display.pdf', source_path: display.path, sha256: display.sha256, byte_length: display.byte_length }] : []),
+    ] : []),
   ];
   return { root, artifactRoot: root, runId, paperId, input: scientificInput, broker, binding, handoff, runControl, controller, created,
     candidate, presentation: candidate, presentationCatalog: presentation, renderOptions, views, editor, review, reviewRequest,

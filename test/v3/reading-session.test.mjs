@@ -164,7 +164,7 @@ async function configuredFixture(t) {
   const bytes = Buffer.from('synthetic source'), source = join(root, 'paper.pdf'); await writeFile(source, bytes);
   const scientificInput = { profile: 'reading-first-1.0', identity: { run_id: 'run', paper_id: 'pap_' + 'a'.repeat(32) }, sources: [{ id: 'paper', path: source, sha256: 'sha256:' + createHash('sha256').update(bytes).digest('hex'), byte_length: bytes.length }], context: 'synthetic', role_artifacts: ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'] };
   const evidence = { current_host: { name: profile.host, reference: 'test session' }, dispatch: { source: 'tool-schema', tool: 'Agent', reference: 'test schema' }, fresh_context: { source: 'host-docs', reference: 'test host docs', blank_context: true }, file_read: { status: 'pass', reference: 'test read' }, input: { status: 'pass', reference: 'test source and parser' } };
-  return { root, profile, evidence, options: { repoRoot: root, runId: 'run', scientificInput, sourceLanguage: 'en', authorizationId: 'test', deadline: '2099-01-01T00:00:00Z', maxCalls: 8, maxTotalCalls: 14, sessionContext: { model: 'm', effort: 'high' }, hostProfile: profile, evidence, includeRepairs: true } };
+  return { root, profile, evidence, options: { repoRoot: root, runId: 'run', scientificInput, sourceLanguage: 'en', instructionProfile: 'configured-reading-2.1', authorizationId: 'test', deadline: '2099-01-01T00:00:00Z', maxCalls: 8, maxTotalCalls: 14, sessionContext: { model: 'm', effort: 'high' }, hostProfile: profile, evidence, includeRepairs: true } };
 }
 
 test('science intent survives recovery and is never automatically dispatched twice', async t => {
@@ -671,13 +671,15 @@ for (const total of [10, 11]) test(`initial enrichment reserves the full chain a
   else { assert.equal(next.action, 'dispatch'); assert.match(next.arguments.prompt, /enrich-initial-evidence/); }
 });
 
-for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, { sourceLanguage: 'en', noRepairs: true }, { sourceLanguage: 'en', shortBudget: true }, { sourceLanguage: 'en', translationOnly: true }, { sourceLanguage: 'en', visualCorrection: true }, { sourceLanguage: 'en', visualCorrection: true, editorRecovery: true }]) test(`late session repair ${JSON.stringify(scenario)}`, async t => {
-  const { sourceLanguage, noRepairs, shortBudget, translationOnly, visualCorrection, editorRecovery } = scenario;
+for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, { sourceLanguage: 'en', noRepairs: true }, { sourceLanguage: 'en', shortBudget: true }, { sourceLanguage: 'en', translationOnly: true }, { sourceLanguage: 'en', visualCorrection: true }, { sourceLanguage: 'en', visualCorrection: true, chartTypeCorrection: true }, { sourceLanguage: 'en', blockedRecovery: true }, { sourceLanguage: 'en', visualCorrection: true, editorRecovery: true }]) test(`late session repair ${JSON.stringify(scenario)}`, async t => {
+  const { sourceLanguage, noRepairs, shortBudget, translationOnly, visualCorrection, editorRecovery, chartTypeCorrection, blockedRecovery } = scenario;
   const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
   if (visualCorrection) {
     template.presentationCatalog.sources = [{ id: 'paper', path: template.presentationCatalog.source_pdf }];
     template.presentationCatalog.visuals[0].source_id = 'paper';
   }
+  if (chartTypeCorrection || blockedRecovery) template.presentationCatalog.visuals[0].chart_types = [{ knowledge_id: 'method', label: { en: 'Intervals', 'zh-CN': '区间图' }, panel: 'b,d,e' }];
+  if (blockedRecovery) f.profile.capabilities = { task_continuation: continuationCapability() };
   let session = await createReadingSession({ ...f.options, sourceLanguage, includeRepairs: !noRepairs, maxTotalCalls: shortBudget ? 14 : 15, enrichmentPolicy: { sources: [], allow_targeted_methods: true } });
   const runRoot = join(f.root, 'runs', 'run'); await mkdir(join(runRoot, 'native'), { recursive: true });
   const accept = async (action, path, value) => {
@@ -697,7 +699,7 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
   const source = f.options.scientificInput.sources[0];
   await recordReadingEvent(session, { kind: 'render-assets', resources: [{ path: template.presentationCatalog.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length }, template.resources[1]], renderOptions: {} });
   const gap = { id: 'late', question: 'What allocation was used?', impact: 'Changes interpretation', severity: 'material', owner_role: 'evidence', source_kind: 'original_page', source_ids: [], target_sections: ['Study'] };
-  const issue = { severity: 'material', kind: 'scientific-gap', detail: 'Allocation unclear', repair_owner: 'science', affected_languages: [targetLanguage], scientific_gap: gap, repair_scope: { status: 'located', section_ids: [template.views[1].sections[0].id], knowledge_ids: [], visual_ids: visualCorrection ? ['fig-one'] : [], editor_fields: [] } };
+  const issue = { severity: 'material', kind: 'scientific-gap', detail: 'Allocation unclear', repair_owner: 'science', affected_languages: [targetLanguage], scientific_gap: gap, repair_scope: { status: 'located', section_ids: [template.views[1].sections[0].id], knowledge_ids: [], visual_ids: visualCorrection || blockedRecovery ? ['fig-one'] : [], editor_fields: [] } };
   if (translationOnly) { issue.repair_owner = 'writer'; delete issue.scientific_gap; }
   const first = await accept(await nextReadingAction(session), 'review', { ...template.review, issues: [issue] });
   if (noRepairs || shortBudget) {
@@ -710,6 +712,7 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
   assert.equal(first.status, 'revision_required');
   const answer = { gap_id: gap.id, classification: 'paper_fact', explanation: 'The source reports random allocation.', consequence: 'It supports the design account.', status: 'recovered', target_sections: ['Study'], source_ids: ['paper'] };
   const visualCorrections = [{ visual_id: 'fig-one', source_id: 'paper', page: 1, label: { en: 'Recovered figure', 'zh-CN': '恢复图像' }, caption: { en: 'Recovered original caption.', 'zh-CN': '已恢复的原始图注。' } }];
+  if (chartTypeCorrection) visualCorrections[0].chart_types = [{ knowledge_id: 'method', label: { en: 'Intervals', 'zh-CN': '区间图' }, panel: 'd,e' }];
   if (!translationOnly) await accept(await nextReadingAction(session), 'enrich-late-evidence', { run_id: 'run', role: 'evidence', resolutions: [answer], ...(visualCorrection ? { visual_corrections: visualCorrections } : {}) });
   const en = structuredClone(template.views[0]), zh = structuredClone(template.views[1]);
   if (!translationOnly) {
@@ -718,11 +721,34 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
   }
   await accept(await nextReadingAction(session), targetLanguage + '-r2', targetLanguage === 'en' ? en : zh);
   const editorAction = await nextReadingAction(session);
-  if (visualCorrection) {
+  if (!translationOnly) {
     const payload = JSON.parse((await readFile(join(runRoot, 'instructions', 'presentation-r2.txt'), 'utf8')).split('\n\n').at(-1));
-    assert.deepEqual(payload.issues[0]?.repair_scope.visual_ids, ['fig-one']);
+    assert.deepEqual(payload.issues, [issue]);
   }
   const revisedEditor = { ...structuredClone(template.editor), views_fingerprint: readingFirstViewsFingerprint([en, zh]) };
+  if (blockedRecovery) {
+    const observation = { action_id: editorAction.action_id, run_id: editorAction.run_id, input_fingerprint: editorAction.input_fingerprint, port: editorAction.port, tool_call: { name: editorAction.host_action, arguments: editorAction.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-' + editorAction.action_id }) };
+    await recordReadingEvent(session, { kind: 'host_observation', action_id: editorAction.action_id, observation });
+    const intent = { kind: 'continuation-intent', action_id: editorAction.action_id, execution_id: 'editor-scope-recovery', message: 'Complete the original scoped Editor task.' };
+    await assert.rejects(() => recordReadingEvent(session, intent), /CALL_BUDGET_EXHAUSTED/);
+    const waiting = await nextReadingAction(session), checkpointBytes = await readFile(waiting.summary.state_ref), checkpoint = JSON.parse(checkpointBytes);
+    const { data } = JSON.parse(await readFile(join(runRoot, 'control/science-state.json'), 'utf8'));
+    const authorization = { authorization_id: 'synthetic-explicit-editor-recovery', reason: 'User approved scoped continuation and chart correction.', checkpoint_fingerprint: checkpoint.checkpoint_fingerprint, action_id: editorAction.action_id, max_additional_calls: 3, deadline: data.prepared.runControl.reading_first_binding.deadline,
+      chart_type_corrections: [{ visual_id: 'fig-one', chart_types: [{ knowledge_id: 'method', label: { en: 'Intervals', 'zh-CN': '区间图' }, panel: 'd,e' }] }] };
+    await assert.rejects(() => recordReadingEvent(session, { kind: 'authorize-repair-continuation', authorization: { ...authorization, checkpoint_fingerprint: 'wrong' } }), /AUTHORIZATION_INVALID/);
+    await assert.rejects(() => recordReadingEvent(session, { kind: 'authorize-repair-continuation', authorization: { ...authorization, chart_type_corrections: [{ ...authorization.chart_type_corrections[0], visual_id: 'unreviewed' }] } }), /VISUAL_CORRECTION_INVALID/);
+    await assert.rejects(() => recordReadingEvent(session, { kind: 'authorize-repair-continuation', authorization: { ...authorization, deadline: '2100-01-01T00:00:00Z' } }), /AUTHORIZATION_INVALID/);
+    await recordReadingEvent(session, { kind: 'authorize-repair-continuation', authorization });
+    assert.deepEqual(await readFile(waiting.summary.state_ref), checkpointBytes);
+    session = await resumeReadingSession({ runRoot });
+    await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+    await recordReadingEvent(session, { kind: 'render-assets', resources: [{ path: template.presentationCatalog.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length }, template.resources[1]], renderOptions: {} });
+    await recordReadingEvent(session, intent);
+    const continuation = await nextReadingAction(session);
+    assert.equal(continuation.host_action, 'ContinueTask');
+    assert.equal(continuation.host_handle, 'host-' + editorAction.action_id);
+    await recordReadingEvent(session, { kind: 'continuation-receipt', execution_id: intent.execution_id, observation: { execution_id: intent.execution_id, action_id: continuation.action_id, agent_id: continuation.host_handle, tool_call: { name: continuation.host_action, arguments: continuation.arguments }, raw_result_text: 'continued', status: 'observed' } });
+  }
   if (editorRecovery) {
     for (const language of ['en', 'zh-CN']) revisedEditor.languages[language].visuals = [{ id: 'fig-one', title: 'Recovered title', notes: [] }];
     const observation = { action_id: editorAction.action_id, run_id: editorAction.run_id, input_fingerprint: editorAction.input_fingerprint, port: editorAction.port, tool_call: { name: editorAction.host_action, arguments: editorAction.arguments }, raw_result_text: JSON.stringify({ agent_id: 'synthetic-editor-r2' }) };
@@ -761,9 +787,27 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
     await recordReadingEvent(session, { kind: 'render-assets', resources: [{ path: template.presentationCatalog.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length }, template.resources[1]], renderOptions: {} });
   } else await accept(editorAction, 'presentation-r2', revisedEditor);
   const local = await nextReadingAction(session);
+  if (chartTypeCorrection || blockedRecovery) {
+    const input = await readFile(join(runRoot, 'instructions', 'review-r2.txt'), 'utf8');
+    assert.match(input, /d,e/);
+    const { data } = JSON.parse(await readFile(join(runRoot, 'control/science-state.json'), 'utf8'));
+    assert.equal(data.prepared.runControl.reading_first_binding.max_total_calls, 15);
+  }
   if (visualCorrection) assert.match(await readFile(join(runRoot, 'instructions', 'review-r2.txt'), 'utf8'), /Recovered original caption/);
   await accept(local, 'review-r2', template.review);
-  assert.equal((await nextReadingAction(session)).status, 'reading_complete');
+  const done = await nextReadingAction(session);
+  assert.equal(done.status, 'reading_complete');
+  if (blockedRecovery) {
+    assert.equal(done.summary.budget.total_used, 16);
+    assert.equal(done.summary.budget.original_total_limit, 15);
+    assert.equal(done.summary.budget.additional_limit, 3);
+    assert.equal(done.summary.budget.additional_used, 1);
+    const published = await inspectReadingFirstPublicationSource(done.publication_source);
+    assert.equal(published.recipe.binding.max_total_calls, 15);
+    assert.equal(published.recipe.checkpoint.state.repairContinuation.authorization.max_additional_calls, 3);
+    assert.equal(published.presentation.visuals[0].chart_types[0].panel, 'd,e');
+    await readingRuntime.restoreReadingFirstPublicationSource(published.recipe);
+  }
 });
 
 test('empty enrichment policy preserves exact requests and instructions without gaps', async t => {

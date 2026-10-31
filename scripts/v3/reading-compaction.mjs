@@ -16,7 +16,7 @@ const stageGuidance = {
 
 function stageCompactionPrompt(boundary, continuation = {}) {
   const binding = continuation.binding ?? {};
-  const executionProfile = binding.configured_setup?.instruction_profile === 'configured-reading-2.1';
+  const executionProfile = ['configured-reading-2.1', 'configured-reading-2.2'].includes(binding.configured_setup?.instruction_profile);
   const metadata = {
     run_id: continuation.run_id ?? null, paper_id: continuation.paper_id ?? null,
     run_root: continuation.run_root ?? null, checkpoint_path: continuation.checkpoint_path ?? boundary.recovery.path ?? null,

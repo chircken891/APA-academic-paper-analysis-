@@ -1,12 +1,14 @@
 import { usesExecutionLedger, validateExecutionLedger, reserveExecution, markExecutionDispatched, recordExecutionReceipt, executionBudgetSummary } from './reading-execution-budget.mjs';
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, readFile, rename, writeFile, link, unlink } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, rename, writeFile, link, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { createConfiguredScienceRequest, getConfiguredReadingDispatchArguments, validateConfiguredReadingDispatch } from './configured-reading.mjs';
 import { createOwnedArtifactBroker, commitOwnedArtifact, readOwnedArtifact, repairOwnedArtifactReceipt } from './owned-artifact-store.mjs';
 import { ingestObservedRunStep } from './phase21-runner.mjs';
 import { fingerprintReadingFirst, buildReadingFirstHandoff, createReadingFirstRequests, snapshotReadingFirstRuntime, restoreReadingFirstRuntime } from './reading-first-runtime.mjs';
 import { compactionEnabled, compactionControlBindings, evaluateCompactionBoundary, assertCompactionSettled, registerCompactionDispatch } from './reading-compaction.mjs';
+import { normalizeHostReceipt, validateHostReceiptEvidence } from './reading-host-evidence.mjs';
+import { validateReadingResources } from './reading-resources.mjs';
 
 const roles = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'];
 const dependencies = { evidence: [], methods: ['evidence'], results: ['evidence'], interpretation: ['evidence', 'methods', 'results'], 'scientific-reading': ['evidence', 'methods', 'results', 'interpretation'], integration: ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading'] };
@@ -15,10 +17,11 @@ const copy = value => structuredClone(value);
 const hash = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const same = (a, b) => fingerprintReadingFirst(a) === fingerprintReadingFirst(b);
 const fail = code => { const error = new Error(code); error.code = code; throw error; };
+const strictEvidence = binding => binding?.configured_setup?.instruction_profile === 'configured-reading-2.2';
 const promptPath = new URL('../../prompts/v3/phase21-scientific-contracts.md', import.meta.url);
 function configuredPromptFiles(prepared) {
   const setup = prepared.runControl.reading_first_binding.configured_setup;
-  if (!['configured-reading-2.0','configured-reading-2.1'].includes(setup?.instruction_profile)) return null;
+  if (!['configured-reading-2.0','configured-reading-2.1','configured-reading-2.2'].includes(setup?.instruction_profile)) return null;
   if (!Array.isArray(setup.prompt_files) || !setup.prompt_files.length
     || setup.prompt_files.some(file => !isAbsolute(file.path ?? '') || !/^sha256:[a-f0-9]{64}$/.test(file.sha256 ?? '')
       || !Number.isSafeInteger(file.byte_length) || file.byte_length < 1)) fail('SCIENCE_PROMPT_BINDING_INVALID');
@@ -87,7 +90,7 @@ async function validateCurrent(state, { deadline = true } = {}) {
   const { data } = state, binding = data.prepared.runControl.reading_first_binding;
   if (deadline && Date.now() >= Date.parse(binding.deadline)) fail('SCIENCE_DEADLINE_EXPIRED');
   if (usesExecutionLedger(binding)) {
-    validateExecutionLedger(data.executionLedger,binding.max_total_calls);
+    validateExecutionLedger(data.executionLedger,binding.max_total_calls,{strict:strictEvidence(binding)});
     validateComputerControlObservations(data.computer_control_observations ?? []);
     const entries=roles.flatMap(role=>[data.entries[role],...(data.entries[role].correction ? [data.entries[role].correction] : [])]);
     if (data.executionLedger.filter(row=>row.kind==='initial').length !== entries.filter(entry=>entry.request).length) fail('SCIENCE_EXECUTION_LEDGER_INVALID');
@@ -101,7 +104,7 @@ async function validateCurrent(state, { deadline = true } = {}) {
   const promptFiles = configuredPromptFiles(data.prepared);
   if (promptFiles) {
     if (!same(data.prompt_files, promptFiles)) fail('SCIENCE_PROMPT_BINDING_INVALID');
-    for (const file of promptFiles) {
+    for (const file of strictEvidence(binding) ? [] : promptFiles) {
       const bytes = await readFile(file.path);
       if (hash(bytes) !== file.sha256 || bytes.length !== file.byte_length) fail('SCIENCE_PROMPT_CHANGED');
     }
@@ -128,9 +131,15 @@ async function validateCurrent(state, { deadline = true } = {}) {
       }
       if (entry.observation) {
         if (!entry.intent || !entry.raw_observation) fail('SCIENCE_OBSERVATION_INVALID');
+        if (strictEvidence(binding)) {
+          validateHostReceiptEvidence(entry.raw_observation, {strict:true});
+          for (const update of entry.host_updates ?? []) validateHostReceiptEvidence(update, {strict:true});
+        }
         // Replay historical source-envelope rejections with their original comparison;
         // a newly recorded return is validated by the corrected canonical comparison.
-        const checked = ingestObservedRunStep({ packet: entry.request.packet, emittedStep: entry.request.emittedStep, observation: entry.raw_observation, run: { run_id: data.prepared.runControl.run_id }, legacySourceComparison: entry.observation.status === 'blocked' && entry.observation.blocked_reason === 'EMITTED_STEP_PACKET_SCOPE_MISMATCH', now: entry.observation.observed_at });
+        const checked = entry.raw_observation.status === 'outcome_unknown' && strictEvidence(binding)
+          ? {status:'outcome_unknown',action_id:entry.intent.action_id,agent_id:null}
+          : ingestObservedRunStep({ packet: entry.request.packet, emittedStep: entry.request.emittedStep, observation: entry.raw_observation, run: { run_id: data.prepared.runControl.run_id }, legacySourceComparison: entry.observation.status === 'blocked' && entry.observation.blocked_reason === 'EMITTED_STEP_PACKET_SCOPE_MISMATCH', now: entry.observation.observed_at });
         if (!same(checked, entry.observation)) fail('SCIENCE_OBSERVATION_INVALID');
       }
       if (entry.content_base64) {
@@ -143,6 +152,23 @@ async function validateCurrent(state, { deadline = true } = {}) {
       }
     }
   }
+  if (strictEvidence(binding) && data.results_resources) {
+    const pending=data.results_resources, spec=binding.configured_setup.results_resources, bytes=Buffer.from(pending.manifest_base64 ?? '', 'base64');
+    if (hash(bytes)!==pending.manifest_sha256 || pending.manifest_sha256!==pending.resource_manifest?.sha256
+      || bytes.length!==pending.resource_manifest?.byte_length || !bytes.equals(await readFile(ownedPath(data.prepared.paths.runRoot,spec.manifest_task.native_path)))) fail('SCIENCE_RESOURCE_MANIFEST_CHANGED');
+    validateReadingResources({manifest:JSON.parse(bytes.toString('utf8')),resourcesRoot:ownedPath(data.prepared.paths.runRoot,spec.output_root),sources:data.prepared.scientificInput.sources});
+    if (pending.receipt) await checkedResultsResources(state);
+  }
+}
+async function checkedResultsResources(state) {
+  const data = state.data, spec = data.prepared.runControl.reading_first_binding.configured_setup.results_resources;
+  const task = spec.manifest_task, root = data.prepared.paths.runRoot, saved = await readOwnedArtifact({artifactRoot:root,artifactId:task.artifact_id});
+  const entry = data.results_resources;
+  if (!saved || !receiptMatches(saved.receipt,state,task) || !same(saved.receipt,entry.receipt)) fail('SCIENCE_RESOURCE_RECEIPT_INVALID');
+  const ref = {path:ownedPath(root,task.artifact_path),resources_root:ownedPath(root,spec.output_root),sha256:saved.receipt.sha256,byte_length:saved.receipt.byte_length};
+  if (!same(ref,entry.resource_manifest)) fail('SCIENCE_RESOURCE_RECEIPT_INVALID');
+  const resources = validateReadingResources({manifest:JSON.parse(saved.bytes.toString('utf8')),resourcesRoot:ref.resources_root,sources:data.prepared.scientificInput.sources});
+  return {resource_manifest:ref,receipt:copy(saved.receipt),sources:copy(data.prepared.scientificInput.sources),resources};
 }
 function envelope(data) { return { schema_version: 'science-controller-state-1.0', data, fingerprint: fingerprintReadingFirst(data) }; }
 async function readState(path) {
@@ -200,6 +226,13 @@ function validateSetup(prepared, tasks, brokerConfig, statePath) {
     }
     if (ids.has(task.artifact_id)) fail('SCIENCE_OUTPUT_CONFLICT'); ids.add(task.artifact_id);
   }
+  if (strictEvidence(binding)) {
+    const spec = binding.configured_setup.results_resources, task = spec?.manifest_task;
+    if (!task || task.role !== 'results' || task.owner_actor_id !== tasks.results.owner_actor_id || !['artifact_id','artifact_path','native_path','revision'].every(key => typeof task[key] === 'string' && task[key]) || ids.has(task.artifact_id)
+      || !brokerConfig.authorized_bindings.some(row => row.run_id === runId && row.actor_id === task.owner_actor_id && row.role === task.role && row.artifact_path === task.artifact_path && row.revision === task.revision)) fail('SCIENCE_RESOURCE_TASK_INVALID');
+    for (const path of [task.artifact_path,task.native_path]) { const target=ownedPath(prepared.paths.runRoot,path).normalize('NFC').toLowerCase(); if(paths.has(target)) fail('SCIENCE_OUTPUT_CONFLICT'); paths.add(target); }
+    ownedPath(prepared.paths.runRoot,spec.output_root);
+  }
   const stateTarget = resolve(statePath);
   for (const expected of compactionControlBindings(prepared.runControl)) {
     if (!brokerConfig.authorized_bindings.some(row => same(row, expected))) fail('SCIENCE_COMPACTION_CHECKPOINT_UNAUTHORIZED');
@@ -254,8 +287,8 @@ export async function reserveScienceContinuation({controller,role,executionId,ac
     if (!data.executionLedger.some(row=>row.execution_id===executionId) && data.executionLedger.length+1+remainingScience+remainingReading>b.max_total_calls) fail('SCIENCE_BUDGET_EXHAUSTED');
     const result=reserveExecution(data.executionLedger,{execution_id:executionId,task_id:task.task_id,action_id:actionId,handle,tool,arguments:args,kind:'continuation',...(context === undefined ? {} : {context:copy(context)})},b.max_total_calls); await save(state); return result; });
 }
-export async function markScienceContinuationDispatched({controller,executionId} = {}) { const s=controllerState(controller); return serial(s,async()=>{ await validateCurrent(s); const row=s.data.executionLedger?.find(x=>x.execution_id===executionId); if (row?.kind!=='continuation') fail('EXECUTION_INTENT_INVALID'); const result=markExecutionDispatched(s.data.executionLedger,executionId); await save(s); return result; }); }
-export async function recordScienceContinuationReceipt({controller,executionId,receipt} = {}) { const s=controllerState(controller); return serial(s,async()=>{ await validateCurrent(s); if (s.data.executionLedger?.find(row=>row.execution_id===executionId)?.kind!=='continuation') fail('EXECUTION_RECEIPT_INVALID'); const result=recordExecutionReceipt(s.data.executionLedger,executionId,receipt); await save(s); return result; }); }
+export async function markScienceContinuationDispatched({controller,executionId} = {}) { const s=controllerState(controller); return serial(s,async()=>{ await validateCurrent(s); const row=s.data.executionLedger?.find(x=>x.execution_id===executionId); if (row?.kind!=='continuation' || strictEvidence(s.data.prepared.runControl.reading_first_binding) && row.status!=='prepared') fail('EXECUTION_INTENT_INVALID'); const result=markExecutionDispatched(s.data.executionLedger,executionId); await save(s); return result; }); }
+export async function recordScienceContinuationReceipt({controller,executionId,receipt} = {}) { const s=controllerState(controller); return serial(s,async()=>{ await validateCurrent(s); if (s.data.executionLedger?.find(row=>row.execution_id===executionId)?.kind!=='continuation') fail('EXECUTION_RECEIPT_INVALID'); const strict=strictEvidence(s.data.prepared.runControl.reading_first_binding); const normalized=normalizeHostReceipt(receipt,{strict}); const result=recordExecutionReceipt(s.data.executionLedger,executionId,normalized,{strict}); await save(s); return result; }); }
 export function getScienceState(controller) {
   const state = controllerState(controller), { data, path } = state, expired = Date.now() >= Date.parse(data.prepared.runControl.reading_first_binding.deadline);
   return copy({ version: data.version, run_id: data.prepared.runControl.run_id, state_path: path, deadline: data.prepared.runControl.reading_first_binding.deadline, expired,
@@ -372,7 +405,15 @@ export async function prepareScienceRequests({ controller } = {}) {
           const record = await readOwnedArtifact({ artifactRoot: state.data.prepared.paths.runRoot, artifactId: state.data.tasks[dep].artifact_id });
           upstream[dep] = { receipt: record.receipt, content: JSON.parse(record.bytes.toString('utf8')) };
         }
-        const request = createConfiguredScienceRequest({ prepared: state.data.prepared, role, task: activeTask(state.data, role), dispatchContext: state.broker.dispatchContext, payload: { ...(state.data.payloads[role] ?? {}), upstream } });
+        let resourcePayload = {};
+        if (strictEvidence(state.data.prepared.runControl.reading_first_binding)) {
+          const root=state.data.prepared.paths.runRoot, spec=state.data.prepared.runControl.reading_first_binding.configured_setup.results_resources;
+          if (role === 'results') {
+            const output=ownedPath(root,spec.output_root); await mkdir(output,{recursive:true});
+            resourcePayload={results_resources:{resources_root:output,native_manifest_path:ownedPath(root,spec.manifest_task.native_path),owned_manifest_path:ownedPath(root,spec.manifest_task.artifact_path),sources:copy(state.data.prepared.scientificInput.sources)}};
+          } else if (role === 'integration') resourcePayload={results_resources:await checkedResultsResources(state)};
+        }
+        const request = createConfiguredScienceRequest({ prepared: state.data.prepared, role, task: activeTask(state.data, role), dispatchContext: state.broker.dispatchContext, payload: { ...(state.data.payloads[role] ?? {}), upstream, ...resourcePayload } });
         if (usesExecutionLedger(state.data.prepared.runControl.reading_first_binding)) reserveExecution(state.data.executionLedger,{execution_id:request.emittedStep.action_id,task_id:activeTask(state.data,role).task_id,action_id:request.emittedStep.action_id,handle:null,tool:request.emittedStep.action,arguments:request.emittedStep.arguments,kind:'initial'},state.data.prepared.runControl.reading_first_binding.max_total_calls);
         activeEntry(state.data, role).request = copy(request);
       }
@@ -404,6 +445,8 @@ export async function recordScienceHostObservation({ controller, role, observati
     await validateCurrent(state);
     const entry = activeEntry(state.data, role);
     if (!entry?.intent) fail('SCIENCE_OBSERVATION_UNAVAILABLE');
+    const strict = strictEvidence(state.data.prepared.runControl.reading_first_binding);
+    observation = normalizeHostReceipt(observation, {strict});
     if (observation?.kind === 'host_update') {
       if (entry.observation?.status !== 'observed' || observation.action_id !== entry.intent.action_id || observation.agent_id !== entry.observation.agent_id || typeof observation.raw_result_text !== 'string' || !observation.tool_call || typeof observation.tool_call.name !== 'string' || !observation.tool_call.arguments || typeof observation.tool_call.arguments !== 'object') fail('SCIENCE_HOST_UPDATE_INVALID');
       const previous = (entry.host_updates ?? []).find(update => observation.host_event_id
@@ -419,13 +462,20 @@ export async function recordScienceHostObservation({ controller, role, observati
     if (entry.observation?.status === 'observed') fail('SCIENCE_HOST_EVENT_CONFLICT');
     if (entry.receipt) fail('SCIENCE_OBSERVATION_UNAVAILABLE');
     const request = entry.request;
+    if (strict && observation.status === 'outcome_unknown') {
+      const checked = {status:'outcome_unknown',action_id:entry.intent.action_id,agent_id:null};
+      recordExecutionReceipt(state.data.executionLedger,request.emittedStep.action_id,observation,{strict});
+      entry.raw_observation=copy(observation); entry.observation=checked;
+      (entry.observations ??= []).push({raw:copy(observation),validated:copy(checked)});
+      await save(state); return copy(checked);
+    }
     const checked = ingestObservedRunStep({ packet: request.packet, emittedStep: request.emittedStep, observation, run: { run_id: state.data.prepared.runControl.run_id } });
     if (entry.raw_observation && same(entry.raw_observation, observation) && same(entry.observation, checked)) {
       if (checked.status !== 'observed') fail('SCIENCE_OBSERVATION_INVALID');
       return copy(checked);
     }
     if (entry.observation?.agent_id && checked.agent_id && entry.observation.agent_id !== checked.agent_id) fail('SCIENCE_HOST_HANDLE_MISMATCH');
-    if (usesExecutionLedger(state.data.prepared.runControl.reading_first_binding) && checked.status === 'observed') recordExecutionReceipt(state.data.executionLedger,request.emittedStep.action_id,observation);
+    if (usesExecutionLedger(state.data.prepared.runControl.reading_first_binding) && checked.status === 'observed') recordExecutionReceipt(state.data.executionLedger,request.emittedStep.action_id,observation,{strict});
     entry.raw_observation = copy(observation); entry.observation = copy(checked);
     (entry.observations ??= []).push({ raw: copy(observation), validated: copy(checked) });
     await save(state);
@@ -440,6 +490,45 @@ export async function acceptScienceResult({ controller, role } = {}) {
     const entry = activeEntry(state.data, role), task = activeTask(state.data, role), root = state.data.prepared.paths.runRoot;
     if (!entry?.intent || entry.observation?.status !== 'observed') fail('SCIENCE_RESULT_UNAVAILABLE');
     if (entry.receipt) return copy(entry.receipt);
+    const strict = strictEvidence(state.data.prepared.runControl.reading_first_binding);
+    if (strict && (role === 'results' || role === 'integration')) {
+      const nativeResult = await readFile(ownedPath(root,task.native_path));
+      const value = JSON.parse(nativeResult.toString('utf8'));
+      if (role === 'results') {
+        const spec=state.data.prepared.runControl.reading_first_binding.configured_setup.results_resources, mt=spec.manifest_task;
+        const native=ownedPath(root,mt.native_path), stat=await lstat(native);
+        if (!stat.isFile() || stat.isSymbolicLink() || await realpath(native) !== native) fail('SCIENCE_RESOURCE_MANIFEST_INVALID');
+        const bytes=await readFile(native), ref={path:ownedPath(root,mt.artifact_path),resources_root:ownedPath(root,spec.output_root),sha256:hash(bytes),byte_length:bytes.length};
+        if (!same(value.resource_manifest,ref)) fail('SCIENCE_RESOURCE_MANIFEST_INVALID');
+        validateReadingResources({manifest:JSON.parse(bytes.toString('utf8')),resourcesRoot:ref.resources_root,sources:state.data.prepared.scientificInput.sources});
+        const pending={resource_manifest:ref,manifest_base64:bytes.toString('base64'),manifest_sha256:hash(bytes)};
+        if (state.data.results_resources) {
+          const {receipt:ignored,...saved}=state.data.results_resources;
+          if (!same(saved,pending)) fail('SCIENCE_RESOURCE_MANIFEST_CHANGED');
+        } else {
+          entry.content_base64=nativeResult.toString('base64'); entry.content_sha256=hash(nativeResult);
+          state.data.results_resources=pending; await save(state);
+        }
+        let existing=await readOwnedArtifact({artifactRoot:root,artifactId:mt.artifact_id});
+        if (!existing) {
+          const issue=()=>state.broker.issueCapability({runId:state.data.prepared.runControl.run_id,actorId:mt.owner_actor_id,role:mt.role,artifactPath:mt.artifact_path,revision:mt.revision});
+          const artifact={artifact_id:mt.artifact_id,path:mt.artifact_path,content:bytes};
+          let receipt;
+          try { receipt=await commitOwnedArtifact({artifactRoot:root,dispatchContext:state.broker.dispatchContext,capability:issue(),artifact,expectedRevision:mt.revision}); }
+          catch (error) {
+            if (error.code!=='ARTIFACT_ALREADY_EXISTS') throw error;
+            receipt=await repairOwnedArtifactReceipt({artifactRoot:root,dispatchContext:state.broker.dispatchContext,capability:issue(),artifact,expectedRevision:mt.revision,statePath:state.path,role:'results-resources'});
+          }
+          existing={receipt,bytes};
+        }
+        if (!receiptMatches(existing.receipt,state,mt) || !existing.bytes.equals(bytes)) fail('SCIENCE_RESOURCE_RECEIPT_INVALID');
+        state.data.results_resources={...pending,receipt:copy(existing.receipt)}; await save(state);
+      } else {
+        const handoff=await checkedResultsResources(state), visuals=value.presentation?.visuals ?? value.visual_resources;
+        if (!same(value.visual_handoff?.resource_manifest,handoff.resource_manifest) || !Array.isArray(visuals)
+          || visuals.some(visual=>!handoff.resources.some(row=>row.id===visual.id && row.path===visual.path && row.source_id===visual.source_id && same(row.locator,visual.locator)))) fail('SCIENCE_RESOURCE_HANDOFF_INVALID');
+      }
+    }
     if (!entry.content_base64) {
       const bytes = await readFile(ownedPath(root, task.native_path));
       const parsed = JSON.parse(bytes.toString('utf8'));
@@ -486,10 +575,11 @@ export async function createScienceHandoff({ controller, checkpointTask } = {}) 
     if (state.data.handoff && !same(state.data.handoff.checkpointTask, checkpointTask)) fail('SCIENCE_CHECKPOINT_CHANGED');
     const runControl = { runId, artifactRoot: root, dispatchContext: state.broker.dispatchContext };
     const handoff = await buildReadingFirstHandoff({ run: { run_id: runId }, dispatchContext: state.broker.dispatchContext, artifactRoot: root, scientificInput: state.data.prepared.scientificInput });
+    const visualHandoff = strictEvidence(binding) ? await checkedResultsResources(state) : undefined;
     if (state.data.handoff?.status === 'transferred') {
       const saved = await readOwnedArtifact({ artifactRoot: root, artifactId: checkpointTask.artifact_id });
       if (!saved || !receiptMatches(saved.receipt, state, checkpointTask) || !same(saved.receipt, state.data.handoff.checkpointReceipt) || !saved.bytes.equals(Buffer.from(JSON.stringify(state.data.handoff.snapshot)))) fail('SCIENCE_CHECKPOINT_INVALID');
-      return { status: 'transferred', handoff, checkpointReceipt: copy(saved.receipt), runControl, broker: state.broker };
+      return { status: 'transferred', handoff, checkpointReceipt: copy(saved.receipt), runControl, broker: state.broker, ...(visualHandoff ? {visual_handoff:visualHandoff} : {}) };
     }
     if (!state.data.handoff) {
       state.data.handoff = { status: 'request_preparing', checkpointTask: copy(checkpointTask), instructionToken: randomUUID() };
@@ -522,6 +612,6 @@ export async function createScienceHandoff({ controller, checkpointTask } = {}) 
     if (entry.status !== 'transferred') {
       state.data.handoff.checkpointReceipt = copy(existing.receipt); state.data.handoff.status = 'transferred'; await save(state);
     }
-    return { status: 'transferred', handoff, controller: restored.controller, requests: restored.requests, checkpointReceipt: copy(existing.receipt), runControl, broker: state.broker };
+    return { status: 'transferred', handoff, controller: restored.controller, requests: restored.requests, checkpointReceipt: copy(existing.receipt), runControl, broker: state.broker, ...(visualHandoff ? {visual_handoff:visualHandoff} : {}) };
   });
 }

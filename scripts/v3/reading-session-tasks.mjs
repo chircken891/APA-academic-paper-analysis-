@@ -6,6 +6,8 @@ const fail = code => { throw Object.assign(new Error(code), { code }); };
 
 /** Predeclare task identities and finite control slots before any role dispatch. */
 export function buildReadingSessionTasks({ runId, scientificInput, sourceLanguage, checkpointCount, controllerActorId = 'controller', taskOverrides = {}, scienceTaskOverrides = {}, includeRepairs = false, presentationMode = 'reading-editor', enrichmentPolicy, instructionProfile } = {}) {
+  const modern = instructionProfile === 'configured-reading-2.2';
+  const translationProgress = ['configured-reading-2.1', 'configured-reading-2.2'].includes(instructionProfile);
   if (!/^[a-zA-Z0-9_-]+$/.test(runId ?? '') || !['en', 'zh-CN'].includes(sourceLanguage) || !nonempty(controllerActorId)) fail('READING_SESSION_INPUT_INVALID');
   const ids = scientificInput?.role_artifacts;
   if (!Array.isArray(ids) || ids.length !== 6 || ids.some(id => !nonempty(id)) || new Set(ids).size !== ids.length) fail('READING_SESSION_SCIENCE_IDENTITIES');
@@ -26,11 +28,11 @@ export function buildReadingSessionTasks({ runId, scientificInput, sourceLanguag
     for (const suffix of includeRepairs ? ['', '-r2'] : ['']) {
       const name = key + suffix;
       const base = task(name, role, 'reading-' + name, 'reading');
-      if (instructionProfile === 'configured-reading-2.1' && role === 'translation') Object.assign(base, { source_view_path: `translation/${name}/source.json`, translation_context_path: `translation/${name}/context.json`, progress_path: `translation/${name}/progress.json` });
+      if (translationProgress && role === 'translation') Object.assign(base, { source_view_path: `translation/${name}/source.json`, translation_context_path: `translation/${name}/context.json`, progress_path: `translation/${name}/progress.json` });
       const override = taskOverrides[name] ?? {};
       if (!override || typeof override !== 'object' || Array.isArray(override) || override.role !== undefined && override.role !== role) fail('READING_SESSION_TASK_OVERRIDE');
       taskBindings[name] = { ...base, ...override };
-      if (instructionProfile === 'configured-reading-2.1' && role === 'translation' && !['source_view_path', 'translation_context_path', 'progress_path'].every(field => nonempty(taskBindings[name][field]))) fail('READING_SESSION_TASK_CONFLICT');
+      if (translationProgress && role === 'translation' && !['source_view_path', 'translation_context_path', 'progress_path'].every(field => nonempty(taskBindings[name][field]))) fail('READING_SESSION_TASK_CONFLICT');
     }
   }
   if (enrichmentPolicy !== undefined) {
@@ -45,7 +47,9 @@ export function buildReadingSessionTasks({ runId, scientificInput, sourceLanguag
   }
   if (Object.keys(taskOverrides).some(key => !Object.hasOwn(taskBindings, key))) fail('READING_SESSION_TASK_OVERRIDE');
   const checkpoints = Array.from({ length: checkpointCount }, (_, i) => ({ artifact_id: `reading-checkpoint-${i + 1}`, artifact_path: `control/reading-checkpoint-${i + 1}.json`, revision: String(i + 1), owner_actor_id: controllerActorId, role: 'control' }));
-  const all = [...Object.values(scienceTasks), ...Object.values(taskBindings), ...checkpoints];
+  const sessionCheckpoints = modern ? checkpoints.map((row, i) => ({ ...row, artifact_id: `session-state-${i + 1}`, artifact_path: `control/session-state-${i + 1}.json` })) : [];
+  const resultsResources = modern ? { output_root: 'resources/results', manifest_task: { ...task('results-resources', 'results', 'results-resources', 'science'), owner_actor_id: 'results' } } : undefined;
+  const all = [...Object.values(scienceTasks), ...Object.values(taskBindings), ...checkpoints, ...sessionCheckpoints, ...(resultsResources ? [resultsResources.manifest_task] : [])];
   const paths = new Set(), artifactIds = new Set(), taskIds = new Set(), names = new Set();
   for (const item of all) {
     if (!['artifact_id', 'artifact_path', 'revision', 'owner_actor_id', 'role'].every(key => nonempty(item[key])) || artifactIds.has(item.artifact_id)) fail('READING_SESSION_TASK_CONFLICT');
@@ -69,5 +73,5 @@ export function buildReadingSessionTasks({ runId, scientificInput, sourceLanguag
     roots.add(normalized);
   }
   const authorizedBindings = all.map(item => ({ run_id: runId, actor_id: item.owner_actor_id, role: item.role, artifact_path: item.artifact_path, revision: item.revision }));
-  return { scienceTasks, taskBindings, checkpoints, authorizedBindings };
+  return { scienceTasks, taskBindings, checkpoints, authorizedBindings, ...(modern ? { resultsResources, sessionCheckpoints } : {}) };
 }

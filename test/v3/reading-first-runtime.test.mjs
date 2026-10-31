@@ -171,7 +171,7 @@ test('a failed reading reminder save cannot expose a prompt or leave dispatch un
   assert.throws(() => dispatchArguments(s, restored.requests[0]), /APA_COMPACTION_BOUNDARY_REQUIRED/);
 });
 
-async function setup(t, { presentation, presentationRequired = false, writingMode = 'independent', sourceLanguage = 'en', presentationMode = 'writer', priorCalls = 0, maxTotalCalls, roleReplyContract, enrichmentPolicy, handoffProfile, legacyPresentationProfile, legacyRepairRouting = false, invalidRepairRouting = false, maxCalls = presentationMode==='reading-editor'?7:6, firstWritingLanguage, integrationContent = {}, writingSkills = {}, compactionPolicy } = {}) {
+async function setup(t, { instructionProfile = 'configured-reading-1.0', presentation, presentationRequired = false, writingMode = 'independent', sourceLanguage = 'en', presentationMode = 'writer', priorCalls = 0, maxTotalCalls, roleReplyContract, enrichmentPolicy, handoffProfile, legacyPresentationProfile, legacyRepairRouting = false, invalidRepairRouting = false, maxCalls = presentationMode==='reading-editor'?7:6, firstWritingLanguage, integrationContent = {}, writingSkills = {}, compactionPolicy } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'reading-first-'));
   t.after(() => rm(root, {recursive:true,force:true}));
   const sourceBytes=Buffer.from('Synthetic original source: design, result and limitation.');
@@ -182,7 +182,7 @@ async function setup(t, { presentation, presentationRequired = false, writingMod
   const input={identity:{paper_id:presentation ? 'pap_'+'a'.repeat(32) : 'synthetic',run_id:'run'},sources:[{...(enrichmentPolicy ? {id:'main'} : {}),path:join(root,'source.pdf'),sha256:sha(sourceBytes),byte_length:sourceBytes.length}],context:'Read all existing material as a connected account.',role_artifacts:roles};
   // source-translation takes its writing rules only from a configured setup, so those runs use a configured fixture with all eleven roles.
   const configuredSetup=writingMode==='source-translation' ? {schema_version:'apa-configured-reading-1.0',config_fingerprint:sha(Buffer.from('config')),paths:{runRoot:root},
-    role_model_policy:createConfiguredApaRoleModelPolicy({model:'gpt-6-astra',reasoning_effort:'high'},Object.fromEntries(APA_CONFIGURED_ROLES.map(role=>[role,{model:'gpt-6-astra',reasoning_effort:'high'}]))),...buildConfiguredReadingInstructions(writingSkills,{instructionProfile:'configured-reading-1.0'})} : undefined;
+    role_model_policy:createConfiguredApaRoleModelPolicy({model:'gpt-6-astra',reasoning_effort:'high'},Object.fromEntries(APA_CONFIGURED_ROLES.map(role=>[role,{model:'gpt-6-astra',reasoning_effort:'high'}]))),...buildConfiguredReadingInstructions(writingSkills,{instructionProfile})} : undefined;
   const runBinding=createReadingFirstRunControl({configuredSetup,presentationMode,writingMode,sourceLanguage,firstWritingLanguage,presentationRequired,priorCalls,maxTotalCalls,roleReplyContract,enrichmentPolicy,handoffProfile,compactionPolicy,runId:'run',scientificInput:input,mainSession:{model:'gpt-6-astra',reasoning_effort:'high'},authorizationId:'synthetic-only',maxCalls,deadline:'2099-01-01T00:00:00Z',taskBindings:tasks});
   const binding=structuredClone(runBinding.reading_first_binding);
   if (legacyPresentationProfile) {
@@ -210,7 +210,7 @@ async function setup(t, { presentation, presentationRequired = false, writingMod
   assert.equal(scienceResult.chain.source_check,undefined);
   const handoff=await buildPreRenderHandoff({run:{run_id:'run',workflow_profile:READING_FIRST_PROFILE},dispatchContext:broker.dispatchContext,artifactRoot:root,scientificInput:input});
   const runControl={runId:'run',artifactRoot:root,dispatchContext:broker.dispatchContext};
-  const created=createLanguageRequests({handoff,runControl});
+  const created=instructionProfile==='configured-reading-2.2' ? readingApi.createReadingFirstRequests({handoff,runControl,executionLedger:[]}) : createLanguageRequests({handoff,runControl});
   assert.equal(created.ok,true,JSON.stringify(created.errors));
   const complete=async(request,value)=>{
     await mkdir(join(root,'native'),{recursive:true});
@@ -1497,4 +1497,36 @@ test('existing writing modes keep byte-identical Writer revision requests', asyn
     assert.deepEqual({ instruction_fingerprint, configuration_fingerprint }, EXISTING_MODE_REVISIONS[writingMode + ':en-r2']);
     assert.doesNotMatch(message, /translation-1\.0|translation_context/);
   }
+});
+
+
+test('2.2 reading runtime uses frozen configured rules and keeps unknown receipts unobserved', async t => {
+  const s = await setup(t, {writingMode:'source-translation',instructionProfile:'configured-reading-2.2',maxTotalCalls:8});
+  const {controller,requests:[request]} = s.created;
+  assert.equal(readingApi.snapshotReadingFirstRuntime(controller).prompt_fingerprint, fingerprintReadingFirst(s.binding.configured_setup.prompt_files));
+  readingApi.recordReadingFirstRequestEvent({controller,request,eventKey:'intent',payload:{action_id:request.emittedStep.action_id}});
+  const unknown = {status:'observed',raw_result_text:''};
+  const recorded = readingApi.recordReadingFirstRequestEvent({controller,request,eventKey:'host_observation',payload:unknown});
+  assert.equal(recorded.payload.status,'outcome_unknown');
+  assert.equal(readingApi.snapshotReadingFirstRuntime(controller).state.executionLedger[0].status,'issued');
+  const raw = '{"agent_id":"synthetic"}', path=join(s.root,'host.txt');
+  await writeFile(path,raw);
+  const observed={status:'observed',raw_result_text:raw,evidence:{kind:'raw',capture:'direct',source_reference:path,sha256:createHash('sha256').update(raw).digest('hex')}};
+  readingApi.recordReadingFirstRequestEvent({controller,request,eventKey:'host_observation',payload:observed});
+  assert.equal(readingApi.snapshotReadingFirstRuntime(controller).state.executionLedger[0].status,'observed');
+});
+
+test('2.2 retains frozen support instructions when a runtime repair changes prompt files', async t => {
+  const s = await setup(t, {writingMode:'source-translation',instructionProfile:'configured-reading-2.2',maxTotalCalls:8,
+    roleReplyContract:getRoleReplyContract(),handoffProfile:SCIENCE_INDEX_PROFILE});
+  const original=fs.readFileSync;
+  fs.readFileSync=function(path,...args) {
+    if (/science-index-1\.0\.md|role-reply-1\.0\.md|reading-editor-1\.3\.md/.test(String(path))) return Buffer.from('changed runtime prompt');
+    return original.call(this,path,...args);
+  };
+  syncBuiltinESMExports();
+  try {
+    assert.doesNotThrow(()=>readingApi.getReadingFirstPendingRequests(s.created.controller));
+    assert.equal(s.binding.configured_setup.frozen_support.science_index.metadata.profile,SCIENCE_INDEX_PROFILE);
+  } finally {fs.readFileSync=original;syncBuiltinESMExports();}
 });

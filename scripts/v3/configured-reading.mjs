@@ -11,28 +11,54 @@ import { getRoleReplyContract, loadRoleReplyContract } from './role-reply-contra
 import { readCommittedReadingFirstKnowledgeRegistry, assertCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
 import { readingEditorInstructions } from './reading-first-editor-contract.mjs';
 import { COMPACTION_POLICY, compactionControlBindings, assertCompactionDispatchAllowed } from './reading-compaction.mjs';
+import { captureReadingRuntime } from './reading-runtime-binding.mjs';
 
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
 const sectionsOf = bytes => Object.fromEntries([...String(bytes).matchAll(/^## (.+)\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/gm)].map(match => [match[1], match[2].trim()]));
 const scienceSections = { evidence: 'Evidence/Coverage Mapper', methods: 'Design/Methods Specialist', results: 'Results/Visuals Specialist', interpretation: 'Interpretation/Appraisal Specialist', 'scientific-reading': 'Scientific Reading Synthesizer', integration: 'Integrator' };
 
-export const DEFAULT_CONFIGURED_INSTRUCTION_PROFILE = 'configured-reading-2.1';
+export const DEFAULT_CONFIGURED_INSTRUCTION_PROFILE = 'configured-reading-2.2';
+
+function freezeSupportPrompt(name, profile, metadata) {
+  const bytes = readFileSync(new URL('../../prompts/v3/' + name, import.meta.url));
+  const actual = { profile, sha256: sha(bytes), byte_length: bytes.length };
+  if (metadata && fingerprintReadingFirst(metadata) !== fingerprintReadingFirst(actual)) throw new Error('APA_CONFIGURED_SUPPORT_PROMPT_CHANGED');
+  return { content: bytes.toString('utf8'), metadata: actual };
+}
+
+function configuredRoleReply(binding) {
+  if (binding.configured_setup?.instruction_profile !== 'configured-reading-2.2') return loadRoleReplyContract(binding.role_reply_contract);
+  if (binding.role_reply_contract === undefined) return '';
+  const frozen = binding.configured_setup.frozen_support?.role_reply;
+  if (typeof frozen?.content !== 'string' || fingerprintReadingFirst(frozen.metadata) !== fingerprintReadingFirst(binding.role_reply_contract)
+    || frozen.metadata?.profile !== 'role-reply-1.0' || sha(Buffer.from(frozen.content)) !== frozen.metadata.sha256
+    || Buffer.byteLength(frozen.content) !== frozen.metadata.byte_length) throw new Error('APA_CONFIGURED_SUPPORT_PROMPT_INVALID');
+  return frozen.content;
+}
+
+
+export function deriveConfiguredMaxCalls({ maxTotalCalls, presentationMode } = {}) {
+  const editor = presentationMode === 'reading-editor';
+  const result = Math.min(editor ? 8 : 6, maxTotalCalls - 6);
+  if (!Number.isSafeInteger(maxTotalCalls) || result < (editor ? 4 : 3)) throw new Error('APA_CONFIGURED_CALL_BUDGET_INVALID');
+  return result;
+}
 
 /** Freeze selected guidance into the binding. Disabled skills contribute no optional instructions. */
 export function buildConfiguredReadingInstructions(writingSkills = {}, { instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE } = {}) {
-  if (['configured-reading-2.0', 'configured-reading-2.1'].includes(instructionProfile)) {
-    const version = instructionProfile === 'configured-reading-2.1' ? '2.1' : '2.0';
+  if (['configured-reading-2.0', 'configured-reading-2.1', 'configured-reading-2.2'].includes(instructionProfile)) {
+    const version = instructionProfile.slice(-3);
     const urls = [`science-configured-${version}.md`, `reading-configured-${version}.md`, 'reading-editor-1.3.md'].map(name => new URL('../../prompts/v3/' + name, import.meta.url));
     const buffers = urls.map(url => readFileSync(url));
     const sections = sectionsOf(buffers[1]);
     sections['Reading Editor'] = buffers[2].toString('utf8').trim();
-    if (version === '2.1') sections['Reading Editor'] = sections['Reading Editor'].replace("map: {nodes: [{id: 'registered-map-node-id', stage: 'design'|'measurement'|'finding'|'limit', primary: true}]}", "map: {nodes: [{id: 'registered-step-id', stage: 'design'}, {id: 'registered-finding-id', stage: 'finding', primary: true}]}") + '\n\nUse design or measurement for step nodes and finding or limit for finding nodes. Only a finding may have primary, which must be boolean. Include every registered step. Run the existing deterministic editor validation through Controller; repair invalid fields before handoff.';
+    if (version === '2.1' || version === '2.2') sections['Reading Editor'] = sections['Reading Editor'].replace("map: {nodes: [{id: 'registered-map-node-id', stage: 'design'|'measurement'|'finding'|'limit', primary: true}]}", "map: {nodes: [{id: 'registered-step-id', stage: 'design'}, {id: 'registered-finding-id', stage: 'finding', primary: true}]}") + '\n\nUse design or measurement for step nodes and finding or limit for finding nodes. Only a finding may have primary, which must be boolean. Include every registered step. Run the existing deterministic editor validation through Controller; repair invalid fields before handoff.';
     const writingInstructions = Object.fromEntries(['en', 'zh-CN'].map(language => [language, Object.entries(writingSkills)
       .filter(([key]) => key !== (language === 'en' ? 'humanizer-zh' : 'humanizer'))
       .map(([key, guide]) => 'Selected optional writing guidance: ' + key + '\n' + JSON.stringify({ path: guide.path, sha256: sha(Buffer.from(guide.content)) })
         + '\nApply only guidance relevant to this language and the assigned article module, within the existing APA output contract. Do not run skill workflows, commands, extra roles or review loops.\n' + guide.content).join('\n\n')]));
-    return { instruction_profile: instructionProfile, prompt_files: urls.map((url, index) => ({ path: fileURLToPath(url), sha256: sha(buffers[index]), byte_length: buffers[index].length })),
+    return { instruction_profile: instructionProfile, ...(version === '2.2' ? { frozen_support: { science_index: freezeSupportPrompt('science-index-1.0.md', SCIENCE_INDEX_PROFILE), role_reply: freezeSupportPrompt('role-reply-1.0.md', 'role-reply-1.0', getRoleReplyContract()) } } : {}), prompt_files: urls.map((url, index) => ({ path: fileURLToPath(url), sha256: sha(buffers[index]), byte_length: buffers[index].length })),
       sections, science_sections: sectionsOf(buffers[0]), writing_instructions: writingInstructions,
       writing_guides: Object.fromEntries(Object.entries(writingSkills).map(([key, guide]) => [key, { path: guide.path, sha256: sha(Buffer.from(guide.content)), byte_length: Buffer.byteLength(guide.content) }])) };
   }
@@ -111,10 +137,19 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
   const parserOptions = { runtimeHome: resolvedConfig.parser.runtime_home,
     python: resolvedConfig.parser.python ?? join(resolvedConfig.parser.runtime_home, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
     configPath: resolvedConfig.parser.config_path ?? join(resolvedConfig.parser.runtime_home, 'config.yaml') };
-  const configuredSetup = { schema_version: 'apa-configured-reading-1.0', config_fingerprint: loaded.fingerprint, paths, parser: parserOptions,
+  const derivedMaxCalls = instructionProfile === 'configured-reading-2.2' && options.maxCalls === undefined
+    ? deriveConfiguredMaxCalls({ maxTotalCalls: options.maxTotalCalls, presentationMode: resolvedConfig.reading.presentation_mode }) : undefined;
+  const configuredSetup = { ...(derivedMaxCalls === undefined ? {} : { budget_derivation: { method: 'min-profile-cap-total-minus-six', max_calls: derivedMaxCalls, max_total_calls: options.maxTotalCalls } }), schema_version: 'apa-configured-reading-1.0', config_fingerprint: loaded.fingerprint, paths, parser: parserOptions,
     knowledge_registry: { policy: 'current-shared-nodes-1.0', vault_root: resolve(repoRoot) },
     role_model_policy: createConfiguredApaRoleModelPolicy(mainSession, resolvedConfig.roles),
     ...buildConfiguredReadingInstructions(resolvedConfig.writingSkills, { instructionProfile }) };
+  if (instructionProfile === 'configured-reading-2.2') {
+    configuredSetup.results_resources = structuredClone(options.resultsResources ?? {
+      output_root: 'resources/results',
+      manifest_task: { task_id: 'results-resources', artifact_id: 'results-resources', artifact_path: 'science/results-resources.json', native_path: 'native/results-resources.json', revision: '1', owner_actor_id: 'results', role: 'results' },
+    });
+    configuredSetup.runtime_binding = captureReadingRuntime();
+  }
   // The language other than the paper's original is translated from the accepted source draft; its tasks run as the translation role.
   const translationKeys = options.sourceLanguage === 'en' ? ['zh-CN', 'zh-CN-r2'] : ['en', 'en-r2'];
   // A caller-supplied role for these keys must already be translation; anything else is a conflict, not something to overwrite.
@@ -127,10 +162,10 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
   const manualCompaction = { host: loaded.config.host?.name ?? null, status: manual?.status ?? 'unknown',
     available: manual?.status === 'detected' && manual.scope === 'current-session' && typeof manual.method === 'string' && !!manual.method.trim() && !!source,
     method: manual?.method ?? null, source: source || null, scope: manual?.scope ?? 'unknown', evidence };
-  const runControl = createReadingFirstRunControl({ ...options, ...(taskBindings ? { taskBindings } : {}), ...(loaded.config.host ? { host: loaded.config.host } : {}), mainSession, configuredSetup, writingMode: 'source-translation',
+  const runControl = createReadingFirstRunControl({ ...options, ...(derivedMaxCalls === undefined ? {} : { maxCalls: derivedMaxCalls }), ...(taskBindings ? { taskBindings } : {}), ...(loaded.config.host ? { host: loaded.config.host } : {}), mainSession, configuredSetup, writingMode: 'source-translation',
     compactionPolicy: COMPACTION_POLICY, manualCompaction,
     roleReplyContract: options.roleReplyContract === undefined ? getRoleReplyContract() : options.roleReplyContract,
-    ...(['configured-reading-2.0', 'configured-reading-2.1'].includes(instructionProfile) ? { presentationProfile: 'reading-editor-1.3' } : {}),
+    ...(['configured-reading-2.0', 'configured-reading-2.1', 'configured-reading-2.2'].includes(instructionProfile) ? { presentationProfile: 'reading-editor-1.3' } : {}),
     firstWritingLanguage: options.sourceLanguage, presentationMode: resolvedConfig.reading.presentation_mode, handoffProfile: SCIENCE_INDEX_PROFILE });
   return freeze({ resolvedConfig, scientificInput: structuredClone(options.scientificInput), configurationFingerprint: loaded.fingerprint, paths, parserOptions, runControl,
     compactionControlBindings: compactionControlBindings(runControl) });
@@ -147,7 +182,7 @@ export function createConfiguredScienceRequest({ prepared, role, task, dispatchC
   if (!scienceSections[role]) throw new Error('APA_CONFIGURED_SCIENCE_ROLE_INVALID');
   const binding = prepared.runControl.reading_first_binding, source = prepared.scientificInput?.sources?.[0] ?? payload.sources?.[0];
   if (!source) throw new Error('APA_CONFIGURED_SCIENCE_SOURCE_REQUIRED');
-  const reply = loadRoleReplyContract(binding.role_reply_contract);
+  const reply = configuredRoleReply(binding);
   const sections = binding.configured_setup?.science_sections ?? sectionsOf(readFileSync(new URL('../../prompts/v3/phase21-scientific-contracts.md', import.meta.url), 'utf8'));
   const outputPath = ownedPath(prepared.paths.runRoot, task.native_path);
   let message = [sections['Common scientific contract'], sections[scienceSections[role]],
@@ -201,7 +236,7 @@ export function validateConfiguredReadingDispatch({ prepared, request } = {}) {
     || fingerprintReadingFirst(packet.role_model_policy) !== fingerprintReadingFirst(binding.role_model_policy)
     || packet.host_action_scope?.action !== (binding.host?.dispatch.tool ?? 'collaboration.spawn_agent')
     || fingerprintReadingFirst(packet.host_action_scope?.dispatch ?? null) !== fingerprintReadingFirst(binding.host?.dispatch ?? null)) throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH');
-  loadRoleReplyContract(binding.role_reply_contract);
+  configuredRoleReply(binding);
   if (fingerprintReadingFirst(packet.backend?.configuration?.role_reply_contract ?? null) !== fingerprintReadingFirst(binding.role_reply_contract ?? null)) throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH');
   let expected;
   try { expected = emitApprovedRunStep({ packet, run: { run_id: prepared.runControl.run_id }, dispatchContext: {},

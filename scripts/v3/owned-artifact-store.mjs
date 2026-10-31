@@ -176,16 +176,34 @@ export async function repairOwnedArtifactReceipt({ artifactRoot, dispatchContext
       || snapshot.control_fingerprint !== fingerprintReadingFirst(data.prepared.runControl.reading_first_binding)) fail('RECOVERY_CHECKPOINT_INVALID');
     bytes = Buffer.from(JSON.stringify(snapshot));
   } else {
-    task = data.tasks?.[role];
-    const entry = data.entries?.[role];
+    const resourceRecovery = role === 'results-resources';
+    const binding = data.prepared.runControl.reading_first_binding;
+    const original = data.entries?.[resourceRecovery ? 'results' : role];
+    const entry = original?.correction ?? original;
+    task = resourceRecovery ? binding.configured_setup?.results_resources?.manifest_task : entry === original ? data.tasks?.[role] : entry.task;
     if (!entry?.intent || !entry.raw_observation || entry.observation?.status !== 'observed' || typeof entry.content_base64 !== 'string') fail('RECOVERY_OBSERVATION_REQUIRED');
+    if (resourceRecovery) {
+      if (binding.configured_setup?.instruction_profile !== 'configured-reading-2.2') fail('RECOVERY_AUTHORITY_MISMATCH');
+      const {validateHostReceiptEvidence}=await import('./reading-host-evidence.mjs');
+      validateHostReceiptEvidence(entry.raw_observation,{strict:true});
+    }
     const { ingestObservedRunStep } = await import('./phase21-runner.mjs');
     const checked = ingestObservedRunStep({ packet: entry.request.packet, emittedStep: entry.request.emittedStep, observation: entry.raw_observation,
       run: { run_id: runId }, now: entry.observation.observed_at });
     if (checked.status !== 'observed' || fingerprintReadingFirst(checked) !== fingerprintReadingFirst(entry.observation)
       || entry.intent.action_id !== entry.request.emittedStep.action_id) fail('RECOVERY_OBSERVATION_INVALID');
-    bytes = Buffer.from(entry.content_base64, 'base64');
-    if (digest(bytes) !== entry.content_sha256) fail('RECOVERY_CONTENT_INVALID');
+    const resultBytes = Buffer.from(entry.content_base64, 'base64');
+    if (digest(resultBytes) !== entry.content_sha256) fail('RECOVERY_CONTENT_INVALID');
+    if (resourceRecovery) {
+      const pending=data.results_resources, spec=binding.configured_setup.results_resources, ref=pending?.resource_manifest;
+      bytes=Buffer.from(pending?.manifest_base64 ?? '', 'base64');
+      const result=JSON.parse(resultBytes.toString('utf8'));
+      if (!ref || digest(bytes)!==pending.manifest_sha256 || ref.sha256!==pending.manifest_sha256 || ref.byte_length!==bytes.length
+        || ref.path!==resolve(context.artifactRoot,task.artifact_path) || ref.resources_root!==resolve(context.artifactRoot,spec.output_root)
+        || fingerprintReadingFirst(result.resource_manifest)!==fingerprintReadingFirst(ref)) fail('RECOVERY_CONTENT_INVALID');
+      const {validateReadingResources}=await import('./reading-resources.mjs');
+      validateReadingResources({manifest:JSON.parse(bytes.toString('utf8')),resourcesRoot:ref.resources_root,sources:data.prepared.scientificInput.sources});
+    } else bytes=resultBytes;
   }
   if (!task || task.artifact_id !== artifact?.artifact_id || task.artifact_path !== state.artifactPath || task.owner_actor_id !== state.actorId
     || task.role !== state.role || task.revision !== state.revision || !Buffer.from(artifact.content).equals(bytes)) fail('RECOVERY_AUTHORITY_MISMATCH');

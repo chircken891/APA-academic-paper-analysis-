@@ -45,7 +45,7 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 
 新配置阅读调用必须按实际主论文向 `prepareConfiguredReading` 显式传入 `sourceLanguage`（`en` 或 `zh-CN`）；原文语言属于每篇文献的事实，不从个人偏好推定。运行将其冻结为 `binding.source_language`，决定 `Wiki/sources/` 与 `Wiki/translations/` 的归属；新运行以同一 `sourceLanguage` 冻结 `first_writing_language`：只有原文语言对应的 Writer 接收科学材料，另一语言由 Translation 角色（`models.roles.translation`）依据已接受的原文稿翻译。旧绑定保留其原有顺序和 `source-first` 模式，不修改旧记录。
 
-新配置化阅读冻结 `current-shared-nodes-1.0` 知识登记策略；候选物化核对提交配对与登记身份，共享节点使用当前正文并记录实际复用的路径与内容指纹，无关笔记编辑不阻断候选。查询与图谱读取已登记笔记的当前内容，发布只核验实际依赖与写入目标；旧绑定保留 `committed-generation-1.0`、`committed-shared-nodes-1.0` 等原策略。新配置化运行冻结 `configured-reading-2.1` 提示与实际文件指纹；使用 Reading Editor 时冻结 `reading-editor-1.3`：全部步骤绘入研究导图，发现可精选，图后链接省略发现，目录、方法条目与图注直接展开；既有绑定保留原策略和呈现版本。配置化预览包含所引用历史知识的当前正文，旧论文只提供标明路径的导航页；历史参考资源不授发布权。
+新配置化阅读冻结 `current-shared-nodes-1.0` 知识登记策略；候选物化核对提交配对与登记身份，共享节点使用当前正文并记录实际复用的路径与内容指纹，无关笔记编辑不阻断候选。查询与图谱读取已登记笔记的当前内容，发布只核验实际依赖与写入目标；旧绑定保留 `committed-generation-1.0`、`committed-shared-nodes-1.0` 等原策略。新配置化运行冻结 `configured-reading-2.2` 提示与实际文件指纹；使用 Reading Editor 时冻结 `reading-editor-1.3`：全部步骤绘入研究导图，发现可精选，图后链接省略发现，目录、方法条目与图注直接展开；既有绑定保留原策略和呈现版本。配置化预览包含所引用历史知识的当前正文，旧论文只提供标明路径的导航页；历史参考资源不授发布权。
 
 宿主档案 `apa-host-profile-1.0`（结构见 `Schema/config/apa-config.schema.json` 的 `hostProfile`）由助手检测自身环境后写入本次独立的 `.tmp/apa-setup/<owner>/<detection-id>/host-profile.json`，`owner` 和 `detection-id` 使用 kebab-case，目录须未被占用；旧档案仍可读取，不迁移或覆盖。档案记录宿主名、当前会话、派发工具及参数名、派发工具可接受的模型与各自的推理强度档位，以及每项的来源；派发工具可选记录 `dispatch.result_handle`（`{source:'text', pattern}`，从派发结果文本提取任务句柄的正则，捕获组 1 为句柄），缺省时 APA 不提取句柄。`inspect`/`page` 加 `--host-profile <file>` 时，检查结果增加 `host_check`（派发方式是否一致、模型或强度是否与本宿主不符），页面的模型与强度选项也来自档案。档案是助手的自我报告，不证明派发或模型实际可用。
 
@@ -90,7 +90,7 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 
 `node scripts/apa-setup.mjs inspect --capability query` 检查查询配置；`--capability reading` 或不传选项沿用阅读检查。两者的 `ready` 都只是对应配置/文件的就绪状态，`model_availability: 'not_checked'` 表示未检查当前宿主模型、未执行模型任务。页面分别展示查询和阅读状态，因此查询配置就绪与阅读依赖缺失可以同时成立。
 
-阅读运行另用 `evaluateReadingPreflight({inspection,hostProfile,evidence})` 计算 `reading_preflight.status`，值为 `pass`、`blocked` 或 `unknown`。必需条件包括配置与依赖、当前宿主与保存声明一致、实际派发工具及独立上下文、模型与推理强度，以及本次 `file_read`、`control_write`、`input` 的通过证据和引用。静态 `inspect` 不具备全部运行证据时保持未知；会话入口写入并回读控制产物后补入证据，派发前要求全部通过。六项可选高级能力不进入这一门槛。恢复仍核对当前运行条件，并沿用原冻结来源、模型和预算。详见[会话接口](apa-v3/reading-session.md)。
+阅读运行另用 `evaluateReadingPreflight({inspection,hostProfile,evidence})` 计算 `reading_preflight.status`，值为 `pass`、`blocked` 或 `unknown`。必需条件包括配置与依赖、当前宿主与保存声明一致、实际派发工具及独立上下文、模型与推理强度，以及本次 `file_read`、`control_write`、`input` 的通过证据和引用。静态 `inspect` 不具备全部运行证据时保持未知；会话入口写入并回读控制产物后补入证据，派发前要求全部通过。2.2 还要求 `evidence.results_tools` 提供 `python`、`libraries`、`file_read` 和 `visual_read`，各项含状态、`observed` 或 `tool-declaration` 来源、引用以及非空 `method` 和 `observation`；声明来源须如实描述声明内容；Python 路径须与已检测的解析器 Python 一致且文件存在，库清单须包含 `fitz`。缺项分别路由 setup 或 engineering，不修改配置和证据。六项可选高级能力不进入这一门槛。恢复仍核对当前运行条件，并沿用原冻结来源、模型和预算。详见[会话接口](apa-v3/reading-session.md)。
 
 `node scripts/apa-setup.mjs export --output <新文件>` 导出答案，CLI 会创建目标父目录。目标已存在时以 `APA_SETUP_EXPORT_EXISTS: <路径>` 拒绝；助手报告该路径并询问用户，同意覆盖时追加 `--overwrite` 直接替换（结果中 `replaced: true`），不覆盖时由用户另行命名后重新导出。助手按技能规则确定完整目标，再传给 `--output`：用户指定路径或文件名时优先采用；仅指定文件名或未指定时使用 `config/backups/<owner>/`，默认文件名为 `apa-config-backup-YYYYMMDD-HHmmss-SSS.json`。`owner` 根据 agent 身份及归属证据确定，不从所选模型推断。CLI 未传 `--output` 时只输出 JSON，相对路径按当前命令目录解析。配置导出不包含代码或论文。完善、字段去除、导出及差异导入均处理 `models.query` 与 `query` 偏好；仅选择查询字段的操作保留科学角色、解析器和目录原值。
 

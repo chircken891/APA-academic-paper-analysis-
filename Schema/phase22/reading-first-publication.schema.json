@@ -55,16 +55,20 @@
             "required": ["source_id", "path", "sha256", "byte_length", "source_version", "locators"],
             "properties": {
               "source_id": { "$ref": "#/$defs/text" },
-              "path": { "type": "string", "pattern": "^Raw/.+\\.[pP][dD][fF]$" },
+              "path": { "type": "string", "pattern": "^Raw/.+\\.([pP][dD][fF]|[dD][oO][cC][xX])$" },
               "sha256": { "$ref": "#/$defs/hash" },
               "byte_length": { "type": "integer", "minimum": 0 },
               "source_version": { "type": ["string", "null"] },
               "locators": {
                 "type": "array", "items": {
-                  "type": "object", "additionalProperties": false, "required": ["kind", "id", "page", "label"],
+                  "type": "object", "additionalProperties": false, "required": ["kind", "id", "label"],
+                  "oneOf": [ { "properties": { "page": {} }, "required": ["page"] }, { "properties": { "locator": {} }, "required": ["locator"] } ],
                   "properties": {
                     "kind": { "enum": ["figure", "table", "formula"] }, "id": { "$ref": "#/$defs/text" },
-                    "page": { "type": "integer", "minimum": 1 }, "label": { "type": "object" }
+                    "page": { "type": "integer", "minimum": 1 }, "label": { "type": "object" },
+                    "locator": { "type": "object", "additionalProperties": false, "required": ["kind", "figure", "paragraph"], "properties": {
+                      "kind": { "const": "docx-figure" }, "figure": { "$ref": "#/$defs/text" }, "paragraph": { "type": "integer", "minimum": 0 }
+                    } }
                   }
                 }
               }
