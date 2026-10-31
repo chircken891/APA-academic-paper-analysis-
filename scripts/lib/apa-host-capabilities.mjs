@@ -7,9 +7,28 @@ const checks = [
   ['manual_compaction', '阶段压缩', '核对本会话的手动压缩入口、作用范围及是否改变持久设置。'],
   ['concise_replies', '短回执', '核对请求携带 role-reply-1.0，实际回复是否遵守须在真实运行中观察。'],
   ['science_recovery', '科学阶段恢复', '核对真实任务句柄、查询或等待工具及参数；在原宿主仍可访问时验证退出续接。'],
+  ['task_continuation', '原任务续接', '核对当前宿主的续接工具、参数及原任务句柄；派发前登记执行额度。'],
   ['threshold_compaction', '阈值自动压缩', '核对安装版本、有效配置后端、计量口径及容量；获批实测时记录触发事件与压缩后信息保留。'],
 ];
 const limited = row => { if (row.status === 'detected') row.status = 'conditional'; };
+
+/** Resolve only evidence-backed continuation of the original task. No host call or setting write occurs here. */
+export function resolveHostContinuation(profile, { hostName, handle, message } = {}) {
+  const finding = profile?.capabilities?.task_continuation;
+  const result = (status, code) => ({ status, code });
+  if (['unsupported', 'blocked'].includes(finding?.status)) return result(finding.status, 'HOST_CONTINUATION_UNAVAILABLE');
+  if (!finding || finding.status !== 'detected' || !finding.evidence?.some(item => item.source?.trim() && item.reference?.trim())) return result('unknown', 'HOST_CONTINUATION_UNKNOWN');
+  if (!hostName || profile.host !== hostName || finding.scope !== 'current-session') return result('blocked', 'HOST_CONTINUATION_HOST_MISMATCH');
+  const contract = finding.continuation;
+  if (!contract || contract.same_context !== true || contract.original_host_accessible !== true) return result('blocked', 'HOST_CONTINUATION_CONTEXT_UNAVAILABLE');
+  const named = value => typeof value === 'string' && Boolean(value.trim());
+  if (![contract.tool, contract.handle_argument, contract.instruction_argument].every(named)
+    || contract.handle_argument === contract.instruction_argument || ['__proto__', 'constructor', 'prototype'].some(key => [contract.handle_argument, contract.instruction_argument].includes(key))) return result('blocked', 'HOST_CONTINUATION_CONTRACT_INVALID');
+  if (!named(handle)) return result('blocked', 'HOST_HANDLE_UNKNOWN');
+  if (!named(message)) return result('blocked', 'HOST_CONTINUATION_MESSAGE_REQUIRED');
+  return { status: 'detected', code: null, host_action: contract.tool,
+    arguments: { [contract.handle_argument]: handle, [contract.instruction_argument]: message }, evidence: structuredClone(finding.evidence) };
+}
 
 function inspectThreshold(row, input) {
   row.threshold = { ...(input ?? {}), candidate_value: null, effective_trigger_tokens: null, feasibility: 'unknown' };
@@ -88,6 +107,13 @@ export function inspectHostCapabilities(config, profile, repoRoot = process.cwd(
       } else if (!input?.recovery?.task_handle_path || !input?.recovery?.lookup_tool || !input?.recovery?.lookup_argument || input?.recovery?.original_host_accessible !== true) {
         row.limitations.push('真实任务句柄路径、查询工具及参数或原宿主可访问性尚未全部核实。');
       }
+    }
+    if (id === 'task_continuation') {
+      const resolved = resolveHostContinuation(profile, { hostName: config.host?.name ?? profile?.host, handle: 'capability-probe', message: 'capability-probe' });
+      row.status = resolved.status;
+      if (input?.continuation) row.continuation = structuredClone(input.continuation);
+      if (resolved.code) row.limitations.push(resolved.code);
+      row.limitations.push('检测只解释当前宿主提供的能力证据；不派发任务、不保存配置，真实续接另行记录。');
     }
     if (id === 'threshold_compaction') inspectThreshold(row, input?.threshold);
     if (id === 'on_demand_reading') row.apa_support = ['APA Controller 要求按需读取所需范围。'];

@@ -45,7 +45,7 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
     knowledge: [{ id: 'method', canonical_key: 'synthetic-method', kind: 'method', source_kind: 'method-background', title: { en: 'Synthetic method', 'zh-CN': '合成方法' }, aliases: ['SyntheticMethodAlias'], paragraphs: { en: ['An independent reusable explanation with supportonlytoken.'], 'zh-CN': ['可独立理解的通用解释，包含仅知识页词。'] } }],
     map: { steps: [{ id: 'design-step', section_id: 'design', label: { en: 'Design', 'zh-CN': '设计' } }], findings: [{ id: 'main-finding', section_id: 'findings', label: { en: 'Finding', 'zh-CN': '发现' } }], relations: [{ step_id: 'design-step', finding_id: 'main-finding' }] },
   };
-  const ownedVisualResources = options.visualProvenance === 'owned-absolute' ? [{
+  const ownedVisualResources = ['owned-absolute', 'owned-asset-mapping'].includes(options.visualProvenance) ? [{
     path: presentation.visuals[0].path, source_id: source.id, source_path: source.path, source_sha256: source.sha256,
     sha256: figure.sha256, byte_length: figure.byte_length,
   }] : null;
@@ -85,10 +85,16 @@ export async function reviewedReadingFirstFixture(t, options = {}) {
   ];
   const broker = createOwnedArtifactBroker({ control_actor_id: 'controller', artifact_root: root,
     authorized_bindings: authorizedBindings, run_controls: [{ run_id: runId, reading_first_binding: binding }] });
+  const assetMapping = options.visualProvenance === 'owned-asset-mapping' ? ownedVisualResources.map(row => ({
+    id: presentation.visuals[0].id, target_path: row.path, source_id: row.source_id,
+    source_path: figure.path, source_pdf_sha256: row.source_sha256, sha256: row.sha256, byte_length: row.byte_length,
+  })) : null;
+  const ownedRegistration = assetMapping ? { resource_handoff: { asset_mapping: options.assetMappingChange ? options.assetMappingChange(assetMapping) : assetMapping } }
+    : ownedVisualResources ? { visual_resources: ownedVisualResources } : {};
   for (const role of roles) await commitOwnedArtifact({ artifactRoot: root, dispatchContext: broker.dispatchContext,
     capability: broker.issueCapability({ runId, actorId: role, role, artifactPath: 'science/' + role + '.json', revision: '1' }),
     artifact: { artifact_id: role, content: JSON.stringify({ context: 'Registered synthetic scientific output for ' + role,
-      ...(role === 'integration' ? { presentation, ...(ownedVisualResources ? { visual_resources: ownedVisualResources } : {}) } : {}) }) }, expectedRevision: '1' });
+      ...(role === 'integration' ? { presentation, ...ownedRegistration } : {}) }) }, expectedRevision: '1' });
   const scientificInput = { ...input, profile: 'reading-first-1.0' };
   const handoff = await buildReadingFirstHandoff({ run: { run_id: runId }, dispatchContext: broker.dispatchContext, artifactRoot: root, scientificInput });
   const runControl = { runId, artifactRoot: root, dispatchContext: broker.dispatchContext };

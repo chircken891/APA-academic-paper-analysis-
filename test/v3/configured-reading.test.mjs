@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { exportPublicApa } from '../../scripts/setup/export-public-apa.mjs';
 import { inspectApaConfig } from '../../scripts/lib/apa-config.mjs';
-import { prepareConfiguredReading,createConfiguredScienceRequest, getConfiguredReadingDispatchArguments, materializeConfiguredReadingCandidate, createConfiguredMineruPort, configuredMineruConfiguration } from '../../scripts/v3/configured-reading.mjs';
+import { prepareConfiguredReading as prepareConfiguredReadingVersion,createConfiguredScienceRequest, getConfiguredReadingDispatchArguments, materializeConfiguredReadingCandidate, createConfiguredMineruPort, configuredMineruConfiguration } from '../../scripts/v3/configured-reading.mjs';
 import { reviewedReadingFirstFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
 import { commitOwnedArtifact } from '../../scripts/v3/owned-artifact-store.mjs';
 import { ingestObservedRunStep } from '../../scripts/v3/phase21-runner.mjs';
@@ -15,6 +15,10 @@ import { createReadingFirstRevisionRequests, createReadingFirstPresentationReque
 import { readingFirstPublicationFixture, applyReadingFirstFixture } from './helpers/reading-first-publication-fixtures.mjs';
 import { readingFirstIndexFixture } from './helpers/reading-first-index-fixtures.mjs';
 import { readCommittedReadingFirstKnowledgeRegistry } from '../../scripts/v3/reading-first-knowledge-registry.mjs';
+
+// These fixtures adopt science directly under their original execution contract.
+// The 2.1 default and durable science handoff are covered by the version/session suites.
+const prepareConfiguredReading = options => prepareConfiguredReadingVersion({ instructionProfile: 'configured-reading-2.0', ...options });
 import { validateConfiguredReadingDispatch } from '../../scripts/v3/configured-reading.mjs';
 import { applyBilingualPublication, loadBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
 import { readCommittedGeneration } from '../../scripts/v3/phase22-active-version.mjs';

@@ -34,6 +34,14 @@ await recordReadingEvent(session, {
 
 **执行与记录**
 
+新 `configured-reading-2.1` 保留六科学角色、单原文语言 Writer、Translation、可选 Editor、一次整体审查和最多一次局部复核；模型、用户选定的写作指导及压缩边界沿原冻结合同。旧绑定保持原版本。
+
+`maxCalls` 限制任务数量，补缺任务不计入阅读任务数量；`maxTotalCalls` 计入全部首次派发与原句柄续接的实际执行，并预留后续步骤所需额度。`host_update`、查询和等待不计入执行次数。`prior_calls=6` 保留科学任务基线，科学续接次数另账传递；旧绑定的实际剩余额度无法确定时记录 `unknown`。
+
+主 Controller 按动作消费字段白名单短摘要，最多 8192 UTF-8 字节和 8 个引用；更多信息沿完整状态文件按需查阅。常态不整读正文、角色包或规则源码，具体错误按定位读取。新翻译通过文件引用按需读取，进度清单锁定完成片段，续接只处理剩余 ID；清单不能代替完整性验收，既有镜像校验仍须执行。
+
+所有桌面应用的电脑控制均须用户明确授权，包括启动、点击、截图及 Obsidian CLI `screenshot`、`eval` 等原生观察；文件工具可检查原 PDF 图。原生展示 `not_run` 不阻断交付或发布准备。实际启动、截图和点击与验收状态分开记录，信息不足标记 `unknown`。工作规则不构成宿主硬性拒绝，宿主权限配置另需授权。
+
 `await nextReadingAction(session)` 返回 `dispatch`、`wait`、`await-user`、`reconcile`、`provide-input` 或 `complete`。`dispatch` 包含冻结的 `host_action`、`arguments`、`action_id`、`run_id`、`input_fingerprint` 和 `port`。调用方在收到 `dispatch` 后按返回的原始工具名与参数调用宿主；会话已在返回前保存派发意图。再次询问下一步不会重发未知结果的动作。
 
 将宿主真实回传封装为下例 `observation`，其中 `tool_call` 和 `raw_result_text` 来自实际调用。先记录 `host_observation`，完成时将同一原始派发观察用于 `result`；宿主按已登记任务写入 native 文件。阅读阶段完成事件会接收该文件、保存 owned 结果并更新检查点。科学阶段结果事件消费其已记录观察。
@@ -60,6 +68,30 @@ await recordReadingEvent(session, {
 
 真实宿主进度可以通过 `host_update` 记录。提供宿主事件 ID 时放在事件的 `host_event_id`；缺少事件 ID 时使用观察内容指纹去重。进度观察需要原 action、可核对的宿主任务句柄、实际查询工具及原始回传。相同事件重复提交保持幂等，同一 ID 的不同内容会被拒绝。
 
+2.1 的原任务续接先登记唯一 `execution_id`。`hostProfile.capabilities.task_continuation` 必须提供当前宿主、原上下文可用性、续接工具及参数的实际依据；能力未知或原句柄缺失时返回具体缺失项。以下事件保存意图和额度，随后由 `nextReadingAction` 返回一次续接动作：
+
+```js
+await recordReadingEvent(session, {
+  kind: 'continuation-intent', action_id: originalActionId,
+  execution_id: executionId, message: boundedContinuationInstruction,
+});
+const continuation = await nextReadingAction(session);
+// 仅在返回 dispatch 时调用其 host_action 和 arguments。
+await recordReadingEvent(session, {
+  kind: 'continuation-receipt', execution_id: continuation.execution_id,
+  observation: {
+    execution_id: continuation.execution_id, action_id: continuation.action_id,
+    agent_id: continuation.host_handle, status: 'observed',
+    tool_call: { name: continuation.host_action, arguments: continuation.arguments },
+    raw_result_text: actualRawResultText,
+  },
+});
+```
+
+结果无法确认时记录 `status:'outcome_unknown'`，额度继续占用，后续动作要求核对原执行。重复意图或回执保持幂等，冲突内容拒绝。任务最终完成仍使用原 `action_id` 与原派发观察提交 `result`。Translation 的续接会核对该任务进度清单，将剩余章节和知识节点 ID 加入请求，并保留已完成片段的指纹；最终稿继续通过完整结构与双语镜像校验。
+
+`computer-control-observation` 单独记录操作事实，`observation` 包含唯一 `event_id`、`coverage`（`complete`、`partial` 或 `unknown`）、`source_reference` 和 `operations`。每项操作记录 `operation`、`application`、`occurred_at`、原始 `tool_call` 与 `raw_result_text`。确认没有操作时可以依据完整记录提交空数组；缺少记录时保持未知。结束动作的 `computer_control` 返回这些事实，与 `native_presentation.status` 分开，不授予操作权限。
+
 新配置化运行冻结 `boundary-reminders-1.2` 和本宿主有依据的手动压缩入口；既有 1.0 和 1.1 绑定沿用原合同。1.2 在四个安全边界保存状态后均返回 `await-user`，向用户推荐压缩，等待用户明确选择后继续。入口未知或不可用、用量低或未知、此前已压缩或提示均不自动跳过；入口未知时说明未知。四个压缩边界缺少临时观测时，`nextReadingAction` 返回 `provide-input`、`kind:'compaction-observation'` 和 `boundary_id`。调用方从当前宿主及可信运行记录收集一次观测，以 `recordReadingEvent(session, {kind:'compaction', input:{observation, sessionId, progress}})` 回传，并立即调用 `nextReadingAction`；观测和用量测量须在 60 秒内，无法取得的字段保持未知。缺少临时入口观测时使用绑定中本宿主已有证据的入口，不能跨宿主套用。
 
 返回 `await-user` 时展示消息与可复制的阶段压缩提示词并结束当前回复；用户决定后重新记录 `compaction` 并继续，检查点和原额度保持不变。提示词包含可用的运行和论文身份、原预算与期限、来源及产物引用、检查点和绑定路径等续接元数据，并要求压缩时保留已完成阶段、下一步、关键科学结论及证据、限制、待决事项和真实任务句柄；完整角色模型策略按需从绑定路径回读。未知字段标明未知，原文及角色全文不写入提示词。Evidence 后突出设计和证据，Methods/Results 后突出关键方法、结果、数值与限制，Writer 前突出综合主线、分歧及写作、翻译、呈现下一步，整体审查前突出候选路径、呈现版本、审查范围及最多一次局部复核。生成提示词不增加模型调用。边界若记录 `skipped`，从已保存的 science-state `data.compaction_reminders` 或 owned 阅读检查点 `state.compaction_reminders` 读取原因并向用户简短说明。自动压缩事件只有关联当前主会话且有实际成功证据时才能记录；无成功事件时保留未核实状态。
@@ -80,7 +112,7 @@ await recordReadingEvent(session, {
 
 入口预登记 Evidence、Methods、Results 三个初始补缺任务，仅派发实际有缺口的角色。`includeRepairs:true` 时再登记三个后期补缺任务；未使用的登记不消耗调用，也不加入发布依赖。每项任务使用自身的 native、owned、指令路径和 `source_root`。
 
-初始补缺按既有科学输出中的重要缺口分组，全部接收后才进入原文 Writer、Translation、可选 Editor 和整体审查。设本批补缺角色数为 N，Editor 启用时 E=1，否则 E=0，派发前要求 `callsUsed + N + 3 + E <= maxTotalCalls`，并满足语言阶段 `maxCalls`。这里的后续预留为 Writer、Translation、可选 Editor 和一次审查，不预留 r2。不足时返回 `reconcile` 和 `READING_FIRST_CALL_BUDGET_EXHAUSTED`。
+初始补缺按既有科学输出中的重要缺口分组，全部接收后才进入原文 Writer、Translation、可选 Editor 和整体审查。设本批尚未准备的补缺角色数为 N，Editor 启用时 E=1，否则 E=0，2.1 派发前以执行账本占用加上尚未准备的补缺及后续步骤核对 `maxTotalCalls`，并满足语言阶段 `maxCalls`；已登记预留不重复计入。这里的后续步骤为 Writer、Translation、可选 Editor 和一次审查，不预留 r2。旧绑定沿用 `callsUsed + N + 3 + E <= maxTotalCalls`。不足时返回 `reconcile` 和 `READING_FIRST_CALL_BUDGET_EXHAUSTED`。
 
 新补缺会话中，首次审查的 science 问题会在预算判断前把两种语言加入修订范围。流程为科学补缺、原文 Writer 修订、Translation、可选 Editor、一次局部复核；仅译稿中的 writer 类问题仍只修译稿。后期补缺角色数与完整修订链均计入原总预算，语言修订另受原 `maxCalls` 约束；不足时在补缺派发前保存 `completed_with_limits`。`includeRepairs:false` 与补缺策略可以同时使用，此时审查后的科学缺口直接按有限完成处理。
 
@@ -97,6 +129,25 @@ const next = await nextReadingAction(restored);
 `runRoot` 为原运行的绝对目录。恢复使用科学状态、原登记和 owned 阅读检查点，并依据冻结的配置重新核对当前宿主及实际依赖；后续个人配置的修改不会改写本次绑定。创建时核对并保存主会话身份；宿主可显式选择冻结模型时，后续主会话变化不改变该绑定。宿主实际继承主会话模型时，还需核对当前身份与冻结身份一致。已存请求与结果会重新校验；有未知派发结果时返回 `reconcile`，让调用方核对原宿主任务。已完成审查的候选恢复需要重新提供相同的 `render-assets`，会话重新生成并核验已有候选和已审指纹后准备发布引用。
 
 阅读控制槽在创建时有限预登记，默认数量为 `16 + 8 * maxTotalCalls`；可通过 `maxControlCheckpoints` 明确增加。它控制本地记录容量，不增加模型调用额度。槽容量不足时返回 `reconcile` 和 `CONTROL_CHECKPOINT_CAPACITY`，并保留最后一个有效检查点。损坏、冲突或缺少回执的控制产物需要核对，不能静默退回旧状态。
+
+**明确批准的 Editor 拒收后恢复**
+
+默认拒收仍以 `completed_with_limits` 结束。若用户另行批准恢复，且拒收原因为 `READING_FIRST_REPAIR_SCOPE_EXCEEDED`，可提交 `recover-rejected-editor` 事件，重新验证已有 `presentation-r2` 的原始 native／owned 字节、宿主观察、首次审查范围和完整 Editor 合同。该接口只支持 `reading-editor-1.3`、一次整体审查后且尚未派发局部复核的状态。
+
+```js
+await recordReadingEvent(session, {
+  kind: 'recover-rejected-editor',
+  authorization: {
+    authorization_id, reason,
+    checkpoint_fingerprint, rejection_fingerprint,
+    max_additional_calls: 1,
+  },
+});
+```
+
+两个指纹必须对应当前已保存的终态检查点及其 `state.rejection`。2.1 直接核对持久化执行账本，禁止传入 `host_calls_used`，并须在原总预算内为局部复核留有额度；旧绑定继续要求授权对象中的 `host_calls_used` 报告原句柄续接等实际执行轮次。事件需要本次用户明确批准，配置或剩余额度不能代替授权。恢复不会调用模型；它在新 owned 检查点的 `state.repairRecoveries` 追加批准、原检查点、原拒收及新的验证结果。原终态、请求事件、拒收回执和调用计数保留。同一批准重复提交保持幂等，发生冲突或字节变化时拒绝。
+
+范围校验允许插入审查 `visual_ids` 明确批准的新图旁条目；新增条目的 notes 仅可引用该审查的 `section_ids`，既有条目和相对顺序继续按原规则校验。其余列表和范围外内容保持。恢复成功后重新物化第二版候选，再使用既有的一次局部复核；原模型、来源、截止时间、额度和发布权限保持原合同。
 
 补缺任务在 `source_root` 写入快照后、结果接收前中断，恢复返回 `reconcile`，调用方核对原任务并沿原事件接收。尚未登记的快照不会被视为已登记来源漂移，也不会自动取得来源身份。已接收结果及其来源沿原检查点和指纹恢复，不重新派发。
 

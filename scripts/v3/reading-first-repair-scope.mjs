@@ -31,9 +31,21 @@ export function assertEditorRepairScope(base, revised, review) {
   delete left.views_fingerprint; delete right.views_fingerprint;
   if (ids('editor_fields').has('map')) { delete left.map; delete right.map; }
   for (const language of ['en','zh-CN']) for (const kind of ['overview','sections','methods','visuals']) {
-    const before=left.languages?.[language]?.[kind], after=right.languages?.[language]?.[kind];
+    const before=left.languages?.[language]?.[kind];
+    let after=right.languages?.[language]?.[kind];
     if (before === undefined && after === undefined) continue;
-    if (!Array.isArray(before) || !Array.isArray(after) || before.length!==after.length) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
+    if (!Array.isArray(before) || !Array.isArray(after)) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
+    if (kind==='visuals') {
+      const existing=new Set(before.map(item=>item.id));
+      if (new Set(after.map(item=>item.id)).size!==after.length) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
+      for (const item of after.filter(item=>!existing.has(item.id))) {
+        if (!visuals.has(item.id) || (item.notes ?? []).some(note=>!sections.has(note.section_id))) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
+      }
+      // Only approved new visuals are removed from the comparison. Existing rows
+      // still pass the same identity, order and outside-content checks below.
+      after=right.languages[language][kind]=after.filter(item=>existing.has(item.id));
+    }
+    if (before.length!==after.length) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
     for (let i=0;i<before.length;i++) {
       const a=before[i], b=after[i], identity=kind==='sections'?'section_id':kind==='methods'||kind==='visuals'?'id':null;
       if (identity && a[identity]!==b[identity]) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');

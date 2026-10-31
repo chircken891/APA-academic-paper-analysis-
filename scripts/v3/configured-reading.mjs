@@ -4,7 +4,7 @@ import { dirname, isAbsolute, relative, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectApaConfig, resolveApaConfig } from '../lib/apa-config.mjs';
 import { createConfiguredApaRoleModelPolicy, resolveApaRoleModel, buildHostDispatchArguments } from '../apa-model-policy.mjs';
-import { SCIENCE_INDEX_PROFILE, createReadingFirstRunControl, fingerprintReadingFirst, renderReadingFirstNotes, snapshotReadingFirstRuntime } from './reading-first-runtime.mjs';
+import { SCIENCE_INDEX_PROFILE, createReadingFirstRunControl, fingerprintReadingFirst, getReadingFirstPresentation, renderReadingFirstNotes, snapshotReadingFirstRuntime } from './reading-first-runtime.mjs';
 import { exportReadingFirstPreview } from './reading-first-preview.mjs';
 import { emitApprovedRunStep, createCurrentMineruBaselinePort } from './phase21-runner.mjs';
 import { getRoleReplyContract, loadRoleReplyContract } from './role-reply-contract.mjs';
@@ -17,15 +17,17 @@ const freeze = value => { if (value && typeof value === 'object') { Object.value
 const sectionsOf = bytes => Object.fromEntries([...String(bytes).matchAll(/^## (.+)\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/gm)].map(match => [match[1], match[2].trim()]));
 const scienceSections = { evidence: 'Evidence/Coverage Mapper', methods: 'Design/Methods Specialist', results: 'Results/Visuals Specialist', interpretation: 'Interpretation/Appraisal Specialist', 'scientific-reading': 'Scientific Reading Synthesizer', integration: 'Integrator' };
 
-export const DEFAULT_CONFIGURED_INSTRUCTION_PROFILE = 'configured-reading-2.0';
+export const DEFAULT_CONFIGURED_INSTRUCTION_PROFILE = 'configured-reading-2.1';
 
 /** Freeze selected guidance into the binding. Disabled skills contribute no optional instructions. */
 export function buildConfiguredReadingInstructions(writingSkills = {}, { instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE } = {}) {
-  if (instructionProfile === 'configured-reading-2.0') {
-    const urls = ['science-configured-2.0.md', 'reading-configured-2.0.md', 'reading-editor-1.3.md'].map(name => new URL('../../prompts/v3/' + name, import.meta.url));
+  if (['configured-reading-2.0', 'configured-reading-2.1'].includes(instructionProfile)) {
+    const version = instructionProfile === 'configured-reading-2.1' ? '2.1' : '2.0';
+    const urls = [`science-configured-${version}.md`, `reading-configured-${version}.md`, 'reading-editor-1.3.md'].map(name => new URL('../../prompts/v3/' + name, import.meta.url));
     const buffers = urls.map(url => readFileSync(url));
     const sections = sectionsOf(buffers[1]);
     sections['Reading Editor'] = buffers[2].toString('utf8').trim();
+    if (version === '2.1') sections['Reading Editor'] = sections['Reading Editor'].replace("map: {nodes: [{id: 'registered-map-node-id', stage: 'design'|'measurement'|'finding'|'limit', primary: true}]}", "map: {nodes: [{id: 'registered-step-id', stage: 'design'}, {id: 'registered-finding-id', stage: 'finding', primary: true}]}") + '\n\nUse design or measurement for step nodes and finding or limit for finding nodes. Only a finding may have primary, which must be boolean. Include every registered step. Run the existing deterministic editor validation through Controller; repair invalid fields before handoff.';
     const writingInstructions = Object.fromEntries(['en', 'zh-CN'].map(language => [language, Object.entries(writingSkills)
       .filter(([key]) => key !== (language === 'en' ? 'humanizer-zh' : 'humanizer'))
       .map(([key, guide]) => 'Selected optional writing guidance: ' + key + '\n' + JSON.stringify({ path: guide.path, sha256: sha(Buffer.from(guide.content)) })
@@ -128,7 +130,7 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
   const runControl = createReadingFirstRunControl({ ...options, ...(taskBindings ? { taskBindings } : {}), ...(loaded.config.host ? { host: loaded.config.host } : {}), mainSession, configuredSetup, writingMode: 'source-translation',
     compactionPolicy: COMPACTION_POLICY, manualCompaction,
     roleReplyContract: options.roleReplyContract === undefined ? getRoleReplyContract() : options.roleReplyContract,
-    ...(instructionProfile === 'configured-reading-2.0' ? { presentationProfile: 'reading-editor-1.3' } : {}),
+    ...(['configured-reading-2.0', 'configured-reading-2.1'].includes(instructionProfile) ? { presentationProfile: 'reading-editor-1.3' } : {}),
     firstWritingLanguage: options.sourceLanguage, presentationMode: resolvedConfig.reading.presentation_mode, handoffProfile: SCIENCE_INDEX_PROFILE });
   return freeze({ resolvedConfig, scientificInput: structuredClone(options.scientificInput), configurationFingerprint: loaded.fingerprint, paths, parserOptions, runControl,
     compactionControlBindings: compactionControlBindings(runControl) });
@@ -268,7 +270,7 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
         const candidate = renderReadingFirstNotes({ controller, ...options });
         const stage = join(scratch, 'candidate-' + randomUUID());
         const exported = await exportReadingFirstPreview({ outputRoot: stage, identity: handoff.identity,
-          views: ['en', 'zh-CN'].map(language => checkpoint.state.views[language].value), presentation: handoff.presentation, resources,
+          views: ['en', 'zh-CN'].map(language => checkpoint.state.views[language].value), presentation: getReadingFirstPresentation({ controller }), resources,
           ...(checkpoint.state.readingEditor ? { readingEditor: checkpoint.state.readingEditor.value } : {}), ...options,
           targetRegistry: candidate.targetRegistry, noteLayout: prepared.runControl.reading_first_binding.note_layout, sourceLanguage: prepared.runControl.reading_first_binding.source_language,
           historicalKnowledge: { vaultRoot: policy.vault_root } });
@@ -338,7 +340,7 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
   await assertRegistryCurrent();
   mkdirSync(dirname(candidateRoot), { recursive: true });
   const exported = await exportReadingFirstPreview({ outputRoot: candidateRoot, identity: handoff.identity,
-    views: ['en', 'zh-CN'].map(language => checkpoint.state.views[language].value), presentation: handoff.presentation, resources,
+    views: ['en', 'zh-CN'].map(language => checkpoint.state.views[language].value), presentation: getReadingFirstPresentation({ controller }), resources,
     ...(checkpoint.state.readingEditor ? { readingEditor: checkpoint.state.readingEditor.value } : {}), ...renderOptions,
     targetRegistry: candidate.targetRegistry,
     ...(policy?.policy === 'committed-shared-nodes-1.0' ? { historicalKnowledge: { vaultRoot: policy.vault_root } } : {}) });

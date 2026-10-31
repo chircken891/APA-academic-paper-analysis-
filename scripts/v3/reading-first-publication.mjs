@@ -150,7 +150,14 @@ async function integratorVisualResources(data) {
   const integrated = artifacts.filter(row => row?.receipt.role === 'integration' && row.receipt.run_id === data.identity.run_id);
   if (integrated.length !== 1) return [];
   const value = JSON.parse(integrated[0].bytes);
-  return Array.isArray(value.visual_resources) ? value.visual_resources : [];
+  if (Array.isArray(value.visual_resources)) return value.visual_resources;
+  if (!Array.isArray(value.resource_handoff?.asset_mapping)) return [];
+  return value.resource_handoff.asset_mapping.map(row => {
+    const parent = data.sources.find(source => source.id === row.source_id && source.sha256 === row.source_pdf_sha256);
+    return { path: row.target_path, source_id: row.source_id, source_path: parent?.path,
+      source_sha256: row.source_pdf_sha256, sha256: row.sha256, byte_length: row.byte_length,
+      image_source_path: row.source_path ?? null };
+  });
 }
 
 async function resourceBindings(data, resources) {
@@ -173,7 +180,9 @@ async function resourceBindings(data, resources) {
         ownedVisuals ??= await integratorVisualResources(data);
         const shown = (data.candidate.visual_resources ?? []).find(row => row.path === resource.path);
         visuals = ownedVisuals.filter(row => row.path === resource.path && row.sha256 === resource.sha256
-          && row.byte_length === resource.byte_length && shown?.source_id === row.source_id);
+          && row.byte_length === resource.byte_length && shown?.source_id === row.source_id
+          && (row.image_source_path === undefined || typeof row.image_source_path === 'string' && isAbsolute(row.image_source_path)
+            && resolve(row.image_source_path) === resolve(resource.source_path)));
       }
       const visual = visuals.length === 1 ? visuals[0] : null;
       const parent = visual && data.sources.find(row => row.id === visual.source_id && row.sha256 === visual.source_sha256);

@@ -185,7 +185,7 @@ node scripts/apa-setup.mjs inspect --repo-root "$apaProjectRoot"
 - **调整设置**：“用 apa-setup 修改当前库配置”。支持完善、全部或选择去除、命名导出，以及导入前差异预览。去除答案不删除笔记或卸载依赖。
 - **正式发布**：先审阅精确发布清单，再批准 V3 受控事务。候选完成不等于已发布。见 [发布接口](docs/apa-v3/reading-first-publication.md)。
 
-新论文由维护中的[阅读会话入口](docs/apa-v3/reading-session.md)衔接科学角色、原文 Writer、Translation、可选 Editor、候选渲染与审查。新配置化运行使用 `configured-reading-2.0` 提示，已有运行从原检查点续接。
+新论文由维护中的[阅读会话入口](docs/apa-v3/reading-session.md)衔接科学角色、原文 Writer、Translation、可选 Editor、候选渲染与审查。新配置化运行使用 `configured-reading-2.1` 提示，已有运行从原检查点续接。
 
 ### 查询与比较已入库论文
 

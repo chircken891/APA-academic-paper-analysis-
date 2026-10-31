@@ -968,6 +968,45 @@ test('explicit science ownership uses the existing approved enrichment before Wr
   assert.equal(getReadingFirstState(controller).status,'reading_complete');
 });
 
+async function visualCorrectionFixture(t) {
+  const presentation={schema_version:'reading-first-obsidian-1.0',bibliography:{title:'Synthetic study',first_author:'Tester',year:2026},source_pdf:'Raw/source.pdf',sources:[{id:'main',path:'Raw/source.pdf'}],sections:[{id:'study',indices:{en:0,'zh-CN':0}}],visuals:[{id:'sensitivity',kind:'figure',label:{en:'Figure S8','zh-CN':'图 S8'},caption:{en:'Wrong independent-source caption.','zh-CN':'错误独立来源图注。'},path:'Figures/sensitivity.jpg',page:31,source_id:'main',source_path:'Raw/source.pdf',section_id:'study'}],knowledge:[],map:{steps:[],findings:[],relations:[]}};
+  const s=await setup(t,{presentation,enrichmentPolicy:{sources:[],allow_targeted_methods:true},maxCalls:6,maxTotalCalls:7}),controller=s.created.controller;
+  for(const request of s.created.requests) await s.complete(request,s.view(request.language));
+  const first=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
+  const gap={id:'visual-binding',severity:'material',question:'Which original figure is this?',impact:'Changes evidence type.',owner_role:'evidence',source_kind:'original_page',target_sections:['Study'],source_ids:['main']};
+  await s.complete(createReadingFirstReviewRequest({controller,presentation:first}),{overall:{complete:false,coherent:false,bilingual_consistent:true},key_nodes:[],issues:[{severity:'material',kind:'visual-source-binding',detail:'Wrong original caption.',repair_owner:'science',affected_languages:['en'],scientific_gap:gap,repair_scope:{status:'located',section_ids:['study'],knowledge_ids:[],visual_ids:['sensitivity'],editor_fields:[]}}],scope:'overall'});
+  const [request]=createReadingFirstEnrichmentRequests({controller});
+  const correction={visual_id:'sensitivity',source_id:'main',page:31,label:{en:'Figure S7','zh-CN':'图 S7'},caption:{en:'Original S7 alternative-method sensitivity.','zh-CN':'原图 S7，替代方法敏感性分析。'}};
+  const value={run_id:'run',role:'evidence',resolutions:[{gap_id:'visual-binding',classification:'paper_fact',explanation:'Original page 31 is Figure S7.',consequence:'Separate alternative methods from independent sources.',status:'recovered',target_sections:['Study'],source_ids:['main']}],visual_corrections:[correction]};
+  return {...s,controller,request,value};
+}
+
+test('owned original-page recovery corrects the consumed visual catalogue and survives restore without changing the original handoff', async t => {
+  const s=await visualCorrectionFixture(t), original=JSON.stringify(s.handoff);
+  await s.complete(s.request,s.value);
+  const [writer]=createReadingFirstRevisionRequests({controller:s.controller});
+  const payload=JSON.parse(writer.emittedStep.arguments.message.split('\n\n').at(-1));
+  assert.equal(payload.handoff.presentation.visuals[0].label.en,'Figure S7');
+  const revised=s.view('en'); revised.enrichment_consumption=[{gap_id:'visual-binding',section_heading:'Study'}];
+  await s.complete(writer,revised);
+  const rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller:s.controller}});
+  assert.match(rendered.notes.find(note=>note.language==='en').content,/Original S7 alternative-method sensitivity/);
+  assert.match(rendered.notes.find(note=>note.language==='zh-CN').content,/原图 S7，替代方法敏感性分析/);
+  assert.doesNotMatch(rendered.notes.map(note=>note.content).join('\n'),/Wrong independent-source caption/);
+  const receipt=await compactionCheckpoint(s,s.controller);
+  const restored=await restoreReadingFirstRuntime({handoff:s.handoff,runControl:s.runControl,checkpointReceipt:receipt});
+  assert.equal(restored.ok,true,JSON.stringify(restored.errors));
+  const again=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller:restored.controller}});
+  assert.equal(again.notes[0].content,rendered.notes[0].content);
+  assert.equal(JSON.stringify(s.handoff),original);
+});
+
+for(const change of [{visual_id:'unreviewed'},{source_id:'other'},{path:'Figures/replaced.jpg'},{caption:{en:'Only one language'}}]) test(`original-page visual correction rejects an out-of-scope or incomplete replacement ${JSON.stringify(change)}`, async t => {
+  const s=await visualCorrectionFixture(t);
+  Object.assign(s.value.visual_corrections[0],change);
+  await assert.rejects(()=>s.complete(s.request,s.value),/READING_FIRST_VISUAL_CORRECTION_INVALID/);
+});
+
 test('renderer issues must identify existing candidate paths before the review is accepted', async t => {
   const presentation={schema_version:'reading-first-obsidian-1.0',bibliography:{title:'Synthetic study',first_author:'Tester',year:2026},source_pdf:'Raw/source.pdf',sections:[{id:'study',indices:{en:0,'zh-CN':0}}],visuals:[],knowledge:[],map:{steps:[],findings:[],relations:[]}};
   const s=await setup(t,{presentation}),controller=s.created.controller;

@@ -39,6 +39,8 @@
 
 新建运行通过[统一会话入口](reading-session.md)传入已批准的 `enrichmentPolicy`。策略原样冻结，接入行为另记为 `reading_first_binding.enrichment_session_profile:'reading-session-enrichment-1.0'`。初始任务预登记三个角色，后期任务仅在 `includeRepairs:true` 时登记；无缺口的角色不派发。初始预算预留 Writer、Translation、可选 Editor 和一次整体审查，不预留 r2。
 
+原页补缺涉及已登记图片的身份、图注或页码错误时，获准的定向任务可在 compact 补缺输出顶层提供 `visual_corrections`，由审查范围关联到唯一的原页 resolution。每项为 `{visual_id,source_id,page,label:{en,zh-CN},caption:{en,zh-CN},kind?}`，仅能更正首次审查已定位的 science 实质问题范围内的既有图。来源必须仍为该图原登记来源；稳定 ID、图片路径和图片字节保持原样，`kind` 如需修正限 `figure` 或 `table`。受控接收后，原 owned 补缺回执提供更正依据，Writer、Translation、Editor、渲染、恢复和后续发布来源捕获均消费更正后的资源目录；原 handoff、Integration 和历史候选不覆写。没有此字段的历史结果维持原行为。此接口不产生新角色、额度或复核轮次，也不授予正式发布权。
+
 带此标记的运行在首次审查出现 science 问题时，先将原文与译文都纳入修订，再计算补缺和完整修订链的预算；先修原文，再译出另一语言。仅译稿中的 writer 问题保持单语修订。未登记后期任务或剩余额度不足时保留 `completed_with_limits`，不在派发到一半后扩充预算。没有补缺结果且来源列表为空时，不向角色请求注入空补缺上下文。
 
 恢复复用现有策略来源、已接收来源及回执检查。角色快照已写入但结果尚未接收时，入口要求核对原任务；未登记快照不会被自动采纳。任务接收及中断恢复的具体动作见会话说明。

@@ -3,11 +3,18 @@ import { statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve, join, isAbsolute } from 'node:path';
 import { inspectApaConfig, checkHostProfile, evaluateReadingPreflight } from '../lib/apa-config.mjs';
-import { prepareConfiguredReading, getConfiguredReadingDispatchArguments, materializeConfiguredReadingCandidate } from './configured-reading.mjs';
+import { prepareConfiguredReading, getConfiguredReadingDispatchArguments, materializeConfiguredReadingCandidate, DEFAULT_CONFIGURED_INSTRUCTION_PROFILE } from './configured-reading.mjs';
+import { resolveHostContinuation } from '../lib/apa-host-capabilities.mjs';
+import { buildReadingActionSummary } from './reading-action-summary.mjs';
+import { checkTranslationProgress } from './reading-translation-progress.mjs';
+import { usesExecutionLedger } from './reading-execution-budget.mjs';
+import { getScienceBudgetSummary, getSciencePendingContinuations, getScienceContinuation, reserveScienceContinuation, markScienceContinuationDispatched, recordScienceContinuationReceipt, recordScienceComputerControlObservation, getScienceComputerControlReport } from './science-controller.mjs';
+import { getReadingBudgetSummary, getReadingPendingContinuations, reserveReadingContinuation, markReadingContinuationDispatched, recordReadingContinuationReceipt } from './reading-first-runtime.mjs';
 import { buildReadingSessionTasks } from './reading-session-tasks.mjs';
 import { ingestObservedRunStep } from './phase21-runner.mjs';
 import { COMPACTION_POLICY } from './reading-compaction.mjs';
 import { createOwnedArtifactBroker, commitOwnedArtifact, readOwnedArtifact } from './owned-artifact-store.mjs';
+import { recoverReadingFirstRejectedEditor } from './reading-first-runtime.mjs';
 import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, getScienceRequest, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, createScienceHandoff, handleScienceCompactionBoundary } from './science-controller.mjs';
 import { fingerprintReadingFirst, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, getReadingFirstPendingRequests, getReadingFirstState, recordReadingFirstRequestEvent, getReadingFirstRequestEvents, acceptReadingFirstResult, createReadingFirstEnrichmentRequests, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstReviewRequest, createReadingFirstRevisionRequests, validateReadingFirstRenderRepair, handleReadingCompactionBoundary, captureReadingFirstPublicationSource } from './reading-first-runtime.mjs';
 
@@ -57,7 +64,17 @@ const checkpointBindings = (brokerConfig, runId, actorId) => brokerConfig.author
 function extendsSnapshot(later, earlier) {
   const a = later.state, b = earlier.state;
   if (a.callsUsed < b.callsUsed || a.reviews < b.reviews) return false;
-  for (const key of ['observations', 'requestLog', 'enrichmentRecords', 'enrichmentSources']) {
+  if (b.executionLedger) {
+    if (!a.executionLedger || a.executionLedger.length < b.executionLedger.length) return false;
+    const rank = { prepared: 0, issued: 1, observed: 2 };
+    for (let i = 0; i < b.executionLedger.length; i++) {
+      const { status: oldStatus, receipt: oldReceipt, ...oldRow } = b.executionLedger[i];
+      const { status: newStatus, receipt: newReceipt, ...newRow } = a.executionLedger[i];
+      if (!same(oldRow, newRow) || rank[newStatus] < rank[oldStatus]
+        || oldReceipt && !same(oldReceipt, newReceipt) && !(oldReceipt.status === 'outcome_unknown' && newReceipt?.status === 'observed')) return false;
+    }
+  }
+  for (const key of ['observations', 'requestLog', 'enrichmentRecords', 'enrichmentSources', 'repairRecoveries']) {
     const left = a[key] ?? [], right = b[key] ?? [];
     if (!Array.isArray(left) || !Array.isArray(right) || left.length < right.length || right.some((item, index) => !same(item, left[index]))) return false;
   }
@@ -108,8 +125,9 @@ export async function createReadingSession(options = {}) {
   const inspection = inspectApaConfig({ repoRoot, hostProfile });
   const presentationMode = inspection.config?.reading?.presentation_mode;
   if (options.presentationMode !== undefined && options.presentationMode !== presentationMode) fail('READING_SESSION_PRESENTATION_CONFLICT');
-  const tasks = buildReadingSessionTasks({ runId, scientificInput, sourceLanguage, checkpointCount: maxControlCheckpoints, controllerActorId: options.controllerActorId, taskOverrides: options.taskOverrides, scienceTaskOverrides: options.scienceTaskOverrides, includeRepairs: options.includeRepairs === true, presentationMode, enrichmentPolicy: options.enrichmentPolicy });
-  const prepared = prepareConfiguredReading({ repoRoot, runId, scientificInput, sourceLanguage, authorizationId, deadline, maxCalls, maxTotalCalls, priorCalls: 6, sessionContext, hostProfile, taskBindings: tasks.taskBindings, controllerActorId: options.controllerActorId, ...(options.enrichmentPolicy !== undefined ? { enrichmentPolicy: options.enrichmentPolicy, enrichmentSessionProfile: 'reading-session-enrichment-1.0' } : {}) });
+  const instructionProfile = options.instructionProfile ?? DEFAULT_CONFIGURED_INSTRUCTION_PROFILE;
+  const tasks = buildReadingSessionTasks({ runId, scientificInput, sourceLanguage, instructionProfile, checkpointCount: maxControlCheckpoints, controllerActorId: options.controllerActorId, taskOverrides: options.taskOverrides, scienceTaskOverrides: options.scienceTaskOverrides, includeRepairs: options.includeRepairs === true, presentationMode, enrichmentPolicy: options.enrichmentPolicy });
+  const prepared = prepareConfiguredReading({ repoRoot, runId, scientificInput, sourceLanguage, instructionProfile, authorizationId, deadline, maxCalls, maxTotalCalls, priorCalls: 6, sessionContext, hostProfile, taskBindings: tasks.taskBindings, controllerActorId: options.controllerActorId, ...(options.enrichmentPolicy !== undefined ? { enrichmentPolicy: options.enrichmentPolicy, enrichmentSessionProfile: 'reading-session-enrichment-1.0' } : {}) });
   const configBytes = await readFile(join(repoRoot, 'config', 'apa.local.json'));
   if (createHash('sha256').update(configBytes).digest('hex') !== prepared.configurationFingerprint || !same(JSON.parse(configBytes), inspection.config)) fail('READING_SESSION_CONFIG_CHANGED');
   const actor = prepared.runControl.reading_first_binding.controller_actor_id;
@@ -197,11 +215,51 @@ function actionForScience(state, role) {
   return { role, ...item };
 }
 
-/** Compute the smallest next action; dispatch actions have already saved intent. */
+const pendingContinuations = state => state.reading ? getReadingPendingContinuations({ controller: state.reading }) : getSciencePendingContinuations({ controller: state.science });
+const continuationRow = (state, executionId) => state.reading
+  ? snapshotReadingFirstRuntime(state.reading).state.executionLedger?.find(row => row.execution_id === executionId && row.kind === 'continuation') ?? null
+  : getScienceContinuation({ controller: state.science, executionId });
+const sessionQueue = (state, work) => {
+  const result = (state.queue ?? Promise.resolve()).then(work);
+  state.queue = result.catch(() => {});
+  return result;
+};
+
+/** Compute the next action and a bounded projection for routine Controller replies. */
 export async function nextReadingAction(session) {
+  const state = stateOf(session);
+  return sessionQueue(state, async () => {
+    const action = await nextSessionAction(session);
+    const snapshot = state.reading ? snapshotReadingFirstRuntime(state.reading) : null;
+    const task = snapshot?.state.request_entries.find(row => row.request.emittedStep.action_id === action.original_action_id || row.request.emittedStep.action_id === action.action_id)?.request.task;
+    const budget = state.reading ? getReadingBudgetSummary({ controller: state.reading }) : getScienceBudgetSummary({ controller: state.science });
+    const statePath = state.reading && state.checkpointReceipt?.path ? join(state.prepared.paths.runRoot, state.checkpointReceipt.path) : controlPath(state.prepared.paths.runRoot);
+    const artifacts = task ? [task.artifact_path, task.native_path, task.instruction_path].filter(Boolean).map(path => ({ path: join(state.prepared.paths.runRoot, path) })) : [];
+    const summary = buildReadingActionSummary({ runId: state.prepared.runControl.run_id, stage: action.stage ?? (state.reading ? 'reading' : 'science'),
+      status: action.status ?? snapshot?.state.status ?? action.action, action: action.action, taskId: task?.task_id ?? action.role, handle: action.host_handle,
+      budget, blockCode: action.code, artifacts, statePath });
+    return { ...action, summary, ...(action.action === 'complete' ? { native_presentation: { status: 'not_run' }, computer_control: getScienceComputerControlReport({ controller: state.science }) } : {}) };
+  });
+}
+
+async function nextSessionAction(session) {
   const state = stateOf(session);
   if (state.poisoned) return { action: 'reconcile', code: 'READING_SESSION_RESTORE_REQUIRED' };
   if (state.preflight.status !== 'pass') return { action: 'provide-input', kind: 'runtime-evidence', preflight: clone(state.preflight) };
+  const continuation = pendingContinuations(state)[0];
+  if (continuation) {
+    if (Date.now() >= Date.parse(state.prepared.runControl.reading_first_binding.deadline)) return { action: 'reconcile', code: 'READING_SESSION_DEADLINE_EXPIRED' };
+    const stage = state.reading ? 'reading' : 'science';
+    if (continuation.status !== 'prepared') return { action: 'reconcile', kind: 'continuation', stage, execution_id: continuation.execution_id, action_id: continuation.action_id, code: 'HOST_CONTINUATION_OUTCOME_UNKNOWN' };
+    if (state.reading) {
+      if (state.nextCheckpoint >= state.checkpoints.length - 2) return { action: 'reconcile', code: 'CONTROL_CHECKPOINT_CAPACITY' };
+      markReadingContinuationDispatched({ controller: state.reading, executionId: continuation.execution_id });
+      await saveReading(state);
+    } else await markScienceContinuationDispatched({ controller: state.science, executionId: continuation.execution_id });
+    return { action: 'dispatch', kind: 'continuation', stage, execution_id: continuation.execution_id, action_id: continuation.action_id,
+      original_action_id: continuation.context?.continuation_request?.action_id, host_handle: continuation.handle,
+      host_action: continuation.tool, arguments: continuation.arguments, run_id: state.prepared.runControl.run_id };
+  }
   if (!state.reading) {
     let current = getScienceState(state.science);
     if (current.expired) return { action: 'reconcile', code: 'READING_SESSION_DEADLINE_EXPIRED' };
@@ -222,7 +280,7 @@ export async function nextReadingAction(session) {
         if (!restored.ok) fail(restored.errors[0].code);
         state.reading = restored.controller;
       }
-      return nextReadingAction(session);
+      return nextSessionAction(session);
     }
     const unknown = Object.entries(current.roles).find(([, item]) => item.status === 'outcome_unknown');
     if (unknown) return { action: 'reconcile', role: unknown[0], action_id: unknown[1].action_id };
@@ -279,7 +337,7 @@ export async function nextReadingAction(session) {
         state.presentation = result.candidate;
         createReadingFirstReviewRequest({ controller: state.reading, presentation: state.presentation, renderRepair: true });
         await saveReading(state);
-        return nextReadingAction(session);
+        return nextSessionAction(session);
       }
       try { createReadingFirstRevisionRequests({ controller: state.reading }); }
       catch (error) {
@@ -310,6 +368,12 @@ export async function nextReadingAction(session) {
   const firstReview = request.task.role === 'independent-verifier'
     && (usesCompactionObservation(state)
       ? request.task.task_id === state.prepared.runControl.reading_first_binding.task_bindings.review.task_id : current.review_rounds === 0);
+  if (firstReview && !state.presentation && state.reviewedPresentation) {
+    if (!state.resources || !state.renderOptions) return { action: 'provide-input', kind: 'render-assets' };
+    const restored = await materializeConfiguredReadingCandidate({ prepared: state.prepared, controller: state.reading, handoff: state.handoff, resources: state.resources, ...state.renderOptions, candidateRevision: current.review_rounds, reuseExisting: true });
+    if (restored.candidate.presentation_fingerprint !== state.reviewedPresentation.presentation_fingerprint) fail('READING_SESSION_REVIEWED_CANDIDATE_CHANGED');
+    state.presentation = restored.candidate;
+  }
   if (firstWriter || firstReview) {
     const boundaryId = firstReview ? 'before-review' : 'before-writer';
     const snapshot = snapshotReadingFirstRuntime(state.reading);
@@ -329,10 +393,87 @@ export async function nextReadingAction(session) {
   return { action: 'dispatch', stage: 'reading', ...intent, input_fingerprint: request.emittedStep.input_fingerprint, run_id: state.prepared.runControl.run_id, port: request.emittedStep.port };
 }
 
+async function readingProgress(state, entry, expectedCompleted) {
+  let nativeOutput;
+  try { nativeOutput = JSON.parse(await readFile(join(state.prepared.paths.runRoot, entry.request.task.native_path), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw Object.assign(new Error('READING_TRANSLATION_PROGRESS_RECONCILE'), { code: 'READING_TRANSLATION_PROGRESS_RECONCILE' }); }
+  return checkTranslationProgress({ artifactRoot: state.prepared.paths.runRoot, task: entry.request.task, runId: state.prepared.runControl.run_id,
+    sourceView: entry.payload.source_view, nativeOutput, expectedCompleted });
+}
+
+async function continuationIntent(state, event) {
+  const binding = state.prepared.runControl.reading_first_binding;
+  if (!usesExecutionLedger(binding)) return { action: 'provide-input', kind: 'continuation', code: 'LEGACY_EXECUTION_BUDGET_UNKNOWN' };
+  if (state.preflight.status !== 'pass') return { action: 'provide-input', kind: 'runtime-evidence', preflight: clone(state.preflight) };
+  if (![event.action_id, event.execution_id, event.message].every(text)) fail('READING_SESSION_CONTINUATION_INVALID');
+  const requestIdentity = { action_id: event.action_id, message: event.message };
+  const existing = continuationRow(state, event.execution_id);
+  if (existing) {
+    if (!same(existing.context?.continuation_request, requestIdentity)) fail('READING_SESSION_CONTINUATION_CONFLICT');
+    return { recorded: true, execution_id: existing.execution_id, status: existing.status };
+  }
+  let handle, taskId, role, entry, progress;
+  if (state.reading) {
+    entry = snapshotReadingFirstRuntime(state.reading).state.request_entries.find(row => row.request.emittedStep.action_id === event.action_id);
+    if (!entry || entry.consumed || !entry.events?.host_observation) fail('READING_SESSION_CONTINUATION_INVALID');
+    const observed = ingestObservedRunStep({ packet: entry.request.packet, emittedStep: entry.request.emittedStep,
+      run: { run_id: state.prepared.runControl.run_id }, observation: entry.events.host_observation.payload });
+    handle = observed.agent_id; taskId = entry.request.task.task_id;
+  } else {
+    const found = Object.entries(getScienceState(state.science).roles).find(([, item]) => item.action_id === event.action_id);
+    if (!found || found[1].status !== 'observed') fail('READING_SESSION_CONTINUATION_INVALID');
+    role = found[0]; handle = found[1].agent_id;
+  }
+  let message = event.message + '\nContinue only the original task, output ownership, model, deadline and authorized scope. Desktop control and native observation require explicit user authorization.';
+  if (entry?.request.task.role === 'translation') {
+    try { progress = await readingProgress(state, entry); }
+    catch (error) { if (error.message === 'READING_TRANSLATION_PROGRESS_RECONCILE') return { action: 'reconcile', code: error.message, action_id: event.action_id }; throw error; }
+    message += '\nRead the original frozen input references from ' + entry.request.instruction_file.path
+      + '. Preserve every completed translation fragment. Translate only the following remaining IDs, then finalize and validate the complete original output JSON.\n'
+      + JSON.stringify({ remaining_sections: progress.remaining_sections, remaining_knowledge: progress.remaining_knowledge,
+        progress_path: join(state.prepared.paths.runRoot, entry.request.task.progress_path), source_fingerprint: progress.source_fingerprint });
+  }
+  const host = resolveHostContinuation(state.hostProfile, { hostName: binding.host?.name ?? state.hostProfile?.host, handle, message });
+  if (host.status !== 'detected') return { action: 'provide-input', kind: 'host-continuation', code: host.code };
+  const input = { executionId: event.execution_id, actionId: `${event.action_id}:continuation:${event.execution_id}`, handle, tool: host.host_action,
+    arguments: host.arguments, context: { continuation_request: requestIdentity, host_evidence: host.evidence, ...(progress ? { translation_progress: progress } : {}) } };
+  let row;
+  if (state.reading) {
+    if (state.nextCheckpoint >= state.checkpoints.length - 3) return { action: 'reconcile', code: 'CONTROL_CHECKPOINT_CAPACITY' };
+    row = reserveReadingContinuation({ controller: state.reading, taskId, ...input });
+    await saveReading(state);
+  } else row = await reserveScienceContinuation({ controller: state.science, role, ...input });
+  return { recorded: true, execution_id: row.execution_id, status: row.status };
+}
+
+async function continuationReceipt(state, event) {
+  if (!text(event.execution_id) || !event.observation) fail('READING_SESSION_CONTINUATION_INVALID');
+  const row = continuationRow(state, event.execution_id);
+  if (!row) fail('READING_SESSION_CONTINUATION_INVALID');
+  if (row.context?.translation_progress && event.observation.status === 'observed') {
+    const entry = snapshotReadingFirstRuntime(state.reading).state.request_entries.find(item => item.request.task.task_id === row.task_id);
+    await readingProgress(state, entry, row.context.translation_progress);
+  }
+  if (!state.reading) return recordScienceContinuationReceipt({ controller: state.science, executionId: event.execution_id, receipt: event.observation });
+  if (state.nextCheckpoint >= state.checkpoints.length - 1) return { action: 'reconcile', code: 'CONTROL_CHECKPOINT_CAPACITY' };
+  const unchanged = row.receipt !== undefined && same(row.receipt, event.observation);
+  const result = recordReadingContinuationReceipt({ controller: state.reading, executionId: event.execution_id, receipt: event.observation });
+  if (!unchanged) await saveReading(state);
+  return result;
+}
+
 /** Record observed host events or explicit runtime inputs without invoking a host tool. */
 export async function recordReadingEvent(session, event = {}) {
   const state = stateOf(session);
+  return sessionQueue(state, () => recordSessionEvent(session, event));
+}
+
+async function recordSessionEvent(session, event = {}) {
+  const state = stateOf(session);
   if (state.poisoned) fail('READING_SESSION_RESTORE_REQUIRED');
+  if (event.kind === 'continuation-intent') return continuationIntent(state, event);
+  if (event.kind === 'continuation-receipt') return continuationReceipt(state, event);
+  if (event.kind === 'computer-control-observation') return recordScienceComputerControlObservation({ controller: state.science, observation: event.observation });
   if (event.kind === 'runtime-evidence') {
     if (!event.hostProfile || !event.evidence) fail('READING_SESSION_INPUT_INVALID');
     state.hostProfile = clone(event.hostProfile); state.evidence = { ...clone(event.evidence), control_write: state.evidence.control_write };
@@ -341,6 +482,13 @@ export async function recordReadingEvent(session, event = {}) {
     return clone(state.preflight);
   }
   if (event.kind === 'compaction') { state.compactionInput = clone(event.input ?? {}); return { recorded: true }; }
+  if (event.kind === 'recover-rejected-editor') {
+    if (!state.reading || state.preflight.status!=='pass') fail('READING_SESSION_RECOVERY_PREFLIGHT_REQUIRED');
+    if (state.nextCheckpoint>=state.checkpoints.length-1) return { action:'reconcile', code:'CONTROL_CHECKPOINT_CAPACITY' };
+    const result=await recoverReadingFirstRejectedEditor({controller:state.reading,checkpointReceipt:state.checkpointReceipt,authorization:event.authorization,saveCheckpoint:snapshot=>saveReading(state,snapshot)});
+    state.presentation=null;
+    return result;
+  }
   if (event.kind === 'render-assets') { state.resources = clone(event.resources); state.renderOptions = clone(event.renderOptions ?? {}); return { recorded: true }; }
   if (event.kind === 'renderer-repair') {
     if (event.resources !== undefined) state.resources = clone(event.resources);
@@ -349,6 +497,7 @@ export async function recordReadingEvent(session, event = {}) {
     return { recorded: true };
   }
   if (!text(event.action_id) || !['host_observation', 'host_update', 'result'].includes(event.kind)) fail('READING_SESSION_EVENT_INVALID');
+  if (event.kind === 'result' && pendingContinuations(state).some(row => row.context?.continuation_request?.action_id === event.action_id)) fail('READING_SESSION_CONTINUATION_OUTCOME_UNKNOWN');
   if (!state.reading) {
     const found = Object.entries(getScienceState(state.science).roles).find(([, item]) => item.action_id === event.action_id);
     if (!found) fail('READING_SESSION_EVENT_ACTION_INVALID');

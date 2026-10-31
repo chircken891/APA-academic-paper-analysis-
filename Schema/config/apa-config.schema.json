@@ -392,6 +392,7 @@
             "manual_compaction": { "$ref": "#/definitions/hostCapability" },
             "concise_replies": { "$ref": "#/definitions/hostCapability" },
             "science_recovery": { "$ref": "#/definitions/hostCapability" },
+            "task_continuation": { "$ref": "#/definitions/hostCapability" },
             "threshold_compaction": { "$ref": "#/definitions/hostCapability" }
           }
         }
@@ -466,6 +467,17 @@
             "lookup_tool": { "type": ["string", "null"] },
             "lookup_argument": { "type": ["string", "null"] },
             "original_host_accessible": { "type": ["boolean", "null"] }
+          }
+        },
+        "continuation": {
+          "type": "object", "additionalProperties": false,
+          "required": ["tool", "handle_argument", "instruction_argument", "same_context", "original_host_accessible"],
+          "properties": {
+            "tool": { "type": "string", "minLength": 1, "pattern": "\\S" },
+            "handle_argument": { "type": "string", "minLength": 1, "pattern": "\\S" },
+            "instruction_argument": { "type": "string", "minLength": 1, "pattern": "\\S" },
+            "same_context": { "type": "boolean" },
+            "original_host_accessible": { "type": "boolean" }
           }
         },
         "threshold": {

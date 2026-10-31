@@ -14,6 +14,16 @@ const observation = () => ({
   context: { tokens: 180000, kind: 'last-request-input', measured_at: new Date(now - 1000).toISOString(), fresh: true, source: 'request usage 42' },
 });
 const progress = { remaining_work: { multiple_responses: true, reason: 'Writer, translation and review remain.' }, growth: { substantial: true, reason: 'Large tool responses since the last checkpoint.' } };
+
+test('2.1 compaction preserves the desktop restriction and actual execution budget', () => {
+  const result = assess('before-writer', { policy: { profile: 'boundary-reminders-1.2' }, continuation: {
+    binding: { configured_setup: { instruction_profile: 'configured-reading-2.1' } }, budget_summary: { total_used: 9, continuations: 3, remaining_total: 13 } } });
+  assert.match(result.compaction_prompt, /所有桌面应用/);
+  assert.match(result.compaction_prompt, /obsidian-cli.*eval/);
+  const metadata = JSON.parse(result.compaction_prompt.split('\n\n').find(part => part.startsWith('{')));
+  assert.equal(metadata.execution_budget.total_used, 9);
+  assert.equal(metadata.execution_budget.continuations, 3);
+});
 function assess(id, changes = {}) {
   assert.equal(typeof api.evaluateCompactionBoundary, 'function', 'the common boundary evaluator is required');
   return api.evaluateCompactionBoundary({ boundary: boundary(id), sessionId: 'main-session', startedAt, observation: observation(), progress, now, ...changes });

@@ -5,7 +5,7 @@ const nonempty = value => typeof value === 'string' && Boolean(value.trim());
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 
 /** Predeclare task identities and finite control slots before any role dispatch. */
-export function buildReadingSessionTasks({ runId, scientificInput, sourceLanguage, checkpointCount, controllerActorId = 'controller', taskOverrides = {}, scienceTaskOverrides = {}, includeRepairs = false, presentationMode = 'reading-editor', enrichmentPolicy } = {}) {
+export function buildReadingSessionTasks({ runId, scientificInput, sourceLanguage, checkpointCount, controllerActorId = 'controller', taskOverrides = {}, scienceTaskOverrides = {}, includeRepairs = false, presentationMode = 'reading-editor', enrichmentPolicy, instructionProfile } = {}) {
   if (!/^[a-zA-Z0-9_-]+$/.test(runId ?? '') || !['en', 'zh-CN'].includes(sourceLanguage) || !nonempty(controllerActorId)) fail('READING_SESSION_INPUT_INVALID');
   const ids = scientificInput?.role_artifacts;
   if (!Array.isArray(ids) || ids.length !== 6 || ids.some(id => !nonempty(id)) || new Set(ids).size !== ids.length) fail('READING_SESSION_SCIENCE_IDENTITIES');
@@ -26,9 +26,11 @@ export function buildReadingSessionTasks({ runId, scientificInput, sourceLanguag
     for (const suffix of includeRepairs ? ['', '-r2'] : ['']) {
       const name = key + suffix;
       const base = task(name, role, 'reading-' + name, 'reading');
+      if (instructionProfile === 'configured-reading-2.1' && role === 'translation') Object.assign(base, { source_view_path: `translation/${name}/source.json`, translation_context_path: `translation/${name}/context.json`, progress_path: `translation/${name}/progress.json` });
       const override = taskOverrides[name] ?? {};
       if (!override || typeof override !== 'object' || Array.isArray(override) || override.role !== undefined && override.role !== role) fail('READING_SESSION_TASK_OVERRIDE');
       taskBindings[name] = { ...base, ...override };
+      if (instructionProfile === 'configured-reading-2.1' && role === 'translation' && !['source_view_path', 'translation_context_path', 'progress_path'].every(field => nonempty(taskBindings[name][field]))) fail('READING_SESSION_TASK_CONFLICT');
     }
   }
   if (enrichmentPolicy !== undefined) {
@@ -52,7 +54,7 @@ export function buildReadingSessionTasks({ runId, scientificInput, sourceLanguag
       if (!['task_id', 'task_name', 'native_path', 'instruction_path'].every(key => nonempty(item[key])) || !/^[a-z0-9_]+$/.test(item.task_name) || taskIds.has(item.task_id) || names.has(item.task_name)) fail('READING_SESSION_TASK_CONFLICT');
       taskIds.add(item.task_id); names.add(item.task_name);
     }
-    for (const path of [item.artifact_path, item.native_path, item.instruction_path].filter(Boolean)) {
+    for (const path of [item.artifact_path, item.native_path, item.instruction_path, item.source_view_path, item.translation_context_path, item.progress_path].filter(Boolean)) {
       const normalized = normalize(path).replaceAll('\\', '/').toLowerCase();
       if (isAbsolute(path) || win32.isAbsolute(path) || normalized === '.' || normalized === '..' || normalized.startsWith('../') || normalized.split('/')[0] === '.phase21-receipts' || paths.has(normalized)) fail('READING_SESSION_TASK_CONFLICT');
       paths.add(normalized);

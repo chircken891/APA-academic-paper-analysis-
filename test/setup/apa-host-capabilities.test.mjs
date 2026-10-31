@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { inspectApaConfig, loadHostProfile } from '../../scripts/lib/apa-config.mjs';
+import { resolveHostContinuation } from '../../scripts/lib/apa-host-capabilities.mjs';
 
 const temporary = t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-host-check-'));
@@ -25,12 +26,46 @@ test('missing and legacy profiles retain unknown capabilities and do not write o
   const repoRoot = temporary(t);
   const inspection = inspectApaConfig({ repoRoot, capability: 'query' });
   assert.equal(inspection.ready, true);
-  assert.equal(inspection.capability_check.checks.length, 6);
+  assert.equal(inspection.capability_check.checks.length, 7);
   assert.ok(inspection.capability_check.checks.every(row => row.status === 'unknown'));
   assert.equal(inspection.capability_check.runtime_validation, 'not_run');
   assert.equal(check(repoRoot, profile(), 'delegated_diagnostics').status, 'detected');
   assert.equal(check(repoRoot, profile(), 'threshold_compaction').status, 'unknown');
   assert.deepEqual(fs.readdirSync(repoRoot), []);
+});
+
+test('continuation requires evidence for the same live host and binds only the original handle', t => {
+  const repoRoot = temporary(t);
+  const report = profile();
+  const options = { hostName: report.host, handle: 'real-handle', message: 'Continue the remaining sections.' };
+  assert.equal(resolveHostContinuation(report, options).status, 'unknown');
+  report.capabilities = { task_continuation: { ...finding(), scope: 'current-session',
+    continuation: { tool: 'followup_task', handle_argument: 'target', instruction_argument: 'message', same_context: true, original_host_accessible: true } } };
+  assert.deepEqual(resolveHostContinuation(report, options).arguments, { target: 'real-handle', message: options.message });
+  assert.equal(resolveHostContinuation(report, options).host_action, 'followup_task');
+  assert.equal(check(repoRoot, report, 'task_continuation').status, 'detected');
+  assert.equal(resolveHostContinuation(report, { ...options, hostName: 'other-host' }).status, 'blocked');
+  assert.equal(resolveHostContinuation(report, { ...options, handle: null }).status, 'blocked');
+  report.capabilities.task_continuation.continuation.same_context = false;
+  assert.equal(resolveHostContinuation(report, options).status, 'blocked');
+  report.capabilities.task_continuation.continuation.same_context = true;
+  report.capabilities.task_continuation.evidence = [];
+  assert.equal(resolveHostContinuation(report, options).status, 'unknown');
+  report.capabilities.task_continuation.status = 'unsupported';
+  assert.equal(resolveHostContinuation(report, options).status, 'unsupported');
+  assert.deepEqual(fs.readdirSync(repoRoot), []);
+});
+
+test('continuation capability is a validated optional host report, not a saved configuration choice', t => {
+  const repoRoot = temporary(t), file = path.join(repoRoot, 'profile.json');
+  const report = profile();
+  report.capabilities = { task_continuation: { ...finding(), scope: 'current-session',
+    continuation: { tool: 'followup_task', handle_argument: 'target', instruction_argument: 'message', same_context: true, original_host_accessible: true } } };
+  fs.writeFileSync(file, JSON.stringify(report));
+  assert.deepEqual(loadHostProfile(file), report);
+  report.capabilities.task_continuation.continuation.same_context = 'yes';
+  fs.writeFileSync(file, JSON.stringify(report));
+  assert.throws(() => loadHostProfile(file), /APA_HOST_PROFILE_INVALID/);
 });
 
 test('CLI accepts evidence-backed optional capability reports without saving answers', t => {

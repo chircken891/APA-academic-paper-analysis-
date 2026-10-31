@@ -5,11 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { createReadingFirstRunControl, acceptReadingFirstResult, getReadingFirstState, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, createReadingFirstDraftRequests, handleReadingCompactionBoundary } from '../../scripts/v3/reading-first-runtime.mjs';
+import { getReadingBudgetSummary as readingApiBudget, createReadingFirstRunControl, acceptReadingFirstResult, getReadingFirstState, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, createReadingFirstDraftRequests, handleReadingCompactionBoundary } from '../../scripts/v3/reading-first-runtime.mjs';
 import { commitOwnedArtifact } from '../../scripts/v3/owned-artifact-store.mjs';
 import { createApaRoleModelPolicy } from '../../scripts/apa-model-policy.mjs';
 import { buildConfiguredReadingInstructions, prepareConfiguredReading, getConfiguredReadingDispatchArguments } from '../../scripts/v3/configured-reading.mjs';
 import * as scienceApi from '../../scripts/v3/science-controller.mjs';
+import * as readingApi from '../../scripts/v3/reading-first-runtime.mjs';
 import { COMPACTION_POLICY, compactionControlBindings } from '../../scripts/v3/reading-compaction.mjs';
 import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, prepareScienceCorrection, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, getScienceRequest, createScienceHandoff, recordScienceCompactionBoundary } from '../../scripts/v3/science-controller.mjs';
 import { ingestObservedRunStep } from '../../scripts/v3/phase21-runner.mjs';
@@ -111,15 +112,16 @@ test('failed science reminder save never returns a prompt or unlocks a stale con
   await assert.rejects(() => prepareScienceRequests({ controller: stale }), /SCIENCE_CONTROLLER_RESTORE_REQUIRED/);
 });
 
-async function fixture(t, { context = 'synthetic', compactionPolicy, promptFiles } = {}) {
+async function fixture(t, { context = 'synthetic', compactionPolicy, promptFiles, instructionProfile, presentationMode } = {}) {
   const root = await mkdtemp(join(tmpdir(),'science-controller-')); t.after(() => rm(root,{recursive:true,force:true}));
   const source = Buffer.from('synthetic source'); await writeFile(join(root,'paper.pdf'),source);
   const tasks = Object.fromEntries(roles.map(role=>[role,{task_id:role,task_name:role.replace('-','_'),owner_actor_id:role,role,artifact_id:role,artifact_path:'science/'+role+'.json',native_path:'native/'+role+'.json',...(role==='evidence'?{instruction_path:'instructions/evidence.txt'}:{}),revision:'1'}]));
   const downstream = Object.fromEntries(['en','zh-CN','review'].map(key=>[key,{task_id:key,task_name:'writer_'+key.replace('-','_').toLowerCase(),owner_actor_id:key,role:key==='en'?'english-writer':key==='zh-CN'?'chinese-writer':'independent-verifier',artifact_id:key,artifact_path:'writer/'+key+'.json',native_path:'native/'+key+'.json',...(key==='en'?{instruction_path:'instructions/en.txt'}:{}),revision:'1'}]));
+  if (presentationMode==='reading-editor') downstream.presentation={task_id:'presentation',task_name:'reading_editor',owner_actor_id:'presentation',role:'reading-editor',artifact_id:'presentation',artifact_path:'writer/presentation.json',native_path:'native/presentation.json',revision:'1'};
   const scientificInput = {profile:'reading-first-1.0',identity:{paper_id:'synthetic',run_id:'run'},sources:[{path:join(root,'paper.pdf'),sha256:sha(source),byte_length:source.length}],context,role_artifacts:roles};
   const mainSession={model:'gpt-6-astra',reasoning_effort:'high'};
-  const configuredSetup={schema_version:'apa-configured-reading-1.0',config_fingerprint:sha(Buffer.from('config')),paths:{runRoot:root},role_model_policy:createApaRoleModelPolicy(mainSession),...buildConfiguredReadingInstructions({}),...(promptFiles ? {instruction_profile:'configured-reading-2.0',prompt_files:promptFiles} : {})};
-  const runControl=createReadingFirstRunControl({runId:'run',scientificInput,mainSession,configuredSetup,authorizationId:'synthetic',deadline:'2099-01-01T00:00:00Z',taskBindings:downstream,writingMode:'source-first',maxCalls:6,priorCalls:6,maxTotalCalls:12,compactionPolicy});
+  const configuredSetup={schema_version:'apa-configured-reading-1.0',config_fingerprint:sha(Buffer.from('config')),paths:{runRoot:root},role_model_policy:createApaRoleModelPolicy(mainSession),...buildConfiguredReadingInstructions({}),...(promptFiles ? {instruction_profile:instructionProfile ?? 'configured-reading-2.0',prompt_files:promptFiles} : {})};
+  const runControl=createReadingFirstRunControl({runId:'run',scientificInput,mainSession,configuredSetup,authorizationId:'synthetic',deadline:'2099-01-01T00:00:00Z',taskBindings:downstream,writingMode:'source-first',maxCalls:6,priorCalls:6,maxTotalCalls:12,compactionPolicy,...(presentationMode ? {presentationMode} : {})});
   const prepared={runControl,scientificInput,configurationFingerprint:sha(Buffer.from('config')),paths:{runRoot:root}};
   const authorized_bindings=[...Object.values(tasks),...Object.values(downstream)].map(task=>({run_id:'run',actor_id:task.owner_actor_id,role:task.role,artifact_path:task.artifact_path,revision:task.revision}));
   const checkpointTask={artifact_id:'checkpoint',artifact_path:'control/checkpoint.json',revision:'1',owner_actor_id:'controller',role:'control'};
@@ -623,4 +625,79 @@ test('claude-code science observations keep the agentId from result text across 
   assert.equal(getScienceRequest({controller:restored,role:'evidence'}).observations[0].raw.raw_result_text,raw);
   await recordScienceHostObservation({controller:restored,role:'evidence',observation:{kind:'host_update',action_id:step.action_id,agent_id:'sci-evidence-1',tool_call:{name:'SendMessage',arguments:{to:'sci-evidence-1'}},raw_result_text:'continued'}});
   assert.equal(getScienceRequest({controller:restored,role:'evidence'}).host_updates.length,1);
+});
+
+
+test('2.1 science continuations survive restore and carry their occupied budget into reading', async t => {
+  const directory=await mkdtemp(join(tmpdir(),'science-budget-')); t.after(()=>rm(directory,{recursive:true,force:true}));
+  const prompt=join(directory,'prompt.md'), bytes=Buffer.from('Synthetic science contract'); await writeFile(prompt,bytes);
+  const f=await fixture(t,{promptFiles:[{path:prompt,sha256:sha(bytes),byte_length:bytes.length}],instructionProfile:'configured-reading-2.1'});
+  let controller=await createScienceController(f.options);
+  assert.equal(scienceApi.getScienceComputerControlReport({controller}).coverage,'unknown');
+  const observation={event_id:'desktop-1',coverage:'partial',operations:[{operation:'read',application:'browser',tool_call:{name:'browser.read',arguments:{tab:'one'}},raw_result_text:'visible',occurred_at:'2026-10-31T00:00:00Z'}],source_reference:'host evidence'};
+  await scienceApi.recordScienceComputerControlObservation({controller,observation});
+  await scienceApi.recordScienceComputerControlObservation({controller,observation});
+  await assert.rejects(()=>scienceApi.recordScienceComputerControlObservation({controller,observation:{...observation,coverage:'complete'}}),/SCIENCE_COMPUTER_CONTROL_CONFLICT/);
+  controller=await restoreScienceController(f.options);
+  assert.deepEqual(scienceApi.getScienceComputerControlReport({controller}),{coverage:'partial',observations:[observation]});
+  const [{request}]=await prepareScienceRequests({controller});
+  await recordScienceDispatchIntent({controller,role:'evidence'});
+  await recordScienceHostObservation({controller,role:'evidence',observation:{action_id:request.emittedStep.action_id,run_id:'run',input_fingerprint:request.emittedStep.input_fingerprint,port:'current-collaboration',tool_call:{name:request.emittedStep.action,arguments:request.emittedStep.arguments},raw_result_text:JSON.stringify({agent_id:'host-evidence'})}});
+  for (let n=1;n<=2;n++) {
+    const args={id:'host-evidence',message:'continue '+n};
+    const parameters={controller,role:'evidence',executionId:'exec-'+n,actionId:'continue-'+n,handle:'host-evidence',tool:'host.resume',arguments:args,context:{continuation_request:{action_id:'continue-'+n,message:'continue '+n}}};
+    await scienceApi.reserveScienceContinuation(parameters); await scienceApi.reserveScienceContinuation(parameters);
+    await scienceApi.markScienceContinuationDispatched({controller,executionId:'exec-'+n});
+    await scienceApi.recordScienceContinuationReceipt({controller,executionId:'exec-'+n,receipt:{execution_id:'exec-'+n,action_id:'continue-'+n,agent_id:'host-evidence',tool_call:{name:'host.resume',arguments:args},raw_result_text:'ok',status:'observed'}});
+    controller=await restoreScienceController(f.options);
+    assert.equal(scienceApi.getScienceContinuation({controller,executionId:'exec-'+n}).context.continuation_request.message,'continue '+n);
+  }
+  assert.equal(scienceApi.getScienceBudgetSummary({controller}).occupied,3);
+  await writeFile(join(f.root,f.tasks.evidence.native_path),JSON.stringify({role:'evidence',text:'accepted source'})); await acceptScienceResult({controller,role:'evidence'});
+  for (let i=0;i<4;i++) await acceptCompactionBatch(f,controller);
+  assert.equal(getScienceState(controller).reserved_calls,6);
+  const handoff=await createScienceHandoff({controller,checkpointTask:f.checkpointTask});
+  assert.equal(handoff.status,'transferred');
+  assert.equal(readingApiBudget({controller:handoff.controller}).occupied,9);
+  const writer=handoff.requests[0], reading=handoff.controller;
+  readingApi.recordReadingFirstRequestEvent({controller:reading,request:writer,eventKey:'intent',payload:{action_id:writer.emittedStep.action_id}});
+  const writerObservation={action_id:writer.emittedStep.action_id,run_id:'run',input_fingerprint:writer.emittedStep.input_fingerprint,port:'current-collaboration',tool_call:{name:writer.emittedStep.action,arguments:writer.emittedStep.arguments},raw_result_text:JSON.stringify({agent_id:'host-writer'})};
+  readingApi.recordReadingFirstRequestEvent({controller:reading,request:writer,eventKey:'host_observation',payload:writerObservation});
+  const args={id:'host-writer',message:'continue'};
+  const continuation={controller:reading,taskId:writer.task.task_id,executionId:'writer-exec',actionId:'writer-continuation',handle:'host-writer',tool:'host.resume',arguments:args,context:{translation_progress:{source_fingerprint:'source'}}};
+  readingApi.reserveReadingContinuation(continuation); readingApi.reserveReadingContinuation(continuation);
+  assert.equal(readingApiBudget({controller:reading}).reserved,1);
+  readingApi.markReadingContinuationDispatched({controller:reading,executionId:'writer-exec'});
+  const receipt={execution_id:'writer-exec',action_id:'writer-continuation',agent_id:'host-writer',tool_call:{name:'host.resume',arguments:args},raw_result_text:'pending',status:'outcome_unknown'};
+  readingApi.recordReadingContinuationReceipt({controller:reading,executionId:'writer-exec',receipt});
+  const checkpoint=await commitOwnedArtifact({artifactRoot:f.root,dispatchContext:handoff.broker.dispatchContext,capability:handoff.broker.issueCapability({runId:'run',actorId:'controller',role:'control',artifactPath:'control/checkpoint-r2.json',revision:'2'}),artifact:{artifact_id:'checkpoint-r2',content:JSON.stringify(snapshotReadingFirstRuntime(reading))},expectedRevision:'2'});
+  const recovered=await restoreReadingFirstRuntime({handoff:handoff.handoff,runControl:handoff.runControl,checkpointReceipt:checkpoint});
+  assert.equal(recovered.ok,true,JSON.stringify(recovered.errors));
+  assert.equal(readingApiBudget({controller:recovered.controller}).occupied,10);
+  assert.equal(readingApi.getReadingPendingContinuations({controller:recovered.controller})[0].receipt.status,'outcome_unknown');
+  readingApi.recordReadingContinuationReceipt({controller:recovered.controller,executionId:'writer-exec',receipt:{...receipt,status:'observed'}});
+  assert.throws(()=>readingApi.reserveReadingContinuation({...continuation,controller:recovered.controller,executionId:'writer-exec-2',actionId:'writer-continuation-2'}),/BUDGET_EXHAUSTED/);
+});
+
+
+for (const presentationMode of ['writer','reading-editor']) test(`2.1 science continuation preserves capacity for unprepared science, drafts and review with ${presentationMode}`, async t => {
+  const directory=await mkdtemp(join(tmpdir(),'science-budget-reserve-')); t.after(()=>rm(directory,{recursive:true,force:true}));
+  const prompt=join(directory,'prompt.md'),bytes=Buffer.from('Synthetic science contract'); await writeFile(prompt,bytes);
+  const f=await fixture(t,{promptFiles:[{path:prompt,sha256:sha(bytes),byte_length:bytes.length}],instructionProfile:'configured-reading-2.1',presentationMode});
+  const controller=await createScienceController(f.options),[{request}]=await prepareScienceRequests({controller});
+  await recordScienceDispatchIntent({controller,role:'evidence'});
+  await recordScienceHostObservation({controller,role:'evidence',observation:{action_id:request.emittedStep.action_id,run_id:'run',input_fingerprint:request.emittedStep.input_fingerprint,port:'current-collaboration',tool_call:{name:request.emittedStep.action,arguments:request.emittedStep.arguments},raw_result_text:JSON.stringify({agent_id:'host-evidence'})}});
+  const allowed=presentationMode==='reading-editor'?2:3;
+  for(let n=1;n<=allowed;n++) {
+    const args={id:'host-evidence',message:'continue '+n}, call={controller,role:'evidence',executionId:'e'+n,actionId:'a'+n,handle:'host-evidence',tool:'host.resume',arguments:args};
+    await scienceApi.reserveScienceContinuation(call); await scienceApi.markScienceContinuationDispatched({controller,executionId:'e'+n});
+    await scienceApi.recordScienceContinuationReceipt({controller,executionId:'e'+n,receipt:{execution_id:'e'+n,action_id:'a'+n,agent_id:'host-evidence',tool_call:{name:'host.resume',arguments:args},raw_result_text:'ok',status:'observed'}});
+  }
+  const call={controller,role:'evidence',executionId:'e-next',actionId:'a-next',handle:'host-evidence',tool:'host.resume',arguments:{id:'host-evidence',message:'continue next'}};
+  await assert.rejects(()=>scienceApi.reserveScienceContinuation(call),/BUDGET_EXHAUSTED/);
+  assert.equal(scienceApi.getScienceBudgetSummary({controller}).occupied,1+allowed);
+  await writeFile(join(f.root,f.tasks.evidence.native_path),JSON.stringify({role:'evidence',text:'accepted source'}));
+  await acceptScienceResult({controller,role:'evidence'});
+  assert.deepEqual((await prepareScienceRequests({controller})).map(row=>row.role),['methods','results']);
+  assert.equal(scienceApi.getScienceBudgetSummary({controller}).occupied,3+allowed);
 });

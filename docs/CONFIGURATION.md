@@ -45,7 +45,7 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 
 新配置阅读调用必须按实际主论文向 `prepareConfiguredReading` 显式传入 `sourceLanguage`（`en` 或 `zh-CN`）；原文语言属于每篇文献的事实，不从个人偏好推定。运行将其冻结为 `binding.source_language`，决定 `Wiki/sources/` 与 `Wiki/translations/` 的归属；新运行以同一 `sourceLanguage` 冻结 `first_writing_language`：只有原文语言对应的 Writer 接收科学材料，另一语言由 Translation 角色（`models.roles.translation`）依据已接受的原文稿翻译。旧绑定保留其原有顺序和 `source-first` 模式，不修改旧记录。
 
-新配置化阅读冻结 `current-shared-nodes-1.0` 知识登记策略；候选物化核对提交配对与登记身份，共享节点使用当前正文并记录实际复用的路径与内容指纹，无关笔记编辑不阻断候选。查询与图谱读取已登记笔记的当前内容，发布只核验实际依赖与写入目标；旧绑定保留 `committed-generation-1.0`、`committed-shared-nodes-1.0` 等原策略。新配置化运行冻结 `configured-reading-2.0` 提示与实际文件指纹；使用 Reading Editor 时冻结 `reading-editor-1.3`：全部步骤绘入研究导图，发现可精选，图后链接省略发现，目录、方法条目与图注直接展开；既有绑定保留原策略和呈现版本。配置化预览包含所引用历史知识的当前正文，旧论文只提供标明路径的导航页；历史参考资源不授发布权。
+新配置化阅读冻结 `current-shared-nodes-1.0` 知识登记策略；候选物化核对提交配对与登记身份，共享节点使用当前正文并记录实际复用的路径与内容指纹，无关笔记编辑不阻断候选。查询与图谱读取已登记笔记的当前内容，发布只核验实际依赖与写入目标；旧绑定保留 `committed-generation-1.0`、`committed-shared-nodes-1.0` 等原策略。新配置化运行冻结 `configured-reading-2.1` 提示与实际文件指纹；使用 Reading Editor 时冻结 `reading-editor-1.3`：全部步骤绘入研究导图，发现可精选，图后链接省略发现，目录、方法条目与图注直接展开；既有绑定保留原策略和呈现版本。配置化预览包含所引用历史知识的当前正文，旧论文只提供标明路径的导航页；历史参考资源不授发布权。
 
 宿主档案 `apa-host-profile-1.0`（结构见 `Schema/config/apa-config.schema.json` 的 `hostProfile`）由助手检测自身环境后写入本次独立的 `.tmp/apa-setup/<owner>/<detection-id>/host-profile.json`，`owner` 和 `detection-id` 使用 kebab-case，目录须未被占用；旧档案仍可读取，不迁移或覆盖。档案记录宿主名、当前会话、派发工具及参数名、派发工具可接受的模型与各自的推理强度档位，以及每项的来源；派发工具可选记录 `dispatch.result_handle`（`{source:'text', pattern}`，从派发结果文本提取任务句柄的正则，捕获组 1 为句柄），缺省时 APA 不提取句柄。`inspect`/`page` 加 `--host-profile <file>` 时，检查结果增加 `host_check`（派发方式是否一致、模型或强度是否与本宿主不符），页面的模型与强度选项也来自档案。档案是助手的自我报告，不证明派发或模型实际可用。
 

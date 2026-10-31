@@ -32,6 +32,8 @@ const registration = await registerBilingualPublication({
 
 图表也可来自 Integrator 的真实 owned 输出：若其已审查 `visual_resources` 精确登记了图表路径、SHA-256、字节数以及父 PDF 的 `source_id`、`source_path`、`source_sha256`，发布接口会核对这些冻结字段与当前资源、登记 PDF 的对应关系。仅在临时目录找到图片或调用方另给一个哈希仍不足以入库；原候选和原审查不因此改写。
 
+既有 owned Integrator 使用 `resource_handoff.asset_mapping` 时，发布消费者也可直接读取该登记：`target_path` 对应图表目标，`source_path` 为源图片的绝对路径，`source_id`、`source_pdf_sha256` 对应原登记父 PDF，`sha256`、`byte_length` 对应图片字节。接口继续核对唯一匹配、实际源图片路径、父 PDF、候选图目录及字节；原 owned 产物、候选和审查保持原样。顶层 `visual_resources` 已存在时保留原消费路径。
+
 准备阶段校验原审查、文件与人工区域，列出本次批准的文件及目标，并生成必要登记与索引。新注册保存签名清单和本次输出的独立文件；这些文件用于直接完成或恢复本次复制，不包含上一代全库副本或整包重建配方。注册阶段不执行正式笔记写入。保留返回的 Controller trust anchor，跨进程读取时通过现有 `trustAnchor` 参数或 `APA_V3_PUBLICATION_TRUST_ANCHOR` 传递，不从待验证的注册文件自取信任锚。
 
 已审查候选若复用了带 V2 元数据的既有共享节点，默认仍拒绝发布。用户明确批准这些具体节点的迁移后，可向准备接口传入 `knowledgeMetadataMigrations`，每项必须精确给出 `{path, before_sha256, candidate_sha256, output_sha256}`。适配仅把 YAML 头中的 `pipeline_version: 2.0.0` 改为字符串 `"3.0"`、`graph_scope: v2-canonical` 改为 `v3-candidate`；正文、原候选及科学审查指纹保持原样。原文件、已审查候选、转换输出三组字节都必须命中；转换记录进入发布写入清单和批准哈希，并在注册重载时重新验证。此参数本身不授予发布权限，也不允许迁移其他旧结果、改正文或跳过 V3 校验。
