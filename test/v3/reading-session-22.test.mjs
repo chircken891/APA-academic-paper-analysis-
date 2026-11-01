@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, cp, appendFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, cp, appendFile, rm, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
@@ -13,6 +13,7 @@ async function configuredFixture(t) {
   const base = join(process.cwd(), '.tmp', 'apa-controller-handoff-20261031');
   await mkdir(base, { recursive: true });
   const root = await mkdtemp(join(base, 'session-22-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, 'config'), { recursive: true });
   const parser = join(root, 'mineru'), bin = join(parser, 'venv', process.platform === 'win32' ? 'Scripts' : 'bin');
   await mkdir(bin, { recursive: true });
@@ -137,6 +138,7 @@ test('2.2 retains Results manifest and rejects changed resources on recovery', a
   const { evidence: omitted, ...unknownWriterObservation } = writerObservation;
   await recordReadingEvent(session, { kind: 'host_observation', action_id: next.action_id, observation: unknownWriterObservation });
   assert.equal((await nextReadingAction(session)).action, 'reconcile');
+  await assert.rejects(recordReadingEvent(session, { kind: 'continuation-intent', action_id: next.action_id, execution_id: 'unknown-writer', message: 'Continue.' }), /READING_SESSION_CONTINUATION_INVALID/);
   await recordReadingEvent(session, { kind: 'host_observation', action_id: next.action_id, observation: writerObservation });
   await writeFile(join(root, 'native', 'en.json'), JSON.stringify(template.views[0]));
   await recordReadingEvent(session, { kind: 'result', action_id: next.action_id, observation: writerObservation });
@@ -167,6 +169,35 @@ test('2.2 retains Results manifest and rejects changed resources on recovery', a
   assert.equal(ready.action, 'provide-input');
   assert.equal(ready.kind, 'accept-translation');
   assert.equal((await nextReadingAction(session)).action, 'provide-input');
+  await rm(join(root, task.native_path));
+  await assert.rejects(recordReadingEvent(session, { kind: 'result', action_id: translation.action_id, observation: translationObservation }), /ENOENT/);
+  await writeFile(join(root, task.native_path), JSON.stringify(template.views[1]));
+  const notContent = await recordReadingEvent(session, { kind: 'continuation-intent', action_id: translation.action_id, execution_id: 'not-content', message: 'Finalize.' });
+  assert.equal(notContent.kind, 'accept-translation');
+  const invalid = structuredClone(template.views[1]);
+  invalid.placements = { ...(invalid.placements ?? {}), visuals: [...(invalid.placements?.visuals ?? []), { id: 'extra-visual', section_id: 'nowhere' }] };
+  await writeFile(join(root, task.native_path), JSON.stringify(invalid));
+  await assert.rejects(recordReadingEvent(session, { kind: 'result', action_id: translation.action_id, observation: translationObservation }), /READING_FIRST_VIEW_/);
+  await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: { ...f.profile, capabilities: {} }, evidence: f.evidence });
+  const noHost = await recordReadingEvent(session, { kind: 'continuation-intent', action_id: translation.action_id, execution_id: 'no-host', message: 'Finalize.' });
+  assert.equal(noHost.kind, 'host-continuation');
+  await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+  await recordReadingEvent(session, { kind: 'continuation-intent', action_id: translation.action_id, execution_id: 'finalize-1', message: 'Finalize.' });
+  const finalize = await nextReadingAction(session); assert.equal(finalize.kind, 'continuation');
+  assert.match(JSON.stringify(finalize.arguments), /previous final output was rejected/);
+  const finalRaw = 'finalized again', finalPath = join(root, 'host-finalize.txt'); await writeFile(finalPath, finalRaw);
+  await recordReadingEvent(session, { kind: 'continuation-receipt', execution_id: 'finalize-1', observation: { execution_id: 'finalize-1', action_id: finalize.action_id,
+    agent_id: finalize.host_handle, tool_call: { name: finalize.host_action, arguments: finalize.arguments }, raw_result_text: finalRaw, status: 'observed',
+    evidence: { kind: 'raw', capture: 'direct', sha256: hash(Buffer.from(finalRaw)).slice(7), source_reference: finalPath } } });
+  await assert.rejects(recordReadingEvent(session, { kind: 'result', action_id: translation.action_id, observation: translationObservation }));
+  assert.equal((await nextReadingAction(session)).code, 'READING_TRANSLATION_FINAL_INVALID');
+  const controlFiles = async () => (await readdir(join(root, 'control'))).length;
+  const filesBefore = await controlFiles();
+  await assert.rejects(recordReadingEvent(session, { kind: 'result', action_id: translation.action_id, observation: translationObservation }));
+  assert.equal(await controlFiles(), filesBefore);
+  const exhausted = await recordReadingEvent(session, { kind: 'continuation-intent', action_id: translation.action_id, execution_id: 'finalize-2', message: 'Finalize.' });
+  assert.equal(exhausted.code, 'READING_TRANSLATION_FINAL_INVALID');
+  await writeFile(join(root, task.native_path), JSON.stringify(template.views[1]));
   await recordReadingEvent(session, { kind: 'result', action_id: translation.action_id, observation: translationObservation });
   const editorAction = await nextReadingAction(session); assert.equal(editorAction.action, 'dispatch');
   const editorObservation = await hostObservation(editorAction, 'editor');

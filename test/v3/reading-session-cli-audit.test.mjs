@@ -46,7 +46,7 @@ test('audit scopes calls to thread and reports damaged coverage', async () => {
  assert.notEqual((await auditControllerLog({logPath:join(dir,'missing'),threadId:'thread-a'})).coverage,'complete');
 });
 
-test('CLI export failure leaves the issued intent for cross-process reconciliation', async () => {
+async function cliFixture() {
  const { mkdir } = await import('node:fs/promises');
  const { execFile } = await import('node:child_process');
  const { promisify } = await import('node:util');
@@ -68,9 +68,15 @@ test('CLI export failure leaves the issued intent for cross-process reconciliati
  const capability={status:'pass',source:'observed',reference:'synthetic fixture',method:'synthetic probe',observation:'available'};
  evidence.results_tools={python:{...capability,path:join(bin,process.platform==='win32'?'python.exe':'python')},libraries:{...capability,names:['fitz']},file_read:{...capability},visual_read:{...capability}};
  const options={repoRoot:root,runId:'run',scientificInput,sourceLanguage:'en',authorizationId:'test',deadline:'2099-01-01T00:00:00Z',maxCalls:8,maxTotalCalls:14,sessionContext:{model:'m',effort:'high'},hostProfile:profile,evidence,includeRepairs:true,instructionProfile:'configured-reading-2.2'};
- const optionsPath=join(root,'options.json'), blocked=join(root,'blocked');
- await writeFile(optionsPath,JSON.stringify(options)); await writeFile(blocked,'file');
- const cli=join(process.cwd(),'scripts/v3/reading-session-cli.mjs'), runRoot=join(root,'runs','run');
+ const optionsPath=join(root,'options.json'); await writeFile(optionsPath,JSON.stringify(options));
+ const cli=join(process.cwd(),'scripts/v3/reading-session-cli.mjs');
+ return { root, run, cli, optionsPath, profile, evidence };
+}
+
+test('CLI export failure leaves the issued intent for cross-process reconciliation', async () => {
+ const { root, run, cli, optionsPath, profile, evidence } = await cliFixture();
+ const blocked=join(root,'blocked'); await writeFile(blocked,'file');
+ const runRoot=join(root,'runs','run');
  await assert.rejects(run(process.execPath,[cli,'create','--input',optionsPath,'--export-dir',blocked]));
  const restored=JSON.parse((await run(process.execPath,[cli,'resume','--run-root',runRoot,'--export-dir',join(root,'export')])).stdout);
  assert.equal(restored.kind,'runtime-evidence');
@@ -79,4 +85,13 @@ test('CLI export failure leaves the issued intent for cross-process reconciliati
  const result=JSON.parse((await run(process.execPath,[cli,'next','--run-root',runRoot,'--runtime-input',eventPath,'--export-dir',join(root,'export')])).stdout);
  assert.equal(result.action,'reconcile');
  assert.equal(result.role,'evidence');
+});
+
+test('CLI rejects a missing export directory before recording any intent', async () => {
+ const { lstat } = await import('node:fs/promises');
+ const { root, run, cli, optionsPath } = await cliFixture();
+ await assert.rejects(run(process.execPath,[cli,'create','--input',optionsPath]), error => { assert.match(error.stderr, /READING_CLI_EXPORT_DIRECTORY_REQUIRED/); return true; });
+ await assert.rejects(lstat(join(root,'runs','run')), { code: 'ENOENT' });
+ const created=JSON.parse((await run(process.execPath,[cli,'create','--input',optionsPath,'--export-dir',join(root,'export')])).stdout);
+ assert.equal(created.action,'dispatch');
 });

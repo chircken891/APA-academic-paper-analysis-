@@ -4,11 +4,10 @@ import { fingerprintV3Json as hash } from './semantic-package-validator.mjs';
 import { freezePhase22Value, getReadingBasisContent, assertReadingBasisCurrent } from './phase22-input.mjs';
 import { assertFrozenRenderContext } from './phase22-render-context.mjs';
 import { assertBilingualParity } from './phase22-parity.mjs';
-import { collectLanguageSpans } from './phase22-language.mjs';
+import { collectLanguageSpans } from './phase22-language-spans.mjs';
 import { assertActiveGeneration, assertActiveIndexContract, assertIndexGeneration, assertCommittedSnapshot, verifyIndexPaperBytes,
-  INDEX_READER_PROFILE, INDEX_READING_FIRST_PROFILE, verifyReaderPresentation, readerIndexDocuments,
+  INDEX_READING_FIRST_PROFILE,
   verifyReadingFirstPresentation, readingFirstIndexDocuments, topicIndexDocuments, assertV3SupportBytes } from './phase22-active-version.mjs';
-import { getReaderPresentationContent } from './phase221-presentation.mjs';
 
 const fail = (code, details = {}) => { throw Object.assign(new Error(code), { code, details }); };
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
@@ -54,9 +53,7 @@ export function buildBilingualIndex({ validatedInputs, generation } = {}) {
   if (!validatedInputs || !Array.isArray(validatedInputs.papers)) fail('P22_VALIDATED_INPUTS_REQUIRED');
   if (validatedInputs.v2 !== undefined && (!Array.isArray(validatedInputs.v2) || validatedInputs.v2.length)) fail('P22_V3_INPUTS_ONLY');
   const previous = previousInputs(validatedInputs, generation);
-  // Existing callers keep the synchronous old-profile API. Reader consumers must await.
-  if (generation.papers.some(paper => paper.profile === INDEX_READER_PROFILE)) return buildReaderIndex(validatedInputs, generation, previous);
-  return buildIndex(validatedInputs, generation, new Map(), previous);
+  return buildIndex(validatedInputs, generation, previous);
 }
 
 function previousInputs(inputs, generation) {
@@ -90,35 +87,7 @@ function presentationBytes(inputs, paper) {
   return { bytes, manifest: JSON.parse(bytes.toString('utf8')) };
 }
 
-async function buildReaderIndex(validatedInputs, generation, previous) {
-  const prepared = structuredClone(generation), readers = new Map();
-  for (const paper of prepared.papers.filter(row => row.profile === INDEX_READER_PROFILE)) {
-    if (validatedInputs.carryHistoricalDocuments && retainedPaper(previous, paper)) continue;
-    const matches = validatedInputs.papers.filter(input => input.presentation?.manifest.identity.paper_id === paper.paper_id);
-    if (!matches.length && retainedPaper(previous, paper)) {
-      const { bytes } = presentationBytes(validatedInputs, paper);
-      const manifest = verifyReaderPresentation(paper, bytes, prepared);
-      const notes = Object.fromEntries(Object.entries(paper.paths).map(([language, path]) => [language, fileBytes(validatedInputs, path)]));
-      const readingRecords = Object.values(manifest.targets.reading_records ?? {}).map(row => ({ path: row.path, bytes: fileBytes(validatedInputs, row.path) }));
-      readers.set(paper.paper_id, readerIndexDocuments({ paper, presentation: manifest, notes, generation: prepared, readingRecords }));
-      continue;
-    }
-    if (matches.length !== 1) fail('P22_CANDIDATE_PAPER_MISSING', { paper_id: paper.paper_id });
-    const { presentation, notes } = matches[0];
-    const data = await getReaderPresentationContent(presentation);
-    const registered = (validatedInputs.files ?? []).filter(row => row.path === paper.reader_presentation.path);
-    if (registered.length !== 1 || sha(registered[0].bytes) !== sha(presentation.presentationBytes)) fail('P221_READER_PRESENTATION_BINDING');
-    const manifest = verifyReaderPresentation(paper, registered[0].bytes, prepared);
-    if (paper.core_hash !== hash(data.core) || hash(data.identity) !== hash(manifest.identity)) fail('P22_CANDIDATE_IDENTITY_MISMATCH');
-    const terminology = { version: data.integrator.ledger_version, terms: [...(data.integrator.terminology_ledger ?? data.integrator.term_candidates)].sort((a, b) => a.term_id.localeCompare(b.term_id)) };
-    if (hash(terminology) !== manifest.dependencies.terms || (paper.terminology && hash(paper.terminology) !== hash(terminology))) fail('P221_READER_TERMS_MISMATCH');
-    paper.terminology = terminology;
-    readers.set(paper.paper_id, readerIndexDocuments({ paper, presentation: manifest, notes, generation: prepared, readingRecords: presentation.readingRecords }));
-  }
-  return buildIndex(validatedInputs, prepared, readers, previous);
-}
-
-function buildIndex(validatedInputs, generation, readers = new Map(), previous) {
+function buildIndex(validatedInputs, generation, previous) {
   const documents = [], coveredPaths = new Set();
   for (const paper of generation.papers) {
     if (validatedInputs.carryHistoricalDocuments && retainedPaper(previous, paper)) {
@@ -133,9 +102,6 @@ function buildIndex(validatedInputs, generation, readers = new Map(), previous) 
       if (matches.length && hash(manifest) !== hash(matches[0].readingFirst)) fail('RF_INDEX_PRESENTATION_MISMATCH');
       const notes = matches[0]?.notes ?? Object.fromEntries(Object.entries(paper.paths).map(([language, path]) => [language, fileBytes(validatedInputs, path)]));
       documents.push(...readingFirstIndexDocuments({ paper, presentation: manifest, notes, generation, files: validatedInputs.files }));
-      Object.values(paper.paths).forEach(path => coveredPaths.add(path));
-    } else if (paper.profile === INDEX_READER_PROFILE) {
-      documents.push(...readers.get(paper.paper_id));
       Object.values(paper.paths).forEach(path => coveredPaths.add(path));
     } else if (paper.pipeline_version === '3.0') {
       const matches = validatedInputs.papers.filter(input => input.basis?.identity.paper_id === paper.paper_id);
@@ -238,7 +204,7 @@ export function queryBilingualIndex({ index, activeSnapshot, query } = {}) {
     }
     group.score = Math.max(group.score, match.score);
     group.hits.push({ language: doc.language, section_id: doc.section_id, span_id: doc.span_id,
-      ...([INDEX_READER_PROFILE, INDEX_READING_FIRST_PROFILE].includes(doc.profile) ? { anchor_type: doc.anchor_type } : {}),
+      ...(doc.profile === INDEX_READING_FIRST_PROFILE ? { anchor_type: doc.anchor_type } : {}),
       ...(doc.entity_id ? { entity_id: doc.entity_id } : {}),
       unit_ids: doc.unit_ids, anchor: doc.anchor, path: doc.path, text: doc.content, score: match.score, matched_terms: match.terms });
   }

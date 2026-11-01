@@ -28,7 +28,7 @@ async function configuredRepo(t, enabled = false) {
 
 async function setup(t) {
  const {root} = await configuredRepo(t); const runId='run_'+ 'a'.repeat(32); let prepared;
- const fixture = await reviewedReadingFirstFixture(t,{artifactRoot:join(root,'.tmp/runs',runId),runId,createRunControl: options => {prepared=prepareConfiguredReading({...options,repoRoot:root,instructionProfile:'configured-reading-2.0'});return prepared.runControl;}});
+ const fixture = await reviewedReadingFirstFixture(t,{artifactRoot:join(root,'.tmp/runs',runId),runId,createRunControl: options => {prepared=prepareConfiguredReading({...options,repoRoot:root,maxTotalCalls:20});return prepared.runControl;}});
  return {prepared,controller:fixture.controller,handoff:fixture.handoff,resources:fixture.resources};
 }
 test('candidate can be recovered only with identical complete bytes', async t=>{

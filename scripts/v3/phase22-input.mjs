@@ -13,6 +13,9 @@ import { compareParserRuns } from './parser-comparison.mjs';
 import { decodeWholePaperArtifact } from './whole-paper-storage.mjs';
 import { readSourceEvidenceScientificInputReference, resolveSourceEvidenceScientificInputReference, fingerprintSourceEvidenceRunControl } from './source-evidence-reuse.mjs';
 import { evaluateScientificEvidenceQualification } from './whole-paper-scientific-validator.mjs';
+import { freezePhase22Value } from './phase22-freeze.mjs';
+
+export { freezePhase22Value };
 
 const profiles = new Map([
   ['phase21-pre-render-handoff-1.0', 'phase21-scientific-input-1.0'],
@@ -27,28 +30,11 @@ const receiptKeys = ['artifact_id','run_id','owner_actor_id','role','path','revi
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const fail = (code, path = '/', details = {}) => { throw Object.assign(new Error(code), { code, path, details }); };
 const bases = new WeakMap(), basisControls = new WeakMap();
-export function freezePhase22Value(value, seen = new WeakSet()) {
-  if (value && typeof value === 'object' && !seen.has(value)) {
-    seen.add(value);
-    for (const child of Object.values(value)) freezePhase22Value(child, seen);
-    Object.freeze(value);
-  }
-  return value;
-}
 /** A runtime read capability; deserialized JSON alone cannot recreate admission. */
 export function getReadingBasisContent(basis) {
   const value = bases.get(basis);
   if (!value) fail('P22_BASIS_NOT_ADMITTED');
   return value;
-}
-
-/** Physical source descriptors come only from the original observed admission reads. */
-export function getReadingBasisSourceBindings(basis) {
-  assertReadingBasisCurrent(basis);
-  const binding = basisControls.get(basis);
-  return Object.freeze(binding.receipts.map(receipt => Object.freeze({
-    artifact_id: receipt.artifact_id, path: resolve(binding.root, receipt.path), sha256: receipt.sha256,
-  })));
 }
 
 /** Re-observe the original controlled receipts and bytes without copying or decoding a large SCI again. */

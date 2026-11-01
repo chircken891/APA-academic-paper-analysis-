@@ -138,6 +138,13 @@ test('current public export includes query and topic entries with their regressi
   assert.equal(paths.has('config/apa.local.json'), false);
   assert.equal([...paths].some(path => path.startsWith('config/backups/')), false);
   assert.equal([...paths].some(path => /^(?:Eval\/|\.planning\/|\.apa-v3\/)/.test(path)), false);
+  for (const name of ['academic-paper-analysis', 'apa-query', 'apa-setup']) assert.ok(paths.has(`.claude/skills/${name}/SKILL.md`), 'Export is missing Claude Code entry: ' + name);
+  assert.equal([...paths].some(path => /^\.claude\/skills\/apa-(?:push|review)\//.test(path)), false);
+  for (const path of ['AGENTS.md', 'README.md', 'docs/apa-v3/current-contracts.md']) {
+    const text = await readFile(join(outputRoot, path), 'utf8');
+    assert.match(text, /configured-reading-2\.2/, path);
+    assert.doesNotMatch(text, /(?:freeze|使用|冻结) `configured-reading-2\.[01]`/, path);
+  }
   for (const path of [...paths].filter(path => path.startsWith('Wiki/'))) {
     assert.match(path, /\/\.gitkeep$/);
     assert.equal((await readFile(join(outputRoot, path))).length, 0, 'Only empty directory placeholders may be exported from Wiki');

@@ -4,7 +4,7 @@
 
 ## 从阅读完成到发布审阅
 
-Controller 保留已接受整体审查所对应的原 `presentation` 对象，以及真实原文语言 Writer、Translation、适用时的 Reading Editor 和 Verifier 的 owned 回执；旧绑定保留其实际两语 Writer 回执。`reading_complete` 表示可以准备发布审阅；阅读候选本身的 `publishable:false` 不授予写入正式库的权限。实质问题未解决、缺少关键审查或内容已改变的结果不能进入发布准备。
+Controller 保留已接受整体审查所对应的原 `presentation` 对象，以及真实原文语言 Writer、Translation、适用时的 Reading Editor 和 Verifier 的 owned 回执。`reading_complete` 表示可以准备发布审阅；阅读候选本身的 `publishable:false` 不授予写入正式库的权限。实质问题未解决、缺少关键审查或内容已改变的结果不能进入发布准备。
 
 ```js
 import { captureReadingFirstPublicationSource } from '../../scripts/v3/reading-first-runtime.mjs';
@@ -81,7 +81,7 @@ node scripts/v3/bilingual.mjs dry-run --vault-root <vault-root> --run <run> --pr
 
 ## 已提交笔记的路径整理
 
-新未绑定运行按原文语言分放：`Wiki/sources/` 保存原文同语言稿，`Wiki/translations/` 保存另一语言稿。旧绑定不自动重渲染或改变目标注册。
+新运行按原文语言分放：`Wiki/sources/` 保存原文同语言稿，`Wiki/translations/` 保存另一语言稿。
 
 已提交 reading-first 笔记可在明确授权后使用 `buildNoteRelocationReview({vaultRoot, runId, generation, papers:[{paperId, sourceLanguage}]})`。该适配只接受当前有效提交，确定性改写链接目标、两语路径及相应清单/索引，不接受调用方正文或新的科学批准；`phase22-note-relocation-1.0` 审查与每篇manifest的 `path_migration` 明确记录其来源。科学依赖和原接受回执保留，不能把整理结果称为重新阅读或新的语言生产。
 

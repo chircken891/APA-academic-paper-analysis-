@@ -1,7 +1,6 @@
 param(
   [string]$RepoRoot,
   [string]$BasePython,
-  [string]$GlobalSkillRoot,
   [string]$GlobalBinRoot,
   [string]$CompanionSkillRoot,
   [switch]$InstallMineru,
@@ -160,7 +159,6 @@ function Assert-Prerequisites {
   }
   $checks += @{ id = 'node_dependencies'; required = $false; status = if ($dependenciesReady) { 'satisfied' } else { 'missing' }; actual = (Join-Path $repoRoot 'node_modules'); details = @('Installed by the selected base step; not an installer prerequisite') }
   $profileRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
-  $skillTarget = if ($GlobalSkillRoot) { [System.IO.Path]::GetFullPath($GlobalSkillRoot) } else { Join-Path $profileRoot '.agents\skills\academic-paper-analysis' }
   $companionTarget = if ($CompanionSkillRoot) { [System.IO.Path]::GetFullPath($CompanionSkillRoot) } elseif ($env:CODEX_HOME) { Join-Path $env:CODEX_HOME 'skills' } else { Join-Path $profileRoot '.codex\skills' }
   $selectedSkillNames = @($CompanionSkills)
   if ('nature-writing' -in $selectedSkillNames -or 'nature-polishing' -in $selectedSkillNames) { $selectedSkillNames = @($selectedSkillNames + 'nature-shared' | Select-Object -Unique) }
@@ -176,7 +174,7 @@ function Assert-Prerequisites {
   $targets = @(
     @{ id = 'base'; selected = $true; path = (Join-Path $repoRoot 'node_modules'); status = if ($dependenciesReady) { 'satisfied' } else { 'missing' }; impact = 'npm ci restores package-lock dependencies and writes .runtime/setup stamp' },
     @{ id = 'mineru'; selected = [bool]$InstallMineru; path = (Join-Path $repoRoot '.runtime\mineru'); status = if (Test-Path -LiteralPath (Join-Path $repoRoot '.runtime\mineru\venv\Scripts\python.exe') -PathType Leaf) { 'present-unverified' } else { 'missing' }; impact = 'Creates local Python environment and downloads MinerU and models' },
-    @{ id = 'global_integration'; selected = [bool]$InstallGlobalIntegration; path = $skillTarget; status = if (Test-Path -LiteralPath (Join-Path $skillTarget 'SKILL.md') -PathType Leaf) { 'present-unverified' } else { 'missing' }; bin_path = $GlobalBinRoot; impact = 'Installs global APA skill and MinerU command launcher; explicit repair backs up conflicts' },
+    @{ id = 'global_integration'; selected = [bool]$InstallGlobalIntegration; path = $GlobalBinRoot; status = if ($GlobalBinRoot -and (Test-Path -LiteralPath (Join-Path $GlobalBinRoot 'mineru.cmd') -PathType Leaf)) { 'present-unverified' } else { 'missing' }; impact = 'Installs MinerU command launcher; explicit repair backs up conflicts' },
     @{ id = 'companion_skills'; selected = $CompanionSkills.Count -gt 0; path = $companionTarget; skills = $skillChecks; impact = 'Downloads only selected skill directories; Nature includes nature-shared' }
   )
   $nextCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -RepoRoot "' + $repoRoot + '"'
@@ -185,7 +183,7 @@ function Assert-Prerequisites {
   if ($InstallGlobalIntegration) { $nextCommand += ' -InstallGlobalIntegration' }
   if ($CompanionSkills.Count) { $nextCommand += ' -CompanionSkills "' + ($CompanionSkills -join ',') + '"' }
   if ($InstallGlobalIntegration -and $RepairGlobalIntegration) { $nextCommand += ' -RepairGlobalIntegration' }
-  foreach ($option in @(@{ Name = 'GlobalSkillRoot'; Value = $GlobalSkillRoot }, @{ Name = 'GlobalBinRoot'; Value = $GlobalBinRoot }, @{ Name = 'CompanionSkillRoot'; Value = $CompanionSkillRoot })) {
+  foreach ($option in @(@{ Name = 'GlobalBinRoot'; Value = $GlobalBinRoot }, @{ Name = 'CompanionSkillRoot'; Value = $CompanionSkillRoot })) {
     if ($option.Value) { $nextCommand += ' -' + $option.Name + ' "' + $option.Value + '"' }
   }
   $report = @{ check_only = [bool]$CheckOnly; prerequisites_ready = $blockingFailures.Count -eq 0; checks = $checks; targets = $targets; next_commands = @($nextCommand); prerequisite_actions = @($blockingFailures); diagnostics = @($script:ProbeDiagnostics) }
@@ -242,11 +240,10 @@ try {
   if ($InstallGlobalIntegration) {
     & (Join-Path $repoRoot 'scripts\setup\install-global-integrations.ps1') `
       -RepoRoot $repoRoot `
-      -GlobalSkillRoot $GlobalSkillRoot `
       -GlobalBinRoot $GlobalBinRoot `
       -RepairGlobalIntegration:$RepairGlobalIntegration
     if ($LASTEXITCODE -ne 0) { throw 'Global integration failed.' }
-    Write-Output '4-5/6 APA skill and MinerU command integration ready.'
+    Write-Output '4-5/6 MinerU command integration ready.'
   } else { Write-Output 'Global integration skipped; use -InstallGlobalIntegration to select it.' }
 
   if ($CompanionSkills.Count -gt 0) {
@@ -259,17 +256,14 @@ try {
   } else { Write-Output 'Companion skill installation skipped; use -CompanionSkills to select named skills.' }
 
   $previousBasePython = $env:APA_BASE_PYTHON
-  $previousGlobalSkill = $env:APA_GLOBAL_SKILL
   $previousGlobalBin = $env:APA_GLOBAL_BIN
   try {
     $env:APA_BASE_PYTHON = $script:ResolvedBasePython
-    if ($GlobalSkillRoot) { $env:APA_GLOBAL_SKILL = [System.IO.Path]::GetFullPath($GlobalSkillRoot) }
     if ($InstallGlobalIntegration) { $env:APA_GLOBAL_BIN = $GlobalBinRoot }
     & $script:NpmCommand.Source run setup:check
     if ($LASTEXITCODE -ne 0) { throw 'Core environment verification failed.' }
   } finally {
     $env:APA_BASE_PYTHON = $previousBasePython
-    $env:APA_GLOBAL_SKILL = $previousGlobalSkill
     $env:APA_GLOBAL_BIN = $previousGlobalBin
   }
   Write-Output '6/6 core environment verification passed.'

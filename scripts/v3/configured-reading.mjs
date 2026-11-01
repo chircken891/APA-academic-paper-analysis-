@@ -7,9 +7,8 @@ import { createConfiguredApaRoleModelPolicy, resolveApaRoleModel, buildHostDispa
 import { SCIENCE_INDEX_PROFILE, createReadingFirstRunControl, fingerprintReadingFirst, getReadingFirstPresentation, renderReadingFirstNotes, snapshotReadingFirstRuntime } from './reading-first-runtime.mjs';
 import { exportReadingFirstPreview } from './reading-first-preview.mjs';
 import { emitApprovedRunStep, createCurrentMineruBaselinePort } from './phase21-runner.mjs';
-import { getRoleReplyContract, loadRoleReplyContract } from './role-reply-contract.mjs';
+import { getRoleReplyContract } from './role-reply-contract.mjs';
 import { readCommittedReadingFirstKnowledgeRegistry, assertCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
-import { readingEditorInstructions } from './reading-first-editor-contract.mjs';
 import { COMPACTION_POLICY, compactionControlBindings, assertCompactionDispatchAllowed } from './reading-compaction.mjs';
 import { captureReadingRuntime } from './reading-runtime-binding.mjs';
 
@@ -28,7 +27,6 @@ function freezeSupportPrompt(name, profile, metadata) {
 }
 
 function configuredRoleReply(binding) {
-  if (binding.configured_setup?.instruction_profile !== 'configured-reading-2.2') return loadRoleReplyContract(binding.role_reply_contract);
   if (binding.role_reply_contract === undefined) return '';
   const frozen = binding.configured_setup.frozen_support?.role_reply;
   if (typeof frozen?.content !== 'string' || fingerprintReadingFirst(frozen.metadata) !== fingerprintReadingFirst(binding.role_reply_contract)
@@ -47,76 +45,23 @@ export function deriveConfiguredMaxCalls({ maxTotalCalls, presentationMode } = {
 
 /** Freeze selected guidance into the binding. Disabled skills contribute no optional instructions. */
 export function buildConfiguredReadingInstructions(writingSkills = {}, { instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE } = {}) {
-  if (['configured-reading-2.0', 'configured-reading-2.1', 'configured-reading-2.2'].includes(instructionProfile)) {
-    const version = instructionProfile.slice(-3);
-    const urls = [`science-configured-${version}.md`, `reading-configured-${version}.md`, 'reading-editor-1.3.md'].map(name => new URL('../../prompts/v3/' + name, import.meta.url));
-    const buffers = urls.map(url => readFileSync(url));
-    const sections = sectionsOf(buffers[1]);
-    sections['Reading Editor'] = buffers[2].toString('utf8').trim();
-    if (version === '2.1' || version === '2.2') sections['Reading Editor'] = sections['Reading Editor'].replace("map: {nodes: [{id: 'registered-map-node-id', stage: 'design'|'measurement'|'finding'|'limit', primary: true}]}", "map: {nodes: [{id: 'registered-step-id', stage: 'design'}, {id: 'registered-finding-id', stage: 'finding', primary: true}]}") + '\n\nUse design or measurement for step nodes and finding or limit for finding nodes. Only a finding may have primary, which must be boolean. Include every registered step. Run the existing deterministic editor validation through Controller; repair invalid fields before handoff.';
-    const writingInstructions = Object.fromEntries(['en', 'zh-CN'].map(language => [language, Object.entries(writingSkills)
-      .filter(([key]) => key !== (language === 'en' ? 'humanizer-zh' : 'humanizer'))
-      .map(([key, guide]) => 'Selected optional writing guidance: ' + key + '\n' + JSON.stringify({ path: guide.path, sha256: sha(Buffer.from(guide.content)) })
-        + '\nApply only guidance relevant to this language and the assigned article module, within the existing APA output contract. Do not run skill workflows, commands, extra roles or review loops.\n' + guide.content).join('\n\n')]));
-    return { instruction_profile: instructionProfile, ...(version === '2.2' ? { frozen_support: { science_index: freezeSupportPrompt('science-index-1.0.md', SCIENCE_INDEX_PROFILE), role_reply: freezeSupportPrompt('role-reply-1.0.md', 'role-reply-1.0', getRoleReplyContract()) } } : {}), prompt_files: urls.map((url, index) => ({ path: fileURLToPath(url), sha256: sha(buffers[index]), byte_length: buffers[index].length })),
-      sections, science_sections: sectionsOf(buffers[0]), writing_instructions: writingInstructions,
-      writing_guides: Object.fromEntries(Object.entries(writingSkills).map(([key, guide]) => [key, { path: guide.path, sha256: sha(Buffer.from(guide.content)), byte_length: Buffer.byteLength(guide.content) }])) };
-  }
-  if (instructionProfile !== 'configured-reading-1.0') throw new Error('APA_CONFIGURED_INSTRUCTION_PROFILE_INVALID');
-  const sections = sectionsOf(readFileSync(new URL('../../prompts/v3/reading-first-contracts.md', import.meta.url), 'utf8'));
-  // Configured runs freeze their own source-translation instructions. The base
-  // prompt remains byte-identical for older runs that bind its fingerprint.
-  sections['Common data contract'] = sections['Common data contract']
-    .replace('Read the complete registered assignment and shared scientific basis,', 'Read the complete registered assignment and its supplied scientific basis or accepted source view,')
-    .replace('consumes both accepted Writer outputs before rendering', 'consumes the accepted source-language Writer and Translation views before rendering')
-    .replace('each Writer returns `knowledge_content:', 'each language view returns `knowledge_content:')
-    .replace("This field only updates the Writer's language;", "This field only updates the view's language;")
-    .replace('each Writer expresses its language, Reading Editor organizes supplied content', 'the source-language Writer expresses the scientific basis, Translation carries its accepted view into the other language, and Reading Editor organizes supplied content')
-    .replace(/In a new `writingMode:'source-first'` run,[^\r\n]*/, "In this configured source-translation run, the source-language Writer composes from the admitted scientific basis. Translation receives the accepted `source_view` and faithfully produces the other language with the same modules, section IDs and placements. The paper's actual source language determines both writing direction and original-note routing.");
-  sections['English Writer'] = sections['English Writer'].replace(
-    'In this English view, preserve the complete source caption/notes in their original English wording beside each visual; the Chinese counterpart uses a faithful translation. Put analyst interpretation, unit clarification or a suspected correction in a separate paragraph labelled **Reading note**.',
-    'In this source-language view, preserve the complete source caption/notes in their original wording beside each visual. Put analyst interpretation, unit clarification or a suspected correction in a separate, unlabelled paragraph.');
-  sections['Chinese Writer'] = sections['Chinese Writer'].replace(
-    '图片旁的“原图注／原表注”忠实翻译完整原文及注释；分析者解释、单位澄清或疑似纠错另写为 **阅读说明**，不混入或静默改写原注。',
-    '图片旁保留完整原图注及注释的原文；分析者解释、单位澄清或疑似纠错另写为不加标签的独立段落，不混入或静默改写原注。');
-  const sourceSections = sectionsOf(readFileSync(new URL('../../prompts/v3/phase21-scientific-contracts.md', import.meta.url), 'utf8'));
-  const scienceReplacements = [
-    ['Both Writers receive the agreed scientific basis. In a new source-first writing binding, the first Writer authors its complete reading note and the other Writer faithfully adapts its accepted source_view into natural target-language prose with matching modules and section IDs. Legacy independent-language bindings keep their original route.', 'The source-language Writer receives the agreed scientific basis and authors its source view. Translation faithfully produces the other language from the accepted source_view with matching modules and section IDs.'],
-    ['accept both real Writer outputs', 'accept the real source-language Writer and Translation outputs'],
-    ['for both Writers to express', 'for the source-language Writer to express and Translation to carry into the other language'],
-    ['through synthesis and both Writers', 'through synthesis, the source-language Writer and Translation'],
-    ['for both writers', 'for the source-language Writer and Translation'],
-    ['The final language writers express this agreed map', 'The source-language Writer and Translation express this agreed map'],
-    ['content for the Writers.', 'content for the source-language Writer and translated view.'],
-    ['this synthesis is not a substitute for either Writer\'s final prose', 'this synthesis is not a substitute for the source-language Writer\'s final prose'],
-    ['the Writers author the final module/subsection organization, paragraphs and resource placements in their existing tasks.', 'the source-language Writer authors the final module/subsection organization, paragraphs and resource placements; Translation preserves them in the other language.'],
-    ['ensure the relevant Writers consume them', 'ensure the source-language Writer consumes them and Translation carries them into the other language'],
-    ['Writers can reorganize language and draw the agreed map', 'The source-language Writer can organize the prose and draw the agreed map; Translation preserves the structure and meaning'],
-    ['English uses the original wording and Chinese a faithful translation.', 'The source language retains the original caption wording; the other language provides a faithful translation.'],
-  ];
-  const science = Object.fromEntries(['Common scientific contract', ...Object.values(scienceSections)].map(key => [key,
-    scienceReplacements.reduce((section, [before, after]) => section.replaceAll(before, after), sourceSections[key])]));
-  const correctionsPath = new URL('../../prompts/v3/flow-corrections-1.0.md', import.meta.url);
-  const correctionBytes = readFileSync(correctionsPath), corrections = sectionsOf(correctionBytes);
-  sections['Overall Verifier'] += '\n\n' + corrections['Review ownership'];
-  for (const languageSection of ['English Writer', 'Chinese Writer']) {
-    sections[languageSection] = sections[languageSection].split(/\r?\n\r?\n/).filter(paragraph => !/Nature Skills|Apply Humanizer|Apply stss|采用 Humanizer-zh|用 stss/.test(paragraph)).join('\n\n');
-    sections[languageSection] += '\n\nKeep all scientific information, attribution, conditions, quantities, units, formulas and uncertainty. Preserve registered Obsidian links, images, anchors and table data. Produce only the assigned JSON for the final Obsidian note. No extra polishing task, role, source search or review round is authorized.';
-  }
-  delete sections['Writer module guidance'];
-  sections['Reading Editor'] = sections['Reading Editor'].replace(/Meaningful emphasis is required where it helps comprehension;[^\r\n]*/g, 'Meaningful emphasis is required where it helps comprehension. Numbered hierarchy, tables, lists, callouts and navigable catalogues remain available.');
-  sections['Reading Editor'] = readingEditorInstructions(sections['Reading Editor']);
+  if (instructionProfile !== DEFAULT_CONFIGURED_INSTRUCTION_PROFILE) throw Object.assign(new Error('READING_BINDING_RETIRED'), { code: 'READING_BINDING_RETIRED' });
+  const urls = ['science-configured-2.2.md', 'reading-configured-2.2.md', 'reading-editor-1.3.md'].map(name => new URL('../../prompts/v3/' + name, import.meta.url));
+  const buffers = urls.map(url => readFileSync(url));
+  const sections = sectionsOf(buffers[1]);
+  sections['Reading Editor'] = buffers[2].toString('utf8').trim().replace("map: {nodes: [{id: 'registered-map-node-id', stage: 'design'|'measurement'|'finding'|'limit', primary: true}]}", "map: {nodes: [{id: 'registered-step-id', stage: 'design'}, {id: 'registered-finding-id', stage: 'finding', primary: true}]}") + '\n\nUse design or measurement for step nodes and finding or limit for finding nodes. Only a finding may have primary, which must be boolean. Include every registered step. Run the existing deterministic editor validation through Controller; repair invalid fields before handoff.';
   const writingInstructions = Object.fromEntries(['en', 'zh-CN'].map(language => [language, Object.entries(writingSkills)
     .filter(([key]) => key !== (language === 'en' ? 'humanizer-zh' : 'humanizer'))
     .map(([key, guide]) => 'Selected optional writing guidance: ' + key + '\n' + JSON.stringify({ path: guide.path, sha256: sha(Buffer.from(guide.content)) })
       + '\nApply only guidance relevant to this language and the assigned article module, within the existing APA output contract. Do not run skill workflows, commands, extra roles or review loops.\n' + guide.content).join('\n\n')]));
-  return { sections, science_sections: science, writing_instructions: writingInstructions, science_guidance: corrections['Scientific reuse'],
-    flow_corrections: { schema_version: 'flow-corrections-1.0', sha256: sha(correctionBytes), byte_length: correctionBytes.length },
+  return { instruction_profile: instructionProfile, frozen_support: { science_index: freezeSupportPrompt('science-index-1.0.md', SCIENCE_INDEX_PROFILE), role_reply: freezeSupportPrompt('role-reply-1.0.md', 'role-reply-1.0', getRoleReplyContract()) }, prompt_files: urls.map((url, index) => ({ path: fileURLToPath(url), sha256: sha(buffers[index]), byte_length: buffers[index].length })),
+    sections, science_sections: sectionsOf(buffers[0]), writing_instructions: writingInstructions,
     writing_guides: Object.fromEntries(Object.entries(writingSkills).map(([key, guide]) => [key, { path: guide.path, sha256: sha(Buffer.from(guide.content)), byte_length: Buffer.byteLength(guide.content) }])) };
 }
 
 /** Required entry for NEW configured readings. Reopening a run uses its owned binding, never this factory. */
 export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext, hostProfile, supportedModelPairs, instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, ...options } = {}) {
+  if (instructionProfile !== DEFAULT_CONFIGURED_INSTRUCTION_PROFILE) throw Object.assign(new Error('READING_BINDING_RETIRED'), { code: 'READING_BINDING_RETIRED' });
   if (sessionContext !== undefined) {
     if (!sessionContext || typeof sessionContext !== 'object' || Array.isArray(sessionContext)
       || sessionContext.effort !== undefined && sessionContext.reasoning_effort !== undefined && sessionContext.effort !== sessionContext.reasoning_effort) throw new Error('APA_CONFIGURED_SESSION_CONTEXT_INVALID');
@@ -137,19 +82,18 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
   const parserOptions = { runtimeHome: resolvedConfig.parser.runtime_home,
     python: resolvedConfig.parser.python ?? join(resolvedConfig.parser.runtime_home, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
     configPath: resolvedConfig.parser.config_path ?? join(resolvedConfig.parser.runtime_home, 'config.yaml') };
-  const derivedMaxCalls = instructionProfile === 'configured-reading-2.2' && options.maxCalls === undefined
+  const derivedMaxCalls = options.maxCalls === undefined
     ? deriveConfiguredMaxCalls({ maxTotalCalls: options.maxTotalCalls, presentationMode: resolvedConfig.reading.presentation_mode }) : undefined;
   const configuredSetup = { ...(derivedMaxCalls === undefined ? {} : { budget_derivation: { method: 'min-profile-cap-total-minus-six', max_calls: derivedMaxCalls, max_total_calls: options.maxTotalCalls } }), schema_version: 'apa-configured-reading-1.0', config_fingerprint: loaded.fingerprint, paths, parser: parserOptions,
     knowledge_registry: { policy: 'current-shared-nodes-1.0', vault_root: resolve(repoRoot) },
     role_model_policy: createConfiguredApaRoleModelPolicy(mainSession, resolvedConfig.roles),
     ...buildConfiguredReadingInstructions(resolvedConfig.writingSkills, { instructionProfile }) };
-  if (instructionProfile === 'configured-reading-2.2') {
-    configuredSetup.results_resources = structuredClone(options.resultsResources ?? {
-      output_root: 'resources/results',
-      manifest_task: { task_id: 'results-resources', artifact_id: 'results-resources', artifact_path: 'science/results-resources.json', native_path: 'native/results-resources.json', revision: '1', owner_actor_id: 'results', role: 'results' },
-    });
-    configuredSetup.runtime_binding = captureReadingRuntime();
-  }
+  configuredSetup.results_resources = structuredClone(options.resultsResources ?? {
+    output_root: 'resources/results',
+    manifest_task: { task_id: 'results-resources', artifact_id: 'results-resources', artifact_path: 'science/results-resources.json', native_path: 'native/results-resources.json', revision: '1', owner_actor_id: 'results', role: 'results' },
+  });
+  configuredSetup.results_resources.python = parserOptions.python;
+  configuredSetup.runtime_binding = captureReadingRuntime();
   // The language other than the paper's original is translated from the accepted source draft; its tasks run as the translation role.
   const translationKeys = options.sourceLanguage === 'en' ? ['zh-CN', 'zh-CN-r2'] : ['en', 'en-r2'];
   // A caller-supplied role for these keys must already be translation; anything else is a conflict, not something to overwrite.
@@ -165,7 +109,7 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
   const runControl = createReadingFirstRunControl({ ...options, ...(derivedMaxCalls === undefined ? {} : { maxCalls: derivedMaxCalls }), ...(taskBindings ? { taskBindings } : {}), ...(loaded.config.host ? { host: loaded.config.host } : {}), mainSession, configuredSetup, writingMode: 'source-translation',
     compactionPolicy: COMPACTION_POLICY, manualCompaction,
     roleReplyContract: options.roleReplyContract === undefined ? getRoleReplyContract() : options.roleReplyContract,
-    ...(['configured-reading-2.0', 'configured-reading-2.1', 'configured-reading-2.2'].includes(instructionProfile) ? { presentationProfile: 'reading-editor-1.3' } : {}),
+    presentationProfile: 'reading-editor-1.3',
     firstWritingLanguage: options.sourceLanguage, presentationMode: resolvedConfig.reading.presentation_mode, handoffProfile: SCIENCE_INDEX_PROFILE });
   return freeze({ resolvedConfig, scientificInput: structuredClone(options.scientificInput), configurationFingerprint: loaded.fingerprint, paths, parserOptions, runControl,
     compactionControlBindings: compactionControlBindings(runControl) });
@@ -183,10 +127,9 @@ export function createConfiguredScienceRequest({ prepared, role, task, dispatchC
   const binding = prepared.runControl.reading_first_binding, source = prepared.scientificInput?.sources?.[0] ?? payload.sources?.[0];
   if (!source) throw new Error('APA_CONFIGURED_SCIENCE_SOURCE_REQUIRED');
   const reply = configuredRoleReply(binding);
-  const sections = binding.configured_setup?.science_sections ?? sectionsOf(readFileSync(new URL('../../prompts/v3/phase21-scientific-contracts.md', import.meta.url), 'utf8'));
+  const sections = binding.configured_setup.science_sections;
   const outputPath = ownedPath(prepared.paths.runRoot, task.native_path);
   let message = [sections['Common scientific contract'], sections[scienceSections[role]],
-    ...(binding.configured_setup?.science_guidance ? [binding.configured_setup.science_guidance] : []),
     ...(reply ? [reply] : []), JSON.stringify(payload), 'Write only the assigned complete JSON to: ' + outputPath].join('\n\n');
   let instructionFile;
   if (task.instruction_path) {
@@ -285,103 +228,74 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
   const recoveringReviewed = reuseExisting && checkpoint.state.reviews === 2 && checkpoint.state.review && ['reviewing', 'reading_complete', 'completed_with_limits'].includes(checkpoint.state.status);
   if (candidateRevision === 2 && !revisionReady && !recoveringReviewed) throw new Error('APA_CONFIGURED_CANDIDATE_REVISION_INVALID');
   const candidateRoot = candidateRevision === 2 ? prepared.paths.candidateRoot + '-r2' : prepared.paths.candidateRoot;
-  if (policy?.policy === 'current-shared-nodes-1.0') {
-    if (typeof policy.vault_root !== 'string' || resolve(policy.vault_root) !== policy.vault_root) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_POLICY_INVALID');
-    let exists = false;
-    try { lstatSync(candidateRoot); exists = true; } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    if (exists && !reuseExisting) throw Object.assign(new Error('RF_PREVIEW_OUTPUT_EXISTS'), { code: 'RF_PREVIEW_OUTPUT_EXISTS' });
-    if (candidateRevision === 2 && recoveringReviewed && !exists) throw new Error('APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH');
-    const scratch = join(policy.vault_root, '.tmp', 'reading-first-candidates');
-    mkdirSync(scratch, { recursive: true });
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const trusted = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, policy: policy.policy });
-        if (attempt === 1 && renderOptions.knowledgeRegistry !== undefined) {
-          const supplied = renderOptions.knowledgeRegistry, byPath = new Map(trusted.map(row => [row.path, row]));
-          if (!Array.isArray(supplied) || new Set(supplied.map(row => row?.path)).size !== supplied.length
-            || supplied.some(row => !byPath.has(row?.path) || fingerprintReadingFirst(row) !== fingerprintReadingFirst(byPath.get(row.path)))) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_MISMATCH');
-        }
-        const options = { ...renderOptions, knowledgeRegistry: trusted };
-        const candidate = renderReadingFirstNotes({ controller, ...options });
-        const stage = join(scratch, 'candidate-' + randomUUID());
-        const exported = await exportReadingFirstPreview({ outputRoot: stage, identity: handoff.identity,
-          views: ['en', 'zh-CN'].map(language => checkpoint.state.views[language].value), presentation: getReadingFirstPresentation({ controller }), resources,
-          ...(checkpoint.state.readingEditor ? { readingEditor: checkpoint.state.readingEditor.value } : {}), ...options,
-          targetRegistry: candidate.targetRegistry, noteLayout: prepared.runControl.reading_first_binding.note_layout, sourceLanguage: prepared.runControl.reading_first_binding.source_language,
-          historicalKnowledge: { vaultRoot: policy.vault_root } });
-        if (candidate.notes.some(note => exported.notes.find(other => other.path === note.path)?.content !== note.content)
-          || (candidate.supportNotes?.length ?? 0) !== (exported.supportNotes?.length ?? 0)
-          || candidate.supportNotes?.some(note => exported.supportNotes.find(other => other.path === note.path)?.content !== note.content)) throw new Error('APA_CONFIGURED_CANDIDATE_RENDER_MISMATCH');
-        await onDependencyBoundary?.({ attempt, phase: 'before-finalize', stagingRoot: stage, candidate });
-        const paths = (exported.manifest.knowledge_dependencies ?? []).map(row => row.path);
-        assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: trusted, policy: policy.policy, paths });
-        if (exists) {
-          try {
-            const walk = (root, prefix = '') => readdirSync(join(root, prefix), { withFileTypes: true }).flatMap(entry => {
-              const relativePath = prefix ? prefix + '/' + entry.name : entry.name;
-              if (entry.isDirectory()) return walk(root, relativePath);
-              if (!entry.isFile()) throw new Error('invalid entry');
-              return [relativePath];
-            });
-            if (!lstatSync(candidateRoot).isDirectory()) throw new Error('invalid root');
-            const actual = walk(candidateRoot).sort(), expected = [...exported.files].sort();
-            if (fingerprintReadingFirst(actual) !== fingerprintReadingFirst(expected)) throw new Error('file set');
-            for (const path of expected) {
-              const oldBytes = readFileSync(join(candidateRoot, ...path.split('/'))), newBytes = readFileSync(join(stage, ...path.split('/')));
-              if (oldBytes.length !== newBytes.length || sha(oldBytes) !== sha(newBytes)) throw new Error('file bytes');
-            }
-            assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: trusted, policy: policy.policy, paths });
-          } catch (error) {
-            if (error.code === 'P23_CURRENT_CHANGED') throw error;
-            throw Object.assign(new Error('APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH'), { code: 'APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH' });
-          }
-          return { candidate, exported: { ...exported, outputRoot: candidateRoot }, staging_root: stage, reused: true };
-        }
-        mkdirSync(dirname(candidateRoot), { recursive: true });
-        try { mkdirSync(candidateRoot); }
-        catch (error) { if (error.code === 'EEXIST') throw Object.assign(new Error('RF_PREVIEW_OUTPUT_EXISTS'), { code: 'RF_PREVIEW_OUTPUT_EXISTS' }); throw error; }
+  if (policy?.policy !== 'current-shared-nodes-1.0') throw Object.assign(new Error('READING_BINDING_RETIRED'), { code: 'READING_BINDING_RETIRED' });
+  if (typeof policy.vault_root !== 'string' || resolve(policy.vault_root) !== policy.vault_root) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_POLICY_INVALID');
+  let exists = false;
+  try { lstatSync(candidateRoot); exists = true; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (exists && !reuseExisting) throw Object.assign(new Error('RF_PREVIEW_OUTPUT_EXISTS'), { code: 'RF_PREVIEW_OUTPUT_EXISTS' });
+  if (candidateRevision === 2 && recoveringReviewed && !exists) throw new Error('APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH');
+  const scratch = join(policy.vault_root, '.tmp', 'reading-first-candidates');
+  mkdirSync(scratch, { recursive: true });
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const trusted = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, policy: policy.policy });
+      if (attempt === 1 && renderOptions.knowledgeRegistry !== undefined) {
+        const supplied = renderOptions.knowledgeRegistry, byPath = new Map(trusted.map(row => [row.path, row]));
+        if (!Array.isArray(supplied) || new Set(supplied.map(row => row?.path)).size !== supplied.length
+          || supplied.some(row => !byPath.has(row?.path) || fingerprintReadingFirst(row) !== fingerprintReadingFirst(byPath.get(row.path)))) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_MISMATCH');
+      }
+      const options = { ...renderOptions, knowledgeRegistry: trusted };
+      const candidate = renderReadingFirstNotes({ controller, ...options });
+      const stage = join(scratch, 'candidate-' + randomUUID());
+      const exported = await exportReadingFirstPreview({ outputRoot: stage, identity: handoff.identity,
+        views: ['en', 'zh-CN'].map(language => checkpoint.state.views[language].value), presentation: getReadingFirstPresentation({ controller }), resources,
+        ...(checkpoint.state.readingEditor ? { readingEditor: checkpoint.state.readingEditor.value } : {}), ...options,
+        targetRegistry: candidate.targetRegistry, noteLayout: prepared.runControl.reading_first_binding.note_layout, sourceLanguage: prepared.runControl.reading_first_binding.source_language,
+        historicalKnowledge: { vaultRoot: policy.vault_root } });
+      if (candidate.notes.some(note => exported.notes.find(other => other.path === note.path)?.content !== note.content)
+        || (candidate.supportNotes?.length ?? 0) !== (exported.supportNotes?.length ?? 0)
+        || candidate.supportNotes?.some(note => exported.supportNotes.find(other => other.path === note.path)?.content !== note.content)) throw new Error('APA_CONFIGURED_CANDIDATE_RENDER_MISMATCH');
+      await onDependencyBoundary?.({ attempt, phase: 'before-finalize', stagingRoot: stage, candidate });
+      const paths = (exported.manifest.knowledge_dependencies ?? []).map(row => row.path);
+      assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: trusted, policy: policy.policy, paths });
+      if (exists) {
         try {
-          cpSync(stage, candidateRoot, { recursive: true, force: false, errorOnExist: true });
-          await onDependencyBoundary?.({ attempt, phase: 'after-finalize', stagingRoot: stage, outputRoot: candidateRoot });
+          const walk = (root, prefix = '') => readdirSync(join(root, prefix), { withFileTypes: true }).flatMap(entry => {
+            const relativePath = prefix ? prefix + '/' + entry.name : entry.name;
+            if (entry.isDirectory()) return walk(root, relativePath);
+            if (!entry.isFile()) throw new Error('invalid entry');
+            return [relativePath];
+          });
+          if (!lstatSync(candidateRoot).isDirectory()) throw new Error('invalid root');
+          const actual = walk(candidateRoot).sort(), expected = [...exported.files].sort();
+          if (fingerprintReadingFirst(actual) !== fingerprintReadingFirst(expected)) throw new Error('file set');
+          for (const path of expected) {
+            const oldBytes = readFileSync(join(candidateRoot, ...path.split('/'))), newBytes = readFileSync(join(stage, ...path.split('/')));
+            if (oldBytes.length !== newBytes.length || sha(oldBytes) !== sha(newBytes)) throw new Error('file bytes');
+          }
           assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: trusted, policy: policy.policy, paths });
         } catch (error) {
-          error.details = { ...error.details, owned_output_path: candidateRoot, staging_root: stage };
-          throw error;
+          if (error.code === 'P23_CURRENT_CHANGED') throw error;
+          throw Object.assign(new Error('APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH'), { code: 'APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH' });
         }
-        return { candidate, exported: { ...exported, outputRoot: candidateRoot }, staging_root: stage };
-      } catch (error) {
-        if (error.code !== 'P23_CURRENT_CHANGED' || attempt === 2) throw error;
-        // Accepted views and their receipts remain untouched; only the candidate is re-rendered.
-        try { lstatSync(candidateRoot); throw error; } catch (probe) { if (probe.code !== 'ENOENT') throw probe; }
+        return { candidate, exported: { ...exported, outputRoot: candidateRoot }, staging_root: stage, reused: true };
       }
+      mkdirSync(dirname(candidateRoot), { recursive: true });
+      try { mkdirSync(candidateRoot); }
+      catch (error) { if (error.code === 'EEXIST') throw Object.assign(new Error('RF_PREVIEW_OUTPUT_EXISTS'), { code: 'RF_PREVIEW_OUTPUT_EXISTS' }); throw error; }
+      try {
+        cpSync(stage, candidateRoot, { recursive: true, force: false, errorOnExist: true });
+        await onDependencyBoundary?.({ attempt, phase: 'after-finalize', stagingRoot: stage, outputRoot: candidateRoot });
+        assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: trusted, policy: policy.policy, paths });
+      } catch (error) {
+        error.details = { ...error.details, owned_output_path: candidateRoot, staging_root: stage };
+        throw error;
+      }
+      return { candidate, exported: { ...exported, outputRoot: candidateRoot }, staging_root: stage };
+    } catch (error) {
+      if (error.code !== 'P23_CURRENT_CHANGED' || attempt === 2) throw error;
+      // Accepted views and their receipts remain untouched; only the candidate is re-rendered.
+      try { lstatSync(candidateRoot); throw error; } catch (probe) { if (probe.code !== 'ENOENT') throw probe; }
     }
   }
-  if (candidateRevision !== 1 || reuseExisting) throw new Error('APA_CONFIGURED_CANDIDATE_REVISION_INVALID');
-  let trusted;
-  if (policy !== undefined) {
-    if (!['committed-generation-1.0', 'committed-shared-nodes-1.0'].includes(policy?.policy) || typeof policy.vault_root !== 'string' || resolve(policy.vault_root) !== policy.vault_root) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_POLICY_INVALID');
-    trusted = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, policy: policy.policy });
-    if (renderOptions.knowledgeRegistry !== undefined) {
-      const supplied = renderOptions.knowledgeRegistry, byPath = new Map(trusted.map(row => [row.path, row]));
-      if (!Array.isArray(supplied) || new Set(supplied.map(row => row?.path)).size !== supplied.length
-        || supplied.some(row => !byPath.has(row?.path) || fingerprintReadingFirst(row) !== fingerprintReadingFirst(byPath.get(row.path)))) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_MISMATCH');
-    }
-    renderOptions.knowledgeRegistry = trusted;
-  }
-  const assertRegistryCurrent = async () => {
-    if (trusted && fingerprintReadingFirst(await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, policy: policy.policy })) !== fingerprintReadingFirst(trusted)) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_CHANGED');
-  };
-  const candidate = renderReadingFirstNotes({ controller, ...renderOptions });
-  await assertRegistryCurrent();
-  mkdirSync(dirname(candidateRoot), { recursive: true });
-  const exported = await exportReadingFirstPreview({ outputRoot: candidateRoot, identity: handoff.identity,
-    views: ['en', 'zh-CN'].map(language => checkpoint.state.views[language].value), presentation: getReadingFirstPresentation({ controller }), resources,
-    ...(checkpoint.state.readingEditor ? { readingEditor: checkpoint.state.readingEditor.value } : {}), ...renderOptions,
-    targetRegistry: candidate.targetRegistry,
-    ...(policy?.policy === 'committed-shared-nodes-1.0' ? { historicalKnowledge: { vaultRoot: policy.vault_root } } : {}) });
-  await assertRegistryCurrent();
-  if (candidate.notes.some(note => exported.notes.find(other => other.path === note.path)?.content !== note.content)
-    || (candidate.supportNotes?.length ?? 0) !== (exported.supportNotes?.length ?? 0)
-    || candidate.supportNotes?.some(note => exported.supportNotes.find(other => other.path === note.path)?.content !== note.content)) throw new Error('APA_CONFIGURED_CANDIDATE_RENDER_MISMATCH');
-  return { candidate, exported };
 }

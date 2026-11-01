@@ -15,7 +15,7 @@ const observation = () => ({
 });
 const progress = { remaining_work: { multiple_responses: true, reason: 'Writer, translation and review remain.' }, growth: { substantial: true, reason: 'Large tool responses since the last checkpoint.' } };
 
-for (const profile of ['configured-reading-2.1','configured-reading-2.2']) test(`${profile} compaction preserves the desktop restriction and actual execution budget`, () => {
+for (const profile of ['configured-reading-2.2']) test(`${profile} compaction preserves the desktop restriction and actual execution budget`, () => {
   const result = assess('before-writer', { policy: { profile: 'boundary-reminders-1.2' }, continuation: {
     binding: { configured_setup: { instruction_profile: profile } }, budget_summary: { total_used: 9, continuations: 3, remaining_total: 13 } } });
   assert.match(result.compaction_prompt, /所有桌面应用/);

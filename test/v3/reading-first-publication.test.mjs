@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { reviewedReadingFirstFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
 import { buildBilingualReview } from '../../scripts/v3/phase22-review.mjs';
 import { captureReadingFirstPublicationSource } from '../../scripts/v3/reading-first-runtime.mjs';
-import { readingFirstPublicationFixture, applyReadingFirstFixture } from './helpers/reading-first-publication-fixtures.mjs';
+import { readingFirstPublicationFixture, applyReadingFirstFixture, readingFirstPublicationAuthority } from './helpers/reading-first-publication-fixtures.mjs';
 import { applyBilingualPublication, recoverBilingualPublication, loadBilingualPublication, registerBilingualPublication, dryRunBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
 
 test('new registrations store only signed output files and no historical snapshot', async t => {
@@ -353,4 +353,39 @@ test('current shared content changed after rendering cannot be overwritten by pu
   await assert.rejects(prepareReadingFirstPublication({ source, vaultRoot: f.vaultRoot, generation: 'new-after-edit',
     evidenceMode: 'synthetic', resources: g.resources }), /RF_PUBLICATION_KNOWLEDGE_CHANGED_SINCE_RENDER/);
   assert.equal(await readFile(path, 'utf8'), edited);
+});
+
+async function currentPolicyNextPaper(t, change) {
+  const f = await readingFirstPublicationFixture(t);
+  await applyBilingualPublication(applyReadingFirstFixture(f));
+  const committed = await readCommittedGeneration({ vaultRoot: f.vaultRoot });
+  await change(f, committed.generation.objects);
+  const g = await reviewedReadingFirstFixture(t, { currentRegistryRoot: f.vaultRoot,
+    runId: 'run_' + 'f'.repeat(32), paperId: 'pap_' + 'f'.repeat(32), title: { en: 'Next reading', 'zh-CN': '下一篇论文' } });
+  const source = await captureReadingFirstPublicationSource({ controller: g.controller, presentation: g.candidate });
+  const prepare = () => prepareReadingFirstPublication({ source, vaultRoot: f.vaultRoot, generation: 'after-object-change', evidenceMode: 'synthetic', resources: g.resources });
+  return Object.assign(prepare, { g, vaultRoot: f.vaultRoot });
+}
+
+test('current policy rejects drift in a registered non-Wiki object', async t => {
+  const prepare = await currentPolicyNextPaper(t, async (f, objects) => {
+    const sidecar = join(f.vaultRoot, objects.find(row => row.kind === 'reader-presentation').path);
+    await writeFile(sidecar, Buffer.concat([await readFile(sidecar), Buffer.from(' ')]));
+  });
+  await assert.rejects(prepare(), error => {
+    assert.equal(error.code, 'RF_PUBLICATION_PREVIOUS_OBJECT_CHANGED');
+    assert.match(error.details.path, /^\.apa-v3\/reading-first\/presentation\//);
+    return true;
+  });
+});
+
+test('edited registered Wiki note still publishes under current policy', async t => {
+  const prepare = await currentPolicyNextPaper(t, async (f, objects) => {
+    const note = join(f.vaultRoot, objects.find(row => row.path.startsWith('Wiki/sources/')).path);
+    await writeFile(note, (await readFile(note, 'utf8')) + '\nHuman note added after publication.\n');
+  });
+  const prepared = await prepare();
+  const authority = await readingFirstPublicationAuthority({ ...prepare.g, vaultRoot: prepare.vaultRoot }, prepared.plan);
+  await registerBilingualPublication({ vaultRoot: prepare.vaultRoot, run: prepare.g.runId, plan: prepared.plan, sourceInputs: prepared.sourceInputs, ...authority });
+  assert.equal((await applyBilingualPublication({ vaultRoot: prepare.vaultRoot, run: prepare.g.runId, plan: prepared.plan, ...authority })).status, 'committed');
 });

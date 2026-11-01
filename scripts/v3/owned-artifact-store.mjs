@@ -183,7 +183,7 @@ export async function repairOwnedArtifactReceipt({ artifactRoot, dispatchContext
     task = resourceRecovery ? binding.configured_setup?.results_resources?.manifest_task : entry === original ? data.tasks?.[role] : entry.task;
     if (!entry?.intent || !entry.raw_observation || entry.observation?.status !== 'observed' || typeof entry.content_base64 !== 'string') fail('RECOVERY_OBSERVATION_REQUIRED');
     if (resourceRecovery) {
-      if (binding.configured_setup?.instruction_profile !== 'configured-reading-2.2') fail('RECOVERY_AUTHORITY_MISMATCH');
+      if (!binding.configured_setup) fail('RECOVERY_AUTHORITY_MISMATCH');
       const {validateHostReceiptEvidence}=await import('./reading-host-evidence.mjs');
       validateHostReceiptEvidence(entry.raw_observation,{strict:true});
     }

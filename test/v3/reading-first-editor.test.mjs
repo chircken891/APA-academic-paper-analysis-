@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateReadingFirstEditor, readingFirstViewsFingerprint } from '../../scripts/v3/reading-first-editor.mjs';
 const views=['en','zh-CN'].map(language=>({language,sections:[{id:'abstract',module_id:'abstract',paragraphs:['Original abstract.']},{id:'design',module_id:'design',paragraphs:['The design supports the main finding.']}]}));
-const editor=()=>({schema_version:'reading-editor-1.0',views_fingerprint:readingFirstViewsFingerprint(views),languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[{section_id:'design',takeaway:'The design supports inference.',emphasis:[{paragraph_index:0,text:'main finding'}],subheadings:[{before_paragraph:0,heading:'Design'}]}],methods:[{id:'method',title:'Method',explanation:'Known method.',application:'Used for the design.',section_ids:['design'],knowledge_id:'method'}]}]))});
+const editor=()=>({schema_version:'reading-editor-1.3',views_fingerprint:readingFirstViewsFingerprint(views),map:{nodes:[]},languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{visuals:[],overview:[{text:'Main finding',section_ids:['design']}],sections:[{section_id:'design',takeaway:'The design supports inference.',emphasis:[{paragraph_index:0,text:'main finding'}],subheadings:[{before_paragraph:0,heading:'Design'}]}],methods:[{id:'method',title:'Method',explanation:'Known method.',application:'Used for the design.',section_ids:['design'],knowledge_id:'method'}]}]))});
 const validate=value=>validateReadingFirstEditor({editor:value,views,presentation:{knowledge:[{id:'method'}]}});
 test('reading editor binds accepted bilingual views and preserves prose via metadata',()=>{
   const value=editor(); assert.equal(validate(value),value);
@@ -15,10 +15,10 @@ test('reading editor rejects invented emphasis, changed abstract and unresolved 
   const method=editor();method.languages.en.methods[0].knowledge_id='missing';assert.throws(()=>validate(method),/METHOD_INVALID/);
   const bilingual=editor();bilingual.languages.en.methods[0].id='other';assert.throws(()=>validate(bilingual),/BILINGUAL_METHODS_INVALID/);
 });
-test('reading editor 1.1 validates figure notes and a shared staged map selection',()=>{
+test('reading editor validates figure notes and a shared staged map selection',()=>{
   const placed=views.map(view=>({...view,sections:[...view.sections.slice(0,1),{...view.sections[1],paragraphs:[...view.sections[1].paragraphs,'Read the panel as counts.']}],placements:{visuals:[{id:'fig',section_id:'design',after_paragraph:0}],knowledge:[]}}));
   const presentation={knowledge:[{id:'method'}],visuals:[{id:'fig'}],map:{steps:[{id:'step'}],findings:[{id:'finding'}],relations:[]}};
-  const make=()=>{const value=editor();value.schema_version='reading-editor-1.1';value.views_fingerprint=readingFirstViewsFingerprint(placed);value.map={nodes:[{id:'step',stage:'design'},{id:'finding',stage:'finding',primary:true}]};
+  const make=()=>{const value=editor();value.views_fingerprint=readingFirstViewsFingerprint(placed);value.map={nodes:[{id:'step',stage:'design'},{id:'finding',stage:'finding',primary:true}]};
     for (const language of ['en','zh-CN']) {value.languages[language].sections[0].subheadings=[];value.languages[language].visuals=[{id:'fig',title:'Figure 1',notes:[{section_id:'design',paragraph_index:1}]}];}
     return value;};
   const check=value=>validateReadingFirstEditor({editor:value,views:placed,presentation});
@@ -35,10 +35,9 @@ test('reading editor 1.1 validates figure notes and a shared staged map selectio
     ['empty map',value=>{value.map.nodes=[];},/MAP_INVALID/],
   ]) {const changed=make();mutate(changed);assert.throws(()=>check(changed),code,name);}
 });
-test('reading editor 1.2 requires every step while allowing omitted findings',()=>{
+test('reading editor requires every step while allowing omitted findings',()=>{
   const presentation={knowledge:[{id:'method'}],visuals:[],map:{steps:[{id:'step'},{id:'step-two'}],findings:[{id:'finding'}],relations:[]}};
-  const value=editor(); value.schema_version='reading-editor-1.2'; value.map={nodes:[{id:'step',stage:'design'},{id:'step-two',stage:'measurement'}]};
-  for (const language of ['en','zh-CN']) value.languages[language].visuals=[];
+  const value=editor(); value.map={nodes:[{id:'step',stage:'design'},{id:'step-two',stage:'measurement'}]};
   const check=()=>validateReadingFirstEditor({editor:value,views,presentation});
   assert.equal(check(),value);
   value.map.nodes.pop();
@@ -46,18 +45,16 @@ test('reading editor 1.2 requires every step while allowing omitted findings',()
   value.map.nodes.push({id:'step',stage:'design'});
   assert.throws(check,/MAP_INVALID/);
 });
-test('reading editor 1.2 covers a fourteen-step map without requiring thirteen findings',()=>{
+test('reading editor covers a fourteen-step map without requiring thirteen findings',()=>{
   const steps=Array.from({length:14},(_,i)=>({id:`d${i+1}`}));
   const findings=Array.from({length:13},(_,i)=>({id:`r${i+1}`}));
   const presentation={knowledge:[{id:'method'}],visuals:[],map:{steps,findings,relations:[]}};
-  const value=editor(); value.schema_version='reading-editor-1.2';
+  const value=editor();
   value.map={nodes:[...steps.map(node=>({id:node.id,stage:'measurement'})),{id:'r1',stage:'finding',primary:true}]};
-  for (const language of ['en','zh-CN']) value.languages[language].visuals=[];
   assert.equal(validateReadingFirstEditor({editor:value,views,presentation}),value);
   value.map.nodes=value.map.nodes.filter(node=>node.id!=='d7');
   assert.throws(()=>validateReadingFirstEditor({editor:value,views,presentation}),error=>error.details?.missing_steps?.includes('d7'));
-  value.schema_version='reading-editor-1.1';
-  assert.equal(validateReadingFirstEditor({editor:value,views,presentation}),value);
+  for (const schema of ['reading-editor-1.0','reading-editor-1.1','reading-editor-1.2']) assert.throws(()=>validateReadingFirstEditor({editor:{...value,schema_version:schema},views,presentation}),/FINGERPRINT_INVALID/);
 });
 test('shared bilingual inventory validates nonempty knowledge links and matching association sets',()=>{
   const presentation={knowledge_layout:'shared-bilingual-1.0',knowledge:[{id:'method'},{id:'measure'}]};
@@ -89,13 +86,4 @@ test('legacy inventory supports optional links and rejects malformed knowledge a
   assert.throws(()=>validate(value),/METHOD_INVALID/);
   value.languages.en.methods[0].knowledge_ids='method';
   assert.throws(()=>validate(value),/METHOD_INVALID/);
-});
-
-test('reading editor 1.3 requires all registered steps',()=>{
-  const presentation={knowledge:[{id:'method'}],visuals:[],map:{steps:[{id:'step'},{id:'step-two'}],findings:[],relations:[]}};
-  const value=editor(); value.schema_version='reading-editor-1.3'; value.map={nodes:[{id:'step',stage:'design'}]};
-  for (const language of ['en','zh-CN']) value.languages[language].visuals=[];
-  assert.throws(()=>validateReadingFirstEditor({editor:value,views,presentation}),error=>error.details?.missing_steps?.includes('step-two'));
-  value.map.nodes.push({id:'step-two',stage:'measurement'});
-  assert.equal(validateReadingFirstEditor({editor:value,views,presentation}),value);
 });

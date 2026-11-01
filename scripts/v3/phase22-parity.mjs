@@ -1,12 +1,12 @@
 import { isDeepStrictEqual as same } from 'node:util';
 import { fingerprintV3Json as hash } from './semantic-package-validator.mjs';
 import { getReadingBasisContent, freezePhase22Value } from './phase22-input.mjs';
-import { getReviewedSupportContent, getReviewedSupportTargets } from './phase221-reviewed-support.mjs';
 import { assertFrozenRenderContext } from './phase22-render-context.mjs';
-import { collectLanguageSpans, collectPhase22QuantityFindings, getAcceptedLanguageRecord, getAcceptedReaderLanguageRecord, createReaderParityRequest as createRuntimeReaderParityRequest, createPhase22VerifierRequest, verifyPhase22VerifierResult } from './phase22-language.mjs';
+import { collectLanguageSpans } from './phase22-language-spans.mjs';
+import { collectPhase22QuantityFindings, getAcceptedLanguageRecord, createPhase22VerifierRequest, verifyPhase22VerifierResult } from './phase22-language.mjs';
 
 export const PARITY_DIMENSIONS=Object.freeze(['structure','quantities_conditions','epistemic_boundaries','coverage']);
-const parityRecords=new WeakMap(), readerParityRecords=new WeakMap();
+const parityRecords=new WeakMap();
 const fail=(code,path='/',details={})=>{throw Object.assign(new Error(code),{code,path,details});};
 export function listParityTargets(basis) {
   const science=getReadingBasisContent(basis),targets=[];
@@ -33,12 +33,12 @@ function relevantSpans(view,id) {
   if(declared)return declared.span_ids;
   return collectLanguageSpans(view).filter(x=>x.span.boundary_refs.includes(id)||x.span.support_refs?.includes(id)).map(x=>x.span.span_id);
 }
-function checkSemanticReviewDraft({basis,context,views,semanticReview,request,validator,dependencies,science,dimensions,add,reviewedSupport}) {
+function checkSemanticReviewDraft({basis,context,views,semanticReview,request,validator,dependencies,science,dimensions,add}) {
   const shape=validator.validate('phase22/parity-review-1.0',semanticReview);
   if(!shape.ok||semanticReview.kind!=='semantic_review')fail('P22_SEMANTIC_REVIEW_INVALID','/semanticReview',{errors:shape.errors});
   if(semanticReview.request_id!==request.request_id||!same(semanticReview.identity,basis.identity)||semanticReview.basis_fingerprint!==basis.basis_fingerprint
     ||semanticReview.context_fingerprint!==context.context_fingerprint||semanticReview.view_fingerprints.en!==dependencies.en_view||semanticReview.view_fingerprints['zh-CN']!==dependencies.zh_view)fail('P22_SEMANTIC_REVIEW_INVALIDATED');
-  const targets=[...listParityTargets(basis),...(reviewedSupport?getReviewedSupportTargets(reviewedSupport):[])],byTarget=new Map(targets.map(x=>[x.semantic_id,x]));
+  const targets=listParityTargets(basis),byTarget=new Map(targets.map(x=>[x.semantic_id,x]));
   const allSpans=Object.fromEntries(['en','zh-CN'].map(language=>[language,new Map(collectLanguageSpans(views[language]).map(x=>[x.span.span_id,x.span]))]));
   const reviewed=new Set();
   for(const [index,item]of semanticReview.items.entries()){
@@ -60,7 +60,7 @@ function checkSemanticReviewDraft({basis,context,views,semanticReview,request,va
   }
   for(const target of targets)for(const dimension of PARITY_DIMENSIONS)if(!reviewed.has(target.semantic_id+'|'+dimension))add('coverage','P22_SEMANTIC_REVIEW_COVERAGE_MISSING','/semanticReview/items',{semantic_id:target.semantic_id,missing_dimension:dimension,verdict:'omission'});
 
-  const validPointers=new Set([...targets.map(x=>x.basis_pointer),...science.scientific_details.source_blocks.map((x,i)=>'/scientific_details/source_blocks/'+i),...science.core.evidence.map((x,i)=>'/core/evidence/'+i),...(reviewedSupport?getReviewedSupportContent(reviewedSupport).sources.map((x,i)=>'/reader_support/sources/'+i):[]),...(reviewedSupport?getReviewedSupportContent(reviewedSupport).expressions.map((x,i)=>'/reader_support/expressions/'+i):[])]);
+  const validPointers=new Set([...targets.map(x=>x.basis_pointer),...science.scientific_details.source_blocks.map((x,i)=>'/scientific_details/source_blocks/'+i),...science.core.evidence.map((x,i)=>'/core/evidence/'+i)]);
   const reversed=new Set(),propositionIds=new Set();
   for(const [index,row]of semanticReview.reverse_grounding.entries()){
     const path='/semanticReview/reverse_grounding/'+index,span=allSpans[row.language]?.get(row.span_id),key=row.language+':'+row.span_id;
@@ -89,7 +89,7 @@ function checkSemanticReviewDraft({basis,context,views,semanticReview,request,va
   return hash(semanticReview);
 }
 /** Deterministic constraints plus a traceable item-by-item semantic adjudication; no heuristic semantic pass. */
-function assessParity({basis,context,views,semanticReview,receipts,currentDependencies}={},reader=false) {
+function assessParity({basis,context,views,semanticReview,receipts,currentDependencies}={}) {
   const dimensions=Object.fromEntries(PARITY_DIMENSIONS.map(name=>[name,{verdict:'aligned',checked_ids:[],checked_spans:[]}]));
   const findings=[];
   const add=(dimension,code,path,details={})=>{
@@ -102,17 +102,17 @@ function assessParity({basis,context,views,semanticReview,receipts,currentDepend
     science=getReadingBasisContent(basis);assertFrozenRenderContext(context,basis);
     if(!views||!same(Object.keys(views).sort(),['en','zh-CN']))fail('P22_BOTH_FROZEN_VIEWS_REQUIRED');
     for(const language of ['en','zh-CN']){
-      metadata[language]=(reader?getAcceptedReaderLanguageRecord:getAcceptedLanguageRecord)(views[language],currentDependencies);
+      metadata[language]=getAcceptedLanguageRecord(views[language],currentDependencies);
       if(views[language].language!==language||views[language].basis_fingerprint!==basis.basis_fingerprint||views[language].context_fingerprint!==context.context_fingerprint)fail('P22_VIEW_IDENTITY_MISMATCH');
     }
     if(!same(metadata.en.dependencies,metadata['zh-CN'].dependencies))fail('P22_VIEW_DEPENDENCY_MISMATCH');
     dependencies={...metadata.en.dependencies,en_view:metadata.en.view_fingerprint,zh_view:metadata['zh-CN'].view_fingerprint};
     if(Object.keys(dependencies).some(key=>currentDependencies?.[key]!==dependencies[key]))fail('P22_PARITY_DEPENDENCY_INVALIDATED','/currentDependencies');
-    const verified=verifyPhase22VerifierResult({...receipts?.verifier,result:semanticReview,currentDependencies,reader});
+    const verified=verifyPhase22VerifierResult({...receipts?.verifier,result:semanticReview,currentDependencies});
     if(!verified.ok)fail(verified.errors[0]?.code??'P22_SEMANTIC_REVIEW_RECEIPT_REQUIRED','/receipts',{errors:verified.errors});
     reviewReceipt=verified.receipt_binding;evidence_mode=verified.evidence_mode;
     if(metadata.en.evidence_mode!==evidence_mode||metadata['zh-CN'].evidence_mode!==evidence_mode)fail('P22_EVIDENCE_MODE_MISMATCH');
-    reviewHash=checkSemanticReviewDraft({basis,context,views,semanticReview,request:receipts.verifier.request,validator:verified.validator,dependencies,science,dimensions,add,reviewedSupport:metadata.en.reviewed_support});
+    reviewHash=checkSemanticReviewDraft({basis,context,views,semanticReview,request:receipts.verifier.request,validator:verified.validator,dependencies,science,dimensions,add});
   } catch(error){
     add('structure',error.code??'P22_PARITY_INVALID',error.path??'/',{reason:error.message,...error.details});
   }
@@ -125,22 +125,12 @@ function assessParity({basis,context,views,semanticReview,receipts,currentDepend
     dimensions,findings,dependencies,semantic_review_fingerprint:reviewHash,semantic_review_receipt:reviewReceipt,evidence_mode,
     provenance_limits:{actual_observable_identity:'unknown',independence:'not_independent'}};
   const result=freezePhase22Value({...body,parity_fingerprint:hash(body)});
-  if(ok)(reader?readerParityRecords:parityRecords).set(result,{basis,context,views,dependencies,semanticReview,receipts});
+  if(ok)parityRecords.set(result,{basis,context,views,dependencies,semanticReview,receipts});
   return result;
 }
 export function assessBilingualParity(args) { return assessParity(args); }
-export function assessReaderBilingualParity(args) { return assessParity(args,true); }
-export function listReaderParityTargets(basis,views) {
-  const en=getAcceptedReaderLanguageRecord(views?.en),zh=getAcceptedReaderLanguageRecord(views?.['zh-CN']);
-  if(en.reviewed_support!==zh.reviewed_support)fail('P221_REVIEWED_SUPPORT_BINDING_INVALID');
-  return [...listParityTargets(basis),...(en.reviewed_support?getReviewedSupportTargets(en.reviewed_support):[])];
-}
-export function createReaderParityRequest({basis,context,views,controller}={}) {
-  try { return createRuntimeReaderParityRequest({basis,context,views,controller,reviewTargets:listReaderParityTargets(basis,views)}); }
-  catch(error) { return {ok:false,errors:[{code:error.code??'P221_READER_PARITY_INPUT_INVALID',path:error.path??'/'}]}; }
-}
 /** Advisory draft mechanics only. Native completion/owned receipts and semantic acceptance remain mandatory. */
-export function preflightPhase22SemanticReview({basis,context,views,semanticReview,request,validator,currentDependencies,reader=false}={}) {
+export function preflightPhase22SemanticReview({basis,context,views,semanticReview,request,validator,currentDependencies}={}) {
   const findings=[],dimensions=Object.fromEntries(PARITY_DIMENSIONS.map(name=>[name,{verdict:'aligned',checked_ids:[],checked_spans:[]}]));
   const add=(dimension,code,path,details={})=>findings.push({dimension,code,path,semantic_id:details.semantic_id??null,language:details.language??null,span_id:details.span_id??null,
     verdict:details.verdict??'contradiction',reason:details.reason??code,owner:details.owner??'Controller',recheck_scope:details.recheck_scope??[],details});
@@ -149,29 +139,28 @@ export function preflightPhase22SemanticReview({basis,context,views,semanticRevi
     if(!views||!same(Object.keys(views).sort(),['en','zh-CN']))fail('P22_BOTH_FROZEN_VIEWS_REQUIRED');
     const metadata={};
     for(const language of ['en','zh-CN']){
-      metadata[language]=(reader?getAcceptedReaderLanguageRecord:getAcceptedLanguageRecord)(views[language],currentDependencies);
+      metadata[language]=getAcceptedLanguageRecord(views[language],currentDependencies);
       if(views[language].language!==language||views[language].basis_fingerprint!==basis.basis_fingerprint||views[language].context_fingerprint!==context.context_fingerprint)fail('P22_VIEW_IDENTITY_MISMATCH');
     }
     if(!same(metadata.en.dependencies,metadata['zh-CN'].dependencies))fail('P22_VIEW_DEPENDENCY_MISMATCH');
     const dependencies={...metadata.en.dependencies,en_view:metadata.en.view_fingerprint,zh_view:metadata['zh-CN'].view_fingerprint};
     if(Object.keys(dependencies).some(key=>currentDependencies?.[key]!==dependencies[key]||request?.dependencies?.[key]!==dependencies[key]))fail('P22_PARITY_DEPENDENCY_INVALIDATED','/currentDependencies');
     if(request?.role!=='bilingual-verifier')fail('P22_VERIFIER_REQUEST_REQUIRED');
-    checkSemanticReviewDraft({basis,context,views,semanticReview,request,validator,dependencies,science,dimensions,add,reviewedSupport:metadata.en.reviewed_support});
+    checkSemanticReviewDraft({basis,context,views,semanticReview,request,validator,dependencies,science,dimensions,add});
   }catch(error){add('structure',error.code??'P22_PARITY_INVALID',error.path??'/',{reason:error.message,...error.details});}
   const semanticCodes=new Set(['P22_SEMANTIC_CONTRADICTION','P22_SEMANTIC_OMISSION','P22_SEMANTIC_UNSUPPORTED_ADDITION','P22_SEMANTIC_UNASSESSABLE','P22_UNSUPPORTED_ADDITION','P22_REVERSE_UNASSESSABLE']);
   const mechanical_errors=findings.filter(x=>!semanticCodes.has(x.code)),semantic_findings=findings.filter(x=>semanticCodes.has(x.code));
   return {ok:mechanical_errors.length===0,preflight_only:true,review_ready:false,mechanical_errors,semantic_findings};
 }
-function assertParity(parity,{basis,context,views,currentDependencies}={},reader=false) {
-  const record=(reader?readerParityRecords:parityRecords).get(parity);
+function assertParity(parity,{basis,context,views,currentDependencies}={}) {
+  const record=parityRecords.get(parity);
   if(!record||record.basis!==basis||record.context!==context||record.views.en!==views?.en||record.views['zh-CN']!==views?.['zh-CN'])fail('P22_PARITY_NOT_CURRENT');
   if(currentDependencies&&Object.keys(record.dependencies).some(k=>currentDependencies[k]!==record.dependencies[k]))fail('P22_PARITY_DEPENDENCY_INVALIDATED');
-  for(const language of ['en','zh-CN'])(reader?getAcceptedReaderLanguageRecord:getAcceptedLanguageRecord)(views[language],currentDependencies??record.dependencies);
-  const checked=verifyPhase22VerifierResult({...record.receipts.verifier,result:record.semanticReview,currentDependencies:currentDependencies??record.dependencies,reader});
+  for(const language of ['en','zh-CN'])getAcceptedLanguageRecord(views[language],currentDependencies??record.dependencies);
+  const checked=verifyPhase22VerifierResult({...record.receipts.verifier,result:record.semanticReview,currentDependencies:currentDependencies??record.dependencies});
   if(!checked.ok||checked.receipt_binding.sha256!==parity.semantic_review_receipt.sha256)fail('P22_SEMANTIC_REVIEW_INVALIDATED');
   return parity;
 }
 
 
 export function assertBilingualParity(parity,args) { return assertParity(parity,args); }
-export function assertReaderBilingualParity(parity,args) { return assertParity(parity,args,true); }

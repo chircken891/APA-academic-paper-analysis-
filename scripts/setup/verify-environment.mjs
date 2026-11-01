@@ -1,12 +1,9 @@
 import { constants } from 'node:fs';
 import { access, readFile, statfs } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
-import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-
-import { verifyApaSkillSync } from './verify-apa-skill-sync.mjs';
 
 import { checkMineruRuntime } from '../lib/mineru-runtime.mjs';
 import { inspectV3Graph } from '../v3/obsidian-graph.mjs';
@@ -121,16 +118,6 @@ export async function canonicalNavigationBoundaryCheck(repoRoot) {
     : failed('canonical_navigation_boundary', 'obsidian', expected, differences, 'Restore the V3 committed-generation navigation views.');
 }
 
-export async function apaSkillCheck(repoRoot, globalSkill) {
-  const expected = 'global APA skill matches the repository installation projection with resolvable repository references';
-  try {
-    const result = await verifyApaSkillSync({ repoRoot, deployedRoot: globalSkill });
-    return ok('apa_skill', 'integration', expected, result);
-  } catch (cause) {
-    return failed('apa_skill', 'integration', expected, cause.message, 'Optional: select bootstrap -InstallGlobalIntegration; use -RepairGlobalIntegration after reviewing an existing global skill.');
-  }
-}
-
 async function collectCoreChecks(repoRoot, contract) {
   const checks = [];
   let packageJson;
@@ -169,9 +156,6 @@ async function collectCoreChecks(repoRoot, contract) {
 
   const runtime = await checkMineruRuntime({ vaultRoot: repoRoot });
   checks.push(mineruRuntimeCheck(runtime, contract));
-
-  const globalSkill = resolve(process.env.APA_GLOBAL_SKILL ?? join(homedir(), '.agents', 'skills', 'academic-paper-analysis'));
-  checks.push(await apaSkillCheck(repoRoot, globalSkill));
 
   let globalBin;
   try {

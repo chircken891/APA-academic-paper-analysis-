@@ -13,10 +13,10 @@ import { registerBilingualPublication, loadBilingualPublication, applyBilingualP
 import { readCommittedGeneration } from '../../scripts/v3/phase22-active-version.mjs';
 
 async function externalFixture(t, modern = false) {
-  const configured=modern === true ? buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-2.0'}) : null;
+  const configured=modern === true ? buildConfiguredReadingInstructions({}) : null;
   const f = await reviewedReadingFirstFixture(t, { omitPresentationAssets: true, visualProvenance: true,
     ...(modern ? {translationLanguage:null,controlOptions:{presentationProfile:'reading-editor-1.3'}} : {}),
-    ...(configured ? {createRunControl:args=>createReadingFirstRunControl({...args,configuredSetup:{...configured,paths:{runRoot:dirname(args.scientificInput.sources[0].path)}}})} : {}) });
+    ...(configured ? {createRunControl:args=>createReadingFirstRunControl({...args,maxTotalCalls:20,configuredSetup:{...configured,paths:{runRoot:dirname(args.scientificInput.sources[0].path)}}})} : {}) });
   const data = await inspectReadingFirstPublicationSource(await captureReadingFirstPublicationSource({ controller: f.controller, presentation: f.candidate }));
   const vaultRoot = join(f.root, 'external-vault'), candidateRoot = join(f.root, 'external-candidate');
   await mkdir(vaultRoot, { recursive: true });
@@ -28,14 +28,14 @@ async function externalFixture(t, modern = false) {
   const args = { vaultRoot, candidateRoot, runRoot: f.root, generation: 'external-generation', evidenceMode: 'synthetic',
     scientificInput: f.input, candidate: data.candidate, presentation: data.presentation, review: data.review,
     reviewReceipt: data.review_receipt, viewReceipts: data.view_receipts, readingEditorReceipt: data.reading_editor_receipt,
-    resources: f.resources, callsUsed: data.calls_used };
+    resources: f.resources, callsUsed: data.calls_used, readingFirstBinding: f.binding };
   return { ...f, args, vaultRoot, candidateRoot };
 }
 
 test('modern external preparation retains its frozen prompt dependencies through restore', async t => {
   const f=await externalFixture(t,true);
-  await assert.rejects(prepareExternalReviewedReadingFirstPublication(f.args),/RF_PUBLICATION_EXTERNAL_BINDING_REQUIRED/);
-  const prepared=await prepareExternalReviewedReadingFirstPublication({...f.args,readingFirstBinding:f.binding});
+  await assert.rejects(prepareExternalReviewedReadingFirstPublication({...f.args,readingFirstBinding:undefined}),/RF_PUBLICATION_EXTERNAL_BINDING_REQUIRED/);
+  const prepared=await prepareExternalReviewedReadingFirstPublication(f.args);
   const recipe=prepared.external_source_recipe;
   assert.deepEqual(recipe.binding,f.binding);
   const paths=recipe.tool_bindings.map(row=>row.path);
@@ -45,10 +45,8 @@ test('modern external preparation retains its frozen prompt dependencies through
   const restored=await restoreReadingFirstPublicationSource(recipe);
   assert.equal((await inspectReadingFirstPublicationSource(restored)).native_presentation.status,'not_run');
   const missing=structuredClone(recipe); delete missing.binding; delete missing.recipe_fingerprint; missing.recipe_fingerprint=fingerprintV3Json(missing);
-  await assert.rejects(restoreReadingFirstPublicationSource(missing),/READING_FIRST_EXTERNAL_PUBLICATION_RECIPE_INVALID/);
-  const changed=structuredClone(f.binding);
-  changed.configured_setup.prompt_files[0].sha256='sha256:'+'0'.repeat(64);
-  await assert.rejects(prepareExternalReviewedReadingFirstPublication({...f.args,readingFirstBinding:changed}),/READING_FIRST_SOURCE_CHANGED|READING_FIRST_PROMPT_CHANGED/);
+  // A recipe without its reading binding is a retired external publication source.
+  await assert.rejects(restoreReadingFirstPublicationSource(missing),/READING_BINDING_RETIRED/);
 });
 
 test('1.3 editor output rejects a mismatched external binding', async t => {
@@ -57,7 +55,7 @@ test('1.3 editor output rejects a mismatched external binding', async t => {
   await assert.rejects(prepareExternalReviewedReadingFirstPublication({...f.args,readingFirstBinding:wrong}),/RF_PUBLICATION_EXTERNAL_BINDING_INVALID/);
 });
 
-test('1.3 with legacy instruction profile binds the 1.3 editor contract', async t => {
+test('unconfigured library run binds the 1.3 editor contract', async t => {
   const f=await externalFixture(t,'legacy13');
   const prepared=await prepareExternalReviewedReadingFirstPublication({...f.args,readingFirstBinding:f.binding});
   const paths=prepared.external_source_recipe.tool_bindings.map(row=>row.path);

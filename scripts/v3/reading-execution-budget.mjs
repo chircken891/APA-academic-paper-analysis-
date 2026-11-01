@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { validateHostReceiptEvidence } from './reading-host-evidence.mjs';
 const fail = code => { const error = new Error(code); error.code = code; throw error; };
 const copy = value => structuredClone(value);
-export const usesExecutionLedger = binding => ['configured-reading-2.1', 'configured-reading-2.2'].includes(binding?.configured_setup?.instruction_profile);
+export const usesExecutionLedger = binding => binding?.configured_setup?.instruction_profile === 'configured-reading-2.2';
 export function validateExecutionLedger(ledger, limit, options = {}) {
   if (!Array.isArray(ledger) || !Number.isSafeInteger(limit) || limit < 0 || ledger.length > limit) fail('EXECUTION_LEDGER_INVALID');
   const ids = new Set(), actions = new Set();

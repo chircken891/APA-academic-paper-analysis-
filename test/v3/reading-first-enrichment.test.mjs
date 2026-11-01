@@ -10,18 +10,18 @@ import { createOwnedArtifactBroker, commitOwnedArtifact } from '../../scripts/v3
 import { getRoleReplyContract, loadRoleReplyContract } from '../../scripts/v3/role-reply-contract.mjs';
 import { createPhase21ContractValidator } from '../../scripts/v3/phase21-contract-loader.mjs';
 import { buildPreRenderHandoff } from '../../scripts/v3/workflow-composer.mjs';
-import { createLanguageRequests } from '../../scripts/v3/phase22-language.mjs';
-import { renderReaderNotes } from '../../scripts/v3/phase221-presentation.mjs';
 import { READING_FIRST_PROFILE, fingerprintReadingFirst, resolveReadingWorkflowProfile, acceptReadingFirstResult, createReadingFirstReviewRequest, getReadingFirstState, createReadingFirstRevisionRequests, createReadingFirstRunControl, snapshotReadingFirstRuntime, restoreReadingFirstRuntime } from '../../scripts/v3/reading-first-runtime.mjs';
+const createLanguageRequests = args => runtime.createReadingFirstRequests(args);
+const renderReaderNotes = async ({ input, targetRegistry, existingTargets = [] } = {}) => runtime.renderReadingFirstNotes({ controller: input.controller, targetRegistry, existingTargets });
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const roles = ['evidence','methods','results','interpretation','scientific-reading','integration'];
-async function setup(t, gaps = [], policy = true, total = 12, languageCalls = 6, hostResultAgentIdPath, scienceGaps = {}, roleReplyContract, enrichmentSessionProfile) {
+async function setup(t, gaps = [], policy = true, total = 12, languageCalls = 6, hostResultAgentIdPath, scienceGaps = {}, roleReplyContract, enrichmentSessionProfile, omitTasks = []) {
   const root = await mkdtemp(join(tmpdir(), 'reading-first-'));
   t.after(() => rm(root, {recursive:true,force:true}));
   const sourceBytes=Buffer.from('Synthetic original source: design, result and limitation.');
   await writeFile(join(root,'source.pdf'),sourceBytes);
   const tasks=Object.fromEntries(['en','zh-CN','review','en-r2','zh-CN-r2','review-r2'].map(key=>[key,{task_id:key,task_name:'reading_'+key.replaceAll('-','_').toLowerCase(),owner_actor_id:key,role:key.startsWith('en')?'english-writer':key.startsWith('zh')?'chinese-writer':'independent-verifier',artifact_id:key,artifact_path:key+'.json',native_path:'native/'+key+'.json',revision:'1'}]));
-  for (const round of ['initial','late']) for (const role of ['evidence','methods','results']) { const key='enrich-'+round+'-'+role; tasks[key]={task_id:key,task_name:key.replaceAll('-','_'),owner_actor_id:key,role,source_root:'sources/'+key,artifact_id:key,artifact_path:key+'.json',native_path:'native/'+key+'.json',revision:'1'}; }
+  for (const round of ['initial','late']) for (const role of ['evidence','methods','results']) { const key='enrich-'+round+'-'+role; if (omitTasks.includes(key)) continue; tasks[key]={task_id:key,task_name:key.replaceAll('-','_'),owner_actor_id:key,role,source_root:'sources/'+key,artifact_id:key,artifact_path:key+'.json',native_path:'native/'+key+'.json',revision:'1'}; }
   const bindings=[...roles.map(role=>({run_id:'run',actor_id:role,role,artifact_path:'science/'+role+'.json',revision:'1'})),...Object.values(tasks).map(task=>({run_id:'run',actor_id:task.owner_actor_id,role:task.role,artifact_path:task.artifact_path,revision:task.revision}))];
   const input={identity:{paper_id:'synthetic',run_id:'run'},sources:[{id:'main',path:join(root,'source.pdf'),sha256:sha(sourceBytes),byte_length:sourceBytes.length}],context:'Read all existing material as a connected account.',role_artifacts:roles,important_gaps:gaps};
   const runBinding=createReadingFirstRunControl({presentationRequired:false,runId:'run',scientificInput:input,mainSession:{model:'gpt-6-astra',reasoning_effort:'high'},authorizationId:'synthetic-only',...(hostResultAgentIdPath===undefined?{}:{hostResultAgentIdPath}),maxCalls:languageCalls,deadline:'2099-01-01T00:00:00Z',taskBindings:policy?tasks:Object.fromEntries(Object.entries(tasks).filter(([k])=>!k.startsWith('enrich-'))),...(policy?{enrichmentPolicy:{sources:[],allow_targeted_methods:true},maxTotalCalls:total}:{}),roleReplyContract,enrichmentSessionProfile});
@@ -156,7 +156,8 @@ test('checkpoint after scientific acceptance preserves common content and does n
 test('late repair batch cannot create calls beyond explicitly approved total',async t=>{
  const s=await setup(t,[],true,6);for(const r of s.created.requests)await s.complete(r,s.view(r.language));const presentation=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller:s.created.controller}});
  await s.complete(createReadingFirstReviewRequest({controller:s.created.controller,presentation}),reviewValue([gap('a'),gap('b',{question:'Which uncertainty estimate?',owner_role:'results'})].map(g=>({severity:'material',kind:'science_missing',detail:g.question,affected_languages:['en'],scientific_gap:g}))));
- assert.throws(()=>runtime.createReadingFirstEnrichmentRequests({controller:s.created.controller}),/BUDGET_EXHAUSTED/);assert.equal(getReadingFirstState(s.created.controller).calls_used,3);
+ // Without budget for the late science calls the review closes with limits instead of opening a late round.
+ assert.equal(getReadingFirstState(s.created.controller).status,'completed_with_limits');assert.throws(()=>runtime.createReadingFirstEnrichmentRequests({controller:s.created.controller}),/READING_FIRST_ENRICHMENT_UNAVAILABLE/);assert.equal(getReadingFirstState(s.created.controller).calls_used,3);
 });
 
 test('owned same-run scientific record can be adopted; arbitrary science artifacts cannot be relabeled',async t=>{
@@ -268,4 +269,21 @@ test('new science repair cannot exceed independent language call limit',async t=
  await s.complete(createReadingFirstReviewRequest({controller:s.created.controller,presentation}),reviewValue([{severity:'material',kind:'scientific-gap',detail:'Allocation unclear',repair_owner:'science',affected_languages:['zh-CN'],scientific_gap:g}]));
  assert.equal(getReadingFirstState(s.created.controller).status,'completed_with_limits');
  assert.throws(()=>runtime.createReadingFirstEnrichmentRequests({controller:s.created.controller}),/UNAVAILABLE/);
+});
+
+const writerOwnedLateGap = async (s, g) => {
+ for(const r of s.created.requests)await s.complete(r,s.view(r.language));
+ const presentation=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller:s.created.controller}});
+ await s.complete(createReadingFirstReviewRequest({controller:s.created.controller,presentation}),reviewValue([{severity:'material',kind:'science_missing',repair_owner:'writer',detail:g.question,affected_languages:['en'],scientific_gap:g}]));
+};
+test('writer-owned late gap without registered late task ends with limits',async t=>{
+ const s=await setup(t,[],true,12,6,undefined,{},undefined,undefined,['enrich-late-evidence']);await writerOwnedLateGap(s,gap('w'));
+ assert.equal(getReadingFirstState(s.created.controller).status,'completed_with_limits');
+ assert.throws(()=>runtime.createReadingFirstEnrichmentRequests({controller:s.created.controller}),/UNAVAILABLE/);
+ assert.equal(getReadingFirstState(s.created.controller).enrichment.pending,false);
+});
+test('writer-owned late gap beyond total budget ends with limits',async t=>{
+ const s=await setup(t,[],true,5,5);await writerOwnedLateGap(s,gap('w'));
+ const state=getReadingFirstState(s.created.controller);
+ assert.equal(state.status,'completed_with_limits');assert.equal(state.calls_used,3);assert.equal(state.enrichment.pending,false);
 });

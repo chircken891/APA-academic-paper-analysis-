@@ -10,8 +10,6 @@ import { syncBuiltinESMExports } from 'node:module';
 import { createOwnedArtifactBroker, commitOwnedArtifact } from '../../scripts/v3/owned-artifact-store.mjs';
 import { createPhase21ContractValidator } from '../../scripts/v3/phase21-contract-loader.mjs';
 import { buildPreRenderHandoff } from '../../scripts/v3/workflow-composer.mjs';
-import { createLanguageRequests } from '../../scripts/v3/phase22-language.mjs';
-import { renderReaderNotes } from '../../scripts/v3/phase221-presentation.mjs';
 import { getRoleReplyContract, loadRoleReplyContract } from '../../scripts/v3/role-reply-contract.mjs';
 import { APA_CONFIGURED_ROLES, createConfiguredApaRoleModelPolicy } from '../../scripts/apa-model-policy.mjs';
 import { buildConfiguredReadingInstructions } from '../../scripts/v3/configured-reading.mjs';
@@ -19,6 +17,8 @@ import { getConfiguredReadingDispatchArguments } from '../../scripts/v3/configur
 import * as readingApi from '../../scripts/v3/reading-first-runtime.mjs';
 import { COMPACTION_POLICY, compactionControlBindings } from '../../scripts/v3/reading-compaction.mjs';
 import { READING_FIRST_PROFILE, SCIENCE_INDEX_PROFILE, fingerprintReadingFirst, resolveReadingWorkflowProfile, acceptReadingFirstResult, createReadingFirstReviewRequest, getReadingFirstState, createReadingFirstRevisionRequests, createReadingFirstRunControl, snapshotReadingFirstRuntime, restoreReadingFirstRuntime, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstEnrichmentRequests, buildReadingFirstHandoff, observeReadingCompactionBoundary, recordReadingCompactionBoundary } from '../../scripts/v3/reading-first-runtime.mjs';
+const createLanguageRequests = args => readingApi.createReadingFirstRequests(args);
+const renderReaderNotes = async ({ input, targetRegistry, existingTargets = [] } = {}) => readingApi.renderReadingFirstNotes({ controller: input.controller, targetRegistry, existingTargets });
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const roles = ['evidence','methods','results','interpretation','scientific-reading','integration'];
 
@@ -171,19 +171,21 @@ test('a failed reading reminder save cannot expose a prompt or leave dispatch un
   assert.throws(() => dispatchArguments(s, restored.requests[0]), /APA_COMPACTION_BOUNDARY_REQUIRED/);
 });
 
-async function setup(t, { instructionProfile = 'configured-reading-1.0', presentation, presentationRequired = false, writingMode = 'independent', sourceLanguage = 'en', presentationMode = 'writer', priorCalls = 0, maxTotalCalls, roleReplyContract, enrichmentPolicy, handoffProfile, legacyPresentationProfile, legacyRepairRouting = false, invalidRepairRouting = false, maxCalls = presentationMode==='reading-editor'?7:6, firstWritingLanguage, integrationContent = {}, writingSkills = {}, compactionPolicy } = {}) {
+async function setup(t, { instructionProfile = 'configured-reading-2.2', presentation, presentationRequired = false, writingMode = 'independent', sourceLanguage = 'en', presentationMode = 'writer', priorCalls = 0, maxTotalCalls, roleReplyContract, enrichmentPolicy, handoffProfile, legacyPresentationProfile, legacyRepairRouting = false, invalidRepairRouting = false, maxCalls = presentationMode==='reading-editor'?7:6, firstWritingLanguage, integrationContent = {}, writingSkills = {}, compactionPolicy } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'reading-first-'));
   t.after(() => rm(root, {recursive:true,force:true}));
   const sourceBytes=Buffer.from('Synthetic original source: design, result and limitation.');
   await writeFile(join(root,'source.pdf'),sourceBytes);
   const tasks=Object.fromEntries(['en','zh-CN','review','en-r2','zh-CN-r2','review-r2',...(presentationMode==='reading-editor'?['presentation','presentation-r2']:[])].map(key=>[key,{task_id:key,task_name:'reading_'+key.replaceAll('-','_').toLowerCase(),owner_actor_id:key,role:key.startsWith('presentation')?'reading-editor':writingMode==='source-translation'&&!key.startsWith('review')&&!key.startsWith(sourceLanguage.slice(0,2))?'translation':key.startsWith('en')?'english-writer':key.startsWith('zh')?'chinese-writer':'independent-verifier',artifact_id:key,artifact_path:key+'.json',native_path:'native/'+key+'.json',revision:'1'}]));
+  // Configured translation reads its source view and context from registered files and keeps a progress manifest.
+  for(const task of Object.values(tasks)) if(task.role==='translation') Object.assign(task,{source_view_path:'translation/'+task.task_id+'/source.json',translation_context_path:'translation/'+task.task_id+'/context.json',progress_path:'translation/'+task.task_id+'/progress.json'});
   if(enrichmentPolicy) tasks['enrich-late-evidence']={task_id:'enrich-late-evidence',task_name:'enrich_late_evidence',owner_actor_id:'enrich-late-evidence',role:'evidence',source_root:'sources/enrich-late-evidence',artifact_id:'enrich-late-evidence',artifact_path:'enrich-late-evidence.json',native_path:'native/enrich-late-evidence.json',revision:'1'};
   const bindings=[...roles.map(role=>({run_id:'run',actor_id:role,role,artifact_path:'science/'+role+'.json',revision:'1'})),...Object.values(tasks).map(task=>({run_id:'run',actor_id:task.owner_actor_id,role:task.role,artifact_path:task.artifact_path,revision:task.revision}))];
   const input={identity:{paper_id:presentation ? 'pap_'+'a'.repeat(32) : 'synthetic',run_id:'run'},sources:[{...(enrichmentPolicy ? {id:'main'} : {}),path:join(root,'source.pdf'),sha256:sha(sourceBytes),byte_length:sourceBytes.length}],context:'Read all existing material as a connected account.',role_artifacts:roles};
   // source-translation takes its writing rules only from a configured setup, so those runs use a configured fixture with all eleven roles.
   const configuredSetup=writingMode==='source-translation' ? {schema_version:'apa-configured-reading-1.0',config_fingerprint:sha(Buffer.from('config')),paths:{runRoot:root},
     role_model_policy:createConfiguredApaRoleModelPolicy({model:'gpt-6-astra',reasoning_effort:'high'},Object.fromEntries(APA_CONFIGURED_ROLES.map(role=>[role,{model:'gpt-6-astra',reasoning_effort:'high'}]))),...buildConfiguredReadingInstructions(writingSkills,{instructionProfile})} : undefined;
-  const runBinding=createReadingFirstRunControl({configuredSetup,presentationMode,writingMode,sourceLanguage,firstWritingLanguage,presentationRequired,priorCalls,maxTotalCalls,roleReplyContract,enrichmentPolicy,handoffProfile,compactionPolicy,runId:'run',scientificInput:input,mainSession:{model:'gpt-6-astra',reasoning_effort:'high'},authorizationId:'synthetic-only',maxCalls,deadline:'2099-01-01T00:00:00Z',taskBindings:tasks});
+  const runBinding=createReadingFirstRunControl({configuredSetup,presentationMode,writingMode,sourceLanguage,firstWritingLanguage,presentationRequired,priorCalls,maxTotalCalls:maxTotalCalls??(configuredSetup?maxCalls+priorCalls:undefined),roleReplyContract,enrichmentPolicy,handoffProfile,compactionPolicy,runId:'run',scientificInput:input,mainSession:{model:'gpt-6-astra',reasoning_effort:'high'},authorizationId:'synthetic-only',maxCalls,deadline:'2099-01-01T00:00:00Z',taskBindings:tasks});
   const binding=structuredClone(runBinding.reading_first_binding);
   if (legacyPresentationProfile) {
     if (legacyPresentationProfile === 'reading-editor-1.0') delete binding.presentation_profile;
@@ -210,13 +212,25 @@ async function setup(t, { instructionProfile = 'configured-reading-1.0', present
   assert.equal(scienceResult.chain.source_check,undefined);
   const handoff=await buildPreRenderHandoff({run:{run_id:'run',workflow_profile:READING_FIRST_PROFILE},dispatchContext:broker.dispatchContext,artifactRoot:root,scientificInput:input});
   const runControl={runId:'run',artifactRoot:root,dispatchContext:broker.dispatchContext};
-  const created=instructionProfile==='configured-reading-2.2' ? readingApi.createReadingFirstRequests({handoff,runControl,executionLedger:[]}) : createLanguageRequests({handoff,runControl});
+  const created=configuredSetup ? readingApi.createReadingFirstRequests({handoff,runControl,executionLedger:[]}) : createLanguageRequests({handoff,runControl});
   assert.equal(created.ok,true,JSON.stringify(created.errors));
+  const recorded=new Set();
   const complete=async(request,value)=>{
     await mkdir(join(root,'native'),{recursive:true});
     await writeFile(join(root,request.task.native_path),JSON.stringify(value));
-    const step=request.emittedStep;
-    return acceptReadingFirstResult({controller:created.controller,request,observation:{action_id:step.action_id,run_id:'run',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:JSON.stringify({agent_id:'synthetic-'+request.task.task_id})},capability:broker.issueCapability({runId:'run',actorId:request.task.owner_actor_id,role:request.task.role,artifactPath:request.task.artifact_path,revision:request.task.revision})});
+    const step=request.emittedStep,raw=JSON.stringify({agent_id:'synthetic-'+request.task.task_id});
+    const observation={action_id:step.action_id,run_id:'run',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:raw};
+    // Configured runs accept only strict host receipts recorded once in the execution ledger.
+    if(configuredSetup){
+      const evidencePath=join(root,'native','evidence-'+request.task.task_id+'.txt'); await writeFile(evidencePath,raw);
+      observation.evidence={kind:'raw',capture:'direct',sha256:sha(Buffer.from(raw)).slice(7),source_reference:evidencePath};
+      if(!recorded.has(step.action_id)){
+        recorded.add(step.action_id);
+        readingApi.recordReadingFirstRequestEvent({controller:created.controller,request,eventKey:'intent',payload:{action_id:step.action_id}});
+        readingApi.recordReadingFirstRequestEvent({controller:created.controller,request,eventKey:'host_observation',payload:observation});
+      }
+    }
+    return acceptReadingFirstResult({controller:created.controller,request,observation,capability:broker.issueCapability({runId:'run',actorId:request.task.owner_actor_id,role:request.task.role,artifactPath:request.task.artifact_path,revision:request.task.revision})});
   };
   const view=language=>({language,sections:[{heading:language==='en'?'Study':'研究',paragraphs:[language==='en'?'The study design produced the main finding; its limitation bounds the conclusion.':'研究设计产生主要发现，研究限制界定结论。']} ]});
   return {root,broker,handoff,created,complete,view,runControl,binding};
@@ -258,23 +272,21 @@ const LEGACY_EN_WRITER = {
 };
 const requestPayload = request => JSON.parse(request.emittedStep.arguments.message.split('\n\n').at(-1));
 const INDEXED_ROLES = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading'];
-test('editor 1.2 guidance is bound separately while old editor profiles retain their prompt and restore', async t => {
-  for (const profile of ['reading-editor-1.0', 'reading-editor-1.1', 'reading-editor-1.2']) {
-    const s = await setup(t, { presentationMode: 'reading-editor', ...(profile === 'reading-editor-1.2' ? {} : { legacyPresentationProfile: profile }) });
-    for (const request of s.created.requests) await s.complete(request, s.view(request.language));
-    const request = createReadingFirstPresentationRequest({ controller: s.created.controller });
-    assert.equal(requestPayload(request).output_schema, profile);
-    if (profile === 'reading-editor-1.2') {
-      assert.match(request.emittedStep.arguments.message, /Include every registered step exactly once/);
-      assert.doesNotMatch(request.emittedStep.arguments.message, /roughly twelve nodes/);
-    } else assert.match(request.emittedStep.arguments.message, /roughly twelve nodes/);
-    const receipt = await commitOwnedArtifact({ artifactRoot: s.root, dispatchContext: s.broker.dispatchContext,
-      capability: s.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: 'checkpoint.json', revision: '1' }),
-      artifact: { artifact_id: 'checkpoint', content: JSON.stringify(snapshotReadingFirstRuntime(s.created.controller)) }, expectedRevision: '1' });
-    const recovered = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: receipt });
-    assert.equal(recovered.ok, true);
-    assert.deepEqual(recovered.requests[0].emittedStep, request.emittedStep);
-  }
+test('editor 1.3 guidance is bound and restored while retired editor profiles are rejected', async t => {
+  const s = await setup(t, { presentationMode: 'reading-editor' });
+  for (const request of s.created.requests) await s.complete(request, s.view(request.language));
+  const request = createReadingFirstPresentationRequest({ controller: s.created.controller });
+  assert.equal(requestPayload(request).output_schema, 'reading-editor-1.3');
+  assert.match(request.emittedStep.arguments.message, /Include every registered step exactly once/);
+  assert.doesNotMatch(request.emittedStep.arguments.message, /roughly twelve nodes/);
+  const receipt = await commitOwnedArtifact({ artifactRoot: s.root, dispatchContext: s.broker.dispatchContext,
+    capability: s.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: 'checkpoint.json', revision: '1' }),
+    artifact: { artifact_id: 'checkpoint', content: JSON.stringify(snapshotReadingFirstRuntime(s.created.controller)) }, expectedRevision: '1' });
+  const recovered = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: receipt });
+  assert.equal(recovered.ok, true);
+  assert.deepEqual(recovered.requests[0].emittedStep, request.emittedStep);
+  for (const profile of ['reading-editor-1.0', 'reading-editor-1.1', 'reading-editor-1.2'])
+    await assert.rejects(() => setup(t, { presentationMode: 'reading-editor', legacyPresentationProfile: profile }), /READING_BINDING_RETIRED/);
 });
 test('legacy bindings keep identical writer requests after masking machine-dependent fields', async t => {
   const s = await setup(t);
@@ -461,8 +473,10 @@ test('Writer knowledge content is validated before owned commit and composed for
   await s.complete(chinese,{...s.view('zh-CN'),knowledge_content:[{id:'method',paragraphs:['充分解释中文原理。']}]});
   const request=createReadingFirstPresentationRequest({controller:s.created.controller});
   const payload=JSON.parse(request.emittedStep.arguments.message.split('\n\n').at(-1));
-  assert.deepEqual(payload.presentation.knowledge[0].paragraphs,{en:['Detailed supported English.'],'zh-CN':['充分解释中文原理。']});
-  assert.equal(payload.presentation.knowledge[0].sections.en[0].heading,'Principle');
+  assert.deepEqual(payload.presentation.knowledge[0].paragraphs,{});
+  assert.equal(payload.presentation.knowledge[0].sections?.en,undefined);
+  assert.deepEqual(payload.views.map(view=>view.knowledge_content[0].paragraphs),[['Detailed supported English.'],['充分解释中文原理。']]);
+  assert.equal(payload.views[0].knowledge_content[0].sections[0].heading,'Principle');
   assert.deepEqual(payload.sources,s.handoff.sources);
   assert.equal(payload.context,s.handoff.context);
   assert.equal(presentation.knowledge[0].paragraphs.en[0],'Original English.');
@@ -687,15 +701,17 @@ test('source-first repairs source then counterpart before the sole local review 
   assert.equal(getReadingFirstState(controller).status,'reading_complete');
 });
 
+// Editor-mode and configured reviews must locate every material repair.
+function locatedScope(sectionIds) { return {status:'located',section_ids:sectionIds,knowledge_ids:[],visual_ids:[],editor_fields:[]}; }
 for (const maxCalls of [7,8]) test(`source-first Reading Editor respects a frozen ${maxCalls}-call budget for bilingual repair`,async t=>{
   const s=await setup(t,{writingMode:'source-first',presentationMode:'reading-editor',priorCalls:6,maxTotalCalls:14,maxCalls}),controller=s.created.controller;
   const views=['en','zh-CN'].map(language=>({...s.view(language),sections:[{id:'design',heading:'Design',paragraphs:['The main finding follows the design.']}]}));
-  const editorFor=()=>({schema_version:'reading-editor-1.2',views_fingerprint:fingerprintReadingFirst(views),map:{nodes:[]},languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'design-method',title:'Design method',explanation:'Design explains inference.',application:'Used in this design.',section_ids:['design']}],visuals:[]}]))});
+  const editorFor=()=>({schema_version:'reading-editor-1.3',views_fingerprint:fingerprintReadingFirst(views),map:{nodes:[]},languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'design-method',title:'Design method',explanation:'Design explains inference.',application:'Used in this design.',section_ids:['design']}],visuals:[]}]))});
   await s.complete(s.created.requests[0],views[0]);
   await s.complete(createReadingFirstDraftRequests({controller})[0],views[1]);
   await s.complete(createReadingFirstPresentationRequest({controller}),editorFor());
   let rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
-  await s.complete(createReadingFirstReviewRequest({controller,presentation:rendered}),{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[{severity:'material',kind:'omission',detail:'Design explanation missing',affected_languages:['en']}],scope:'overall'});
+  await s.complete(createReadingFirstReviewRequest({controller,presentation:rendered}),{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[{severity:'material',kind:'omission',detail:'Design explanation missing',affected_languages:['en'],repair_scope:locatedScope(['design'])}],scope:'overall'});
   if(maxCalls===7){
     assert.equal(getReadingFirstState(controller).status,'completed_with_limits');
     assert.throws(()=>createReadingFirstRevisionRequests({controller}),/REVISION_UNAVAILABLE/);
@@ -769,14 +785,14 @@ test('dedicated reading editor owns its output and must refresh after a Writer c
   const views=['en','zh-CN'].map(language=>({...s.view(language),sections:[{id:'design',heading:'Design',paragraphs:['The main finding follows the design.']}]}));
   for(const request of s.created.requests) await s.complete(request,views.find(view=>view.language===request.language));
   await assert.rejects(()=>renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}}),/EDITOR_REQUIRED/);
-  const editorFor=values=>({schema_version:'reading-editor-1.2',views_fingerprint:fingerprintReadingFirst(values),map:{nodes:[]},languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'design-method',title:'Design method',explanation:'Design explains inference.',application:'Used in this design.',section_ids:['design']}],visuals:[]}]))});
+  const editorFor=values=>({schema_version:'reading-editor-1.3',views_fingerprint:fingerprintReadingFirst(values),map:{nodes:[]},languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'design-method',title:'Design method',explanation:'Design explains inference.',application:'Used in this design.',section_ids:['design']}],visuals:[]}]))});
   const first=createReadingFirstPresentationRequest({controller});
   assert.equal(first.task.role,'reading-editor');
   assert.equal(first.emittedStep.arguments.model,'gpt-6-astra');
   const accepted=await s.complete(first,editorFor(views));
   assert.equal(accepted.receipt.role,'reading-editor');
   let rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
-  await s.complete(createReadingFirstReviewRequest({controller,presentation:rendered}),{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[{severity:'material',kind:'omission',detail:'Design explanation missing',affected_languages:['en']}],scope:'overall'});
+  await s.complete(createReadingFirstReviewRequest({controller,presentation:rendered}),{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[{severity:'material',kind:'omission',detail:'Design explanation missing',affected_languages:['en'],repair_scope:locatedScope(['design'])}],scope:'overall'});
   const revision=createReadingFirstRevisionRequests({controller})[0];
   views[0].sections[0].paragraphs[0]='The revised main finding follows the design.';
   await s.complete(revision,views[0]);
@@ -821,10 +837,10 @@ test('presentation-only run adopts authentic Writer receipts and restores pendin
     const step=request.emittedStep;
     return acceptReadingFirstResult({controller:recovered.controller,request,observation:{action_id:step.action_id,run_id:'presentation-only',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:JSON.stringify({agent_id:'synthetic-editor-'+request.task.task_id})},capability:broker.issueCapability({runId:'presentation-only',actorId:request.task.owner_actor_id,role:request.task.role,artifactPath:request.task.artifact_path,revision:'1'})});
   };
-  const editor={schema_version:'reading-editor-1.2',views_fingerprint:fingerprintReadingFirst(['en','zh-CN'].map(language=>handoff.adopted_views.find(item=>item.content.language===language).content)),map:{nodes:[]},languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'design-method',title:'Design method',explanation:'Design explains inference.',application:'Used in this design.',section_ids:['design']}],visuals:[]}]))};
+  const editor={schema_version:'reading-editor-1.3',views_fingerprint:fingerprintReadingFirst(['en','zh-CN'].map(language=>handoff.adopted_views.find(item=>item.content.language===language).content)),map:{nodes:[]},languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'design-method',title:'Design method',explanation:'Design explains inference.',application:'Used in this design.',section_ids:['design']}],visuals:[]}]))};
   await complete(recovered.requests[0],editor);
   let rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller:recovered.controller}});
-  await complete(createReadingFirstReviewRequest({controller:recovered.controller,presentation:rendered}),{overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[{severity:'material',kind:'presentation',detail:'Reading emphasis needs repair'}],scope:'overall'});
+  await complete(createReadingFirstReviewRequest({controller:recovered.controller,presentation:rendered}),{overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[{severity:'material',kind:'presentation',detail:'Reading emphasis needs repair',repair_owner:'editor',repair_scope:locatedScope(['design'])}],scope:'overall'});
   assert.equal(getReadingFirstState(recovered.controller).status,'revision_required');
   await complete(createReadingFirstPresentationRequest({controller:recovered.controller}),editor);
   rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller:recovered.controller}});
@@ -863,7 +879,7 @@ for (const issueKind of ['layout', 'presentation']) test(`renderer-only minor ${
   const s=await setup(t,{presentation,presentationMode:'reading-editor'}),controller=s.created.controller;
   const views=['en','zh-CN'].map(language=>({language,sections:presentation.modules.map(module=>({id:module.id,module_id:module.id,heading:module.id,paragraphs:['Design explains the main finding.']})),placements:{visuals:[],knowledge:[]}}));
   for(const request of s.created.requests) await s.complete(request,views.find(view=>view.language===request.language));
-  const editor={schema_version:'reading-editor-1.2',views_fingerprint:fingerprintReadingFirst(views),map:{nodes:[]},languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'method',title:'Method',explanation:'Study design.',application:'Used in the study.',section_ids:['design']}],visuals:[]}]))};
+  const editor={schema_version:'reading-editor-1.3',views_fingerprint:fingerprintReadingFirst(views),map:{nodes:[]},languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:'Main finding',section_ids:['design']}],sections:[],methods:[{id:'method',title:'Method',explanation:'Study design.',application:'Used in the study.',section_ids:['design']}],visuals:[]}]))};
   await s.complete(createReadingFirstPresentationRequest({controller}),editor);
   const rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
   const verdict={overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[{kind:'main_conclusion',location:'p1',finding:'supported'},{kind:'key_design',location:'p1',finding:'supported'}],issues:[{severity:'minor',kind:issueKind,detail:'Directory is too deep'}],scope:'overall'};
@@ -1030,12 +1046,12 @@ test('Editor and renderer material repairs share the original local review slot'
   const s=await setup(t,{presentation,presentationMode:'reading-editor',maxCalls:6}),controller=s.created.controller;
   const views=['en','zh-CN'].map(language=>({language,sections:presentation.modules.map(module=>({id:module.id,module_id:module.id,heading:module.id,paragraphs:['Design explains the main finding.']})),placements:{visuals:[],knowledge:[]}}));
   for(const request of s.created.requests) await s.complete(request,views.find(view=>view.language===request.language));
-  const editor=overview=>({schema_version:'reading-editor-1.2',views_fingerprint:fingerprintReadingFirst(views),map:{nodes:[]},languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:overview,section_ids:['design']}],sections:[],methods:[{id:'method',title:'Method',explanation:'Study design.',application:'Used in the study.',section_ids:['design']}],visuals:[]}]))});
+  const editor=overview=>({schema_version:'reading-editor-1.3',views_fingerprint:fingerprintReadingFirst(views),map:{nodes:[]},languages:Object.fromEntries(['en','zh-CN'].map(language=>[language,{overview:[{text:overview,section_ids:['design']}],sections:[],methods:[{id:'method',title:'Method',explanation:'Study design.',application:'Used in the study.',section_ids:['design']}],visuals:[]}]))});
   await s.complete(createReadingFirstPresentationRequest({controller}),editor('Initial finding'));
   const first=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}}),path=first.notes[0].path;
   await s.complete(createReadingFirstReviewRequest({controller,presentation:first}),{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[
-    {severity:'material',kind:'presentation',detail:'Fix the overview',repair_owner:'editor'},
-    {severity:'material',kind:'knowledge-accumulation',detail:'Fix the renderer',repair_owner:'renderer',affected_paths:[path]},
+    {severity:'material',kind:'presentation',detail:'Fix the overview',repair_owner:'editor',repair_scope:locatedScope(['design'])},
+    {severity:'material',kind:'knowledge-accumulation',detail:'Fix the renderer',repair_owner:'renderer',affected_paths:[path],repair_scope:locatedScope(['design'])},
   ],scope:'overall'});
   assert.throws(()=>createReadingFirstRevisionRequests({controller}),/REVISION_UNAVAILABLE/);
   const editorRevision=createReadingFirstPresentationRequest({controller});
@@ -1086,18 +1102,9 @@ test('invalid scientific gap is rejected before the review artifact is committed
   await assert.rejects(()=>readFile(join(s.root,'review.json')),/ENOENT/);
 });
 
-test('an existing binding without owner routing retains its original review contract', async t => {
-  const s=await setup(t,{legacyRepairRouting:true}),controller=s.created.controller;
-  for(const request of s.created.requests) await s.complete(request,s.view(request.language));
-  const rendered=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller}});
-  const issue={severity:'material',kind:'knowledge-accumulation',detail:'Review from old binding',repair_owner:'renderer',affected_languages:['en']};
-  await s.complete(createReadingFirstReviewRequest({controller,presentation:rendered}),{overall:{complete:false,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[issue],scope:'overall'});
-  const [writer]=createReadingFirstRevisionRequests({controller});
-  assert.equal(writer.language,'en');
-});
-
-test('an unknown frozen repair routing cannot silently fall back to legacy behavior', async t => {
-  await assert.rejects(()=>setup(t,{invalidRepairRouting:true}),/CONTROL_REQUIRED/);
+test('a binding without owner routing or with an unknown routing is retired', async t => {
+  await assert.rejects(()=>setup(t,{legacyRepairRouting:true}),/READING_BINDING_RETIRED/);
+  await assert.rejects(()=>setup(t,{invalidRepairRouting:true}),/READING_BINDING_RETIRED/);
 });
 
 test('explicit science repair stays limited when its owner or full repair budget was not approved', async t => {
@@ -1229,7 +1236,14 @@ const EXISTING_MODE_WRITERS = {
   'source-first:en': { instruction_fingerprint: 'sha256:f54d7e9a82646f82c43d8782f35219ff1bcd2969d60028e520223e096c96107a', configuration_fingerprint: 'sha256:260d65b2be453ff03476f6856289755115a74223cffc463f1c34771fbeb115aa' },
   'source-first:zh-CN': { instruction_fingerprint: 'sha256:4b85ae5514c276dfa64467bed1cbbac5224b8371348df958466e8be348606202', configuration_fingerprint: 'sha256:69065e9a31cef04f3d85dc118a95768afa38bbf068d8e6f7a8c83911a581db1c' },
 };
-const translationNoteUrl = new URL('../../prompts/v3/translation-1.0.md', import.meta.url);
+// Configured translation receives its source view and context as registered files; this rebuilds the logical payload from them.
+const translationPayload = request => {
+  const { language, source_view_ref, translation_context_ref } = requestPayload(request);
+  return { ...JSON.parse(fs.readFileSync(translation_context_ref.path, 'utf8')), language, source_view: JSON.parse(fs.readFileSync(source_view_ref.path, 'utf8')) };
+};
+const translationSection = s => s.binding.configured_setup.sections.Translation;
+// Translation progress is tracked per section id, so translated runs use identified sections.
+const idView = (language, count = 1) => ({ language, sections: Array.from({ length: count }, (_, index) => ({ id: 'study-' + index, heading: (language === 'en' ? 'Study ' : '研究 ') + index, paragraphs: ['Body.'] })) });
 const moduleView = (language, ids = ['design-overview', 'design-steps']) => ({ language, sections: ids.map(id => ({ id, module_id: 'design', heading: (language === 'en' ? 'Design ' : '设计 ') + id, paragraphs: [language === 'en' ? 'The design supports the comparison.' : '该设计支持比较。'] })), placements: { visuals: [{ id: 'fig1', section_id: 'design-overview', after_paragraph: 0 }], knowledge: [] } });
 const modulePresentation = () => ({ schema_version: 'reading-first-obsidian-1.0', layout: 'writer-modules-1.0', modules: [{ id: 'design', label: { en: 'Study design', 'zh-CN': '研究设计' } }],
   visuals: [{ id: 'fig1', kind: 'figure', label: { en: 'Figure 1', 'zh-CN': '图1' }, caption: { en: 'Caption.', 'zh-CN': '图注。' }, path: 'Figures/fig1.png', page: 2 }],
@@ -1249,23 +1263,22 @@ test('source-translation sends science only to the source-language writer', asyn
 test('translation request carries the accepted source view and no science handoff', async t => {
   const presentation = modulePresentation();
   const s = await setup(t, { writingMode: 'source-translation', handoffProfile: SCIENCE_INDEX_PROFILE, presentation, integrationContent: { terminology: terminologyLedger } });
-  const note = await readFile(translationNoteUrl);
   assert.equal(Object.hasOwn(s.created.requests[0].packet.backend.configuration, 'translation'), false);
   await s.complete(s.created.requests[0], moduleView('en'));
   const [request] = createReadingFirstDraftRequests({ controller: s.created.controller });
   assert.equal(request.language, 'zh-CN');
   assert.equal(request.task.role, 'translation');
   assert.equal(request.packet.host_action_scope.role, 'translation');
-  const payload = requestPayload(request);
+  const payload = translationPayload(request);
   assert.equal(Object.hasOwn(payload, 'handoff'), false);
   assert.deepEqual(payload.source_view, moduleView('en'));
   assert.equal(payload.source_view_receipt.artifact_id, 'en');
   assert.deepEqual(payload.translation_context, { identity: s.handoff.identity, modules: presentation.modules, visuals: [{ id: 'fig1', label: { en: 'Figure 1', 'zh-CN': '图1' } }], knowledge: [{ id: 'rate', label: { en: 'Age standardisation', 'zh-CN': '年龄标化' } }], terminology: terminologyLedger });
   const message = request.emittedStep.arguments.message;
-  assert.ok(message.includes(note.toString('utf8')));
+  assert.ok(message.includes(translationSection(s)));
   assert.doesNotMatch(message, /science-index-1\.0|science_index|Full connected science for/);
   assert.match(requestPayloadMessage(s.created.requests[0]), /Full connected science for integration/);
-  assert.deepEqual(request.packet.backend.configuration.translation, { profile: 'translation-1.0', sha256: sha(note), byte_length: note.length });
+  assert.equal(Object.hasOwn(request.packet.backend.configuration, 'translation'), false);
   assert.equal(Object.hasOwn(request.packet.backend.configuration, 'science_index'), false);
   const result = await s.complete(request, moduleView('zh-CN'));
   assert.equal(result.status, 'pending_review');
@@ -1275,11 +1288,11 @@ const requestPayloadMessage = request => request.emittedStep.arguments.message;
 test('translation terminology comes from the Integrator terminology, then its ledger, else stays empty', async t => {
   for (const [integrationContent, expected] of [[{ terminology: terminologyLedger, terminology_ledger: [] }, terminologyLedger], [{ terminology_ledger: terminologyLedger }, terminologyLedger], [{}, []]]) {
     const s = await setup(t, { writingMode: 'source-translation', integrationContent });
-    await s.complete(s.created.requests[0], s.view('en'));
+    await s.complete(s.created.requests[0], idView('en'));
     const [request] = createReadingFirstDraftRequests({ controller: s.created.controller });
-    assert.deepEqual(requestPayload(request).translation_context.terminology, expected);
+    assert.deepEqual(translationPayload(request).translation_context.terminology, expected);
+    assert.match(translationSection(s), /terminology list is empty, take terms and abbreviations from the accepted source draft/);
   }
-  assert.match(await readFile(translationNoteUrl, 'utf8'), /terminology list is empty, take terms and abbreviations from the accepted source draft/);
 });
 
 test('configured writing instructions for the target language reach Translation, the writing guide does not', async t => {
@@ -1287,7 +1300,7 @@ test('configured writing instructions for the target language reach Translation,
   const s = await setup(t, { writingMode: 'source-translation', writingSkills });
   const [source] = s.created.requests;
   assert.match(requestPayloadMessage(source), /EN-GUIDE-TEXT/);
-  await s.complete(source, s.view('en'));
+  await s.complete(source, idView('en'));
   const [request] = createReadingFirstDraftRequests({ controller: s.created.controller });
   const message = requestPayloadMessage(request);
   assert.equal(request.task.role, 'translation');
@@ -1295,7 +1308,7 @@ test('configured writing instructions for the target language reach Translation,
   assert.match(message, /STSS-GUIDE-TEXT/);
   assert.doesNotMatch(message, /EN-GUIDE-TEXT|writing_guide|Full connected science for/);
   assert.equal(Object.hasOwn(request.packet.backend.configuration, 'writing_guide'), false);
-  assert.match(await readFile(translationNoteUrl, 'utf8'), /Apply the writing guidance supplied in this message/);
+  assert.match(translationSection(s), /Apply the writing guidance supplied in this message/);
 });
 
 test('chinese papers write Chinese first and translate to English', async t => {
@@ -1305,14 +1318,14 @@ test('chinese papers write Chinese first and translate to English', async t => {
   const [source] = s.created.requests;
   assert.deepEqual([source.language, source.task.role], ['zh-CN', 'chinese-writer']);
   assert.ok(Object.hasOwn(requestPayload(source), 'handoff'));
-  await s.complete(source, s.view('zh-CN'));
+  await s.complete(source, idView('zh-CN'));
   const [translation] = createReadingFirstDraftRequests({ controller: s.created.controller });
   assert.deepEqual([translation.language, translation.task.role], ['en', 'translation']);
-  const payload = requestPayload(translation);
+  const payload = translationPayload(translation);
   assert.equal(Object.hasOwn(payload, 'handoff'), false);
-  assert.deepEqual(payload.source_view, s.view('zh-CN'));
+  assert.deepEqual(payload.source_view, idView('zh-CN'));
   assert.deepEqual(payload.translation_context.terminology, []);
-  await s.complete(translation, s.view('en'));
+  await s.complete(translation, idView('en'));
   const rendered = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller: s.created.controller } });
   assert.match(rendered.notes.find(item => item.language === 'zh-CN').path, /^Wiki\/sources\//);
   assert.match(rendered.notes.find(item => item.language === 'en').path, /^Wiki\/translations\//);
@@ -1348,7 +1361,7 @@ test('existing writing modes keep byte-identical requests', async t => {
   }
 });
 
-test('source-translation binding freezes the translation profile and keeps the source language first', async t => {
+test('source-translation binding freezes the translation profile, keeps the source language first and rejects retired setups', async t => {
   const root = await mkdtemp(join(tmpdir(), 'reading-first-translation-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const bytes = Buffer.from('Synthetic original source.');
@@ -1356,50 +1369,23 @@ test('source-translation binding freezes the translation profile and keeps the s
   const mainSession = { model: 'gpt-6-astra', reasoning_effort: 'high' };
   const options = { runId: 'run', scientificInput: { identity: { paper_id: 'synthetic', run_id: 'run' }, sources: [{ path: join(root, 'source.pdf'), sha256: sha(bytes), byte_length: bytes.length }], context: 'Read all existing material as a connected account.', role_artifacts: roles }, mainSession, authorizationId: 'synthetic-only', deadline: '2099-01-01T00:00:00Z', taskBindings: {} };
   const pair = { model: 'gpt-6-astra', reasoning_effort: 'high' };
-  const legacyRoles = Object.fromEntries(['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration', 'english-writer', 'chinese-writer', 'reading-editor', 'independent-verifier'].map(role => [role, pair]));
-  const configured = roles => ({ role_model_policy: createConfiguredApaRoleModelPolicy(mainSession, roles), ...buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-1.0'}) });
-  const translating = { ...options, writingMode: 'source-translation', configuredSetup: configured({ ...legacyRoles, translation: pair }) };
+  const allRoles = Object.fromEntries(APA_CONFIGURED_ROLES.map(role => [role, pair]));
+  const configured = roles => ({ role_model_policy: createConfiguredApaRoleModelPolicy(mainSession, roles), ...buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-2.2'}) });
+  const translating = { ...options, writingMode: 'source-translation', configuredSetup: configured(allRoles) };
   const binding = createReadingFirstRunControl({ ...translating, sourceLanguage: 'zh-CN' }).reading_first_binding;
   assert.deepEqual([binding.writing_mode, binding.source_language, binding.translation_profile], ['source-translation', 'zh-CN', 'translation-1.0']);
   assert.equal(createReadingFirstRunControl({ ...translating, sourceLanguage: 'en', firstWritingLanguage: 'en' }).reading_first_binding.first_writing_language, 'en');
   assert.throws(() => createReadingFirstRunControl({ ...translating, sourceLanguage: 'en', firstWritingLanguage: 'zh-CN' }), /READING_FIRST_WRITING_MODE_INVALID/);
   assert.throws(() => createReadingFirstRunControl({ ...options, writingMode: 'source-translation' }), /READING_FIRST_WRITING_MODE_INVALID/);
   for (const writingMode of ['independent', 'source-first']) assert.equal(Object.hasOwn(createReadingFirstRunControl({ ...options, writingMode }).reading_first_binding, 'translation_profile'), false);
-  assert.throws(() => createReadingFirstRunControl({ ...options, writingMode: 'source-translation', configuredSetup: configured(legacyRoles) }), /READING_FIRST_TRANSLATION_MODEL_REQUIRED/);
-  assert.equal(createReadingFirstRunControl({ ...options, writingMode: 'source-first', configuredSetup: configured(legacyRoles) }).reading_first_binding.writing_mode, 'source-first');
-});
-
-// Simulates an edit of the note by wrapping the file read; the repository file itself is never touched.
-function changeTranslationNote(t) {
-  const original = fs.readFileSync;
-  t.mock.method(fs, 'readFileSync', function (path, ...rest) {
-    const bytes = original.call(this, path, ...rest);
-    return String(path?.href ?? path).endsWith('translation-1.0.md') ? Buffer.concat([Buffer.from(bytes), Buffer.from('\nChanged.')]) : bytes;
-  });
-  syncBuiltinESMExports();
-  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
-}
-test('translation note is captured in state, restored from the checkpoint and checked for drift', async t => {
-  const s = await setup(t, { writingMode: 'source-translation' });
-  const note = await readFile(translationNoteUrl);
-  await s.complete(s.created.requests[0], s.view('en'));
-  const [pending] = createReadingFirstDraftRequests({ controller: s.created.controller });
-  const saved = snapshotReadingFirstRuntime(s.created.controller);
-  assert.deepEqual(saved.state.translationNote, { profile: 'translation-1.0', sha256: sha(note), byte_length: note.length });
-  const receipt = await commitOwnedArtifact({ artifactRoot: s.root, dispatchContext: s.broker.dispatchContext,
-    capability: s.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: 'checkpoint.json', revision: '1' }),
-    artifact: { artifact_id: 'checkpoint', content: JSON.stringify(saved) }, expectedRevision: '1' });
-  const recovered = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: receipt });
-  assert.equal(recovered.ok, true, JSON.stringify(recovered.errors));
-  assert.deepEqual(recovered.requests.map(item => item.emittedStep), [pending.emittedStep]);
-  assert.deepEqual(snapshotReadingFirstRuntime(recovered.controller), saved);
-  changeTranslationNote(t);
-  assert.throws(() => snapshotReadingFirstRuntime(s.created.controller), /READING_FIRST_TRANSLATION_NOTE_CHANGED/);
-  assert.throws(() => snapshotReadingFirstRuntime(recovered.controller), /READING_FIRST_TRANSLATION_NOTE_CHANGED/);
+  const { translation, ...withoutTranslation } = allRoles;
+  assert.throws(() => configured(withoutTranslation), /APA_CONFIGURED_ROLE_MODEL_INVALID/);
+  assert.equal(createReadingFirstRunControl({ ...options, writingMode: 'source-first', configuredSetup: configured(allRoles) }).reading_first_binding.writing_mode, 'source-first');
+  assert.throws(() => createReadingFirstRunControl({ ...translating, configuredSetup: { ...configured(allRoles), instruction_profile: 'configured-reading-1.0' } }), /READING_BINDING_RETIRED/);
 });
 
 // Drives a run to a first review whose single material issue concerns `affected` languages.
-// Sections are numbered so a translation can be checked against the source draft it was given; the review issue carries the Writer owner a configured run requires.
+// Sections are numbered so a translation can be checked against the source draft it was given; the review issue carries the Writer owner and, in configured runs, the located repair scope those runs require.
 const plainView = (language, count = 1) => ({ language, sections: Array.from({ length: count }, (_, index) => ({ heading: (language === 'en' ? 'Study ' : '研究 ') + index, paragraphs: ['Body.'] })) });
 async function reviewedRun(t, options, affected) {
   const { view = plainView, ...setupOptions } = options;
@@ -1411,7 +1397,7 @@ async function reviewedRun(t, options, affected) {
     if (drafts.length === 1) drafts.push(...createReadingFirstDraftRequests({ controller }));
   }
   const rendered = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller } });
-  const material = { overall: { complete: false, coherent: true, bilingual_consistent: true }, key_nodes: [], issues: [{ severity: 'material', kind: 'omission', detail: 'Missing design explanation', affected_languages: affected, repair_owner: 'writer' }], scope: 'whole account' };
+  const material = { overall: { complete: false, coherent: true, bilingual_consistent: true }, key_nodes: [], issues: [{ severity: 'material', kind: 'omission', detail: 'Missing design explanation', affected_languages: affected, repair_owner: 'writer', ...(s.binding.configured_setup ? { repair_scope: locatedScope(['study-0']) } : {}) }], scope: 'whole account' };
   await s.complete(createReadingFirstReviewRequest({ controller, presentation: rendered }), material);
   return { s, controller };
 }
@@ -1422,44 +1408,44 @@ const finishLocalReview = async ({ s, controller }) => {
 };
 
 test('translation-only issues revise only the translation', async t => {
-  const { s, controller } = await reviewedRun(t, { writingMode: 'source-translation' }, ['zh-CN']);
+  const { s, controller } = await reviewedRun(t, { writingMode: 'source-translation', view: idView }, ['zh-CN']);
   const requests = createReadingFirstRevisionRequests({ controller });
   assert.deepEqual(requests.map(item => [item.task.task_id, item.language, item.task.role, item.packet.host_action_scope.role]), [['zh-CN-r2', 'zh-CN', 'translation', 'translation']]);
-  const payload = requestPayload(requests[0]);
+  const payload = translationPayload(requests[0]);
   assert.equal(Object.hasOwn(payload, 'handoff'), false);
-  assert.deepEqual(payload.source_view, plainView('en'));
+  assert.deepEqual(payload.source_view, idView('en'));
   assert.equal(payload.source_view_receipt.artifact_id, 'en');
-  assert.deepEqual(payload.prior_view, plainView('zh-CN'));
+  assert.deepEqual(payload.prior_view, idView('zh-CN'));
   assert.equal(payload.issues.length, 1);
   assert.equal(typeof payload.revision_scope, 'string');
   assert.deepEqual(payload.translation_context.terminology, []);
-  assert.match(requests[0].emittedStep.arguments.message, /Translation: translation-1\.0/);
+  assert.ok(requests[0].emittedStep.arguments.message.includes(translationSection(s)));
   assert.doesNotMatch(requests[0].emittedStep.arguments.message, /Full connected science for/);
   assert.throws(() => createReadingFirstRevisionRequests({ controller }), /READING_FIRST_REVISION_UNAVAILABLE/);
-  await assert.rejects(() => s.complete(requests[0], plainView('zh-CN', 2)), /READING_FIRST_VIEW_LAYOUT_INVALID/);
-  await s.complete(requests[0], plainView('zh-CN'));
+  await assert.rejects(() => s.complete(requests[0], idView('zh-CN', 2)), /READING_FIRST_VIEW_LAYOUT_INVALID/);
+  await s.complete(requests[0], idView('zh-CN'));
   await finishLocalReview({ s, controller });
   assert.equal(getReadingFirstState(controller).calls_used, 5);
   assert.equal(getReadingFirstState(controller).status, 'reading_complete');
 });
 
 test('source issues revise the source first, then retranslate', async t => {
-  const { s, controller } = await reviewedRun(t, { writingMode: 'source-translation' }, ['en']);
+  const { s, controller } = await reviewedRun(t, { writingMode: 'source-translation', view: idView }, ['en']);
   const first = createReadingFirstRevisionRequests({ controller });
   assert.deepEqual(first.map(item => [item.task.task_id, item.task.role]), [['en-r2', 'english-writer']]);
   assert.ok(Object.hasOwn(requestPayload(first[0]), 'handoff'));
-  await s.complete(first[0], plainView('en', 2));
+  await s.complete(first[0], idView('en', 2));
   const second = createReadingFirstRevisionRequests({ controller });
   assert.deepEqual(second.map(item => [item.task.task_id, item.language, item.task.role]), [['zh-CN-r2', 'zh-CN', 'translation']]);
-  const payload = requestPayload(second[0]);
+  const payload = translationPayload(second[0]);
   assert.equal(Object.hasOwn(payload, 'handoff'), false);
-  assert.deepEqual(payload.source_view, plainView('en', 2));
+  assert.deepEqual(payload.source_view, idView('en', 2));
   assert.equal(payload.source_view_receipt.artifact_id, 'en-r2');
-  assert.deepEqual(payload.prior_view, plainView('zh-CN'));
+  assert.deepEqual(payload.prior_view, idView('zh-CN'));
   assert.equal(payload.issues.length, 1);
   // The mirror is checked against the re-accepted source view, not the first one.
-  await assert.rejects(() => s.complete(second[0], plainView('zh-CN')), /READING_FIRST_VIEW_LAYOUT_INVALID/);
-  await s.complete(second[0], plainView('zh-CN', 2));
+  await assert.rejects(() => s.complete(second[0], idView('zh-CN')), /READING_FIRST_VIEW_LAYOUT_INVALID/);
+  await s.complete(second[0], idView('zh-CN', 2));
   await finishLocalReview({ s, controller });
   assert.equal(getReadingFirstState(controller).calls_used, 6);
   assert.equal(getReadingFirstState(controller).review_rounds, 2);
@@ -1467,20 +1453,20 @@ test('source issues revise the source first, then retranslate', async t => {
 });
 
 test('translation revision waits for the pending source revision', async t => {
-  const { controller } = await reviewedRun(t, { writingMode: 'source-translation' }, ['en', 'zh-CN']);
+  const { controller } = await reviewedRun(t, { writingMode: 'source-translation', view: idView }, ['en', 'zh-CN']);
   const [first] = createReadingFirstRevisionRequests({ controller });
   assert.equal(first.task.task_id, 'en-r2');
   assert.throws(() => createReadingFirstRevisionRequests({ controller }), /READING_FIRST_SOURCE_DRAFT_PENDING/);
 });
 
 test('chinese source papers revise the Chinese Writer first, then the English translation', async t => {
-  const { s, controller } = await reviewedRun(t, { writingMode: 'source-translation', sourceLanguage: 'zh-CN' }, ['zh-CN']);
+  const { s, controller } = await reviewedRun(t, { writingMode: 'source-translation', sourceLanguage: 'zh-CN', view: idView }, ['zh-CN']);
   const [first] = createReadingFirstRevisionRequests({ controller });
   assert.deepEqual([first.task.task_id, first.task.role], ['zh-CN-r2', 'chinese-writer']);
-  await s.complete(first, { language: 'zh-CN', sections: [{ heading: 'Revised', paragraphs: ['Revised.'] }] });
+  await s.complete(first, { language: 'zh-CN', sections: [{ id: 'revised', heading: 'Revised', paragraphs: ['Revised.'] }] });
   const [second] = createReadingFirstRevisionRequests({ controller });
   assert.deepEqual([second.task.task_id, second.task.role], ['en-r2', 'translation']);
-  assert.equal(requestPayload(second).source_view_receipt.artifact_id, 'zh-CN-r2');
+  assert.equal(translationPayload(second).source_view_receipt.artifact_id, 'zh-CN-r2');
 });
 
 // Fingerprints of masked en-r2 Writer revision requests, captured from the code before translation revisions existed (2026-10-29).

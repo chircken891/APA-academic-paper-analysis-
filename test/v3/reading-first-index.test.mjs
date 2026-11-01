@@ -7,7 +7,6 @@ import { readCommittedGeneration, assertIndexGeneration } from '../../scripts/v3
 import { buildBilingualIndex, queryBilingualIndex } from '../../scripts/v3/phase22-search.mjs';
 import { buildGraphProposal } from '../../scripts/v3/phase22-graph.mjs';
 import { fingerprintV3Json as hash } from '../../scripts/v3/semantic-package-validator.mjs';
-import { readerIndexFixture } from './helpers/phase221-index-fixtures.mjs';
 
 test('reading-first committed consumers index bilingual paper and one shared knowledge note with real anchors', async t => {
   const f = await readingFirstIndexFixture(t), built = await f.build();
@@ -83,20 +82,3 @@ test('reading-first next generation retains another committed paper and updates 
   await assert.rejects(async () => buildBilingualIndex({ generation, validatedInputs: { ...second.validatedInputs, previousSnapshot: structuredClone(previousSnapshot) } }), /P22_SNAPSHOT_NOT_COMMITTED/);
 });
 
-test('reading-first addition retains a committed Phase22 reader paper and its exact index projection', async t => {
-  const old = await readerIndexFixture(t), initial = await old.build(); await old.save(initial);
-  const previousSnapshot = await readCommittedGeneration({ vaultRoot: old.vaultRoot });
-  assert.equal(previousSnapshot.ok, true, JSON.stringify(previousSnapshot));
-  const next = await readingFirstIndexFixture(t, { vaultRoot: old.vaultRoot });
-  const generation = structuredClone(next.generation);
-  generation.papers.unshift(initial.generation.papers[0]);
-  generation.objects.push(...initial.generation.objects);
-  generation.shared_nodes.push(...initial.generation.shared_nodes);
-  const files = [...old.files, ...Object.entries(old.notes).map(([language, bytes]) => ({ path: old.paper.paths[language], bytes })), ...next.allFiles()];
-  const built = await buildBilingualIndex({ generation, validatedInputs: { papers: next.validatedInputs.papers, files, previousSnapshot } });
-  assert.deepEqual(built.index.documents.filter(doc => doc.paper_id === old.paper.paper_id), initial.index.documents);
-  await next.save(built);
-  const snapshot = await readCommittedGeneration({ vaultRoot: old.vaultRoot });
-  assert.equal(snapshot.ok, true, JSON.stringify(snapshot));
-  assert.ok(queryBilingualIndex({ index: snapshot.index, activeSnapshot: snapshot, query: 'finalreaderneedle' }).results.length);
-});

@@ -1,6 +1,7 @@
 import YAML from 'yaml';
 import { fingerprintV3Json } from './semantic-package-validator.mjs';
 
+export const PHASE22_REGIONS = Object.freeze(['source','abstract','study-design','key-findings','methods-concepts-measures','figures-tables','discussion','limitations','conclusion','evidence','relations','coverage']);
 export const PHASE22_MACHINE_FIELDS = Object.freeze([
   'type', 'pipeline_version', 'rendering_profile', 'paper_id', 'run_id', 'analysis_revision',
   'language', 'title', 'aliases', 'basis_fingerprint', 'context_fingerprint', 'core_fingerprint',
@@ -13,7 +14,6 @@ export const TOPIC_MACHINE_FIELDS = Object.freeze(['type', 'pipeline_version', '
 export function machineFieldsForProfile(profile) {
   if (profile === 'phase24-topic-1.0') return TOPIC_MACHINE_FIELDS;
   if (profile === 'reading-first-obsidian-1.0') return READING_FIRST_MACHINE_FIELDS;
-  if (profile === 'phase22-reader-note-1.0') return PHASE221_MACHINE_FIELDS;
   if (profile === undefined || profile === 'phase22-managed-note-1.0') return PHASE22_MACHINE_FIELDS;
   fail('P221_PROFILE_UNKNOWN');
 }
@@ -79,12 +79,12 @@ function parse(bytes) {
     cursor = range.to;
   }
   if (cursor < bytes.length) humanRanges.push({ from: cursor, to: bytes.length, bytes: bytes.subarray(cursor) });
-  if (profile === 'phase24-topic-1.0' || profile === 'phase22-reader-note-1.0') {
-    if (machineFields.some(key => !Object.hasOwn(frontmatter, key))) fail(profile === 'phase24-topic-1.0' ? 'P24_TOPIC_FIELDS_REQUIRED' : 'P221_READER_FIELDS_REQUIRED');
+  if (profile === 'phase24-topic-1.0') {
+    if (machineFields.some(key => !Object.hasOwn(frontmatter, key))) fail('P24_TOPIC_FIELDS_REQUIRED');
     const personalAt = byteOffset(bodyStart + notes[0].index);
     for (const range of humanRanges) {
       const from = Math.max(range.from, byteOffset(bodyStart)), to = Math.min(range.to, personalAt);
-      if (to > from && bytes.subarray(from, to).toString('utf8').replace(/<!--[\s\S]*?-->/g, '').trim()) fail(profile === 'phase24-topic-1.0' ? 'P24_TOPIC_HUMAN_STRUCTURE' : 'P221_HUMAN_STRUCTURE', from);
+      if (to > from && bytes.subarray(from, to).toString('utf8').replace(/<!--[\s\S]*?-->/g, '').trim()) fail('P24_TOPIC_HUMAN_STRUCTURE', from);
     }
   }
   const machine = Object.fromEntries(machineFields.filter(key => Object.hasOwn(frontmatter, key)).map(key => [key, frontmatter[key]]));
@@ -105,7 +105,6 @@ export function mergeManagedNote({ existingBytes, rendered, expectedManagedHash 
   const bytes = asBytes(existingBytes); const existing = parse(bytes);
   if (candidate.profile !== existing.profile && (candidate.profile === 'phase24-topic-1.0' || existing.profile === 'phase24-topic-1.0')) fail('P24_PROFILE_MISMATCH');
   if (candidate.profile !== existing.profile && (candidate.profile === 'reading-first-obsidian-1.0' || existing.profile === 'reading-first-obsidian-1.0')) fail('RF_OBSIDIAN_PROFILE_MISMATCH');
-  if (candidate.profile !== existing.profile && (candidate.profile === 'phase22-reader-note-1.0' || existing.profile === 'phase22-reader-note-1.0')) fail('P221_PROFILE_MISMATCH');
   if (expectedManagedHash !== undefined && expectedManagedHash !== existing.managedHash) fail('P22_MANAGED_HASH_MISMATCH');
   const patches = existing.regions.map((region, index) => ({ from: region.from, to: region.to, bytes: candidate.regions[index].bytes }));
   const eol = existing.text.includes('\r\n') ? '\r\n' : '\n';

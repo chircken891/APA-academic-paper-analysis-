@@ -12,7 +12,7 @@ import { createScienceController, restoreScienceController, prepareScienceReques
 
 const roles = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'];
 const hash = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
-async function fixture() {
+async function fixture({ python } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'science-22-'));
   await mkdir(join(root, 'native'));
   const source = Buffer.from('source'), prompt = Buffer.from('prompt');
@@ -22,7 +22,7 @@ async function fixture() {
   const scientificInput = { profile: 'reading-first-1.0', identity: { paper_id: 'synthetic', run_id: 'run' }, sources: [{ id: 'paper', path: join(root, 'paper.pdf'), sha256: hash(source), byte_length: source.length }], context: 'synthetic', role_artifacts: roles };
   const mainSession = { model: 'gpt-6-astra', reasoning_effort: 'high' };
   const manifestTask = { task_id: 'results-resources', artifact_id: 'results-resources', artifact_path: 'science/results-resources.json', native_path: 'native/results-resources.json', revision: '1', owner_actor_id: 'results', role: 'results' };
-  const config = { schema_version: 'apa-configured-reading-1.0', config_fingerprint: hash(Buffer.from('config')), paths: { runRoot: root }, role_model_policy: createApaRoleModelPolicy(mainSession), ...buildConfiguredReadingInstructions({}), instruction_profile: 'configured-reading-2.2', prompt_files: [{ path: join(root, 'prompt.md'), sha256: hash(prompt), byte_length: prompt.length }], results_resources: { output_root: 'resources/results', manifest_task: manifestTask } };
+  const config = { schema_version: 'apa-configured-reading-1.0', config_fingerprint: hash(Buffer.from('config')), paths: { runRoot: root }, role_model_policy: createApaRoleModelPolicy(mainSession), ...buildConfiguredReadingInstructions({}), instruction_profile: 'configured-reading-2.2', prompt_files: [{ path: join(root, 'prompt.md'), sha256: hash(prompt), byte_length: prompt.length }], results_resources: { output_root: 'resources/results', manifest_task: manifestTask, ...(python ? { python } : {}) } };
   const runControl = createReadingFirstRunControl({ runId: 'run', scientificInput, mainSession, configuredSetup: config, authorizationId: 'synthetic', deadline: '2099-01-01T00:00:00Z', taskBindings: downstream, writingMode: 'source-first', maxCalls: 6, priorCalls: 6, maxTotalCalls: 12 });
   const prepared = { runControl, scientificInput, configurationFingerprint: config.config_fingerprint, paths: { runRoot: root } };
   const authorized_bindings = [...Object.values(tasks), ...Object.values(downstream), manifestTask].map(task => ({ run_id: 'run', actor_id: task.owner_actor_id, role: task.role, artifact_path: task.artifact_path, revision: task.revision }));
@@ -138,4 +138,31 @@ test('2.2 refuses a changed native manifest after interruption', async () => {
   const f=await interruptedManifest();
   await writeFile(join(f.root,'native/results-resources.json'),'changed');
   await assert.rejects(()=>restoreScienceController(f.options),/SCIENCE_RESOURCE_MANIFEST_CHANGED/);
+});
+
+const requestPayload = request => Object.values(request.emittedStep.arguments).filter(value => typeof value === 'string')
+  .flatMap(value => value.split(String.fromCharCode(10, 10))).map(chunk => { try { return JSON.parse(chunk); } catch { return null; } })
+  .find(value => value && typeof value === 'object' && 'upstream' in value);
+async function resultsRequest(f) {
+  const controller = await createScienceController(f.options);
+  for (let batch = 0; batch < 5; batch++) {
+    for (const { role, request } of await prepareScienceRequests({ controller })) {
+      if (role === 'results') return request;
+      await recordScienceDispatchIntent({ controller, role });
+      const step = request.emittedStep, raw = JSON.stringify({ agent_id: 'host-' + role }), evidencePath = join(f.root, 'evidence-' + role + '.txt');
+      await writeFile(evidencePath, raw);
+      await recordScienceHostObservation({ controller, role, observation: { action_id: step.action_id, run_id: 'run', input_fingerprint: step.input_fingerprint, port: 'current-collaboration', tool_call: { name: step.action, arguments: step.arguments }, raw_result_text: raw, evidence: { kind: 'raw', capture: 'direct', sha256: hash(Buffer.from(raw)).slice(7), source_reference: evidencePath } } });
+      await writeFile(join(f.root, f.options.tasks[role].native_path), JSON.stringify({ role }));
+      await acceptScienceResult({ controller, role });
+    }
+  }
+  throw new Error('results request not reached');
+}
+test('2.2 Results request carries the frozen python path', async () => {
+  const request = await resultsRequest(await fixture({ python: process.execPath }));
+  assert.equal(requestPayload(request).results_resources.python, process.execPath);
+});
+test('existing 2.2 binding without frozen python still dispatches Results', async () => {
+  const request = await resultsRequest(await fixture());
+  assert.equal('python' in requestPayload(request).results_resources, false);
 });

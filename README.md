@@ -173,7 +173,7 @@ node scripts/apa-setup.mjs inspect --repo-root "$apaProjectRoot"
 | Writer、Translation、Editor、Verifier 模型 | 分别指定参数，或在新运行创建时跟随主会话并冻结 |
 | 运行、解析、候选目录 | 当前库内的三个输出根目录，每次使用独立 run ID 子目录 |
 | MinerU | 选择已有运行环境、Python 和配置文件 |
-| 呈现方式 | 选择 Writer 与 Translation 直接呈现或增加 Reading Editor（新配置化运行采用 reading-editor-1.3，目录、方法条目和图注直接展开，旧运行保持原版式） |
+| 呈现方式 | 选择 Writer 与 Translation 直接呈现或增加 Reading Editor（新配置化运行采用 reading-editor-1.3，目录、方法条目和图注直接展开） |
 | Nature、Humanizer、stss | 分别启用已有技能，填写其 SKILL.md 路径；仅在既有 Writer 内使用 |
 
 阅读和查询共用本库忽略提交的 `config/apa.local.json`，无需分别配置两套文件，无跨库全局层。公开包不含个人答案；已有运行继续使用原冻结绑定。详见 [配置说明](docs/CONFIGURATION.md)。
@@ -181,11 +181,11 @@ node scripts/apa-setup.mjs inspect --repo-root "$apaProjectRoot"
 ## 日常使用
 
 - **分析论文**：“用 APA 分析 Raw/论文.pdf”。先核对已有材料，批准有限范围后执行。
-- **继续任务**：“继续这次 APA 运行”，提供保存的运行目录或检查点。不会自动重做已完成内容或升级旧绑定。
+- **继续任务**：“继续这次 APA 运行”，提供保存的运行目录或检查点。不会自动重做已完成内容；已正式提交的历史运行不再续接。
 - **调整设置**：“用 apa-setup 修改当前库配置”。支持完善、全部或选择去除、命名导出，以及导入前差异预览。去除答案不删除笔记或卸载依赖。
 - **正式发布**：先审阅精确发布清单，再批准 V3 受控事务。候选完成不等于已发布。见 [发布接口](docs/apa-v3/reading-first-publication.md)。
 
-新论文由维护中的[阅读会话入口](docs/apa-v3/reading-session.md)衔接科学角色、原文 Writer、Translation、可选 Editor、候选渲染与审查。新配置化运行使用 `configured-reading-2.1` 提示，已有运行从原检查点续接。
+新论文由维护中的[阅读会话入口](docs/apa-v3/reading-session.md)衔接科学角色、原文 Writer、Translation、可选 Editor、候选渲染与审查。新配置化运行使用 `configured-reading-2.2` 提示，已有运行从原检查点续接。
 
 ### 查询与比较已入库论文
 

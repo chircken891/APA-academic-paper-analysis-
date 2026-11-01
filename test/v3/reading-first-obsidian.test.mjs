@@ -385,7 +385,8 @@ function editedInput() {
     view.sections[3].paragraphs = ['The total burden increased, while the standardised rate was lower.', 'Rates and counts answer different questions.'];
     view.placements.visuals[0].after_paragraph = 1;
   });
-  data.readingEditor = { schema_version: 'reading-editor-1.0', views_fingerprint: readingFirstViewsFingerprint(data.views), languages: Object.fromEntries(data.views.map(view => [view.language, {
+  data.readingEditor = { schema_version: 'reading-editor-1.3', views_fingerprint: readingFirstViewsFingerprint(data.views), map: { nodes: [{ id: 'estimate', stage: 'measurement' }] }, languages: Object.fromEntries(data.views.map(view => [view.language, {
+    visuals: [],
     overview: [{ text: 'Counts and rates have different meanings.', section_ids: ['findings', 'methods'] }],
     sections: [{ section_id: 'findings', takeaway: 'The comparison depends on the measure.', emphasis: [{ paragraph_index: 0, text: 'total burden increased' }], subheadings: [{ before_paragraph: 1, heading: 'Population and rate' }] }],
     methods: [{ id: 'counts', title: 'Counts', explanation: 'Counts describe the total burden.', application: 'The study reports burden.', section_ids: ['findings'] }, { id: 'rate', title: 'Standardisation', explanation: 'Rates adjust age structure.', application: 'The study compares rates.', section_ids: ['methods', 'findings'], knowledge_id: 'rate' }],
@@ -397,52 +398,18 @@ function compactInput() {
   const data = editedInput();
   data.views.forEach(view => { view.sections[3].paragraphs.push('Read the bars as counts, not rates.'); });
   data.presentation.visuals[0].chart_types = [{ knowledge_id: 'rate', label: { en: 'Rate plot', 'zh-CN': '率图' } }];
-  data.readingEditor.schema_version = 'reading-editor-1.1';
   data.readingEditor.views_fingerprint = readingFirstViewsFingerprint(data.views);
   data.readingEditor.map = { nodes: [{ id: 'estimate', stage: 'measurement' }, { id: 'burden', stage: 'finding', primary: true }] };
   Object.values(data.readingEditor.languages).forEach(language => { language.visuals = [{ id: 'fig-1', title: 'Figure 1 Burden', notes: [{ section_id: 'findings', paragraph_index: 2 }] }]; });
   return data;
 }
 
-test('reading editor 1.2 renders omitted findings as bilingual section links', () => {
+test('reading editor renders omitted findings as bilingual section links', () => {
   const data = compactInput();
-  data.readingEditor.schema_version = 'reading-editor-1.2';
   data.presentation.map.findings.push({ id: 'other', label: { en: 'Other finding', 'zh-CN': '其他发现' }, section_id: 'findings' });
   const notes = renderReadingFirstObsidian(data).notes;
   assert.match(notes.find(note => note.language === 'en').content, /Findings not shown in the map: \[Other finding\]\(#/);
   assert.match(notes.find(note => note.language === 'zh-CN').content, /未画入导图的发现：\[其他发现\]\(#/);
-});
-
-test('reading editor 1.1 keeps three heading levels and puts figure notes, folded captions and a staged map in place', () => {
-  const content = renderReadingFirstObsidian(compactInput()).notes.find(note => note.language === 'en').content;
-  assert.doesNotMatch(content, /^#### /m);
-  assert.doesNotMatch(content, /^## Contents/m);
-  assert.match(content, /^> \[!note\]- Contents$/m);
-  assert.match(content, /^> \[!info\]- Standardisation$/m);
-  assert.match(content, /\*\*Population and rate\.\*\* Rates and counts/);
-  const punctuated = compactInput();
-  punctuated.readingEditor.languages.en.sections[0].subheadings[0].heading = 'Population and rate:';
-  assert.match(renderReadingFirstObsidian(punctuated).notes.find(note => note.language === 'en').content, /\*\*Population and rate\.\*\* Rates/);
-  assert.match(content, /\*\*Figure 1 Burden\*\* · \[Original p\. 2\]\([^)]+\) \^rf-visual-fig-1/);
-  const image = content.indexOf('![Figure 1]'), note = content.indexOf('Read the bars as counts'), caption = content.indexOf('> [!quote]- Original caption');
-  assert.ok(image > 0 && image < note && note < caption);
-  assert.equal(content.split('Read the bars as counts').length, 2);
-  assert.doesNotMatch(content, /Method background: \[Rate/);
-  assert.doesNotMatch(content, /Research map/);
-  const map = content.indexOf('```mermaid\nflowchart LR');
-  assert.ok(map > content.indexOf('### 2.1 design details') && map < content.indexOf('## 3. Methods, concepts and measurement'));
-  assert.match(content, /^## 4\. Findings$/m);
-  assert.doesNotMatch(content, /^## \d\. (METHODS|FINDINGS)/m);
-  assert.match(content, /subgraph stage_measurement\["Measurement and analysis"\]/);
-  assert.match(content, /^  class burden primary$/m);
-  assert.match(content, /^  estimate --> burden$/m);
-});
-
-test('reading editor 1.0 output keeps the original numbered layout', () => {
-  const content = renderReadingFirstObsidian(editedInput()).notes.find(note => note.language === 'en').content;
-  assert.match(content, /^## Contents/m);
-  assert.match(content, /^#### 3\.1\.1 Counts/m);
-  assert.match(content, /^### 2\.1 Research map/m);
 });
 
 for (const coverage of ['inventory', 'chart', 'inline']) test(`shared knowledge ${coverage} covers a node without repetitive body placements`, () => {
@@ -484,32 +451,20 @@ test('shared visual resources expose immutable source/page/crop provenance for r
 test('editor adds numbered reading hierarchy, meaningful inventory, takeaway and selective emphasis without replacing prose', () => {
   const result = renderReadingFirstObsidian(editedInput());
   const note = result.notes[0].content;
-  assert.match(note, /## 1\. ABSTRACT/);
-  assert.match(note, /### 2\.1 Research map/);
-  assert.match(note, /### 2\.2 design details/);
-  assert.match(note, /### 3\.1 Methods and concepts at a glance/);
-  assert.match(note, /#### 3\.1\.1 Counts/);
-  assert.match(note, /#### 3\.1\.2 Standardisation/);
-  assert.match(note, /Counts describe the total burden\./);
+  assert.match(note, /^## 1\. Abstract$/m);
+  assert.match(note, /^### 2\.1 design details$/m);
+  assert.match(note, /^### 3\.1 Methods and concepts at a glance$/m);
+  assert.match(note, /^> \[!info\] Counts\n> \*\*Principle\*\*: Counts describe the total burden\./m);
+  assert.match(note, /^> \[!info\] Standardisation$/m);
   assert.match(note, /\*\*Use in this study\*\*: The study reports burden\./);
   assert.match(note, /\[Shared explanation\]\(\.\.\/methods\//);
-  assert.match(note, /### 3\.2 methods details/);
-  assert.match(note, /### 4\.1 findings details/);
-  assert.match(note, /#### 4\.1\.1 Population and rate/);
+  assert.match(note, /^### 3\.2 methods details$/m);
+  assert.match(note, /^### 4\.1 findings details$/m);
+  assert.match(note, /\*\*Population and rate\.\*\* Rates and counts answer different questions\./);
   assert.match(note, /> \[!summary\] Key point\n> The comparison depends on the measure\./);
   assert.match(note, /The \*\*total burden increased\*\*, while the standardised rate was lower\./);
-  assert.match(note, /Rates and counts answer different questions\./);
-  const contents = note.split('## Contents\n\n')[1].split('<!-- AUTO:END source -->')[0];
-  assert.doesNotMatch(contents, /^ {4,}- /m);
-  assert.doesNotMatch(contents, /3\.1\.1 Counts|3\.1\.2 Standardisation|4\.1\.1 Population and rate/);
-  assert.match(contents, /3\.1 Methods and concepts at a glance/);
-  assert.match(contents, /4\.1 findings details/);
-  assert.match(note, /#### 3\.1\.1 Counts[\s\S]*Counts describe the total burden\./);
-  assert.ok(note.indexOf('## Reading overview') < note.indexOf('## Contents'));
-  assert.ok(note.indexOf('## Contents') < note.indexOf('## 1. ABSTRACT'));
-  assert.match(note, /- \*\*\[4\. FINDINGS\]\(#4\.%20FINDINGS\)\*\*/);
-  assert.match(note, /  - \[4\.1 findings details\]\(#4\.1%20findings%20details\)/);
-  assert.match(note, /\[figure\]\(#Figure%201%20%C2%B7%20Source%20p\.%202\)/);
+  assert.doesNotMatch(note, /^#### /m);
+  assert.ok(note.indexOf('## Reading overview') < note.indexOf('## 1. Abstract'));
   assert.match(note, /\^rf-findings/);
   assert.match(note, /\^rf-visual-fig-1/);
   // Program validation establishes target existence, not native Obsidian click acceptance.
@@ -544,9 +499,8 @@ test('editor encodes parentheses in visual headings and resource paths without c
   data.presentation.source_pdf = 'Raw/paper (original).pdf';
   const result = renderReadingFirstObsidian(data);
   const note = result.notes[0].content;
-  assert.match(note, /#### Table 2 \(1\/2\) · Source p\. 2/);
-  const figureTarget = note.match(/\[figure\]\(#([^)]*)\)/)[1];
-  assert.equal(decodeURI(figureTarget), 'Table 2 (1/2) · Source p. 2');
+  assert.match(note, /^\*\*Table 2 \(1\/2\)\*\* · \[Original p\. 2\]/m);
+  assert.match(note, /^- \[Table 2 \(1\/2\)\]\(#\^rf-visual-fig-1\)$/m);
   assert.match(note, /Figures\/paper\/table%20%281%29\.png/);
   assert.match(note, /Raw\/paper%20%28original%29\.pdf/);
   const validation = validateReadingFirstPreviewFiles([...result.notes, ...result.supportNotes, ...result.assetPaths.map(path => ({ path, bytes: Buffer.from('resource') }))]);
@@ -604,7 +558,7 @@ test('shared Reading Editor retains an explained unlinked method in both languag
   data.readingEditor.languages['zh-CN'].methods[0].knowledge_ids = [];
   const result = renderReadingFirstObsidian(data);
   result.notes.forEach(note => {
-    const counts = note.content.split('#### 3.1.1 Counts')[1].split('#### 3.1.2')[0];
+    const counts = note.content.split('> [!info] Counts')[1].split('> [!info] Standardisation')[0];
     assert.match(counts, /Counts describe the total burden\./);
     assert.match(counts, /The study reports burden\./);
     assert.doesNotMatch(counts, /Shared explanation|共享讲解/);
@@ -632,15 +586,11 @@ test('complete original captions and footnotes remain beside images before separ
 test('reading editor 1.3 retains full map and navigation with no folded content', () => {
   const data = compactInput();
   data.presentation.map.findings.push({ id: 'other', label: { en: 'Other finding', 'zh-CN': '其他发现' }, section_id: 'findings' });
-  data.readingEditor.schema_version = 'reading-editor-1.2';
-  const old = renderReadingFirstObsidian(data).notes;
-  data.readingEditor.schema_version = 'reading-editor-1.3';
   const next = renderReadingFirstObsidian(data).notes;
   for (let i = 0; i < next.length; i++) {
     assert.doesNotMatch(next[i].content, /^> \[![^\]]+\]-/m);
     assert.doesNotMatch(next[i].content, /<details\b/i);
     assert.doesNotMatch(next[i].content, /^#### /m);
     assert.match(next[i].content, /other|其他发现/i);
-    assert.equal(next[i].content, old[i].content.replace(/^(> \[![^\]]+\])-/gm, '$1'));
   }
 });

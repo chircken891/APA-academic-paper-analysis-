@@ -11,11 +11,6 @@ import { createOwnedArtifactBroker } from '../../scripts/v3/owned-artifact-store
 import { freezeRenderContext, PHASE22_REGIONS } from '../../scripts/v3/phase22-render-context.mjs';
 const digest = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 
-test('reader evidence binding access rejects an unowned review', async () => {
-  const { getReaderReviewSourceBindings } = await import('../../scripts/v3/phase22-review.mjs');
-  await assert.rejects(getReaderReviewSourceBindings({}), /P22_REVIEW_NOT_OWNED/);
-});
-
 async function contextFixture(t, options = {}) {
   const f = await createPhase22Fixture({ t, presentation:options.presentation, conflicts:options.conflicts??[], mutateScientificInput: sci => { sci.scientific_details.explanations[0].full_term = 'Independent evaluation'; options.mutateScientificInput?.(sci); } });
   const validator = await createPhase22ContractValidator(), admitted = await consumePhase21Handoff({ ...f, phase22Validator:validator });
@@ -151,7 +146,7 @@ async function acceptFixtureView(f,request,view=makeView(f,request)) {
 }
 
 import { createParityRequest, assessBilingualParity, listParityTargets, PARITY_DIMENSIONS } from '../../scripts/v3/phase22-parity.mjs';
-import { collectLanguageSpans } from '../../scripts/v3/phase22-language.mjs';
+import { collectLanguageSpans } from '../../scripts/v3/phase22-language-spans.mjs';
 async function parityFixture(t,{mutateView,fixtureOptions={}}={}) {
  const f=await languageFixture(t,fixtureOptions),views={},accepted={};
  for(const request of f.requests) {
@@ -448,6 +443,34 @@ test('06-01 actual producers publish a complete temporary generation and query e
   assert.equal(journal.state, 'committed');
   assert.equal(journal.inventory.length, dry.plan.inventory.length);
   assert.equal((await createPhase22ContractValidator()).validate('phase22/publication-transaction-1.0', journal).ok, true);
+});
+
+test('Controller public identity can be prepared without writes or grants and later registers with the same key', async t => {
+  const api = await import('../../scripts/v3/phase22-publication.mjs');
+  const f = await publicationFixture(t), scope = { vaultRoot: f.vaultRoot, run: f.run };
+  assert.throws(() => api.getBilingualPublicationTrustAnchor(scope), /P22_CONTROLLER_TRUST_REQUIRED/);
+  const before = await readdir(f.artifactRoot, { recursive: true });
+  const anchor = api.prepareBilingualPublicationTrustAnchor(scope);
+  assert.deepEqual(api.prepareBilingualPublicationTrustAnchor(scope), anchor);
+  assert.deepEqual(api.getBilingualPublicationTrustAnchor(scope), anchor);
+  assert.deepEqual(Object.keys(anchor).sort(), ['public_key', 'run_id', 'schema_version', 'vault_root']);
+  const absentRoot = join(f.vaultRoot, 'not-created-by-key-preparation');
+  const otherRoot = api.prepareBilingualPublicationTrustAnchor({ vaultRoot: absentRoot, run: f.run });
+  const otherRun = api.prepareBilingualPublicationTrustAnchor({ vaultRoot: f.vaultRoot, run: f.run + '-other' });
+  assert.notEqual(otherRoot.public_key, anchor.public_key); assert.notEqual(otherRun.public_key, anchor.public_key);
+  assert.deepEqual(await readdir(f.artifactRoot, { recursive: true }), before);
+  await assert.rejects(lstat(absentRoot), { code: 'ENOENT' });
+  await assert.rejects(lstat(join(f.vaultRoot, '.apa-v3')), { code: 'ENOENT' });
+  for (const invalid of [{ run: f.run }, { vaultRoot: null, run: f.run }, { vaultRoot: f.vaultRoot, run: '../bad' }]) {
+    assert.throws(() => api.prepareBilingualPublicationTrustAnchor(invalid), /P22_CONTROLLER_TRUST_REQUIRED/);
+  }
+  const dry = await api.dryRunBilingualPublication({ vaultRoot: f.vaultRoot, run: f.run, review: f.review });
+  assert.equal(dry.ok, true, JSON.stringify(dry));
+  const registered = await api.registerBilingualPublication({ ...scope, plan: dry.plan, sourceInputs: { basis: f.basis, context: f.context, views: f.views,
+    parity: f.parity, currentControl: f.currentControl, integratorReceipt: f.integratorReceipt, languageRunControl: f.runControl, languageController: f.created.controller } });
+  assert.deepEqual(registered.trust_anchor, anchor);
+  const loaded = await api.loadBilingualPublication({ ...scope, trustAnchor: anchor });
+  assert.deepEqual(loaded.plan.hashes, dry.plan.hashes);
 });
 
 test('06-01 missing approval or a source-forged control causes zero business writes', async t => {

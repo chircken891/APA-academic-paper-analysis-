@@ -1,6 +1,5 @@
 param(
   [string]$RepoRoot,
-  [string]$GlobalSkillRoot,
   [string]$GlobalBinRoot,
   [switch]$RepairGlobalIntegration
 )
@@ -11,78 +10,13 @@ $repoRoot = if ($RepoRoot) {
 } else {
   [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 }
-$profileRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
-if (-not $GlobalSkillRoot) {
-  $GlobalSkillRoot = Join-Path $profileRoot '.agents\skills\academic-paper-analysis'
-}
 if (-not $GlobalBinRoot) {
   $GlobalBinRoot = (& npm config get prefix).Trim()
   if ($LASTEXITCODE -ne 0 -or -not $GlobalBinRoot) { throw 'Unable to resolve the user npm bin directory.' }
 }
-$GlobalSkillRoot = [System.IO.Path]::GetFullPath($GlobalSkillRoot)
 $GlobalBinRoot = [System.IO.Path]::GetFullPath($GlobalBinRoot)
-$canonicalSkillRoot = Join-Path $repoRoot '.agents\skills\academic-paper-analysis'
-$globalSkillContainer = Split-Path -Parent $GlobalSkillRoot
-$globalSkillBase = Split-Path -Parent $globalSkillContainer
-$skillBackupRoot = Join-Path (Join-Path $globalSkillBase 'backups\skills') (Split-Path -Leaf $GlobalSkillRoot)
 $cmdPath = Join-Path $GlobalBinRoot 'mineru.cmd'
 $launcherPath = Join-Path $GlobalBinRoot 'mineru-local.ps1'
-
-if (-not (Test-Path -LiteralPath $canonicalSkillRoot -PathType Container)) {
-  throw "Canonical APA skill does not exist: $canonicalSkillRoot"
-}
-
-function Get-ProjectedSkillBytes([string]$Path) {
-  $bytes = [System.IO.File]::ReadAllBytes($Path)
-  if ([System.IO.Path]::GetExtension($Path) -ine '.md') { return ,$bytes }
-  $text = [System.Text.Encoding]::UTF8.GetString($bytes)
-  foreach ($match in [regex]::Matches($text, '\]\(((?:\.\./)+[^)]+)\)')) {
-    $parts = ($match.Groups[1].Value -split '#', 2)
-    $absolute = [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $Path) $parts[0]))
-    if (-not $absolute.StartsWith($canonicalSkillRoot.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
-      if (-not (Test-Path -LiteralPath $absolute)) { throw "Canonical APA reference does not exist: $absolute" }
-      $suffix = if ($parts.Length -eq 2) { '#' + $parts[1] } else { '' }
-      $text = $text.Replace($match.Value, '](<' + $absolute.Replace('\', '/') + $suffix + '>)')
-    }
-  }
-  return ,([System.Text.Encoding]::UTF8.GetBytes($text))
-}
-
-function Get-DirectoryInventory([string]$Root, [switch]$ProjectReferences) {
-  if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return $null }
-  $rootItem = Get-Item -LiteralPath $Root -Force
-  if ($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-    throw "Global APA skill root must not be a link: $Root"
-  }
-  $inventory = @(
-    Get-ChildItem -LiteralPath $Root -Recurse -Force -File | ForEach-Object {
-      if ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-        throw "Global APA skill contains a link: $($_.FullName)"
-      }
-      [pscustomobject]@{
-        path = $_.FullName.Substring($Root.TrimEnd('\').Length + 1).Replace('\', '/')
-        sha256 = if ($ProjectReferences) { Get-BytesSha256 (Get-ProjectedSkillBytes $_.FullName) } else { Get-Sha256 $_.FullName }
-      }
-    } | Sort-Object path
-  )
-  return ($inventory | ConvertTo-Json -Compress)
-}
-
-function Get-BytesSha256([byte[]]$Bytes) {
-  $sha = [System.Security.Cryptography.SHA256]::Create()
-  try { return -join ($sha.ComputeHash($Bytes) | ForEach-Object { $_.ToString('x2') }) } finally { $sha.Dispose() }
-}
-
-function Get-Sha256([string]$Path) {
-  $stream = [System.IO.File]::OpenRead($Path)
-  $sha = [System.Security.Cryptography.SHA256]::Create()
-  try {
-    return -join ($sha.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') })
-  } finally {
-    $sha.Dispose()
-    $stream.Dispose()
-  }
-}
 
 function Get-FileState([string]$Path, [string]$Expected, [switch]$RequireUtf8Bom) {
   if (-not (Test-Path -LiteralPath $Path)) { return 'missing' }
@@ -96,23 +30,14 @@ function Get-FileState([string]$Path, [string]$Expected, [switch]$RequireUtf8Bom
   return 'conflict'
 }
 
-function Backup-Existing([string]$Path, [string]$BackupRoot) {
+function Backup-Existing([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path)) { return $null }
   $stamp = [DateTime]::UtcNow.ToString('yyyyMMddHHmmssfff')
-  $backup = if ($BackupRoot) {
-    New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
-    Join-Path $BackupRoot $stamp
-  } else {
-    "$Path.backup-$stamp"
-  }
+  $backup = "$Path.backup-$stamp"
   $counter = 0
   while (Test-Path -LiteralPath $backup) {
     $counter += 1
-    $backup = if ($BackupRoot) {
-      Join-Path $BackupRoot "$stamp-$counter"
-    } else {
-      "$Path.backup-$stamp-$counter"
-    }
+    $backup = "$Path.backup-$stamp-$counter"
   }
   Move-Item -LiteralPath $Path -Destination $backup
   return $backup
@@ -157,19 +82,9 @@ exit `$exitCode
 "@
 $launcherContent = $launcherContent.Replace("`n", "`r`n")
 
-$canonicalInventory = Get-DirectoryInventory $canonicalSkillRoot -ProjectReferences
-$skillState = if (-not (Test-Path -LiteralPath $GlobalSkillRoot)) {
-  'missing'
-} elseif (-not (Test-Path -LiteralPath $GlobalSkillRoot -PathType Container)) {
-  'conflict'
-} else {
-  $skillInventory = Get-DirectoryInventory $GlobalSkillRoot
-  if ($skillInventory -ceq $canonicalInventory) { 'current' } else { 'conflict' }
-}
 $cmdState = Get-FileState $cmdPath $cmdContent
 $launcherState = Get-FileState $launcherPath $launcherContent -RequireUtf8Bom
 $conflicts = @()
-if ($skillState -eq 'conflict') { $conflicts += $GlobalSkillRoot }
 if ($cmdState -eq 'conflict') { $conflicts += $cmdPath }
 if ($launcherState -eq 'conflict') { $conflicts += $launcherPath }
 if ($conflicts.Count -gt 0 -and -not $RepairGlobalIntegration) {
@@ -183,18 +98,9 @@ if (-not ($pathEntries | Where-Object { $_ -ieq $GlobalBinRoot.TrimEnd('\') })) 
   throw "User npm bin is not on PATH: $GlobalBinRoot"
 }
 
-if ($skillState -eq 'conflict') { Backup-Existing $GlobalSkillRoot $skillBackupRoot | Write-Output }
 if ($cmdState -eq 'conflict') { Backup-Existing $cmdPath | Write-Output }
 if ($launcherState -eq 'conflict') { Backup-Existing $launcherPath | Write-Output }
 
-if ($skillState -ne 'current') {
-  New-Item -ItemType Directory -Path (Split-Path -Parent $GlobalSkillRoot) -Force | Out-Null
-  Copy-Item -LiteralPath $canonicalSkillRoot -Destination $GlobalSkillRoot -Recurse
-  Get-ChildItem -LiteralPath $canonicalSkillRoot -Recurse -File -Filter '*.md' | ForEach-Object {
-    $relativePath = $_.FullName.Substring($canonicalSkillRoot.TrimEnd('\').Length + 1)
-    [System.IO.File]::WriteAllBytes((Join-Path $GlobalSkillRoot $relativePath), (Get-ProjectedSkillBytes $_.FullName))
-  }
-}
 New-Item -ItemType Directory -Path $GlobalBinRoot -Force | Out-Null
 if ($cmdState -ne 'current') {
   [System.IO.File]::WriteAllText($cmdPath, $cmdContent, [System.Text.UTF8Encoding]::new($false))
@@ -203,8 +109,8 @@ if ($launcherState -ne 'current') {
   [System.IO.File]::WriteAllText($launcherPath, $launcherContent, [System.Text.UTF8Encoding]::new($true))
 }
 
-if ($skillState -eq 'current' -and $cmdState -eq 'current' -and $launcherState -eq 'current') {
-  Write-Output 'Global integration no-op: APA skill and MinerU launchers are current.'
+if ($cmdState -eq 'current' -and $launcherState -eq 'current') {
+  Write-Output 'Global integration no-op: MinerU launchers are current.'
 } else {
-  Write-Output "Global integration ready: $GlobalSkillRoot; $GlobalBinRoot"
+  Write-Output "Global integration ready: $GlobalBinRoot"
 }

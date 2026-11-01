@@ -78,7 +78,7 @@ async function createHarness(t, { recommendedFreeGib = 0 } = {}) {
     '',
   ].join('\r\n'), 'utf8');
   await writeFile(join(repoRoot, 'scripts', 'setup', 'install-global-integrations.ps1'), [
-    'param([string]$RepoRoot, [string]$GlobalSkillRoot, [string]$GlobalBinRoot, [switch]$RepairGlobalIntegration)',
+    'param([string]$RepoRoot, [string]$GlobalBinRoot, [switch]$RepairGlobalIntegration)',
     "New-Item -ItemType Directory -Path (Join-Path $RepoRoot '.runtime\\test') -Force | Out-Null",
     "[System.IO.File]::WriteAllText((Join-Path $RepoRoot '.runtime\\test\\global-bin.txt'), $GlobalBinRoot)",
     '',
@@ -99,7 +99,6 @@ function runBootstrap(harness, extraEnv = {}, selection = ['-InstallMineru', '-I
       '-RepoRoot', harness.repoRoot,
       '-BasePython', harness.python,
       '-CompanionSkillRoot', harness.root,
-      '-GlobalSkillRoot', join(harness.root, '用户 profile', '.agents', 'skills', 'academic-paper-analysis'),
       ...selection,
     ], {
       env: {

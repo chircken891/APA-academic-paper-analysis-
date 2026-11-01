@@ -16,7 +16,7 @@ def extract(request):
     if not source.is_file() or not root.is_dir():
         raise ValueError('invalid source or output directory')
     parent = {'path': str(source), **fingerprint(source.read_bytes())}
-    records = []
+    planned = []
     names = set()
     for item in request['items']:
         name = item['filename']
@@ -46,14 +46,25 @@ def extract(request):
                 data = page_obj.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect, alpha=False).tobytes('png')
         else:
             raise ValueError('source and locator mismatch')
-        with target.open('xb') as file:
-            file.write(data)
-        records.append({'id': item['id'], 'source_id': request['source_id'], 'locator': locator,
-                        'source_path': str(target), 'path': item['path'], **fingerprint(data), 'parent': parent})
-    return {'version': 'reading-resources-1.0', 'resources': records}
+        planned.append((target, data, {'id': item['id'], 'source_id': request['source_id'], 'locator': locator,
+                        'source_path': str(target), 'path': item['path'], **fingerprint(data), 'parent': parent}))
+    written = []
+    try:
+        for target, data, _ in planned:
+            with target.open('xb') as file:
+                written.append(target)
+                file.write(data)
+    except OSError:
+        for target in written:
+            target.unlink(missing_ok=True)
+        raise
+    return {'version': 'reading-resources-1.0', 'resources': [record for _, _, record in planned]}
 
 
 if __name__ == '__main__':
+    sys.stdin.reconfigure(encoding='utf-8-sig')
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding='utf-8')
     try:
         print(json.dumps(extract(json.load(sys.stdin)), ensure_ascii=False))
     except (ValueError, KeyError, OSError, zipfile.BadZipFile) as error:

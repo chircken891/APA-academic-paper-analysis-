@@ -79,23 +79,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-wind
 
 工程自带 `academic-paper-analysis`、`apa-query` 和 `apa-setup` 三个项目技能，位于项目 `.agents/skills/`。用户同意将仓库设为工作目录后即可使用这些随仓库提供的技能。论文阅读与续接使用 `academic-paper-analysis`；已入库论文的查询、比较、专题保存和更新使用 [apa-query](.agents/skills/apa-query/SKILL.md)；配置检查和修改使用 `apa-setup`。它们读取同一个 `config/apa.local.json`。新论文阅读需要完整阅读配置；查询模型和回答偏好均可留空，分别默认跟随当前会话、问题语言和问题所需详略。明确保存专题时才需要共享候选目录，无需为查询再次完成整套阅读设置。
 
-若宿主没有自动发现新技能，在本工程中新开会话，或直接让助手读取 `.agents/skills/apa-query/SKILL.md`。下面的可选全局安装器仍只管理全局 APA 副本与 MinerU 命令，不安装独立的全局 `apa-query` 副本。
+若宿主没有自动发现新技能，在本工程中新开会话，或直接让助手读取 `.agents/skills/apa-query/SKILL.md`。下面的可选全局安装器只管理 MinerU 命令，不安装任何 APA 技能副本。
 
 ## 可选全局集成
 
-本库技能可直接使用。以下可选安装器针对 Codex 的全局 APA 副本与命令集成，需要时才执行：
+本库技能可直接使用。以下可选安装器针对 MinerU 命令（`mineru.cmd`、`mineru-local.ps1`）的全局集成，需要时才执行：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1 -InstallGlobalIntegration
 ```
 
-已有不同内容的安装不会静默覆盖；检查具体差异后再明确选择修复参数。`-RepairGlobalIntegration` 必须同时带 `-InstallGlobalIntegration`。`npm run verify:apa-skill` 仅核对同步，不安装。
+已有不同内容的安装不会静默覆盖；检查具体差异后再明确选择修复参数。`-RepairGlobalIntegration` 必须同时带 `-InstallGlobalIntegration`。
 
 ## Obsidian 与更新
 
 将工程目录作为知识库打开。配置页不改已有 Obsidian 设置。`npm run setup:check:full` 增加 Obsidian 检查。默认检索和图谱以已提交 V3 记录确定登记范围，读取已登记笔记的当前内容；候选交付与正式发布分开。
 
-更新保留本地答案与知识资料。重新检查依赖和配置即可；旧运行不自动重绑。
+更新保留本地答案与知识资料。重新检查依赖和配置即可；已提交的历史运行不再续接。
 
 ## 故障处理
 
@@ -104,14 +104,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-wind
 | 缺少答案 | 生成页面补全，再应用操作 JSON |
 | 所选文件不存在 | 修正路径或明确安装，不自动换服务 |
 | 页面过期 | 重新生成，在最新配置上重做操作 |
-| 模型组合不可用 | 新运行派发前按当前宿主能力调整；旧运行保留原断点 |
+| 模型组合不可用 | 新运行派发前按当前宿主能力调整；进行中的运行保留原断点 |
 | 网络或用量中断 | 保存绑定、已接受输出及剩余预算，从断点继续 |
-| 全局技能不同步 | 使用本库技能，或另行批准全局同步 |
 
 工程检查、合成测试、真实解析、科学阅读、原生显示和正式发布需分别报告。
 
 
-配置字段与导入导出详见 [配置说明](docs/CONFIGURATION.md)。显式全局修复的技能恢复点在用户目录 `.agents/backups/skills/academic-paper-analysis/<UTC timestamp>`；启动器备份在原文件旁，后缀 `.backup-<timestamp>`。
+配置字段与导入导出详见 [配置说明](docs/CONFIGURATION.md)。显式全局修复时，启动器备份在原文件旁，后缀 `.backup-<timestamp>`。
 
 ## 安装前检测报告
 

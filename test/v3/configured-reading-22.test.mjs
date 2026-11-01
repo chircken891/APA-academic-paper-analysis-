@@ -16,7 +16,7 @@ test('2.2 default freezes new prompt and derives bounded budget', () => {
     assert.equal(item.metadata.sha256, 'sha256:' + createHash('sha256').update(item.content).digest('hex'));
     assert.equal(item.metadata.byte_length, Buffer.byteLength(item.content));
   }
-  assert.equal(buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-2.1'}).frozen_support, undefined);
+  assert.throws(() => buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-2.1'}), { code: 'READING_BINDING_RETIRED' });
   assert.equal(deriveConfiguredMaxCalls({ maxTotalCalls: 14, presentationMode: 'reading-editor' }), 8);
   assert.equal(deriveConfiguredMaxCalls({ maxTotalCalls: 11, presentationMode: 'reading-editor' }), 5);
   assert.equal(deriveConfiguredMaxCalls({ maxTotalCalls: 20, presentationMode: 'writer' }), 6);

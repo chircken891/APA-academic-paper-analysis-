@@ -106,6 +106,7 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
     role: key.startsWith('presentation') ? 'reading-editor' : translationLanguage && key.startsWith(translationLanguage === 'en' ? 'en' : 'zh') ? 'translation' : key.startsWith('en') ? 'english-writer' : key.startsWith('zh') ? 'chinese-writer' : 'independent-verifier',
     artifact_id: key, artifact_path: 'accepted/' + key + '.json', native_path: 'native/' + key + '.json', revision: '1',
     ...(options.instructionFiles ? { instruction_path: 'instructions/' + key + '.txt' } : {}),
+    ...(translationLanguage && key.startsWith(translationLanguage === 'en' ? 'en' : 'zh') ? { source_view_path: 'translation/' + key + '/source.json', translation_context_path: 'translation/' + key + '/context.json', progress_path: 'translation/' + key + '/progress.json' } : {}),
   }]));
   const input = {
     identity: { paper_id: paperId, run_id: runId, ...(options.analysisRevision ? { analysis_revision: options.analysisRevision } : {}) },
@@ -117,7 +118,7 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
     authorizationId: 'synthetic-publication-source-only', deadline: options.deadline ?? '2099-01-01T00:00:00Z', maxCalls: 7,
     writingMode: 'source-first', sourceLanguage: 'en', presentationMode: 'reading-editor', taskBindings: tasks, ...options.controlOptions,
     ...(options.manifestDocx ? {maxTotalCalls:20,presentationProfile:'reading-editor-1.3',configuredSetup:{...buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-2.2'}),paths:{runRoot:root},results_resources:{output_root:'resources/results',manifest_task:manifestTask}}} : {}),
-    ...(options.currentRegistryRoot ? { configuredSetup: { paths: { runRoot: root }, writing_instructions: { en: '', 'zh-CN': '' },
+    ...(options.currentRegistryRoot ? { maxTotalCalls: 20, configuredSetup: { ...buildConfiguredReadingInstructions({}), paths: { runRoot: root },
       knowledge_registry: { policy: 'current-shared-nodes-1.0', vault_root: options.currentRegistryRoot } } } : {}) });
   const binding = runBinding.reading_first_binding;
   const authorizedBindings = [
@@ -151,7 +152,7 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
   const scientificInput = { ...input, profile: 'reading-first-1.0' };
   const handoff = await buildReadingFirstHandoff({ run: { run_id: runId }, dispatchContext: broker.dispatchContext, artifactRoot: root, scientificInput });
   const runControl = { runId, artifactRoot: root, dispatchContext: broker.dispatchContext };
-  const created = createReadingFirstRequests({ handoff, runControl, ...(options.manifestDocx ? {executionLedger:[]} : {}) });
+  const created = createReadingFirstRequests({ handoff, runControl, ...(binding.configured_setup ? {executionLedger:[]} : {}) });
   assert.equal(created.ok, true, JSON.stringify(created.errors));
   const controller = created.controller;
   const settleCompaction = async (id, candidate) => {
@@ -184,7 +185,7 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
       action_id: step.action_id, run_id: runId, input_fingerprint: step.input_fingerprint, port: 'current-collaboration',
       tool_call: { name: step.action, arguments: step.arguments }, raw_result_text: raw,
     };
-    if (options.manifestDocx) {
+    if (binding.configured_setup) {
       const evidencePath=join(root,'native','evidence-'+request.task.task_id+'.txt'); await writeFile(evidencePath,raw);
       observation.evidence={kind:'raw',capture:'direct',sha256:sha(Buffer.from(raw)).slice(7),source_reference:evidencePath};
       recordReadingFirstRequestEvent({controller,request,eventKey:'intent',payload:{action_id:step.action_id}});

@@ -6,10 +6,8 @@ import { canonicalizeV3Json, fingerprintV3Json as hash } from './semantic-packag
 import { assertBilingualParity } from './phase22-parity.mjs';
 import { assertRenderedBilingualNotes } from './phase22-render.mjs';
 import { inspectManagedNote, mergeManagedNote } from './phase22-managed-markdown.mjs';
-import { assertActiveGeneration, assertActiveIndexContract, assertIndexGeneration, verifyIndexPaperBytes, verifyReaderPresentation, readerIndexDocuments } from './phase22-active-version.mjs';
-import { getReaderPresentationContent, READER_PROFILE } from './phase221-presentation.mjs';
-import { assertReaderReviewCurrent, assertPreparedReaderReviewCurrent } from './phase221-reading-review.mjs';
-import { collectLanguageSpans } from './phase22-language.mjs';
+import { assertActiveGeneration, assertActiveIndexContract, assertIndexGeneration, verifyIndexPaperBytes } from './phase22-active-version.mjs';
+import { collectLanguageSpans } from './phase22-language-spans.mjs';
 import { readPhase22SourceAsset } from './phase22-input.mjs';
 import { validatePhase22TargetPath } from './phase22-render-context.mjs';
 import { buildReadingFirstPublicationReview, assertReadingFirstPublicationReviewCurrent } from './reading-first-publication.mjs';
@@ -129,9 +127,8 @@ function candidatePair({ index, active, generation, basis, context, views, parit
 }
 
 /** In-memory review assembly. It writes no vault files and grants no publication authority. */
-export function buildBilingualReview({ basis, context, views, parity, rendered, presentation, readingReview, readingFirst, existingTargets = [], activeSnapshot = {} } = {}) {
+export function buildBilingualReview({ basis, context, views, parity, rendered, readingFirst, existingTargets = [], activeSnapshot = {} } = {}) {
   if (readingFirst) return buildReadingFirstPublicationReview(readingFirst);
-  if (presentation) return buildReaderReview({ presentation, readingReview, existingTargets, activeSnapshot });
   const args = { basis, context, views, parity, rendered, existingTargets, activeSnapshot };
   assertBilingualParity(parity, { basis, context, views, currentDependencies: activeSnapshot.currentDependencies });
   assertRenderedBilingualNotes(rendered, { basis, context, views, parity });
@@ -294,7 +291,6 @@ export function assertBilingualReviewCurrent(review, currentArgs) {
   if (review?.reviewManifest?.profile === 'reading-first-obsidian-1.0') return assertReadingFirstPublicationReviewCurrent(review);
   const record = records.get(review);
   if (!record) fail('P22_REVIEW_NOT_OWNED');
-  if (record.reader) return assertReaderPackageCurrent(review, currentArgs ?? record.args);
   if (record.stamp !== hash({ reviewManifest: review.reviewManifest, inventory: inventoryStamp(review.outputInventory), hashes: review.hashes })) fail('P22_REVIEW_OUTPUT_INVALIDATED');
   if (!same(record.tools, toolManifest())) fail('P22_REVIEW_TOOL_INVALIDATED');
   const args = currentArgs ?? record.args;
@@ -304,144 +300,4 @@ export function assertBilingualReviewCurrent(review, currentArgs) {
   const current = buildBilingualReview(args);
   if (!same(current.hashes, review.hashes)) fail('P22_REVIEW_DEPENDENCY_INVALIDATED');
   return review;
-}
-
-/** Reader packages consume already-merged producer bytes and owned final-page judgments. */
-async function buildReaderReview(args) {
-  const { presentation, readingReview, existingTargets, activeSnapshot } = args;
-  const data = await getReaderPresentationContent(presentation), manifest = presentation.manifest;
-  if (!readingReview?.prepared || !readingReview.review) fail('P221_REVIEW_ASSESSMENT_REQUIRED');
-  const prepared = await assertPreparedReaderReviewCurrent(readingReview.prepared);
-  const checked = await assertReaderReviewCurrent({ ...readingReview, presentation });
-  if (!checked.current || prepared.presentation_sha256 !== digest(presentation.presentationBytes)
-    || !same(prepared.identity, manifest.identity) || !same(prepared.dependencies, manifest.dependencies)) fail('P221_REVIEW_READING_BINDING_INVALID');
-  for (const language of languages) {
-    const bytes = presentation[language === 'en' ? 'en' : 'zhCN'];
-    if (prepared.pages.find(row => row.language === language)?.byte_sha256 !== digest(bytes)) fail('P221_REVIEW_FINAL_BYTES_MISMATCH');
-  }
-  if (!Array.isArray(existingTargets)) fail('P22_REVIEW_PREIMAGES_REQUIRED');
-  const preimages = new Map(), seen = new Set(), output = [], readDependencies = [], previews = [];
-  for (const row of existingTargets) {
-    const path = safePath(row.path), key = path.normalize('NFC').toLowerCase();
-    if (seen.has(key)) fail('P22_REVIEW_TARGET_COLLISION');
-    if (row.bytes !== null && !(row.bytes instanceof Uint8Array)) fail('P22_REVIEW_PREIMAGE_REQUIRED');
-    seen.add(key); preimages.set(path, row);
-  }
-  seen.clear();
-  const before = path => {
-    if (!preimages.has(path)) fail('P22_REVIEW_PREIMAGE_REQUIRED', '/', { path });
-    return preimages.get(path);
-  };
-  const add = (path, kind, bytes, extra = {}) => {
-    safePath(path); const key = path.normalize('NFC').toLowerCase();
-    if (seen.has(key)) fail('P22_REVIEW_TARGET_COLLISION');
-    seen.add(key); const original = before(path), owned = byteArray(bytes, path);
-    const row = { path, kind, bytes: owned, byte_sha256: digest(owned), byte_length: owned.length,
-      before_sha256: original.bytes === null ? null : digest(original.bytes), before_byte_length: original.bytes?.length ?? null, ...extra };
-    output.push(row); return row;
-  };
-  for (const language of languages) {
-    const path = manifest.targets.notes[language].path, bytes = presentation[language === 'en' ? 'en' : 'zhCN'];
-    const prior = before(path), info = inspectManagedNote(bytes);
-    if (prior.bytes !== null && (!prior.managedHash || inspectManagedNote(prior.bytes).managedHash !== prior.managedHash)) fail('P22_REVIEW_MANAGED_PREIMAGE_REQUIRED');
-    // This is a preservation check only. Never replace the already-reviewed bytes with a second merge.
-    if (prior.bytes !== null && !mergeManagedNote({ existingBytes: prior.bytes, rendered: bytes, expectedManagedHash: prior.managedHash }).bytes.equals(bytes)) fail('P221_REVIEW_HUMAN_PREIMAGE_MISMATCH');
-    const row = add(path, 'paper', bytes, { language, managed_hash: info.managedHash, before_managed_hash: prior.managedHash ?? null });
-    previews.push({ language, path, byte_sha256: row.byte_sha256, byte_length: row.byte_length, managed_hash: info.managedHash,
-      human_ranges: info.humanRanges.map(range => ({ from: range.from, to: range.to, byte_sha256: digest(range.bytes) })) });
-  }
-  for (const note of presentation.supportNotes) {
-    const path = note.target_path ?? note.path;
-    if (note.disposition === 'reuse') {
-      const prior = before(path);
-      if (prior.bytes === null || digest(prior.bytes) !== note.byte_sha256) fail('P22_SUPPORT_REUSE_INVALIDATED');
-      readDependencies.push({ path, entity_id: note.entity_id, disposition: 'reuse', byte_sha256: note.byte_sha256, byte_length: prior.bytes.length, definition_fingerprint: note.definition_fingerprint });
-    } else {
-      if (before(path).bytes !== null) fail('P22_SUPPORT_EXISTING_TARGET');
-      add(path, 'support', note.bytes);
-    }
-  }
-  for (const asset of presentation.assets) add(asset.target_path, 'asset', asset.bytes, { asset_id: asset.asset_id });
-  for (const row of presentation.readingRecords) add(row.target_path, 'reader-record', row.bytes, { language: row.language });
-  if (presentation.stylesheet) add(presentation.stylesheet.path, 'reader-style', presentation.stylesheet.bytes);
-  const presentationRow = add(manifest.targets.presentation, 'reader-presentation', presentation.presentationBytes);
-  const readingPath = '.apa-v3/phase221/reading-review/' + prepared.prepared_fingerprint.slice(7) + '.json';
-  const readingRow = add(readingPath, 'reading-review', jsonBytes(readingReview.review));
-  const generation = activeSnapshot.generation, previousGeneration = activeSnapshot.previous_generation ?? null;
-  if (typeof generation !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(generation)) fail('P22_GENERATION_INVALID');
-  if (generation === previousGeneration) fail('P22_GENERATION_NOT_NEW');
-  const readCandidate = name => {
-    const candidate = activeSnapshot[name];
-    if (!candidate?.bytes || digest(candidate.bytes) !== candidate.byte_sha256) fail('P221_REVIEW_PAIR_REQUIRED');
-    return parseJson(candidate.bytes, 'P221_REVIEW_PAIR_INVALID', name);
-  };
-  const active = assertActiveGeneration(readCandidate('candidateActive')), index = readCandidate('candidateIndex');
-  assertIndexGeneration(index, active);
-  const mode = readingReview.review.evidence_mode;
-  if (active.generation_id !== generation || active.evidence_mode !== mode || mode !== data.qualification.evidence_mode) fail('P221_REVIEW_GENERATION_BINDING_INVALID');
-  const paper = active.papers.find(row => row.paper_id === manifest.identity.paper_id);
-  if (!paper || paper.profile !== READER_PROFILE || paper.core_hash !== hash(data.core)) fail('P221_REVIEW_PAPER_BINDING_INVALID');
-  verifyReaderPresentation(paper, presentation.presentationBytes, active);
-  const documents = readerIndexDocuments({ paper, presentation: manifest, notes: { en: presentation.en, 'zh-CN': presentation.zhCN }, generation: active, readingRecords: presentation.readingRecords }).sort((a, b) => a.id.localeCompare(b.id));
-  if (!same(index.documents.filter(row => row.paper_id === paper.paper_id), documents)) fail('P221_REVIEW_INDEX_CONTENT_INVALID');
-  const objects = new Map(active.objects.map(row => [row.path, row]));
-  for (const row of [...output, ...readDependencies]) {
-    const object = objects.get(row.path), kind = row.kind === 'paper' ? 'v3-note' : row.kind ?? 'support';
-    if (!object || object.kind !== kind || object.sha256 !== (row.managed_hash ?? row.byte_sha256)) fail('P221_REVIEW_OBJECT_BINDING_INVALID', '/', { path: row.path });
-  }
-  const base = '.apa-v3/phase22/generations/' + generation;
-  const indexRow = add(base + '/index.json', 'index', activeSnapshot.candidateIndex.bytes);
-  const activeRow = add(base + '/active.json', 'active', activeSnapshot.candidateActive.bytes);
-  const scientificReviewHash = hash({ dependencies: data.dependencies, qualification: data.qualification });
-  const ready = mode === 'actual' && checked.accepted;
-  const diagnostics = ready ? [] : [{ code: 'P221_READING_NOT_ACCEPTED', path: '/reading_gates', details: { gates: checked.gates } }];
-  const status = mode === 'synthetic' ? 'synthetic_prepared' : ready ? 'review_ready' : 'not_approvable';
-  const tools = { ...toolManifest(), ...prepared.review_tools, ...manifest.dependencies.reader_tools };
-  const reviewManifest = { schema_version: 'phase22/review-manifest-1.0', profile: READER_PROFILE, identity: manifest.identity,
-    status, evidence_mode: mode, review_ready: ready, publishable: false, scientific_review_hash: scientificReviewHash,
-    generation, previous_generation: previousGeneration, previews, dependencies: manifest.dependencies, tools,
-    reading_gates: checked.gates, reading_accepted: checked.accepted,
-    presentation: { path: presentationRow.path, byte_sha256: presentationRow.byte_sha256 },
-    reading_review: { path: readingRow.path, byte_sha256: readingRow.byte_sha256, prepared_fingerprint: prepared.prepared_fingerprint },
-    read_dependencies: readDependencies, index: { path: indexRow.path, byte_sha256: indexRow.byte_sha256 },
-    active: { path: activeRow.path, byte_sha256: activeRow.byte_sha256 }, write_set: output.map(({ bytes, ...row }) => row), diagnostics,
-    provenance_limits: data.qualification.provenance_limits ?? {} };
-  add(base + '/manifest.json', 'manifest', jsonBytes(reviewManifest));
-  output.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-  const hashes = { scientific_review_hash: scientificReviewHash, review_bundle_hash: hash({ reviewManifest, outputs: inventoryStamp(output), read_dependencies: readDependencies }),
-    output_inventory_hash: hash({ generation, previous_generation: previousGeneration, output: inventoryStamp(output), read_dependencies: readDependencies }) };
-  const result = freeze({ ok: true, status, reviewManifest, outputInventory: output, hashes, diagnostics });
-  records.set(result, { reader: true, args, stamp: hash({ reviewManifest, inventory: inventoryStamp(output), hashes }) });
-  return result;
-}
-
-async function assertReaderPackageCurrent(review, args) {
-  const record = records.get(review);
-  if (record.stamp !== hash({ reviewManifest: review.reviewManifest, inventory: inventoryStamp(review.outputInventory), hashes: review.hashes })) fail('P22_REVIEW_OUTPUT_INVALIDATED');
-  const current = await buildReaderReview(args);
-  if (!same(current.hashes, review.hashes)) fail('P22_REVIEW_DEPENDENCY_INVALIDATED');
-  return review;
-}
-
-/** Return only the physical evidence bindings of an owned, current reader review. */
-export async function getReaderReviewSourceBindings(review, renderer, reader) {
-  const record = records.get(review);
-  if (!record?.reader) fail('P22_REVIEW_NOT_OWNED');
-  await assertReaderPackageCurrent(review, record.args);
-  const { assertReaderPresentationRenderer } = await import('./phase221-presentation.mjs');
-  const quantityProof = assertReaderPresentationRenderer(record.args.presentation, renderer);
-  const data = await getReaderPresentationContent(record.args.presentation);
-  const bindings = [...(data.source_bindings ?? [])];
-  if (data.reviewed_support) {
-    const { getReviewedSupportBindings } = await import('./phase221-reviewed-support.mjs');
-    bindings.push(...getReviewedSupportBindings(data.reviewed_support));
-  }
-  if (!Object.hasOwn(data, 'producer')) {
-    const { getAcceptedReaderLanguageRecord } = await import('./phase22-language.mjs');
-    for (const view of Object.values(data.views)) bindings.push(...(getAcceptedReaderLanguageRecord(view).physical_bindings ?? []));
-  }
-  const { getOwnedReaderReviewEvidence } = await import('./phase221-reading-review.mjs');
-  const evidence = await getOwnedReaderReviewEvidence({ ...record.args.readingReview, ownedReview: reader?.ownedReview,
-    runtime: reader?.runtime, nativeObservationReceipt: reader?.nativeObservationReceipt, preparation: reader?.preparation });
-  return { ...evidence, quantityProof, bindings: [...structuredClone(bindings), ...evidence.bindings] };
 }

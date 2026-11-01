@@ -223,7 +223,7 @@ export async function dryRunBilingualPublication({ vaultRoot, run, review, plan:
   if (previousGeneration !== review.reviewManifest.previous_generation) fail('P22_PREVIOUS_GENERATION_CHANGED');
   const inventory = [];
   for (const row of review.outputInventory) {
-    if (!['paper', 'support', 'asset', 'active', 'index', 'manifest', 'reader-presentation', 'reading-review', 'reader-record', 'reader-style', 'topic'].includes(row.kind)) fail('P22_PUBLICATION_KIND_INVALID');
+    if (!['paper', 'support', 'asset', 'active', 'index', 'manifest', 'reader-presentation', 'topic'].includes(row.kind)) fail('P22_PUBLICATION_KIND_INVALID');
     const entry = await bindOutput(root, row);
     if (row.kind === 'paper' && entry.before_sha256 !== null) {
       const old = await observe(root, row.path);
@@ -624,7 +624,7 @@ export async function applyBilingualPublication(args = {}) {
   const rootInfo = await rootState(args.vaultRoot);
   if (rootInfo.root !== plan.vault_root || args.run !== plan.run_id || !sameIdentity(rootInfo.identity, plan.root_identity)) fail('P22_PUBLICATION_SCOPE_CHANGED');
   const planRecord = plans.get(plan);
-  if (plan.evidence_mode === 'actual' && ['phase22-reader-note-1.0', 'reading-first-obsidian-1.0'].includes(planRecord.review?.reviewManifest.profile)
+  if (plan.evidence_mode === 'actual' && planRecord.review?.reviewManifest.profile === 'reading-first-obsidian-1.0'
     && !planRecord.review.reviewManifest.reading_accepted) fail('P221_READER_NOT_ACCEPTED');
   const authority = await assertAuthority(args, plan);
   const controllerGrant = planRecord.controllerGrant ?? signControllerGrant(publicationGrantPayload(plan, authority));
@@ -884,7 +884,7 @@ function captureSourceBindings(sourceInputs, review) {
   const toolFiles = [
     'phase22-publication.mjs', 'phase22-review.mjs', 'phase22-render.mjs', 'phase22-managed-markdown.mjs',
     'phase22-active-version.mjs', 'phase22-search.mjs', 'phase22-graph.mjs', 'phase22-input.mjs',
-    'phase22-render-context.mjs', 'phase22-language.mjs', 'phase22-parity.mjs', 'phase22-contract-loader.mjs',
+    'phase22-render-context.mjs', 'phase22-language.mjs', 'phase22-language-spans.mjs', 'phase22-freeze.mjs', 'phase22-parity.mjs', 'phase22-contract-loader.mjs',
     'owned-artifact-store.mjs', 'semantic-package-validator.mjs',
   ].map(name => fileURLToPath(new URL('./' + name, import.meta.url)));
   const toolBindings = toolFiles.map(fileBinding);
@@ -894,228 +894,6 @@ function captureSourceBindings(sourceInputs, review) {
   toolBindings.push(fileBinding(fileURLToPath(new URL('../../prompts/v3/phase22-language-contracts.md', import.meta.url))));
   return { source_bindings: [...files.values()].sort((a, b) => a.path.localeCompare(b.path)), tool_bindings: toolBindings,
     control_snapshot: { source: clone(sourceControl), integrator: clone(contextControl), language: clone(languageControl), runtime: clone(runtimeSnapshot) } };
-}
-// Only older registrations replay their frozen producer inputs.
-function restoreRecipeData(value) {
-  if (value && typeof value === 'object' && Object.keys(value).length === 1 && typeof value.reader_bytes_base64 === 'string') {
-    const bytes = Buffer.from(value.reader_bytes_base64, 'base64');
-    if (bytes.toString('base64') !== value.reader_bytes_base64) fail('P221_REGISTRATION_RECIPE_INVALID');
-    return bytes;
-  }
-  if (Array.isArray(value)) return value.map(restoreRecipeData);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, restoreRecipeData(v)]));
-  return value;
-}
-async function assertReaderPresentationPlan(proof, renderer, context, views) {
-  if (!proof) return;
-  const { readOwnedArtifact } = await import('./owned-artifact-store.mjs');
-  const owned = await readOwnedArtifact({ artifactRoot: proof.artifactRoot, artifactId: proof.artifactId });
-  if (!owned || owned.receipt.role !== 'integration' || owned.receipt.sha256 !== proof.sha256) fail('P221_PRESENTATION_OWNED_MAPPING_REQUIRED');
-  const value = JSON.parse(owned.bytes), plan = value.presentation_plan, options = renderer.presentationOptions;
-  if (!plan || !same(plan, { researchMap: options?.researchMap, sharedExplanations: options?.sharedExplanations, auditDisplay: options?.auditDisplay })) fail('P221_PRESENTATION_MAPPING_CHANGED');
-  if (context && (value.dependencies?.context !== context.context_fingerprint || value.presentation_dependencies?.context !== hash(context)
-    || value.presentation_dependencies?.target_registry !== hash(renderer.targetRegistry)
-    || !same(value.dependencies?.views, Object.fromEntries(Object.entries(views).map(([language, view]) => [language, hash(view)]))))) fail('P221_PRESENTATION_MAPPING_DEPENDENCY_CHANGED');
-}
-async function captureReaderBindings(sourceInputs, review) {
-  const { basis, context, currentControl, integratorReceipt, reader } = sourceInputs ?? {};
-  if (!reader?.renderer || !reader.runtime?.runControl || !reader.runtime.checkpointReceipt || !reader.ownedReview || !reader.review) fail('P221_REGISTRATION_RECIPE_REQUIRED');
-  assertReadingBasisCurrent(basis); assertFrozenRenderContext(context, basis);
-  const source = getRunControlForDispatch({ dispatchContext: currentControl?.dispatchContext, runId: currentControl?.run?.run_id });
-  const integrator = getRunControlForDispatch(integratorReceipt)?.phase22_context_binding;
-  const runtimeControl = getRunControlForDispatch({ dispatchContext: reader.runtime.runControl.dispatchContext, runId: reader.runtime.runControl.runId });
-  if (!source || !integrator || !runtimeControl?.phase22_runtime_checkpoint_binding || runtimeControl.phase22_language_binding?.mode !== 'reader') fail('P221_REGISTRATION_CONTROL_REQUIRED');
-  const files = new Map(), add = path => { const row = fileBinding(path); files.set(row.path, row); return row; };
-  const owned = (root, artifactId, expected) => {
-    const receiptPath = join(root, '.phase21-receipts', encodeURIComponent(artifactId) + '.json'); add(receiptPath);
-    const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')); safeRelative(receipt.path);
-    const artifact = add(join(root, receipt.path));
-    if (receipt.artifact_id !== artifactId || receipt.sha256 !== artifact.sha256 || receipt.byte_length !== artifact.byte_length
-      || (expected && !Object.keys(expected).every(key => same(receipt[key], expected[key])))) fail('P22_REGISTERED_RECEIPT_MISMATCH', { artifactId });
-    return receipt;
-  };
-  for (const receipt of Object.values(currentControl.registry ?? {})) {
-    const observed = owned(currentControl.artifactRoot, receipt.artifact_id);
-    if (!same(observed, receipt)) fail('P22_REGISTERED_SOURCE_REGISTRY_REQUIRED');
-  }
-  owned(integratorReceipt.artifactRoot, integratorReceipt.artifactId);
-  const sourcePresentation = currentControl.presentationControl ? getRunControlForDispatch(currentControl.presentationControl)?.phase22_source_presentation_binding : null;
-  if (sourcePresentation) {
-    owned(currentControl.artifactRoot, sourcePresentation.manifest_artifact_id);
-    for (const asset of sourcePresentation.asset_bindings) owned(currentControl.artifactRoot, asset.artifact_id);
-  }
-  const language = runtimeControl.phase22_language_binding;
-  if (hash(reader.runtime.readerInput) !== language.reader_input_fingerprint) fail('P221_READER_INPUT_BINDING_INVALID');
-  if (reader.runtime.readerInput?.reviewed_support) {
-    const { admitReviewedSupport, getReviewedSupportContent, getReviewedSupportBindings } = await import('./phase221-reviewed-support.mjs');
-    const support = await admitReviewedSupport({ basis, descriptor: reader.runtime.readerInput.reviewed_support });
-    if (getReviewedSupportContent(support).support_fingerprint !== language.reviewed_support_fingerprint) fail('P221_REVIEWED_SUPPORT_BINDING_INVALID');
-    for (const binding of getReviewedSupportBindings(support)) add(binding.path);
-  }
-  owned(reader.runtime.runControl.artifactRoot, runtimeControl.phase22_runtime_checkpoint_binding.artifact_id, runtimeControl.phase22_runtime_checkpoint_binding);
-  const snapshot = JSON.parse(readFileSync(join(reader.runtime.runControl.artifactRoot, runtimeControl.phase22_runtime_checkpoint_binding.path), 'utf8'));
-  const tasks = [...Object.values(language.task_bindings), ...(language.revision_bindings ?? []).map(row => row.task)];
-  for (const task of tasks) {
-    if (snapshot.tasks.some(row => row.task_id === task.task_id && row.adoption)) continue;
-    if (snapshot.tasks.some(row => row.task_id === task.task_id && row.status === 'completed')) {
-      owned(reader.runtime.runControl.artifactRoot, task.artifact_id); safeRelative(task.native_path); add(join(reader.runtime.runControl.artifactRoot, task.native_path));
-    }
-    if (task.payload && snapshot.tasks.some(row => row.task_id === task.task_id)) owned(reader.runtime.runControl.artifactRoot, task.payload.artifact_id);
-  }
-  for (const seed of Object.values(language.revision_seeds ?? {})) owned(reader.runtime.runControl.artifactRoot, seed.receipt.artifact_id);
-  if (language.consumption_contract) {
-    const receipt = owned(reader.runtime.runControl.artifactRoot, language.consumption_contract.artifact_id);
-    const contract = JSON.parse(readFileSync(join(reader.runtime.runControl.artifactRoot, receipt.path), 'utf8'));
-    for (const ref of [contract.disposition_source, contract.span_source]) owned(reader.runtime.runControl.artifactRoot, ref.artifact_id);
-  }
-  const { quantityEquivalence, ...presentationOptions } = reader.renderer.presentationOptions ?? {};
-  if (quantityEquivalence && !reader.quantityProofReceipt) fail('P221_QUANTITY_RESTORE_RECEIPT_REQUIRED');
-  const rendererRecipe = { ...reader.renderer, presentationOptions };
-  let presentationPlanProof = null;
-  if (reader.presentationPlanReceipt) {
-    const reference = reader.presentationPlanReceipt, receipt = owned(reference.artifactRoot, reference.artifactId);
-    presentationPlanProof = { artifactRoot: reference.artifactRoot, artifactId: reference.artifactId, sha256: receipt.sha256 };
-    await assertReaderPresentationPlan(presentationPlanProof, rendererRecipe);
-  }
-  const { getReaderReviewSourceBindings } = await import('./phase22-review.mjs');
-  const evidence = await getReaderReviewSourceBindings(review, reader.renderer, reader);
-  if (evidence.quantityProof) {
-    const supplied = reader.quantityProofReceipt, actual = evidence.quantityProof;
-    if (!supplied || ['artifactRoot', 'runId', 'artifactId'].some(key => supplied[key] !== actual[key])) fail('P221_QUANTITY_RESTORE_RECEIPT_REQUIRED');
-    if (owned(actual.artifactRoot, actual.artifactId).sha256 !== actual.sha256) fail('P22_REGISTERED_RECEIPT_MISMATCH');
-  } else if (reader.quantityProofReceipt) fail('P221_QUANTITY_RESTORE_RECEIPT_REQUIRED');
-  owned(evidence.reviewReceipt.artifactRoot, evidence.reviewReceipt.artifactId);
-  if (evidence.nativeReceipt) owned(evidence.nativeReceipt.artifactRoot, evidence.nativeReceipt.artifactId);
-  for (const binding of evidence.bindings) {
-    const observed = fileBinding(binding.path);
-    if (observed.sha256 !== binding.sha256 || (binding.byte_length !== undefined && observed.byte_length !== binding.byte_length)) fail('P22_REGISTERED_DEPENDENCY_CHANGED', { path: binding.path });
-    files.set(observed.path, observed);
-  }
-  if (reader.historical) {
-    const { readHistoricalReaderInput } = await import('./phase221-historical-input.mjs');
-    const historical = await readHistoricalReaderInput(reader.historical);
-    for (const row of [...historical.source_bindings, historical.registration.pointer, historical.registration.bundle]) add(row.path);
-  }
-  for (const row of reader.preparation?.sourceInventory ?? []) {
-    add(row.source_binding.path); for (const asset of row.available_assets ?? []) add(asset.path);
-  }
-  const toolNames = ['phase22-publication.mjs', 'phase22-review.mjs', 'phase22-render.mjs', 'phase22-managed-markdown.mjs',
-    'phase22-active-version.mjs', 'phase22-search.mjs', 'phase22-graph.mjs', 'phase22-input.mjs', 'phase22-render-context.mjs',
-    'phase22-language.mjs', 'phase22-parity.mjs', 'phase22-contract-loader.mjs', 'phase21-contract-loader.mjs', 'owned-artifact-store.mjs',
-    'semantic-package-validator.mjs', 'phase221-historical-input.mjs', 'phase221-presentation.mjs', 'phase221-reading-review.mjs',
-    'phase221-targets.mjs', 'phase221-display.mjs', 'phase221-visuals.mjs', 'phase221-source-assets.mjs'];
-  if (reader.renderer.presentationOptions?.researchMap !== undefined) toolNames.push('phase221-research-map.mjs');
-  if (reader.runtime.readerInput?.reviewed_support) toolNames.push('phase221-reviewed-support.mjs');
-  const toolBindings = toolNames.map(name => fileBinding(fileURLToPath(new URL('./' + name, import.meta.url))));
-  if (reader.renderer.presentationOptions?.localStyle === true) toolBindings.push(fileBinding(fileURLToPath(new URL('../../Templates/apa-v3/apa-readable.css', import.meta.url))));
-  for (const name of ['reading-basis', 'render-context', 'language-view', 'parity-review', 'review-manifest', 'publication-transaction', 'active-index', 'reader-presentation', 'reading-review']) {
-    const path = fileURLToPath(new URL('../../Schema/phase22/' + name + '.schema.json', import.meta.url));
-    toolBindings.push(fileBinding(path));
-  }
-  toolBindings.push(fileBinding(fileURLToPath(new URL('../../Schema/phase21/proof-chain.schema.json', import.meta.url))));
-  for (const name of ['phase22-language-contracts.md', 'phase221-reading-contracts.md']) toolBindings.push(fileBinding(fileURLToPath(new URL('../../prompts/v3/' + name, import.meta.url))));
-  const options = rendererRecipe.presentationOptions ?? {};
-  return { source_bindings: [...files.values()].sort((a, b) => a.path.localeCompare(b.path)), tool_bindings: toolBindings,
-    control_snapshot: { source: clone(source), integrator: clone(integrator), language: clone(language), runtime: snapshot },
-    reader_evidence: { runtimeBinding: clone(runtimeControl), renderer: { targetRegistry: clone(rendererRecipe.targetRegistry),
-      presentationOptions: { ...(options.researchMap === undefined ? {} : { researchMap: clone(options.researchMap) }),
-        ...(options.sharedExplanations === undefined ? {} : { sharedExplanations: clone(options.sharedExplanations) }),
-        ...(options.auditDisplay === undefined ? {} : { auditDisplay: clone(options.auditDisplay) }) } },
-      presentationPlanProof } };
-}
-async function rebuildRegisteredReader(encoded, onAdoptedBindings) {
-  const recipe = restoreRecipeData(encoded);
-  if (recipe?.schema_version !== 'phase221-reader-registration-recipe-1.0') fail('P221_REGISTRATION_RECIPE_INVALID');
-  const { createPhase21ContractValidator } = await import('./phase21-contract-loader.mjs');
-  const { createPhase22ContractValidator } = await import('./phase22-contract-loader.mjs');
-  const { consumePhase21Handoff } = await import('./phase22-input.mjs');
-  const { freezeRenderContext } = await import('./phase22-render-context.mjs');
-  const { readOwnedArtifact } = await import('./owned-artifact-store.mjs');
-  const { restorePhase22Runtime } = await import('./phase22-language.mjs');
-  const { assessReaderBilingualParity } = await import('./phase22-parity.mjs');
-  const { renderReaderNotes } = await import('./phase221-presentation.mjs');
-  const { prepareReaderReview, assessReaderReview, acceptReaderNativeObservation } = await import('./phase221-reading-review.mjs');
-  const { buildBilingualReview } = await import('./phase22-review.mjs');
-  const sourceBroker = createOwnedArtifactBroker({ control_actor_id: 'registered-reader-source-controller', artifact_root: recipe.source.control.artifactRoot,
-    authorized_bindings: [], run_controls: [recipe.source.binding] });
-  const currentControl = { ...recipe.source.control, dispatchContext: sourceBroker.dispatchContext, proofChain: recipe.source.control.run.chain };
-  if (recipe.source.presentation_binding) {
-    const p = recipe.source.presentation_binding;
-    const broker = createOwnedArtifactBroker({ control_actor_id: 'registered-reader-presentation-controller', artifact_root: currentControl.artifactRoot,
-      authorized_bindings: [], run_controls: [{ run_id: currentControl.run.run_id, phase22_source_presentation_binding: p }] });
-    currentControl.presentationControl = { dispatchContext: broker.dispatchContext, runId: currentControl.run.run_id, artifactId: p.manifest_artifact_id };
-  }
-  const validator = await createPhase22ContractValidator();
-  const handoff = JSON.parse((await readOwnedArtifact({ artifactRoot: currentControl.artifactRoot, artifactId: currentControl.producer_artifact_id })).bytes);
-  const admitted = await consumePhase21Handoff({ handoff, currentControl,
-    artifactResolver: artifactId => readOwnedArtifact({ artifactRoot: currentControl.artifactRoot, artifactId }),
-    phase21Validator: await createPhase21ContractValidator({ schemas: [JSON.parse(await readFile(new URL('../../Schema/phase21/proof-chain.schema.json', import.meta.url), 'utf8'))] }), phase22Validator: validator });
-  if (!admitted.ok) fail('P221_REGISTERED_SOURCE_REJECTED', { errors: admitted.errors });
-  const basis = admitted.basis;
-  const integratorBroker = createOwnedArtifactBroker({ control_actor_id: 'registered-reader-integrator-controller', artifact_root: recipe.integrator.receipt.artifactRoot,
-    authorized_bindings: [], run_controls: [{ run_id: basis.identity.run_id, phase22_context_binding: recipe.integrator.binding }] });
-  const integratorReceipt = { ...recipe.integrator.receipt, dispatchContext: integratorBroker.dispatchContext };
-  const integration = JSON.parse((await readOwnedArtifact({ artifactRoot: integratorReceipt.artifactRoot, artifactId: integratorReceipt.artifactId })).bytes);
-  let committedSnapshot;
-  const reuseRoots = [...new Set(integration.entity_mappings.filter(row => row.existing_support?.vault_root).map(row => row.existing_support.vault_root))];
-  if (reuseRoots.length > 1) fail('P22_REGISTERED_REUSE_ROOT_MISMATCH');
-  if (reuseRoots.length) { committedSnapshot = await readCommittedGeneration({ vaultRoot: reuseRoots[0] }); if (!committedSnapshot.ok) fail('P22_REGISTERED_REUSE_ROOT_MISMATCH'); }
-  const frozen = freezeRenderContext({ basis, termCandidates: integration.term_candidates, entityMappings: integration.entity_mappings, integratorReceipt, validator, committedSnapshot });
-  if (!frozen.ok) fail('P221_REGISTERED_CONTEXT_REJECTED', { errors: frozen.errors });
-  const context = frozen.context, rt = recipe.runtime;
-  const runtimeBroker = createOwnedArtifactBroker({ control_actor_id: rt.binding.phase22_language_binding.controller_actor_id, artifact_root: rt.runControl.artifactRoot,
-    authorized_bindings: [], run_controls: [rt.binding] });
-  const runControl = { ...rt.runControl, dispatchContext: runtimeBroker.dispatchContext, validator };
-  const rebind = receipt => ({ ...receipt, dispatchContext: runtimeBroker.dispatchContext });
-  let historical;
-  if (recipe.historical) historical = await (await import('./phase221-historical-input.mjs')).readHistoricalReaderInput(recipe.historical);
-  if (!['reader', 'historical'].includes(recipe.renderer.input_mode)) fail('P221_REGISTRATION_RECIPE_INVALID');
-  if (recipe.renderer.input_mode === 'historical' && !historical) fail('P221_REGISTRATION_RECIPE_REQUIRED');
-  let presentation, prepared;
-  const restored = await restorePhase22Runtime({ mode: 'reader', readerInput: rt.readerInput, basis, context, runControl,
-    checkpointReceipt: rebind(rt.checkpointReceipt), restoreReaderReview: async ({ views, verifier_request }) => {
-      const tasks = [...Object.values(rt.binding.phase22_language_binding.task_bindings), ...(rt.binding.phase22_language_binding.revision_bindings ?? []).map(row => row.task)];
-      const task = tasks.find(row => row.task_id === verifier_request.task_id);
-      const owned = await readOwnedArtifact({ artifactRoot: runControl.artifactRoot, artifactId: task.artifact_id });
-      const checkpoint = JSON.parse((await readOwnedArtifact({ artifactRoot: runControl.artifactRoot, artifactId: rt.checkpointReceipt.artifactId })).bytes);
-      const state = checkpoint.tasks.find(row => row.task_id === task.task_id);
-      const receipt = { artifactRoot: runControl.artifactRoot, dispatchContext: runtimeBroker.dispatchContext, runId: runControl.runId, artifactId: task.artifact_id,
-        task_id: task.task_id, call_id: state.call_id, return_id: state.return_id };
-      const parity = await assessReaderBilingualParity({ basis, context, views, semanticReview: JSON.parse(owned.bytes),
-        receipts: { verifier: { request: verifier_request, receipt } }, currentDependencies: verifier_request.dependencies });
-      if (!parity.ok) fail('P221_REGISTERED_PARITY_REJECTED', { errors: parity.errors });
-      const input = recipe.renderer.input_mode === 'historical' ? historical : { basis, context, views, parity, mode: 'reader', ...(historical ? { historicalSourceInput: historical } : {}) };
-      const { input_mode, ...renderer } = recipe.renderer;
-      await assertReaderPresentationPlan(recipe.presentationPlanProof, renderer, context, views);
-      if (recipe.quantityProof) {
-        const broker = createOwnedArtifactBroker({ control_actor_id: 'registered-reader-quantity-controller', artifact_root: recipe.quantityProof.receipt.artifactRoot,
-          authorized_bindings: [], run_controls: [recipe.quantityProof.binding] });
-        const { acceptReaderQuantityEquivalence } = await import('./phase221-display.mjs');
-        const quantityEquivalence = await acceptReaderQuantityEquivalence({ input, integratorReceipt: { ...recipe.quantityProof.receipt, dispatchContext: broker.dispatchContext } });
-        renderer.presentationOptions = { ...renderer.presentationOptions, quantityEquivalence };
-      }
-      presentation = await renderReaderNotes({ input, ...renderer });
-      prepared = await prepareReaderReview({ presentation, ...recipe.preparation });
-      return prepared;
-    } });
-  if (!restored.ok || !prepared) fail('P221_REGISTERED_RUNTIME_REJECTED', { errors: restored.errors });
-  if (onAdoptedBindings) {
-    const { getAcceptedReaderLanguageRecord } = await import('./phase22-language.mjs');
-    onAdoptedBindings(Object.values(restored.views).flatMap(view => getAcceptedReaderLanguageRecord(view).physical_bindings ?? []));
-  }
-  const owned = await readOwnedArtifact({ artifactRoot: recipe.ownedReview.receipt.artifactRoot, artifactId: recipe.ownedReview.receipt.artifactId });
-  const value = JSON.parse(owned.bytes), request = restored.verifier_request;
-  if (request.request_fingerprint !== recipe.ownedReview.request_fingerprint || hash(value) !== recipe.ownedReview.value_fingerprint) fail('P221_REGISTERED_REVIEW_CHANGED');
-  let nativeObservation;
-  if (recipe.native) {
-    const broker = createOwnedArtifactBroker({ control_actor_id: 'registered-reader-native-controller', artifact_root: recipe.native.receipt.artifactRoot,
-      authorized_bindings: [], run_controls: [recipe.native.binding] });
-    nativeObservation = await acceptReaderNativeObservation({ prepared, observationReceipt: { ...recipe.native.receipt, dispatchContext: broker.dispatchContext } });
-  }
-  const assessed = await assessReaderReview({ prepared, ownedReview: { request, receipt: rebind(recipe.ownedReview.receipt), value, currentDependencies: request.dependencies },
-    ...(nativeObservation ? { nativeObservation } : {}) });
-  if (!assessed.ok) fail('P221_REGISTERED_REVIEW_REJECTED', { errors: assessed.errors });
-  return buildBilingualReview({ presentation, readingReview: { prepared, review: assessed.review }, ...recipe.review });
 }
 async function writeRegisteredRecord(ctx, path, bytes, { replace = false } = {}) {
   const before = await observe(ctx.root, path);
@@ -1275,8 +1053,7 @@ export async function registerBilingualPublication(args = {}) {
     ? await captureTopicPublicationRegistration({ sourceInputs, review: record.review })
     : record.review.reviewManifest.profile === 'reading-first-obsidian-1.0'
     ? await captureReadingFirstPublicationRegistration({ sourceInputs, review: record.review })
-    : record.review.reviewManifest.profile === 'phase22-reader-note-1.0'
-      ? await captureReaderBindings(sourceInputs, record.review) : captureSourceBindings(sourceInputs, record.review);
+    : captureSourceBindings(sourceInputs, record.review);
   const authority = args.control ? await assertAuthority(args, plan) : null;
   const root = CONTROL + '/runs/' + plan.run_id;
   const versionRoot = root + '/' + plan.hashes.output_inventory_hash.slice(7);
@@ -1342,6 +1119,7 @@ export async function loadBilingualPublication({ vaultRoot, run, requireApproval
   if ((!simple && bundle.schema_version !== 'phase22-registered-publication-1.0') || !identifier(bundle.transaction_id) || bundle.run_id !== run || bundle.vault_root !== root
     || !Array.isArray(bundle.source_bindings) || !bundle.source_bindings.length || !Array.isArray(bundle.tool_bindings)
     || !bundle.tool_bindings.length || !bundle.control_snapshot) fail('P22_REGISTERED_BUNDLE_INVALID');
+  if (bundle.reviewManifest?.profile === 'phase22-reader-note-1.0') fail('P221_PROFILE_RETIRED');
   assertFileBindings(bundle.source_bindings); assertFileBindings(bundle.tool_bindings);
   const outputBindings = [];
   const inventory = [];
@@ -1380,18 +1158,15 @@ export async function loadBilingualPublication({ vaultRoot, run, requireApproval
     control = { dispatchContext: broker.dispatchContext, runId: run };
   } else if (requireApproval) fail('P22_PUBLICATION_CONTROL_REQUIRED');
   let rebuiltReview = null;
-  if (!simple && ['phase24-topic-1.0', 'phase22-reader-note-1.0', 'reading-first-obsidian-1.0'].includes(bundle.reviewManifest.profile)) {
+  if (!simple && ['phase24-topic-1.0', 'reading-first-obsidian-1.0'].includes(bundle.reviewManifest.profile)) {
     if (bundle.reviewManifest.profile === 'phase24-topic-1.0') {
       if (!bundle.topic_recipe) fail('P24_RECIPE_REQUIRED');
       rebuiltReview = await rebuildRegisteredTopicReview(bundle.topic_recipe, { registration: pointer,
         bundleBytes: stored.bytes, trustAnchor: trustedAnchor });
-    } else if (bundle.reviewManifest.profile === 'reading-first-obsidian-1.0') {
+    } else {
       if (!bundle.reading_first_recipe) fail('RF_PUBLICATION_RECIPE_REQUIRED');
       rebuiltReview = await rebuildRegisteredReadingFirstReview(bundle.reading_first_recipe, { registration: pointer,
         bundleBytes: stored.bytes, trustAnchor: trustedAnchor });
-    } else {
-      if (!bundle.reader_recipe) fail('P221_REGISTRATION_RECIPE_REQUIRED');
-      rebuiltReview = await rebuildRegisteredReader(bundle.reader_recipe);
     }
     if (!same(rebuiltReview.hashes, { scientific_review_hash: plan.hashes.scientific_review_hash, review_bundle_hash: plan.hashes.review_hash, output_inventory_hash: plan.hashes.review_output_inventory_hash })
       || !same(rebuiltReview.reviewManifest, bundle.reviewManifest)) fail('P221_REGISTERED_REBUILD_MISMATCH');

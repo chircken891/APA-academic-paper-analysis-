@@ -54,20 +54,12 @@ test('configured role policy accepts translation', () => {
   assert.equal(policies.APA_VERIFIER_ROLES.includes('translation'), false);
 });
 
-test('a frozen legacy 10-role configured policy stays valid and does not resolve translation', () => {
+test('a legacy 10-role configured policy without translation is rejected', () => {
   const policy = JSON.parse(readFileSync(new URL('./fixtures/apa-model-policy/legacy-configured-10-roles.json', import.meta.url), 'utf8'));
-  assert.equal(Object.keys(policy.roles).length, 10);
   assert.equal(Object.hasOwn(policy.roles, 'translation'), false);
-  assert.equal(policies.validateApaRoleModelPolicy(policy), true);
-  assert.deepEqual(policies.resolveApaRoleModel('english-writer', undefined, policy), policy.roles['english-writer']);
-  assert.deepEqual(policies.resolveApaRoleModel('independent-verifier', undefined, policy), policy.roles['independent-verifier']);
-  assert.throws(() => policies.resolveApaRoleModel('translation', undefined, policy), /APA_CONFIGURED_ROLE_MODEL_INVALID/);
-  // The optional translation entry must be a valid pair; any other extra or missing key is still rejected.
+  assert.equal(policies.validateApaRoleModelPolicy(policy), false);
+  assert.throws(() => policies.resolveApaRoleModel('english-writer', undefined, policy), /APA_CONFIGURED_ROLE_MODEL_INVALID/);
   const pair = { model: 'synthetic-provider/model', reasoning_effort: 'low' };
   assert.equal(policies.validateApaRoleModelPolicy({ ...policy, roles: { ...policy.roles, translation: pair } }), true);
-  assert.equal(policies.validateApaRoleModelPolicy({ ...policy, roles: { ...policy.roles, translation: { model: '' } } }), false);
-  assert.equal(policies.validateApaRoleModelPolicy({ ...policy, roles: { ...policy.roles, extra: pair } }), false);
   assert.equal(policies.validateApaRoleModelPolicy({ ...policy, roles: { ...policy.roles, extra: pair, translation: pair } }), false);
-  const { evidence, ...missing } = policy.roles;
-  assert.equal(policies.validateApaRoleModelPolicy({ ...policy, roles: { ...missing, translation: pair } }), false);
 });

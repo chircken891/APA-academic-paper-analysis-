@@ -3,9 +3,9 @@ import { isDeepStrictEqual } from 'node:util';
 import { fingerprintV3Json as hash } from './semantic-package-validator.mjs';
 import { getReadingBasisContent, readPhase22SourceAsset, resolvePhase22ImmutableRange } from './phase22-input.mjs';
 import { PHASE22_REGIONS, assertFrozenRenderContext, assertPhase22TargetRegistry } from './phase22-render-context.mjs';
-import { collectLanguageSpans, getAcceptedLanguageRecord } from './phase22-language.mjs';
+import { getAcceptedLanguageRecord } from './phase22-language.mjs';
+import { collectLanguageSpans } from './phase22-language-spans.mjs';
 import { assertBilingualParity } from './phase22-parity.mjs';
-import { renderReaderNotes, READER_PROFILE } from './phase221-presentation.mjs';
 
 const renders = new WeakMap();
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
@@ -178,14 +178,12 @@ function supports(context, views, existingSupportRefs) {
 export { supports as renderPhase22SupportNotes };
 /** Pure candidate producer. No Wiki, parser, model or external write. */
 export function renderBilingualNotes(options={}) {
- // An already-frozen P22 context retains its historical synchronous profile.
- // New candidates enter with `input` and default to the asynchronous reader producer.
+ // An already-frozen P22 context retains its historical synchronous profile; the reader profile is retired.
  const {basis,context,views,parity,existingSupportRefs=context?.existingSupportRefs}=options;
  // `profile` already names an upstream scientific-analysis object in existing callers.
  // Rendering dispatch therefore has its own explicit string option.
- const profile=options.renderingProfile ?? (options.input ? READER_PROFILE : 'phase22-managed-note-1.0');
- if(profile===READER_PROFILE)return renderReaderNotes({...options,input:options.input??{basis,context,views,parity}});
- if(profile!=='phase22-managed-note-1.0')fail('P221_PROFILE_UNKNOWN');
+ const profile=options.renderingProfile ?? (options.input ? 'phase22-reader-note-1.0' : 'phase22-managed-note-1.0');
+ if(profile!=='phase22-managed-note-1.0')fail(profile==='phase22-reader-note-1.0'?'P221_PROFILE_RETIRED':'P221_PROFILE_UNKNOWN');
  assertBilingualParity(parity,{basis,context,views});
  assertFrozenRenderContext(context,basis);
  const science=getReadingBasisContent(basis),records=scientificMap(science);

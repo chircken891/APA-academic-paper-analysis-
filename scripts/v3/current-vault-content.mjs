@@ -38,13 +38,11 @@ function parseNote(bytes, path, generation, index) {
   const node = generation.shared_nodes.find(row => row.path === path);
   if (paper) {
     const language = Object.entries(paper.paths).find(([, value]) => value === path)[0];
-    const readerProfile = paper.profile === 'phase22-reader-note-1.0';
     const managedProfile = !paper.profile || paper.profile === 'phase22-managed-note-1.0';
-    if (fm.type !== 'paper' || (!readerProfile && fm.paper_id !== paper.paper_id)
-      || (readerProfile && fm.paper_id !== undefined && fm.paper_id !== paper.paper_id)
+    if (fm.type !== 'paper' || fm.paper_id !== paper.paper_id
       || fm.language !== language || fm.pipeline_version !== '3.0'
       || fm.rendering_profile !== (paper.profile ?? 'phase22-managed-note-1.0')
-      || (!readerProfile && fm.alternate_language_path !== paper.paths[language === 'en' ? 'zh-CN' : 'en'])
+      || fm.alternate_language_path !== paper.paths[language === 'en' ? 'zh-CN' : 'en']
       || ((managedProfile || fm.run_id !== undefined) && fm.run_id !== paper.run_id)
       || ((managedProfile || fm.analysis_revision !== undefined) && fm.analysis_revision !== paper.analysis_revision)) fail('P23_CURRENT_IDENTITY_MISMATCH', { path });
   } else if (topic) {

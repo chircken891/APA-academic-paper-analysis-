@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { verifyApaSkillSync } from '../../scripts/setup/verify-apa-skill-sync.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const guidePath = path.join(root, 'docs/CONFIGURATION.md');
@@ -36,25 +35,20 @@ test('APA configuration links and documented environment fields resolve to their
   }
 });
 
-test('global repair behavior and documentation distinguish skill and launcher backup locations', async t => {
+test('global repair behavior and documentation describe launcher backup locations', async t => {
   const targetRoot = await mkdtemp(path.join(tmpdir(), 'apa-doc-global-repair-'));
   t.after(() => rm(targetRoot, { recursive: true, force: true }));
   const profileRoot = path.join(targetRoot, 'profile');
-  const skillRoot = path.join(profileRoot, '.agents', 'skills', 'academic-paper-analysis');
   const binRoot = path.join(profileRoot, 'npm');
-  const skillBytes = Buffer.from('documented skill conflict');
   const cmdBytes = Buffer.from('documented cmd conflict');
   const launcherBytes = Buffer.from('documented launcher conflict');
-  await mkdir(skillRoot, { recursive: true });
   await mkdir(binRoot, { recursive: true });
-  await writeFile(path.join(skillRoot, 'SKILL.md'), skillBytes);
   await writeFile(path.join(binRoot, 'mineru.cmd'), cmdBytes);
   await writeFile(path.join(binRoot, 'mineru-local.ps1'), launcherBytes);
 
   const repaired = spawnSync('powershell.exe', [
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installerPath,
     '-RepoRoot', root,
-    '-GlobalSkillRoot', skillRoot,
     '-GlobalBinRoot', binRoot,
     '-RepairGlobalIntegration',
   ], {
@@ -63,16 +57,7 @@ test('global repair behavior and documentation distinguish skill and launcher ba
   });
   assert.ifError(repaired.error);
   assert.equal(repaired.status, 0, `${repaired.stderr}\n${repaired.stdout}`);
-  assert.equal((await verifyApaSkillSync({ repoRoot: root, deployedRoot: skillRoot })).ok, true);
 
-  const skillBackupRelative = '.agents/backups/skills/academic-paper-analysis';
-  const skillBackupRoot = path.join(profileRoot, ...skillBackupRelative.split('/'));
-  assert.equal(path.relative(profileRoot, skillBackupRoot).replaceAll('\\', '/'), skillBackupRelative);
-  const skillBackupTimestamps = await readdir(skillBackupRoot);
-  assert.equal(skillBackupTimestamps.length, 1);
-  assert.deepEqual(await readFile(path.join(skillBackupRoot, skillBackupTimestamps[0], 'SKILL.md')), skillBytes);
-  const scannedSkillEntries = await readdir(path.dirname(skillRoot));
-  assert.equal(scannedSkillEntries.filter(name => name.startsWith('academic-paper-analysis.backup-')).length, 0);
   for (const [name, bytes] of [['mineru.cmd', cmdBytes], ['mineru-local.ps1', launcherBytes]]) {
     const backups = (await readdir(binRoot)).filter(entry => entry.startsWith(`${name}.backup-`));
     assert.equal(backups.length, 1);
@@ -81,7 +66,6 @@ test('global repair behavior and documentation distinguish skill and launcher ba
 
   const [setup, guide] = await Promise.all([setupPath, guidePath].map(file => readFile(file, 'utf8')));
   for (const document of [setup, guide]) {
-    assert.ok(document.includes(`${skillBackupRelative}/<UTC timestamp>`));
     assert.ok(document.includes('.backup-<timestamp>'));
   }
 });

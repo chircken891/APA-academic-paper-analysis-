@@ -42,19 +42,18 @@ test('translation input references and partial progress retain source and comple
   assert.deepEqual(progress.checkTranslationProgress({artifactRoot,task,runId:'run',sourceView,nativeOutput,expectedCompleted:baseline}).completed_sections,baseline.completed_sections);
 });
 
-test('2.1 predeclares separate translation progress paths and legacy stays unchanged', async () => {
+test('2.2 predeclares separate translation progress paths and retired profiles are refused', async () => {
   const {buildReadingSessionTasks} = await import('../../scripts/v3/reading-session-tasks.mjs');
   const options = {runId:'run',scientificInput:{role_artifacts:['a','b','c','d','e','f']},sourceLanguage:'en',checkpointCount:1,includeRepairs:true};
-  const modern = buildReadingSessionTasks({...options,instructionProfile:'configured-reading-2.1'});
-  const legacy = buildReadingSessionTasks(options);
-  assert.ok(modern.taskBindings['zh-CN'].progress_path);
-  assert.notEqual(modern.taskBindings['zh-CN'].progress_path,modern.taskBindings['zh-CN-r2'].progress_path);
-  assert.equal(legacy.taskBindings['zh-CN'].progress_path,undefined);
+  const current = buildReadingSessionTasks(options);
+  assert.ok(current.taskBindings['zh-CN'].progress_path);
+  assert.notEqual(current.taskBindings['zh-CN'].progress_path,current.taskBindings['zh-CN-r2'].progress_path);
+  assert.throws(()=>buildReadingSessionTasks({...options,instructionProfile:'configured-reading-2.1'}),/READING_BINDING_RETIRED/);
 });
 
-test('2.1 freezes on-demand instructions and correct map examples', async () => {
+test('2.2 freezes on-demand instructions and correct map examples', async () => {
   const {buildConfiguredReadingInstructions} = await import('../../scripts/v3/configured-reading.mjs');
-  const result = buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-2.1'});
+  const result = buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-2.2'});
   assert.match(result.sections.Translation,/checkpoint/);
   assert.match(result.sections['Reading Editor'],/primary.*finding/);
   assert.match(result.science_sections['Common scientific contract'],/desktop control/i);
@@ -73,9 +72,9 @@ test('updated progress preserves prior completed fragments and allows remaining 
   assert.deepEqual(progress.checkTranslationProgress({artifactRoot,task:other,runId:'r',sourceView}).remaining_sections,['one','two']);
 });
 
-test('2.1 refuses missing progress paths and collisions', async () => {
+test('2.2 refuses missing progress paths and collisions', async () => {
   const {buildReadingSessionTasks} = await import('../../scripts/v3/reading-session-tasks.mjs');
-  const options = {runId:'run',scientificInput:{role_artifacts:['a','b','c','d','e','f']},sourceLanguage:'en',checkpointCount:1,instructionProfile:'configured-reading-2.1'};
+  const options = {runId:'run',scientificInput:{role_artifacts:['a','b','c','d','e','f']},sourceLanguage:'en',checkpointCount:1,instructionProfile:'configured-reading-2.2'};
   assert.throws(()=>buildReadingSessionTasks({...options,taskOverrides:{'zh-CN':{progress_path:''}}}),/TASK_CONFLICT/);
   assert.throws(()=>buildReadingSessionTasks({...options,taskOverrides:{'zh-CN':{progress_path:'native/zh-CN.json'}}}),/TASK_CONFLICT/);
 });

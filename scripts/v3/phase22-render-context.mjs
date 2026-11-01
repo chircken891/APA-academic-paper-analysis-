@@ -6,9 +6,11 @@ import { createHash } from 'node:crypto';
 import { isDeepStrictEqual as same } from 'node:util';
 import { fingerprintV3Json as hash } from './semantic-package-validator.mjs';
 import { getRunControlForDispatch } from './owned-artifact-store.mjs';
-import { getReadingBasisContent, freezePhase22Value } from './phase22-input.mjs';
+import { getReadingBasisContent } from './phase22-input.mjs';
+import { freezePhase22Value } from './phase22-freeze.mjs';
+import { PHASE22_REGIONS } from './phase22-managed-markdown.mjs';
 
-export const PHASE22_REGIONS = Object.freeze(['source','abstract','study-design','key-findings','methods-concepts-measures','figures-tables','discussion','limitations','conclusion','evidence','relations','coverage']);
+export { PHASE22_REGIONS };
 export const PHASE22_EXEMPT_KINDS = Object.freeze(['quotation','title','formula','code','id','url','link_target']);
 const frozenContexts = new WeakSet();
 const committedSupportContexts = new WeakMap();

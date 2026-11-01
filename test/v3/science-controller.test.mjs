@@ -22,10 +22,8 @@ async function acceptCompactionBatch(f, controller) {
     const args = getConfiguredReadingDispatchArguments({ prepared: f.options.prepared, request });
     const intent = await recordScienceDispatchIntent({ controller, role });
     assert.deepEqual(intent.arguments, args);
-    await recordScienceHostObservation({ controller, role, observation: { action_id: request.emittedStep.action_id, run_id: 'run',
-      input_fingerprint: request.emittedStep.input_fingerprint, port: 'current-collaboration',
-      tool_call: { name: request.emittedStep.action, arguments: args }, raw_result_text: JSON.stringify({ agent_id: 'host-' + role }) } });
-    await writeFile(join(f.root, f.tasks[role].native_path), JSON.stringify({ role, text: 'accepted source' }));
+    await recordScienceHostObservation({ controller, role, observation: await observed(f.root, request.emittedStep, JSON.stringify({ agent_id: 'host-' + role }), args) });
+    await writeNative(f, role, { role, text: 'accepted source' });
     await acceptScienceResult({ controller, role });
   }
 }
@@ -112,18 +110,42 @@ test('failed science reminder save never returns a prompt or unlocks a stale con
   await assert.rejects(() => prepareScienceRequests({ controller: stale }), /SCIENCE_CONTROLLER_RESTORE_REQUIRED/);
 });
 
-async function fixture(t, { context = 'synthetic', compactionPolicy, promptFiles, instructionProfile, presentationMode } = {}) {
+async function hostEvidence(root, raw) {
+  const digest = sha(Buffer.from(raw)).slice(7), directory = join(root, 'host-evidence'), path = join(directory, digest + '.txt');
+  await mkdir(directory, { recursive: true }); await writeFile(path, raw);
+  return { kind: 'raw', capture: 'direct', sha256: digest, source_reference: path };
+}
+async function observed(root, step, raw, args = step.arguments) {
+  return { action_id: step.action_id, run_id: 'run', input_fingerprint: step.input_fingerprint, port: 'current-collaboration', tool_call: { name: step.action, arguments: args }, raw_result_text: raw, evidence: await hostEvidence(root, raw) };
+}
+async function withEvidence(root, receipt) { return { ...receipt, evidence: await hostEvidence(root, receipt.raw_result_text) }; }
+// Results and Integration must hand over a validated resource manifest under 2.2.
+async function writeNative(f, role, content = { role, text: 'synthetic' }) {
+  const spec = f.options.prepared.runControl.reading_first_binding.configured_setup.results_resources;
+  if (role === 'results' || role === 'integration') {
+    const output = join(f.root, spec.output_root), image = Buffer.from('image'), source = f.options.prepared.scientificInput.sources[0];
+    const resource = { id: 'fig-1', source_id: source.id, locator: { kind: 'pdf-page', page: 1 }, source_path: join(output, 'figure.png'), path: 'Figures/paper/figure.png', sha256: sha(image), byte_length: image.length, parent: { path: source.path, sha256: source.sha256, byte_length: source.byte_length } };
+    const manifest = Buffer.from(JSON.stringify({ version: 'reading-resources-1.0', resources: [resource] }));
+    if (role === 'results') { await mkdir(output, { recursive: true }); await writeFile(join(output, 'figure.png'), image); await writeFile(join(f.root, spec.manifest_task.native_path), manifest); }
+    const ref = { path: join(f.root, spec.manifest_task.artifact_path), resources_root: output, sha256: sha(manifest), byte_length: manifest.length };
+    content = role === 'results' ? { ...content, resource_manifest: ref } : { ...content, visual_handoff: { resource_manifest: ref }, visual_resources: [{ id: resource.id, path: resource.path, source_id: resource.source_id, locator: resource.locator }] };
+  }
+  await writeFile(join(f.root, f.tasks[role].native_path), JSON.stringify(content));
+}
+
+async function fixture(t, { context = 'synthetic', compactionPolicy, promptFiles, presentationMode } = {}) {
   const root = await mkdtemp(join(tmpdir(),'science-controller-')); t.after(() => rm(root,{recursive:true,force:true}));
   const source = Buffer.from('synthetic source'); await writeFile(join(root,'paper.pdf'),source);
   const tasks = Object.fromEntries(roles.map(role=>[role,{task_id:role,task_name:role.replace('-','_'),owner_actor_id:role,role,artifact_id:role,artifact_path:'science/'+role+'.json',native_path:'native/'+role+'.json',...(role==='evidence'?{instruction_path:'instructions/evidence.txt'}:{}),revision:'1'}]));
   const downstream = Object.fromEntries(['en','zh-CN','review'].map(key=>[key,{task_id:key,task_name:'writer_'+key.replace('-','_').toLowerCase(),owner_actor_id:key,role:key==='en'?'english-writer':key==='zh-CN'?'chinese-writer':'independent-verifier',artifact_id:key,artifact_path:'writer/'+key+'.json',native_path:'native/'+key+'.json',...(key==='en'?{instruction_path:'instructions/en.txt'}:{}),revision:'1'}]));
   if (presentationMode==='reading-editor') downstream.presentation={task_id:'presentation',task_name:'reading_editor',owner_actor_id:'presentation',role:'reading-editor',artifact_id:'presentation',artifact_path:'writer/presentation.json',native_path:'native/presentation.json',revision:'1'};
-  const scientificInput = {profile:'reading-first-1.0',identity:{paper_id:'synthetic',run_id:'run'},sources:[{path:join(root,'paper.pdf'),sha256:sha(source),byte_length:source.length}],context,role_artifacts:roles};
+  const scientificInput = {profile:'reading-first-1.0',identity:{paper_id:'synthetic',run_id:'run'},sources:[{id:'paper',path:join(root,'paper.pdf'),sha256:sha(source),byte_length:source.length}],context,role_artifacts:roles};
   const mainSession={model:'gpt-6-astra',reasoning_effort:'high'};
-  const configuredSetup={schema_version:'apa-configured-reading-1.0',config_fingerprint:sha(Buffer.from('config')),paths:{runRoot:root},role_model_policy:createApaRoleModelPolicy(mainSession),...buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-2.1'}),...(promptFiles ? {instruction_profile:instructionProfile ?? 'configured-reading-2.0',prompt_files:promptFiles} : {})};
+  const manifestTask={task_id:'results-resources',artifact_id:'results-resources',artifact_path:'science/results-resources.json',native_path:'native/results-resources.json',revision:'1',owner_actor_id:'results',role:'results'};
+  const configuredSetup={schema_version:'apa-configured-reading-1.0',config_fingerprint:sha(Buffer.from('config')),paths:{runRoot:root},role_model_policy:createApaRoleModelPolicy(mainSession),...buildConfiguredReadingInstructions({}),...(promptFiles ? {prompt_files:promptFiles} : {}),results_resources:{output_root:'resources/results',manifest_task:manifestTask}};
   const runControl=createReadingFirstRunControl({runId:'run',scientificInput,mainSession,configuredSetup,authorizationId:'synthetic',deadline:'2099-01-01T00:00:00Z',taskBindings:downstream,writingMode:'source-first',maxCalls:6,priorCalls:6,maxTotalCalls:12,compactionPolicy,...(presentationMode ? {presentationMode} : {})});
   const prepared={runControl,scientificInput,configurationFingerprint:sha(Buffer.from('config')),paths:{runRoot:root}};
-  const authorized_bindings=[...Object.values(tasks),...Object.values(downstream)].map(task=>({run_id:'run',actor_id:task.owner_actor_id,role:task.role,artifact_path:task.artifact_path,revision:task.revision}));
+  const authorized_bindings=[...Object.values(tasks),...Object.values(downstream),manifestTask].map(task=>({run_id:'run',actor_id:task.owner_actor_id,role:task.role,artifact_path:task.artifact_path,revision:task.revision}));
   const checkpointTask={artifact_id:'checkpoint',artifact_path:'control/checkpoint.json',revision:'1',owner_actor_id:'controller',role:'control'};
   authorized_bindings.push({run_id:'run',actor_id:'controller',role:'control',artifact_path:checkpointTask.artifact_path,revision:'1'});
   authorized_bindings.push({run_id:'run',actor_id:'controller',role:'control',artifact_path:'control/checkpoint-r2.json',revision:'2'});
@@ -133,10 +155,10 @@ async function fixture(t, { context = 'synthetic', compactionPolicy, promptFiles
   await mkdir(join(root,'native')); return {root,options,tasks,checkpointTask};
 }
 
-test('configured science freezes actual versioned prompt files and verifies them on restore', async t => {
+test('configured science freezes the prompt file record and restores against that record', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'science-prompt-version-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const prompt = join(directory, 'science-configured-2.0.md'), bytes = Buffer.from('Synthetic versioned science contract.');
+  const prompt = join(directory, 'science-configured-2.2.md'), bytes = Buffer.from('Synthetic versioned science contract.');
   await writeFile(prompt, bytes);
   const promptFiles = [{ path: prompt, sha256: sha(bytes), byte_length: bytes.length }];
   const f = await fixture(t, { promptFiles });
@@ -145,8 +167,9 @@ test('configured science freezes actual versioned prompt files and verifies them
   assert.deepEqual(saved.data.prompt_files, promptFiles);
   assert.equal(Object.hasOwn(saved.data, 'prompt_sha256'), false);
   await restoreScienceController(f.options);
+  // 2.2 dispatches frozen sections, so a later external file change does not reopen the binding.
   await writeFile(prompt, 'Changed science contract.');
-  await assert.rejects(() => restoreScienceController(f.options), /SCIENCE_PROMPT_CHANGED/);
+  await restoreScienceController(f.options);
 });
 
 test('science observations and progress updates are idempotent and reject conflicting event identities', async t => {
@@ -154,22 +177,21 @@ test('science observations and progress updates are idempotent and reject confli
   const [{ request }] = await prepareScienceRequests({ controller });
   await recordScienceDispatchIntent({ controller, role: 'evidence' });
   const step = request.emittedStep;
-  const observation = { action_id: step.action_id, run_id: 'run', input_fingerprint: step.input_fingerprint,
-    port: 'current-collaboration', tool_call: { name: step.action, arguments: step.arguments }, raw_result_text: JSON.stringify({ agent_id: 'same-host-task' }) };
+  const observation = await observed(f.root, step, JSON.stringify({ agent_id: 'same-host-task' }));
   const accepted = await recordScienceHostObservation({ controller, role: 'evidence', observation });
   const version = getScienceState(controller).version;
   assert.deepEqual(await recordScienceHostObservation({ controller, role: 'evidence', observation }), accepted);
   assert.equal(getScienceState(controller).version, version);
-  const update = { kind: 'host_update', action_id: step.action_id, agent_id: 'same-host-task', host_event_id: 'progress-1',
-    tool_call: { name: 'host.wait', arguments: { id: 'same-host-task' } }, raw_result_text: 'running' };
+  const update = await withEvidence(f.root, { kind: 'host_update', action_id: step.action_id, agent_id: 'same-host-task', host_event_id: 'progress-1',
+    tool_call: { name: 'host.wait', arguments: { id: 'same-host-task' } }, raw_result_text: 'running' });
   await recordScienceHostObservation({ controller, role: 'evidence', observation: update });
   const restored = await restoreScienceController(f.options);
   await recordScienceHostObservation({ controller: restored, role: 'evidence', observation: update });
   assert.equal(getScienceRequest({ controller: restored, role: 'evidence' }).host_updates.length, 1);
-  await assert.rejects(() => recordScienceHostObservation({ controller: restored, role: 'evidence', observation: { ...update, raw_result_text: 'different same event' } }), /SCIENCE_HOST_EVENT_CONFLICT/);
-  await recordScienceHostObservation({ controller: restored, role: 'evidence', observation: { ...update, host_event_id: 'progress-2', raw_result_text: 'still running' } });
+  await assert.rejects(async () => recordScienceHostObservation({ controller: restored, role: 'evidence', observation: await withEvidence(f.root, { ...update, raw_result_text: 'different same event' }) }), /SCIENCE_HOST_EVENT_CONFLICT/);
+  await recordScienceHostObservation({ controller: restored, role: 'evidence', observation: await withEvidence(f.root, { ...update, host_event_id: 'progress-2', raw_result_text: 'still running' }) });
   assert.equal(getScienceRequest({ controller: restored, role: 'evidence' }).host_updates.length, 2);
-  await assert.rejects(() => recordScienceHostObservation({ controller: restored, role: 'evidence', observation: { ...observation, raw_result_text: JSON.stringify({ agent_id: 'different' }) } }), /SCIENCE_HOST_EVENT_CONFLICT/);
+  await assert.rejects(async () => recordScienceHostObservation({ controller: restored, role: 'evidence', observation: await observed(f.root, step, JSON.stringify({ agent_id: 'different' })) }), /SCIENCE_HOST_EVENT_CONFLICT/);
 });
 
 async function failedFinalDispatch(t, { maxTotalCalls = 14, maxCalls = 6 } = {}) {
@@ -187,12 +209,12 @@ async function failedFinalDispatch(t, { maxTotalCalls = 14, maxCalls = 6 } = {})
       const step = request.emittedStep;
       const args = structuredClone(step.arguments);
       if (role === 'integration') args.message += ' accidental change';
-      const observation = { action_id: step.action_id, run_id: 'run', input_fingerprint: step.input_fingerprint, port: 'current-collaboration', tool_call: { name: step.action, arguments: args }, raw_result_text: JSON.stringify({ agent_id: 'original-' + role }) };
+      const observation = await observed(f.root, step, JSON.stringify({ agent_id: 'original-' + role }), args);
       if (role === 'integration') {
         await assert.rejects(() => recordScienceHostObservation({ controller, role, observation }), /SCIENCE_OBSERVATION_INVALID/);
       } else {
         await recordScienceHostObservation({ controller, role, observation });
-        await writeFile(join(f.root, f.tasks[role].native_path), JSON.stringify({ role, text: 'source' }));
+        await writeNative(f, role, { role, text: 'source' });
         await acceptScienceResult({ controller, role });
       }
     }
@@ -218,7 +240,7 @@ test('a role naming the committed registry input is not emitted or dispatched be
   const [{ request }] = await prepareScienceRequests({ controller });
   await recordScienceDispatchIntent({ controller, role: 'evidence' });
   const step = request.emittedStep;
-  await recordScienceHostObservation({ controller, role: 'evidence', observation: { action_id: step.action_id, run_id: 'run', input_fingerprint: step.input_fingerprint, port: 'current-collaboration', tool_call: { name: step.action, arguments: step.arguments }, raw_result_text: JSON.stringify({ agent_id: 'evidence-agent' }) } });
+  await recordScienceHostObservation({ controller, role: 'evidence', observation: await observed(f.root, step, JSON.stringify({ agent_id: 'evidence-agent' })) });
   await writeFile(join(f.root, f.tasks.evidence.native_path), JSON.stringify({ role: 'evidence', text: 'source' }));
   await acceptScienceResult({ controller, role: 'evidence' });
   await assert.rejects(() => prepareScienceRequests({ controller }), /SCIENCE_KNOWLEDGE_REGISTRY_INPUT_REQUIRED/);
@@ -264,8 +286,8 @@ test('authorized correction retains a rejected original, counts both calls, and 
   assert.deepEqual(resumed.intent, intent);
   assert.deepEqual(resumed.original, f.original);
   const step = request.emittedStep;
-  await recordScienceHostObservation({ controller, role, observation: { action_id: step.action_id, run_id: 'run', input_fingerprint: step.input_fingerprint, port: 'current-collaboration', tool_call: { name: step.action, arguments: step.arguments }, raw_result_text: JSON.stringify({ agent_id: 'corrected-integration' }) } });
-  await writeFile(join(f.root, f.grant.task.native_path), JSON.stringify({ role, text: 'new genuine result' }));
+  await recordScienceHostObservation({ controller, role, observation: await observed(f.root, step, JSON.stringify({ agent_id: 'corrected-integration' })) });
+  await writeNative({ ...f, tasks: { ...f.tasks, integration: f.grant.task } }, role, { role, text: 'new genuine result' });
   const receipt = await acceptScienceResult({ controller, role });
   assert.equal(receipt.artifact_id, f.tasks.integration.artifact_id);
   assert.equal(getScienceState(controller).accepted_results, 6);
@@ -311,7 +333,7 @@ test('restore preserves a historical source-metadata rejection and accepts a new
   const [{ request }] = await prepareScienceRequests({ controller });
   await recordScienceDispatchIntent({ controller, role: 'evidence' });
   const step = request.emittedStep;
-  const observation = { action_id: step.action_id, run_id: 'run', input_fingerprint: step.input_fingerprint, port: 'current-collaboration', tool_call: { name: step.action, arguments: step.arguments }, raw_result_text: JSON.stringify({ agent_id: 'original-evidence' }) };
+  const observation = await observed(f.root, step, JSON.stringify({ agent_id: 'original-evidence' }));
   const historical = ingestObservedRunStep({ packet: request.packet, emittedStep: step, observation, run: { run_id: 'run' }, legacySourceComparison: true });
   assert.equal(historical.status, 'blocked');
   const saved = JSON.parse(await readFile(f.options.statePath, 'utf8'));
@@ -331,7 +353,7 @@ test('observed evidence is accepted once and unlocks methods and results in para
   const f=await fixture(t), controller=await createScienceController(f.options);
   const [{role,request}]=await prepareScienceRequests({controller}); await recordScienceDispatchIntent({controller,role});
   const step=request.emittedStep;
-  await recordScienceHostObservation({controller,role,observation:{action_id:step.action_id,run_id:'run',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:JSON.stringify({agent_id:'synthetic-1'})}});
+  await recordScienceHostObservation({controller,role,observation:await observed(f.root,step,JSON.stringify({agent_id:'synthetic-1'}))});
   await writeFile(join(f.root,f.tasks.evidence.native_path),JSON.stringify({role:'evidence',text:'source'}));
   const receipt=await acceptScienceResult({controller,role});
   assert.deepEqual(await acceptScienceResult({controller,role}),receipt);
@@ -358,12 +380,12 @@ test('handoff is gated by six owned results and restores the same Writer action'
         assert.equal(getScienceState(controller).compaction_boundary,null);
         await assert.rejects(() => recordScienceCompactionBoundary({controller,id:'evidence-accepted',status:'prompted',reason:'unsafe while task may run'}), /SCIENCE_COMPACTION_UNAVAILABLE/);
       }
-      await recordScienceHostObservation({controller,role,observation:{action_id:step.action_id,run_id:'run',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:JSON.stringify({agent_id:'synthetic-'+role})}});
+      await recordScienceHostObservation({controller,role,observation:await observed(f.root,step,JSON.stringify({agent_id:'synthetic-'+role}))});
       if (role === 'methods') {
         assert.equal(getScienceState(controller).roles.methods.status,'observed');
         await assert.rejects(() => recordScienceCompactionBoundary({controller,id:'methods-results-accepted',status:'prompted',reason:'task lacks receipt'}), /SCIENCE_COMPACTION_UNAVAILABLE/);
       }
-      await writeFile(join(f.root,f.tasks[role].native_path),JSON.stringify({role,text:'synthetic result'}));
+      await writeNative(f,role,{role,text:'synthetic result'});
       await acceptScienceResult({controller,role});
     }
     if (batch[0] === 'evidence') await recordScienceCompactionBoundary({controller,id:'evidence-accepted',status:'skipped',reason:'context unknown'});
@@ -396,7 +418,7 @@ test('handoff is gated by six owned results and restores the same Writer action'
   assert.deepEqual(downstream.requests,first.requests);
   const writer=downstream.requests[0], step=writer.emittedStep;
   await writeFile(join(f.root,writer.task.native_path),JSON.stringify({language:'en',sections:[{heading:'Study',paragraphs:['The synthetic study explains its design and limitation.']}]}));
-  await acceptReadingFirstResult({controller:downstream.controller,request:writer,observation:{action_id:step.action_id,run_id:'run',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:JSON.stringify({agent_id:'synthetic-writer'})},capability:resumed.broker.issueCapability({runId:'run',actorId:writer.task.owner_actor_id,role:writer.task.role,artifactPath:writer.task.artifact_path,revision:writer.task.revision})});
+  await acceptReadingFirstResult({controller:downstream.controller,request:writer,observation:await observed(f.root,step,JSON.stringify({agent_id:'synthetic-writer'})),capability:resumed.broker.issueCapability({runId:'run',actorId:writer.task.owner_actor_id,role:writer.task.role,artifactPath:writer.task.artifact_path,revision:writer.task.revision})});
   assert.equal(getReadingFirstState(downstream.controller).observations.length,1);
   const [translator]=createReadingFirstDraftRequests({controller:downstream.controller});
   assert.equal(translator.language,'zh-CN');
@@ -477,7 +499,7 @@ test('independent process exit preserves intent and repairs only exact owned res
   await crashChild(f,'intent'); controller=await restoreScienceController(f.options);
   assert.equal(getScienceRequest({controller,role:'evidence'}).intent.action_id,request.emittedStep.action_id);
   const step=request.emittedStep;
-  await recordScienceHostObservation({controller,role:'evidence',observation:{action_id:step.action_id,run_id:'run',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:JSON.stringify({agent_id:'synthetic-evidence'})}});
+  await recordScienceHostObservation({controller,role:'evidence',observation:await observed(f.root,step,JSON.stringify({agent_id:'synthetic-evidence'}))});
   await writeFile(join(f.root,f.tasks.evidence.native_path),JSON.stringify({role:'evidence',text:'synthetic'}));
   await crashChild(f,'science-body-temp');
   await crashChild(f,'science-body');
@@ -493,8 +515,8 @@ test('independent exits preserve original Writer request across checkpoint write
   for (const batch of [['evidence'],['methods','results'],['interpretation'],['scientific-reading'],['integration']]) {
     for (const {role,request} of await prepareScienceRequests({controller})) {
       assert.ok(batch.includes(role)); await recordScienceDispatchIntent({controller,role}); const step=request.emittedStep;
-      await recordScienceHostObservation({controller,role,observation:{action_id:step.action_id,run_id:'run',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:JSON.stringify({agent_id:'synthetic-'+role})}});
-      await writeFile(join(f.root,f.tasks[role].native_path),JSON.stringify({role,text:'synthetic'})); await acceptScienceResult({controller,role});
+      await recordScienceHostObservation({controller,role,observation:await observed(f.root,step,JSON.stringify({agent_id:'synthetic-'+role}))});
+      await writeNative(f,role); await acceptScienceResult({controller,role});
     }
   }
   await crashChild(f,'writer-instruction-temp');
@@ -513,7 +535,7 @@ test('independent exits preserve original Writer request across checkpoint write
   assert.deepEqual(downstream.requests[0],first);
   const writer=downstream.requests[0], step=writer.emittedStep;
   await writeFile(join(f.root,writer.task.native_path),JSON.stringify({language:'en',sections:[{heading:'Study',paragraphs:['Synthetic design and limitation.']}]}));
-  await acceptReadingFirstResult({controller:downstream.controller,request:writer,observation:{action_id:step.action_id,run_id:'run',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:JSON.stringify({agent_id:'synthetic-writer'})},capability:resumed.broker.issueCapability({runId:'run',actorId:writer.task.owner_actor_id,role:writer.task.role,artifactPath:writer.task.artifact_path,revision:writer.task.revision})});
+  await acceptReadingFirstResult({controller:downstream.controller,request:writer,observation:await observed(f.root,step,JSON.stringify({agent_id:'synthetic-writer'})),capability:resumed.broker.issueCapability({runId:'run',actorId:writer.task.owner_actor_id,role:writer.task.role,artifactPath:writer.task.artifact_path,revision:writer.task.revision})});
   assert.equal(getReadingFirstState(downstream.controller).observations.length,1);
 });
 
@@ -526,7 +548,7 @@ for (const hostStyle of ['codex','mapped']) test(`configured reading binds and r
   if(hostStyle==='mapped') config.host={name:'claude-code',dispatch:{tool:'Agent',model_argument:'model',effort_argument:'effort',instruction_argument:'prompt',task_name_argument:'description',fresh_context:null}};
   await writeFile(join(configRoot,'config/apa.local.json'),JSON.stringify(config));
   const old=f.options.prepared, binding=old.runControl.reading_first_binding;
-  const prepared=prepareConfiguredReading({instructionProfile:'configured-reading-2.1',repoRoot:configRoot,runId:'run',scientificInput:old.scientificInput,sessionContext:hostStyle==='mapped'?{model:'sonnet'}:{model:'gpt-6-astra',effort:'high'},authorizationId:'synthetic',deadline:binding.deadline,sourceLanguage:'en',taskBindings:{...binding.task_bindings,'zh-CN':{...binding.task_bindings['zh-CN'],role:'translation'}},maxCalls:6,priorCalls:6,maxTotalCalls:12});
+  const prepared=prepareConfiguredReading({repoRoot:configRoot,runId:'run',scientificInput:old.scientificInput,sessionContext:hostStyle==='mapped'?{model:'sonnet'}:{model:'gpt-6-astra',effort:'high'},authorizationId:'synthetic',deadline:binding.deadline,sourceLanguage:'en',taskBindings:{...binding.task_bindings,'zh-CN':{...binding.task_bindings['zh-CN'],role:'translation'}},maxCalls:6,priorCalls:6,maxTotalCalls:12});
   const brokerConfig={...f.options.brokerConfig,artifact_root:prepared.paths.runRoot,authorized_bindings:[...f.options.brokerConfig.authorized_bindings,...prepared.compactionControlBindings],run_controls:[prepared.runControl]};
   const options={...f.options,prepared,brokerConfig,statePath:join(prepared.paths.runRoot,'state.json')};
   const controller=await createScienceController(options); const [{request}]=await prepareScienceRequests({controller});
@@ -557,9 +579,9 @@ test('wrong orphan bytes cannot acquire a receipt and host updates retain the or
   const f=await fixture(t), controller=await createScienceController(f.options);
   const [{request}]=await prepareScienceRequests({controller}); await recordScienceDispatchIntent({controller,role:'evidence'});
   const step=request.emittedStep;
-  await recordScienceHostObservation({controller,role:'evidence',observation:{action_id:step.action_id,run_id:'run',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:JSON.stringify({agent_id:'synthetic-evidence'})}});
-  await recordScienceHostObservation({controller,role:'evidence',observation:{kind:'host_update',action_id:step.action_id,agent_id:'synthetic-evidence',tool_call:{name:'host.wait',arguments:{id:'synthetic-evidence'}},raw_result_text:'running'}});
-  await assert.rejects(()=>recordScienceHostObservation({controller,role:'evidence',observation:{kind:'host_update',action_id:step.action_id,agent_id:'different',tool_call:{name:'host.wait',arguments:{}},raw_result_text:'done'}}),/SCIENCE_HOST_UPDATE_INVALID/);
+  await recordScienceHostObservation({controller,role:'evidence',observation:await observed(f.root,step,JSON.stringify({agent_id:'synthetic-evidence'}))});
+  await recordScienceHostObservation({controller,role:'evidence',observation:await withEvidence(f.root,{kind:'host_update',action_id:step.action_id,agent_id:'synthetic-evidence',tool_call:{name:'host.wait',arguments:{id:'synthetic-evidence'}},raw_result_text:'running'})});
+  await assert.rejects(async()=>recordScienceHostObservation({controller,role:'evidence',observation:await withEvidence(f.root,{kind:'host_update',action_id:step.action_id,agent_id:'different',tool_call:{name:'host.wait',arguments:{}},raw_result_text:'done'})}),/SCIENCE_HOST_UPDATE_INVALID/);
   assert.equal(getScienceRequest({controller,role:'evidence'}).host_updates.length,1);
   await writeFile(join(f.root,f.tasks.evidence.native_path),JSON.stringify({role:'evidence',text:'actual'}));
   await mkdir(join(f.root,'science')); await writeFile(join(f.root,f.tasks.evidence.artifact_path),'conflicting orphan');
@@ -570,7 +592,7 @@ test('wrong orphan bytes cannot acquire a receipt and host updates retain the or
 test('altered owned receipt or native bytes refuse restoration', async t=>{
   const f=await fixture(t), controller=await createScienceController(f.options);
   const [{request}]=await prepareScienceRequests({controller}); await recordScienceDispatchIntent({controller,role:'evidence'}); const step=request.emittedStep;
-  await recordScienceHostObservation({controller,role:'evidence',observation:{action_id:step.action_id,run_id:'run',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:JSON.stringify({agent_id:'synthetic-evidence'})}});
+  await recordScienceHostObservation({controller,role:'evidence',observation:await observed(f.root,step,JSON.stringify({agent_id:'synthetic-evidence'}))});
   await writeFile(join(f.root,f.tasks.evidence.native_path),JSON.stringify({role:'evidence',text:'actual'})); await acceptScienceResult({controller,role:'evidence'});
   const receiptPath=join(f.root,'.phase21-receipts/evidence.json'); const original=JSON.parse(await readFile(receiptPath,'utf8')); const receipt={...original,run_id:'another-run'};
   await writeFile(receiptPath,JSON.stringify(receipt)); await assert.rejects(()=>restoreScienceController(f.options),/SCIENCE_RECEIPT_INVALID/);
@@ -582,8 +604,8 @@ test('one parallel result does not unlock interpretation or reissue its sibling'
   const f=await fixture(t); let controller=await createScienceController(f.options);
   async function complete(role, request) {
     await recordScienceDispatchIntent({controller,role}); const step=request.emittedStep;
-    await recordScienceHostObservation({controller,role,observation:{action_id:step.action_id,run_id:'run',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:JSON.stringify({agent_id:'synthetic-'+role})}});
-    await writeFile(join(f.root,f.tasks[role].native_path),JSON.stringify({role,text:'synthetic'})); await acceptScienceResult({controller,role});
+    await recordScienceHostObservation({controller,role,observation:await observed(f.root,step,JSON.stringify({agent_id:'synthetic-'+role}))});
+    await writeNative(f,role); await acceptScienceResult({controller,role});
   }
   let [evidence]=await prepareScienceRequests({controller}); await complete(evidence.role,evidence.request);
   const [methods,results]=await prepareScienceRequests({controller}); await recordScienceDispatchIntent({controller,role:'results'});
@@ -611,27 +633,25 @@ test('claude-code science observations keep the agentId from result text across 
     host:{name:'claude-code',dispatch:{tool:'Agent',model_argument:'model',effort_argument:'effort',instruction_argument:'prompt',task_name_argument:'description',fresh_context:null,result_handle:resultHandle}}};
   await writeFile(join(configRoot,'config/apa.local.json'),JSON.stringify(config));
   const old=f.options.prepared, binding=old.runControl.reading_first_binding;
-  const prepared=prepareConfiguredReading({instructionProfile:'configured-reading-2.1',repoRoot:configRoot,runId:'run',scientificInput:old.scientificInput,sessionContext:{model:'sonnet'},authorizationId:'synthetic',deadline:binding.deadline,sourceLanguage:'en',taskBindings:{...binding.task_bindings,'zh-CN':{...binding.task_bindings['zh-CN'],role:'translation'}},maxCalls:6,priorCalls:6,maxTotalCalls:12});
+  const prepared=prepareConfiguredReading({repoRoot:configRoot,runId:'run',scientificInput:old.scientificInput,sessionContext:{model:'sonnet'},authorizationId:'synthetic',deadline:binding.deadline,sourceLanguage:'en',taskBindings:{...binding.task_bindings,'zh-CN':{...binding.task_bindings['zh-CN'],role:'translation'}},maxCalls:6,priorCalls:6,maxTotalCalls:12});
   const brokerConfig={...f.options.brokerConfig,artifact_root:prepared.paths.runRoot,authorized_bindings:[...f.options.brokerConfig.authorized_bindings,...prepared.compactionControlBindings],run_controls:[prepared.runControl]};
   const options={...f.options,prepared,brokerConfig,statePath:join(prepared.paths.runRoot,'state.json')};
   const controller=await createScienceController(options); const [{request}]=await prepareScienceRequests({controller});
   assert.deepEqual(request.packet.host_action_scope.result_bindings.agent_id,resultHandle);
   await recordScienceDispatchIntent({controller,role:'evidence'}); const step=request.emittedStep;
   const raw='Done.\nagentId: sci-evidence-1 (use SendMessage with to: sci-evidence-1 to continue this agent)';
-  const observed=await recordScienceHostObservation({controller,role:'evidence',observation:{action_id:step.action_id,run_id:'run',input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:raw}});
-  assert.equal(observed.agent_id,'sci-evidence-1'); assert.equal(observed.host_task_handle_status,'extracted');
+  const result=await recordScienceHostObservation({controller,role:'evidence',observation:await observed(f.root,step,raw)});
+  assert.equal(result.agent_id,'sci-evidence-1'); assert.equal(result.host_task_handle_status,'extracted');
   const restored=await restoreScienceController(options);
   assert.equal(getScienceState(restored).roles.evidence.agent_id,'sci-evidence-1');
   assert.equal(getScienceRequest({controller:restored,role:'evidence'}).observations[0].raw.raw_result_text,raw);
-  await recordScienceHostObservation({controller:restored,role:'evidence',observation:{kind:'host_update',action_id:step.action_id,agent_id:'sci-evidence-1',tool_call:{name:'SendMessage',arguments:{to:'sci-evidence-1'}},raw_result_text:'continued'}});
+  await recordScienceHostObservation({controller:restored,role:'evidence',observation:await withEvidence(f.root,{kind:'host_update',action_id:step.action_id,agent_id:'sci-evidence-1',tool_call:{name:'SendMessage',arguments:{to:'sci-evidence-1'}},raw_result_text:'continued'})});
   assert.equal(getScienceRequest({controller:restored,role:'evidence'}).host_updates.length,1);
 });
 
 
-test('2.1 science continuations survive restore and carry their occupied budget into reading', async t => {
-  const directory=await mkdtemp(join(tmpdir(),'science-budget-')); t.after(()=>rm(directory,{recursive:true,force:true}));
-  const prompt=join(directory,'prompt.md'), bytes=Buffer.from('Synthetic science contract'); await writeFile(prompt,bytes);
-  const f=await fixture(t,{promptFiles:[{path:prompt,sha256:sha(bytes),byte_length:bytes.length}],instructionProfile:'configured-reading-2.1'});
+test('science continuations survive restore and carry their occupied budget into reading', async t => {
+  const f=await fixture(t);
   let controller=await createScienceController(f.options);
   assert.equal(scienceApi.getScienceComputerControlReport({controller}).coverage,'unknown');
   const observation={event_id:'desktop-1',coverage:'partial',operations:[{operation:'read',application:'browser',tool_call:{name:'browser.read',arguments:{tab:'one'}},raw_result_text:'visible',occurred_at:'2026-10-31T00:00:00Z'}],source_reference:'host evidence'};
@@ -642,13 +662,13 @@ test('2.1 science continuations survive restore and carry their occupied budget 
   assert.deepEqual(scienceApi.getScienceComputerControlReport({controller}),{coverage:'partial',observations:[observation]});
   const [{request}]=await prepareScienceRequests({controller});
   await recordScienceDispatchIntent({controller,role:'evidence'});
-  await recordScienceHostObservation({controller,role:'evidence',observation:{action_id:request.emittedStep.action_id,run_id:'run',input_fingerprint:request.emittedStep.input_fingerprint,port:'current-collaboration',tool_call:{name:request.emittedStep.action,arguments:request.emittedStep.arguments},raw_result_text:JSON.stringify({agent_id:'host-evidence'})}});
+  await recordScienceHostObservation({controller,role:'evidence',observation:await observed(f.root,request.emittedStep,JSON.stringify({agent_id:'host-evidence'}))});
   for (let n=1;n<=2;n++) {
     const args={id:'host-evidence',message:'continue '+n};
     const parameters={controller,role:'evidence',executionId:'exec-'+n,actionId:'continue-'+n,handle:'host-evidence',tool:'host.resume',arguments:args,context:{continuation_request:{action_id:'continue-'+n,message:'continue '+n}}};
     await scienceApi.reserveScienceContinuation(parameters); await scienceApi.reserveScienceContinuation(parameters);
     await scienceApi.markScienceContinuationDispatched({controller,executionId:'exec-'+n});
-    await scienceApi.recordScienceContinuationReceipt({controller,executionId:'exec-'+n,receipt:{execution_id:'exec-'+n,action_id:'continue-'+n,agent_id:'host-evidence',tool_call:{name:'host.resume',arguments:args},raw_result_text:'ok',status:'observed'}});
+    await scienceApi.recordScienceContinuationReceipt({controller,executionId:'exec-'+n,receipt:await withEvidence(f.root,{execution_id:'exec-'+n,action_id:'continue-'+n,agent_id:'host-evidence',tool_call:{name:'host.resume',arguments:args},raw_result_text:'ok '+n,status:'observed'})});
     controller=await restoreScienceController(f.options);
     assert.equal(scienceApi.getScienceContinuation({controller,executionId:'exec-'+n}).context.continuation_request.message,'continue '+n);
   }
@@ -661,7 +681,7 @@ test('2.1 science continuations survive restore and carry their occupied budget 
   assert.equal(readingApiBudget({controller:handoff.controller}).occupied,9);
   const writer=handoff.requests[0], reading=handoff.controller;
   readingApi.recordReadingFirstRequestEvent({controller:reading,request:writer,eventKey:'intent',payload:{action_id:writer.emittedStep.action_id}});
-  const writerObservation={action_id:writer.emittedStep.action_id,run_id:'run',input_fingerprint:writer.emittedStep.input_fingerprint,port:'current-collaboration',tool_call:{name:writer.emittedStep.action,arguments:writer.emittedStep.arguments},raw_result_text:JSON.stringify({agent_id:'host-writer'})};
+  const writerObservation=await observed(f.root,writer.emittedStep,JSON.stringify({agent_id:'host-writer'}));
   readingApi.recordReadingFirstRequestEvent({controller:reading,request:writer,eventKey:'host_observation',payload:writerObservation});
   const args={id:'host-writer',message:'continue'};
   const continuation={controller:reading,taskId:writer.task.task_id,executionId:'writer-exec',actionId:'writer-continuation',handle:'host-writer',tool:'host.resume',arguments:args,context:{translation_progress:{source_fingerprint:'source'}}};
@@ -675,23 +695,21 @@ test('2.1 science continuations survive restore and carry their occupied budget 
   assert.equal(recovered.ok,true,JSON.stringify(recovered.errors));
   assert.equal(readingApiBudget({controller:recovered.controller}).occupied,10);
   assert.equal(readingApi.getReadingPendingContinuations({controller:recovered.controller})[0].receipt.status,'outcome_unknown');
-  readingApi.recordReadingContinuationReceipt({controller:recovered.controller,executionId:'writer-exec',receipt:{...receipt,status:'observed'}});
+  readingApi.recordReadingContinuationReceipt({controller:recovered.controller,executionId:'writer-exec',receipt:await withEvidence(f.root,{...receipt,raw_result_text:'done',status:'observed'})});
   assert.throws(()=>readingApi.reserveReadingContinuation({...continuation,controller:recovered.controller,executionId:'writer-exec-2',actionId:'writer-continuation-2'}),/BUDGET_EXHAUSTED/);
 });
 
 
-for (const presentationMode of ['writer','reading-editor']) test(`2.1 science continuation preserves capacity for unprepared science, drafts and review with ${presentationMode}`, async t => {
-  const directory=await mkdtemp(join(tmpdir(),'science-budget-reserve-')); t.after(()=>rm(directory,{recursive:true,force:true}));
-  const prompt=join(directory,'prompt.md'),bytes=Buffer.from('Synthetic science contract'); await writeFile(prompt,bytes);
-  const f=await fixture(t,{promptFiles:[{path:prompt,sha256:sha(bytes),byte_length:bytes.length}],instructionProfile:'configured-reading-2.1',presentationMode});
+for (const presentationMode of ['writer','reading-editor']) test(`science continuation preserves capacity for unprepared science, drafts and review with ${presentationMode}`, async t => {
+  const f=await fixture(t,{presentationMode});
   const controller=await createScienceController(f.options),[{request}]=await prepareScienceRequests({controller});
   await recordScienceDispatchIntent({controller,role:'evidence'});
-  await recordScienceHostObservation({controller,role:'evidence',observation:{action_id:request.emittedStep.action_id,run_id:'run',input_fingerprint:request.emittedStep.input_fingerprint,port:'current-collaboration',tool_call:{name:request.emittedStep.action,arguments:request.emittedStep.arguments},raw_result_text:JSON.stringify({agent_id:'host-evidence'})}});
+  await recordScienceHostObservation({controller,role:'evidence',observation:await observed(f.root,request.emittedStep,JSON.stringify({agent_id:'host-evidence'}))});
   const allowed=presentationMode==='reading-editor'?2:3;
   for(let n=1;n<=allowed;n++) {
     const args={id:'host-evidence',message:'continue '+n}, call={controller,role:'evidence',executionId:'e'+n,actionId:'a'+n,handle:'host-evidence',tool:'host.resume',arguments:args};
     await scienceApi.reserveScienceContinuation(call); await scienceApi.markScienceContinuationDispatched({controller,executionId:'e'+n});
-    await scienceApi.recordScienceContinuationReceipt({controller,executionId:'e'+n,receipt:{execution_id:'e'+n,action_id:'a'+n,agent_id:'host-evidence',tool_call:{name:'host.resume',arguments:args},raw_result_text:'ok',status:'observed'}});
+    await scienceApi.recordScienceContinuationReceipt({controller,executionId:'e'+n,receipt:await withEvidence(f.root,{execution_id:'e'+n,action_id:'a'+n,agent_id:'host-evidence',tool_call:{name:'host.resume',arguments:args},raw_result_text:'ok '+n,status:'observed'})});
   }
   const call={controller,role:'evidence',executionId:'e-next',actionId:'a-next',handle:'host-evidence',tool:'host.resume',arguments:{id:'host-evidence',message:'continue next'}};
   await assert.rejects(()=>scienceApi.reserveScienceContinuation(call),/BUDGET_EXHAUSTED/);

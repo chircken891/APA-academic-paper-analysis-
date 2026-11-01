@@ -82,7 +82,7 @@ test('validates supplied wiki links and resolves existing knowledge snapshots wi
 test('trusted historical preview includes referenced knowledge and marks paper navigation as preview-only', async t => {
   const prior = await readingFirstIndexFixture(t), built = await prior.build();
   await prior.save(built);
-  const registry = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: prior.vaultRoot, policy: 'committed-shared-nodes-1.0' });
+  const registry = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: prior.vaultRoot, policy: 'current-shared-nodes-1.0' });
   const input = await fixture(t);
   input.views[0].sections[0].paragraphs.push(`[[${registry[0].path}#English|History]]`);
   input.knowledgeRegistry = registry;
@@ -114,7 +114,7 @@ test('historical knowledge self-links terminate and registered assets are verifi
   support.bytes = Buffer.concat([support.bytes, Buffer.from(`\n[Self](./${path.posix.basename(support.path)}#English)\n\n![[${asset.path}]]\n`)]);
   prior.generation.objects.find(row => row.path === support.path).sha256 = 'sha256:' + digest(support.bytes);
   await prior.save(await prior.build());
-  const registry = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: prior.vaultRoot, policy: 'committed-shared-nodes-1.0' });
+  const registry = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: prior.vaultRoot, policy: 'current-shared-nodes-1.0' });
   const input = await fixture(t);
   input.views[0].sections[0].paragraphs.push(`[[${support.path}#English|History]]`);
   input.knowledgeRegistry = registry;
@@ -135,7 +135,7 @@ test('historical knowledge self-links terminate and registered assets are verifi
 test('a merged candidate takes precedence over a historical reference to the same node', async t => {
   const prior = await readingFirstIndexFixture(t);
   await prior.save(await prior.build());
-  const registry = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: prior.vaultRoot, policy: 'committed-shared-nodes-1.0' });
+  const registry = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: prior.vaultRoot, policy: 'current-shared-nodes-1.0' });
   const input = await fixture(t);
   input.presentation.knowledge_layout = 'shared-bilingual-1.0';
   input.presentation.knowledge[0].canonical_key = registry[0].canonical_key;
@@ -157,10 +157,10 @@ test('exports the fingerprint-bound editor layout and validates its numbered hea
     view.sections = ids.map(id => ({ id, module_id: id, heading: id + ' explanation', paragraphs: ['A complete explanation.'] }));
     view.placements = { visuals: [{ id: 'figure', section_id: 'findings', after_paragraph: 0 }], knowledge: [{ id: 'rate', section_id: 'methods', after_paragraph: 0 }] };
   });
-  input.readingEditor = { schema_version: 'reading-editor-1.0', views_fingerprint: readingFirstViewsFingerprint(input.views), languages: Object.fromEntries(input.views.map(view => [view.language, {
+  input.readingEditor = { schema_version: 'reading-editor-1.3', views_fingerprint: readingFirstViewsFingerprint(input.views), map: { nodes: (input.presentation.map?.steps ?? []).map(node => ({ id: node.id, stage: 'design' })) }, languages: Object.fromEntries(input.views.map(view => [view.language, {
     overview: [{ text: 'A useful reading overview.', section_ids: ['findings'] }],
     sections: [{ section_id: 'findings', takeaway: 'A meaningful finding.', emphasis: [{ paragraph_index: 0, text: 'complete explanation' }], subheadings: [] }],
-    methods: [{ id: 'rate', title: 'Rate', explanation: 'A general measure.', application: 'The paper compares this measure.', section_ids: ['methods'], knowledge_id: 'rate' }],
+    methods: [{ id: 'rate', title: 'Rate', explanation: 'A general measure.', application: 'The paper compares this measure.', section_ids: ['methods'], knowledge_id: 'rate' }], visuals: [],
   }])) };
   const result = await exportReadingFirstPreview(input);
   const content = await readFile(path.join(input.outputRoot, result.notes[0].path), 'utf8');

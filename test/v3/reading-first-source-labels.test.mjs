@@ -23,7 +23,7 @@ function input({ compact = false } = {}) {
     map: { steps: [], findings: [], relations: [] },
   };
   const data = { identity: { paper_id: 'pap_' + 'a'.repeat(32) }, views, presentation };
-  if (compact) data.readingEditor = { schema_version: 'reading-editor-1.1', views_fingerprint: readingFirstViewsFingerprint(views), map: { nodes: [] },
+  if (compact) data.readingEditor = { schema_version: 'reading-editor-1.3', views_fingerprint: readingFirstViewsFingerprint(views), map: { nodes: [] },
     languages: Object.fromEntries(views.map(view => [view.language, { overview: [{ text: 'Overview', section_ids: ['findings'] }],
       sections: [], methods: [{ id: 'rate', title: 'Rate', explanation: 'Rate background.', application: 'Rate in the study.', section_ids: ['methods'], knowledge_id: 'rate' }],
       visuals: [{ id: 'fig-1', title: 'Figure 1', notes: [] }] }])) };

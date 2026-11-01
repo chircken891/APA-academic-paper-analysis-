@@ -9,7 +9,7 @@ import { inspectManagedNote, mergeManagedNote } from './phase22-managed-markdown
 import { readCommittedGeneration, assertActiveGeneration, assertIndexGeneration, phase22GenerationPaths,
   readRegisteredCommit, INDEX_READING_FIRST_PROFILE } from './phase22-active-version.mjs';
 import { buildBilingualIndex } from './phase22-search.mjs';
-import { assertReadingFirstPublicationManifest } from './reading-first-index.mjs';
+import { assertReadingFirstPublicationManifest, verifyReadingFirstPresentation } from './reading-first-index.mjs';
 import { captureReadingFirstPublicationSource, createExternalReadingFirstPublicationSource,
   getReadingFirstRuntimePublicationToolBindings, inspectReadingFirstPublicationSource,
   restoreReadingFirstPublicationSource } from './reading-first-runtime.mjs';
@@ -136,8 +136,13 @@ async function baseFor(root, currentPolicy = false) {
   if (currentPolicy) {
     const registered = await readRegisteredCommit({ vaultRoot: root });
     if (!registered.ok) fail('RF_PUBLICATION_PREVIOUS_GENERATION_INVALID', { errors: registered.errors });
-    return { snapshot: null, generation: clone(registered.generation), index: clone(registered.index), carryHistoricalDocuments: true,
-      files: new Map(registered.generation.objects.map(row => [row.path, regularBytes(root, row.path)])) };
+    // Registered Wiki notes accept later human edits; every other registered object must keep its committed bytes.
+    const files = new Map(registered.generation.objects.map(row => {
+      const bytes = regularBytes(root, row.path);
+      if (!row.path.startsWith('Wiki/') && sha(bytes) !== row.sha256) fail('RF_PUBLICATION_PREVIOUS_OBJECT_CHANGED', { path: row.path });
+      return [row.path, bytes];
+    }));
+    return { snapshot: null, generation: clone(registered.generation), index: clone(registered.index), carryHistoricalDocuments: true, files };
   }
   const snapshot = await readCommittedGeneration({ vaultRoot: root });
   if (!snapshot.ok) fail('RF_PUBLICATION_PREVIOUS_GENERATION_INVALID', { errors: snapshot.errors });
@@ -288,31 +293,35 @@ async function resourceBindings(data, resources, approvedAssets = []) {
   if (!same([...paths].sort(), expected)) fail('RF_PUBLICATION_RESOURCE_INVENTORY_INCOMPLETE');
   return result;
 }
-function publicationCitation(data, resources) {
+function publicationCitation(data, resources, approvals = []) {
   const catalog = data.presentation;
   if (!catalog) return undefined;
   const resource = resources.find(row => row.path === catalog.source_pdf);
   const source = resource && data.sources.find(row => resolve(row.path) === resource.source_path
     && row.sha256 === resource.sha256 && row.byte_length === resource.byte_length);
   if (!source) fail('RF_PUBLICATION_CITATION_SOURCE_UNREGISTERED');
-  if (data.recipe.binding?.configured_setup?.instruction_profile === 'configured-reading-2.2') {
-    const ids = [...new Set([source.id, ...(catalog.visuals ?? []).map(row => row.source_id ?? source.id)])];
-    return { bibliography: clone(catalog.bibliography), sources: ids.map(id => {
-      const original = data.sources.find(row => row.id === id);
-      const path = id === source.id ? catalog.source_pdf : catalog.sources?.find(row => row.id === id)?.path;
-      const target = resources.find(row => row.path === path && original && resolve(row.source_path) === resolve(original.path)
-        && row.sha256 === original.sha256 && row.byte_length === original.byte_length);
-      if (!target) fail('RF_PUBLICATION_CITATION_SOURCE_UNREGISTERED');
-      return {source_id:id,path:target.path,sha256:original.sha256,byte_length:original.byte_length,
-        source_version:typeof original.version === 'string' ? original.version : null,
-        locators:(catalog.visuals ?? []).filter(row => (row.source_id ?? source.id) === id).map(row => ({kind:row.kind,id:row.id,label:clone(row.label),
-          ...(row.locator?.kind === 'docx-figure' ? {locator:clone(row.locator)} : {page:row.locator?.kind === 'pdf-page' ? row.locator.page : row.page})}))};
-    }) };
-  }
+  // Each visual cites its own source: the registered original, or an approved derived display asset of that source.
   const visuals = catalog.visuals ?? [];
-  return { bibliography: clone(catalog.bibliography), sources: [{ source_id: source.id, path: resource.path,
-    sha256: resource.sha256, byte_length: resource.byte_length, source_version: typeof source.version === 'string' ? source.version : null,
-    locators: visuals.map(row => ({ kind: row.kind, id: row.id, page: row.locator?.kind === 'pdf-page' ? row.locator.page : row.page, label: clone(row.label) })) }] };
+  const configured22 = data.recipe.binding?.configured_setup?.instruction_profile === 'configured-reading-2.2';
+  const ids = [...new Set([source.id, ...visuals.map(row => row.source_id ?? source.id)])];
+  return { bibliography: clone(catalog.bibliography), sources: ids.map(id => {
+    const original = data.sources.find(row => row.id === id);
+    const path = id === source.id ? catalog.source_pdf : catalog.sources?.find(row => row.id === id)?.path;
+    const approved = approvals.find(row => row.scientific_parent?.source_id === id && row.resource?.path === path);
+    // Pre-2.2 bindings registered display PDFs as input assets; 2.2 requires the original or an approved derived asset.
+    const registeredAsset = row => id !== source.id && !configured22 && data.presentation_assets.some(asset => resolve(asset.path) === resolve(row.source_path)
+      && asset.sha256 === row.sha256 && asset.byte_length === row.byte_length);
+    const target = approved ? resources.find(row => row.path === approved.resource.path && row.sha256 === approved.resource.sha256
+      && row.byte_length === approved.resource.byte_length && resolve(row.source_path) === resolve(approved.resource.source_path))
+      : resources.find(row => row.path === path && (original && resolve(row.source_path) === resolve(original.path)
+        && row.sha256 === original.sha256 && row.byte_length === original.byte_length || registeredAsset(row)));
+    if (!target || !original) fail('RF_PUBLICATION_CITATION_SOURCE_UNREGISTERED');
+    return { source_id: id, path: target.path, sha256: target.sha256, byte_length: target.byte_length,
+      source_version: typeof original.version === 'string' ? original.version : null,
+      locators: visuals.filter(row => (row.source_id ?? source.id) === id).map(row => row.locator?.kind === 'docx-figure'
+        ? { kind: row.kind, id: row.id, label: clone(row.label), locator: clone(row.locator) }
+        : { kind: row.kind, id: row.id, page: row.locator?.kind === 'pdf-page' ? row.locator.page : row.page, label: clone(row.label) }) };
+  }) };
 }
 
 /** Prepare the exact accepted reading output for the existing V3 publication transaction. */
@@ -426,7 +435,7 @@ async function buildReview({ source, data, options, base, preimages }) {
     presentation_fingerprint: candidate.presentation_fingerprint, scientific_input_fingerprint: data.scientific_input_fingerprint,
     evidence_mode: options.evidenceMode, dependencies, qualification: { reading_status: 'reading_complete', native_status: data.native_presentation.status },
     targets: { presentation: manifestPath, notes: noteTargets, support: supportTargets, assets: options.resources.map(row => row.path) }, navigation: [] };
-  const citation = publicationCitation(data, options.resources);
+  const citation = publicationCitation(data, options.resources, options.presentationAssetRegistrations ?? []);
   if (citation) presentation.citation = citation;
   assertReadingFirstPublicationManifest(presentation);
   const manifestBytes = jsonBytes(presentation);
@@ -499,6 +508,7 @@ export async function assertReadingFirstPublicationReviewCurrent(review) {
   const record = records.get(review);
   if (!record) fail('P22_REVIEW_NOT_OWNED');
   if (record.stamp !== hash({ manifest: review.reviewManifest, output: inventoryStamp(review.outputInventory), hashes: review.hashes })) fail('P22_REVIEW_OUTPUT_INVALIDATED');
+  if (record.correction) { currentBindings(record.sourceBindings); currentBindings(record.toolBindings); return review; }
   await inspectReadingFirstPublicationSource(record.source);
   currentBindings(record.sourceBindings); currentBindings(record.toolBindings);
   return review;
@@ -506,12 +516,14 @@ export async function assertReadingFirstPublicationReviewCurrent(review) {
 
 /** A current-content publication is selected only by its frozen reading binding. */
 export function usesCurrentReadingFirstPublication(review) {
-  return records.get(review)?.recipe?.source?.binding?.configured_setup?.knowledge_registry?.policy === 'current-shared-nodes-1.0';
+  const record = records.get(review);
+  return record?.correction === true || record?.recipe?.source?.binding?.configured_setup?.knowledge_registry?.policy === 'current-shared-nodes-1.0';
 }
 
 /** Restored evidence can reload its signed plan, but cannot mint a new plan or approval source. */
 export async function assertReadingFirstPublicationReviewLive(review) {
   await assertReadingFirstPublicationReviewCurrent(review);
+  if (records.get(review).correction) return review;
   const data = await inspectReadingFirstPublicationSource(records.get(review).source);
   if (data.origin !== 'live') fail('RF_PUBLICATION_LIVE_SOURCE_REQUIRED');
   return review;
@@ -520,7 +532,14 @@ export async function assertReadingFirstPublicationReviewLive(review) {
 /** Capture an owned live review; no JSON request can substitute for its source capability. */
 export async function captureReadingFirstPublicationRegistration({ review, sourceInputs } = {}) {
   await assertReadingFirstPublicationReviewCurrent(review);
-  const record = records.get(review), data = await inspectReadingFirstPublicationSource(record.source);
+  const record = records.get(review);
+  if (record.correction) {
+    if (sourceInputs?.readingFirst?.correction !== review) fail('RF_PUBLICATION_LIVE_SOURCE_REQUIRED');
+    return { source_bindings: clone(record.sourceBindings), tool_bindings: clone(record.toolBindings),
+      control_snapshot: { schema_version: 'reading-first-publication-control-1.0', run_id: review.reviewManifest.identity.run_id,
+        evidence_mode: review.reviewManifest.evidence_mode, source_fingerprint: hash(record.sourceBindings) } };
+  }
+  const data = await inspectReadingFirstPublicationSource(record.source);
   if (data.origin !== 'live' || sourceInputs?.readingFirst?.source !== record.source) fail('RF_PUBLICATION_LIVE_SOURCE_REQUIRED');
   return { source_bindings: clone(record.sourceBindings),
     tool_bindings: [...new Map([...data.tool_bindings, ...record.toolBindings].map(row => [row.path, row])).values()],
@@ -566,6 +585,124 @@ export async function prepareReadingFirstPublication(args = {}) {
   return { ...dry, review, sourceInputs: { readingFirst: { source } } };
 }
 
+// The record must belong to the corrected run, and every catalog in it must agree on which source each visual belongs to.
+function frozenVisualSources(value, mainPath, runId) {
+  const catalogs = [], runs = new Set(), walk = item => {
+    if (Array.isArray(item)) item.forEach(walk);
+    else if (item && typeof item === 'object') {
+      if (Array.isArray(item.visuals) && item.source_pdf === mainPath) catalogs.push(item);
+      if (typeof item.run_id === 'string') runs.add(item.run_id);
+      Object.values(item).forEach(walk);
+    }
+  };
+  walk(value);
+  if (!runs.has(runId)) fail('RF_CITATION_CORRECTION_SCOPE', { reason: 'catalog record does not belong to the run' });
+  if (!catalogs.length) fail('RF_CITATION_CORRECTION_SCOPE');
+  const visuals = new Map(), sources = new Map();
+  for (const catalog of catalogs) {
+    for (const row of catalog.visuals) {
+      if (visuals.has(row.id) && visuals.get(row.id) !== (row.source_id ?? null)) fail('RF_CITATION_CORRECTION_SCOPE', { visual: row.id });
+      visuals.set(row.id, row.source_id ?? null);
+    }
+    for (const row of catalog.sources ?? []) {
+      if (sources.has(row.id) && sources.get(row.id) !== row.path) fail('RF_CITATION_CORRECTION_SCOPE', { source: row.id });
+      sources.set(row.id, row.path);
+    }
+  }
+  return { visuals, sources };
+}
+
+// Committed locators keep their exact bytes; only their grouping under sources changes.
+function correctedCitation(manifest, frozen, generation, files) {
+  const old = manifest.citation, main = old?.sources?.[0];
+  if (!main) fail('RF_CITATION_CORRECTION_SCOPE');
+  const locators = old.sources.flatMap(row => row.locators);
+  if (locators.some(row => !frozen.visuals.has(row.id))) fail('RF_CITATION_CORRECTION_SCOPE');
+  const sourceOf = row => frozen.visuals.get(row.id) ?? main.source_id;
+  return { ...clone(old), sources: [...new Set([main.source_id, ...locators.map(sourceOf)])].map(id => {
+    const prior = old.sources.find(row => row.source_id === id), path = prior?.path ?? frozen.sources.get(id);
+    const object = generation.objects.find(row => row.path === path);
+    if (!manifest.targets.assets.includes(path) || object?.kind !== 'asset' || !files.has(path)) fail('RF_PUBLICATION_CITATION_SOURCE_UNREGISTERED', { source_id: id });
+    return { source_id: id, path, sha256: prior?.sha256 ?? object.sha256, byte_length: prior?.byte_length ?? files.get(path).length,
+      source_version: prior?.source_version ?? null, locators: locators.filter(row => sourceOf(row) === id).map(clone) };
+  }) };
+}
+
+/** Re-group one committed paper's citation by the run's frozen visual sources; notes, knowledge and assets stay as committed. */
+export async function prepareReadingFirstCitationCorrection({ vaultRoot, runId, catalogPath, generation, evidenceMode = 'actual' } = {}) {
+  const root = rootPath(vaultRoot);
+  if (!identifier(runId) || !['actual', 'synthetic'].includes(evidenceMode)) fail('RF_PUBLICATION_INPUT_INVALID');
+  const pairPaths = phase22GenerationPaths(generation);
+  const base = await baseFor(root, true);
+  if (!base.generation || generation === base.generation.generation_id) fail('P22_GENERATION_NOT_NEW');
+  if (base.generation.evidence_mode !== evidenceMode) fail('RF_PUBLICATION_EVIDENCE_MODE_MISMATCH');
+  const paper = base.generation.papers.find(row => row.run_id === runId && row.profile === profile);
+  if (!paper) fail('RF_CITATION_CORRECTION_SCOPE');
+  const oldPath = paper.reader_presentation.path, oldBytes = base.files.get(oldPath);
+  const manifest = verifyReadingFirstPresentation(paper, oldBytes, base.generation);
+  const catalogBinding = binding(catalogPath);
+  const frozen = frozenVisualSources(JSON.parse(readFileSync(catalogBinding.path, 'utf8')), manifest.citation?.sources?.[0]?.path, runId);
+  const citation = correctedCitation(manifest, frozen, base.generation, base.files);
+  if (same(citation, manifest.citation)) fail('RF_CITATION_CORRECTION_NOOP');
+  const path = '.apa-v3/reading-first/presentation/' + runId + '-' + hash(manifest.identity).slice(7, 31) + '-citation-' + hash(citation).slice(7, 19) + '.json';
+  const corrected = { ...clone(manifest), citation, targets: { ...clone(manifest.targets), presentation: path } };
+  assertReadingFirstPublicationManifest(corrected);
+  const bytes = jsonBytes(corrected);
+  const active = { ...clone(base.generation), generation_id: generation,
+    papers: base.generation.papers.map(row => row === paper ? { ...clone(row), reader_presentation: { ...clone(row.reader_presentation), path, sha256: sha(bytes) } } : clone(row)),
+    objects: [...base.generation.objects.filter(row => row.path !== oldPath), { path, kind: 'reader-presentation', sha256: sha(bytes) }]
+      .sort((a, b) => a.path.localeCompare(b.path)) };
+  delete active.index_manifest;
+  assertActiveGeneration(active);
+  const files = new Map(base.files); files.delete(oldPath); files.set(path, bytes);
+  const built = await buildBilingualIndex({ generation: active, validatedInputs: { papers: [{ readingFirst: corrected }],
+    files: [...files].map(([file, content]) => ({ path: file, bytes: content })), carryHistoricalDocuments: true,
+    previousPrepared: { generation: base.generation, index: base.index } } });
+  // Paper-note documents must not move; shared-node documents follow the current registered prose, as any new publication would.
+  const notePaths = new Set(Object.values(paper.paths));
+  const documents = index => index.documents.filter(row => row.paper_id === paper.paper_id && notePaths.has(row.path));
+  if (!same(documents(JSON.parse(built.bytes)), documents(base.index))) fail('RF_CITATION_CORRECTION_SCOPE', { reason: 'paper note documents changed' });
+  const output = [], add = (file, kind, content) => {
+    if (regularBytes(root, file, { missing: true }) !== null) fail('RF_CITATION_CORRECTION_TARGET_EXISTS', { path: file });
+    output.push({ path: file, kind, bytes: Buffer.from(content), byte_sha256: sha(content), byte_length: content.length, before_sha256: null, before_byte_length: null });
+  };
+  add(path, 'reader-presentation', bytes);
+  add(pairPaths.active, 'active', jsonBytes(built.generation));
+  add(pairPaths.index, 'index', built.bytes);
+  const readDependencies = built.generation.objects.filter(row => row.path !== path)
+    .map(row => ({ path: row.path, byte_sha256: sha(files.get(row.path)), byte_length: files.get(row.path).length }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+  const toolBindings = tools(), sourceBindings = [catalogBinding];
+  const scientificReviewHash = hash({ citation_correction: { run_id: runId, previous_presentation: sha(oldBytes), citation } });
+  const reviewManifest = { schema_version: 'phase22/review-manifest-1.0', profile, identity: clone(manifest.identity),
+    status: evidenceMode === 'actual' ? 'review_ready' : 'synthetic_prepared', evidence_mode: evidenceMode, review_ready: evidenceMode === 'actual',
+    publishable: false, reading_accepted: true, native_presentation: { status: 'not_run' }, scientific_review_hash: scientificReviewHash,
+    generation, previous_generation: base.generation.generation_id, support_notes: [], assets: [],
+    previews: languages.map(language => {
+      const note = files.get(paper.paths[language]), inspected = inspectManagedNote(note);
+      return { language, path: paper.paths[language], byte_sha256: sha(note), byte_length: note.length, managed_hash: inspected.managedHash,
+        human_ranges: inspected.humanRanges.map(range => ({ from: range.from, to: range.to, byte_sha256: sha(range.bytes) })) };
+    }),
+    read_dependencies: readDependencies, dependencies: clone(manifest.dependencies), tools: Object.fromEntries(toolBindings.map(row => [row.path, row.sha256])),
+    index: { path: pairPaths.index, byte_sha256: built.sha256 }, active: { path: pairPaths.active, byte_sha256: sha(jsonBytes(built.generation)) },
+    write_set: output.map(({ bytes: _, ...row }) => row), diagnostics: [],
+    provenance_limits: { native_presentation: 'not_run', scientific_review_scope: 'citation regrouping of a committed reading', independent_first_read: 'not_asserted' } };
+  contractValidator ??= createPhase22ContractValidator();
+  (await contractValidator).assert('phase22/review-manifest-1.0', reviewManifest);
+  add('.apa-v3/phase22/generations/' + generation + '/manifest.json', 'manifest', jsonBytes(reviewManifest));
+  output.sort((a, b) => a.path.localeCompare(b.path));
+  const hashes = { scientific_review_hash: scientificReviewHash,
+    review_bundle_hash: hash({ reviewManifest, outputs: inventoryStamp(output), read_dependencies: readDependencies }),
+    output_inventory_hash: hash({ generation, previous_generation: reviewManifest.previous_generation, output: inventoryStamp(output), read_dependencies: readDependencies }) };
+  const review = freeze({ ok: true, status: reviewManifest.status, reviewManifest, outputInventory: output, hashes, diagnostics: [] });
+  records.set(review, { correction: true, sourceBindings, toolBindings, stamp: hash({ manifest: reviewManifest, output: inventoryStamp(output), hashes }) });
+  const { dryRunBilingualPublication } = await import('./phase22-publication.mjs');
+  const dry = await dryRunBilingualPublication({ vaultRoot: root, run: runId, review });
+  return { ...dry, review, sourceInputs: { readingFirst: { correction: review } },
+    correction: { previous_path: oldPath, path, moved_locators: citation.sources.slice(1).reduce((sum, row) => sum + row.locators.length, 0)
+      - manifest.citation.sources.slice(1).reduce((sum, row) => sum + row.locators.length, 0) } };
+}
+
 /** Prepare a reviewed candidate completed by an external host transport without claiming native dispatch. */
 export async function prepareExternalReviewedReadingFirstPublication({
   vaultRoot, generation, evidenceMode = 'actual', resources, runRoot, candidateRoot,
@@ -601,7 +738,7 @@ export async function prepareExternalReviewedReadingFirstPublication({
   ].map(row => [row.path, row])).values()];
   const editorValue = JSON.parse(readFileSync(join(runRoot, readingEditorReceipt.path), 'utf8'));
   if (editorValue.schema_version === 'reading-editor-1.3' && !readingFirstBinding) fail('RF_PUBLICATION_EXTERNAL_BINDING_REQUIRED');
-  if (readingFirstBinding && ((readingFirstBinding.presentation_profile ?? 'reading-editor-1.0') !== editorValue.schema_version
+  if (readingFirstBinding && ((readingFirstBinding.presentation_profile ?? 'reading-editor-1.3') !== editorValue.schema_version
     || readingFirstBinding.input_fingerprint !== hash(scientificInput))) fail('RF_PUBLICATION_EXTERNAL_BINDING_INVALID');
   const sourceRecipe = {
     schema_version: 'external-reviewed-reading-first-publication-source-1.0',

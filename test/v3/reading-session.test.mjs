@@ -1,6 +1,8 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, unlink } from 'node:fs/promises';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { inspectReadingFirstPublicationSource } from '../../scripts/v3/reading-first-runtime.mjs';
@@ -16,14 +18,39 @@ const continuationCapability = () => ({ status: 'detected', method: 'ContinueTas
   evidence: [{ source: 'tool-schema', reference: 'synthetic ContinueTask schema' }], limitations: [],
   continuation: { tool: 'ContinueTask', handle_argument: 'target', instruction_argument: 'prompt', same_context: true, original_host_accessible: true } });
 
-test('2.1 continuation is budgeted before dispatch, emitted once and reconciled after recovery', async t => {
+// 2.2 accepts only host receipts whose raw text is captured in an absolute evidence file.
+const receiptRoot = mkdtempSync(join(tmpdir(), 'apa-session-receipts-'));
+after(() => rmSync(receiptRoot, { recursive: true, force: true }));
+const withEvidence = observation => {
+  const sha256 = createHash('sha256').update(observation.raw_result_text, 'utf8').digest('hex'), path = join(receiptRoot, sha256 + '.txt');
+  writeFileSync(path, observation.raw_result_text);
+  return { ...observation, evidence: { kind: 'raw', capture: 'direct', sha256, source_reference: path } };
+};
+const observe = (action, handle = 'host-' + action.action_id) => withEvidence({ action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port,
+  tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: handle }) });
+
+// 2.2 Results register a resource manifest and Integration hands off the matching visuals.
+async function scienceOutputs(f, catalog) {
+  const runRoot = join(f.root, 'runs', 'run'), resourceRoot = join(runRoot, 'resources', 'results'), source = f.options.scientificInput.sources[0];
+  await mkdir(resourceRoot, { recursive: true }); await mkdir(join(runRoot, 'native'), { recursive: true });
+  const image = Buffer.from('synthetic figure'), imagePath = join(resourceRoot, 'figure.png'); await writeFile(imagePath, image);
+  const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
+  const presentation = catalog ? structuredClone(catalog) : { visuals: [] };
+  presentation.sources = [{ id: source.id, path: catalog?.source_pdf ?? 'Raw/paper.pdf', kind: 'main' }];
+  presentation.visuals = presentation.visuals.map(visual => ({ ...visual, source_id: source.id, locator: { kind: 'pdf-page', page: 1 } }));
+  const rows = presentation.visuals.map(visual => ({ id: visual.id, path: visual.path, source_id: source.id, source_path: imagePath, sha256: sha(image), byte_length: image.length, parent: source, locator: visual.locator }));
+  const manifest = Buffer.from(JSON.stringify({ version: 'reading-resources-1.0', resources: rows }));
+  await writeFile(join(runRoot, 'native', 'results-resources.json'), manifest);
+  const ref = { path: join(runRoot, 'science', 'results-resources.json'), resources_root: resourceRoot, sha256: sha(manifest), byte_length: manifest.length };
+  return (role, extra = {}) => ({ role, text: 'synthetic', ...(role === 'results' ? { resource_manifest: ref } : role === 'integration' ? { presentation, visual_handoff: { resource_manifest: ref } } : {}), ...extra });
+}
+
+test('2.2 continuation is budgeted before dispatch, emitted once and reconciled after recovery', async t => {
   const f = await configuredFixture(t);
   f.profile.capabilities = { task_continuation: continuationCapability() };
   let session = await createReadingSession(f.options);
   const first = await nextAction(session);
-  const initial = { action_id: first.action_id, run_id: first.run_id, input_fingerprint: first.input_fingerprint, port: first.port,
-    tool_call: { name: first.host_action, arguments: first.arguments }, raw_result_text: JSON.stringify({ agent_id: 'original-task' }) };
-  await recordReadingEvent(session, { kind: 'host_observation', action_id: first.action_id, observation: initial });
+  await recordReadingEvent(session, { kind: 'host_observation', action_id: first.action_id, observation: observe(first, 'original-task') });
   const intent = { kind: 'continuation-intent', action_id: first.action_id, execution_id: 'continue-1', message: 'Finish the original evidence output.' };
   assert.deepEqual(await recordReadingEvent(session, intent), await recordReadingEvent(session, intent));
   const continuation = await nextAction(session);
@@ -36,37 +63,31 @@ test('2.1 continuation is budgeted before dispatch, emitted once and reconciled 
   session = await resumeReadingSession({ runRoot: join(f.root, 'runs', 'run') });
   await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
   assert.equal((await nextAction(session)).action, 'reconcile');
-  const receipt = { kind: 'continuation-receipt', execution_id: 'continue-1', observation: { execution_id: 'continue-1', action_id: continuation.action_id,
-    agent_id: 'original-task', tool_call: { name: continuation.host_action, arguments: continuation.arguments }, raw_result_text: 'continued', status: 'observed' } };
+  const receipt = { kind: 'continuation-receipt', execution_id: 'continue-1', observation: withEvidence({ execution_id: 'continue-1', action_id: continuation.action_id,
+    agent_id: 'original-task', tool_call: { name: continuation.host_action, arguments: continuation.arguments }, raw_result_text: 'continued', status: 'observed' }) };
   assert.deepEqual(await recordReadingEvent(session, receipt), await recordReadingEvent(session, receipt));
   assert.equal((await nextAction(session)).action, 'wait');
   assert.equal((await nextAction(session)).summary.budget.total_used, 2);
   await assert.rejects(() => recordReadingEvent(session, { ...receipt, observation: { ...receipt.observation, agent_id: 'different' } }));
 });
 
-test('unsupported continuation spends no budget and old bindings expose unknown execution balance', async t => {
+test('unsupported continuation spends no budget and retired bindings are refused', async t => {
   const f = await configuredFixture(t), session = await createReadingSession(f.options);
   const first = await nextAction(session);
-  const observation = { action_id: first.action_id, run_id: first.run_id, input_fingerprint: first.input_fingerprint, port: first.port,
-    tool_call: { name: first.host_action, arguments: first.arguments }, raw_result_text: JSON.stringify({ agent_id: 'original-task' }) };
-  await recordReadingEvent(session, { kind: 'host_observation', action_id: first.action_id, observation });
+  await recordReadingEvent(session, { kind: 'host_observation', action_id: first.action_id, observation: observe(first, 'original-task') });
   const result = await recordReadingEvent(session, { kind: 'continuation-intent', action_id: first.action_id, execution_id: 'continue-1', message: 'Continue.' });
   assert.equal(result.action, 'provide-input');
   assert.equal(result.code, 'HOST_CONTINUATION_UNKNOWN');
   assert.equal((await nextAction(session)).summary.budget.occupied, 1);
   const old = await configuredFixture(t);
-  const legacy = await createReadingSession({ ...old.options, instructionProfile: 'configured-reading-2.0' });
-  assert.equal((await nextAction(legacy)).summary.budget.remaining_total, null);
+  for (const instructionProfile of ['configured-reading-2.0', 'configured-reading-2.1']) await assert.rejects(() => createReadingSession({ ...old.options, instructionProfile }), /READING_BINDING_RETIRED/);
 });
 
 test('translation continuation carries only remaining IDs and preserves completed fragments across recovery', async t => {
   const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
   f.profile.capabilities = { task_continuation: continuationCapability() };
   let session = await createReadingSession({ ...f.options, maxTotalCalls: 22 });
-  const runRoot = join(f.root, 'runs', 'run');
-  await mkdir(join(runRoot, 'native'), { recursive: true });
-  const observe = action => ({ action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port,
-    tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-' + action.action_id }) });
+  const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, path, value) => {
     const observation = observe(action);
     await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
@@ -75,7 +96,7 @@ test('translation continuation carries only remaining IDs and preserves complete
   };
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session);
-    await accept(action, action.role, { role: action.role, text: 'synthetic', ...(action.role === 'integration' ? { presentation: template.presentationCatalog } : {}) });
+    await accept(action, action.role, content(action.role));
   }
   await accept(await nextReadingAction(session), 'en', template.views[0]);
   const translation = await nextReadingAction(session), original = observe(translation);
@@ -101,8 +122,8 @@ test('translation continuation carries only remaining IDs and preserves complete
   assert.deepEqual(scope.remaining_knowledge, baseline.remaining_knowledge);
   assert.ok(!scope.remaining_sections.includes(partial.sections[0].id));
   assert.equal(continuation.summary.budget.total_used, 9);
-  const receipt = { kind: 'continuation-receipt', execution_id: 'translate-rest', observation: { execution_id: 'translate-rest', action_id: continuation.action_id,
-    agent_id: continuation.host_handle, tool_call: { name: continuation.host_action, arguments: continuation.arguments }, raw_result_text: 'finished', status: 'observed' } };
+  const receipt = { kind: 'continuation-receipt', execution_id: 'translate-rest', observation: withEvidence({ execution_id: 'translate-rest', action_id: continuation.action_id,
+    agent_id: continuation.host_handle, tool_call: { name: continuation.host_action, arguments: continuation.arguments }, raw_result_text: 'finished', status: 'observed' }) };
   const changed = structuredClone(partial); changed.sections[0].paragraphs[0] += ' changed';
   await writeFile(join(runRoot, task.native_path), JSON.stringify(changed));
   await assert.rejects(() => recordReadingEvent(session, receipt), /READING_TRANSLATION_PROGRESS_RECONCILE/);
@@ -164,7 +185,9 @@ async function configuredFixture(t) {
   const bytes = Buffer.from('synthetic source'), source = join(root, 'paper.pdf'); await writeFile(source, bytes);
   const scientificInput = { profile: 'reading-first-1.0', identity: { run_id: 'run', paper_id: 'pap_' + 'a'.repeat(32) }, sources: [{ id: 'paper', path: source, sha256: 'sha256:' + createHash('sha256').update(bytes).digest('hex'), byte_length: bytes.length }], context: 'synthetic', role_artifacts: ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'] };
   const evidence = { current_host: { name: profile.host, reference: 'test session' }, dispatch: { source: 'tool-schema', tool: 'Agent', reference: 'test schema' }, fresh_context: { source: 'host-docs', reference: 'test host docs', blank_context: true }, file_read: { status: 'pass', reference: 'test read' }, input: { status: 'pass', reference: 'test source and parser' } };
-  return { root, profile, evidence, options: { repoRoot: root, runId: 'run', scientificInput, sourceLanguage: 'en', instructionProfile: 'configured-reading-2.1', authorizationId: 'test', deadline: '2099-01-01T00:00:00Z', maxCalls: 8, maxTotalCalls: 14, sessionContext: { model: 'm', effort: 'high' }, hostProfile: profile, evidence, includeRepairs: true } };
+  const observedTool = { status: 'pass', source: 'tool-declaration', reference: 'synthetic', method: 'synthetic declaration', observation: 'declared available' };
+  evidence.results_tools = { python: { ...observedTool, path: join(bin, process.platform === 'win32' ? 'python.exe' : 'python') }, libraries: { ...observedTool, names: ['fitz'] }, visual_read: observedTool, file_read: observedTool };
+  return { root, profile, evidence, options: { repoRoot: root, runId: 'run', scientificInput, sourceLanguage: 'en', instructionProfile: 'configured-reading-2.2', authorizationId: 'test', deadline: '2099-01-01T00:00:00Z', maxCalls: 8, maxTotalCalls: 14, sessionContext: { model: 'm', effort: 'high' }, hostProfile: profile, evidence, includeRepairs: true } };
 }
 
 test('science intent survives recovery and is never automatically dispatched twice', async t => {
@@ -179,16 +202,16 @@ test('science intent survives recovery and is never automatically dispatched twi
   const pending = await nextReadingAction(session);
   assert.equal(pending.action, 'reconcile');
   assert.equal(pending.action_id, first.action_id);
-  const observation = { action_id: first.action_id, run_id: first.run_id, input_fingerprint: first.input_fingerprint, port: first.port, tool_call: { name: first.host_action, arguments: first.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-evidence' }) };
+  const observation = observe(first, 'host-evidence');
   await recordReadingEvent(session, { kind: 'host_observation', action_id: first.action_id, observation });
   assert.equal((await nextReadingAction(session)).action, 'wait');
   const progress = { action_id: first.action_id, agent_id: 'host-evidence', raw_result_text: 'working', tool_call: { name: 'query', arguments: {} } };
-  const progressEvent = { kind: 'host_update', action_id: first.action_id, host_event_id: 'event-1', observation: progress };
+  const progressEvent = { kind: 'host_update', action_id: first.action_id, host_event_id: 'event-1', observation: withEvidence(progress) };
   assert.deepEqual(await recordReadingEvent(session, progressEvent), await recordReadingEvent(session, progressEvent));
-  await assert.rejects(() => recordReadingEvent(session, { ...progressEvent, observation: { ...progress, raw_result_text: 'changed' } }), /SCIENCE_HOST_EVENT_CONFLICT/);
+  await assert.rejects(() => recordReadingEvent(session, { ...progressEvent, observation: withEvidence({ ...progress, raw_result_text: 'changed' }) }), /SCIENCE_HOST_EVENT_CONFLICT/);
   await mkdir(join(f.root, 'runs', 'run', 'native'), { recursive: true });
   await writeFile(join(f.root, 'runs', 'run', 'native', 'evidence.json'), JSON.stringify({ role: 'evidence', text: 'synthetic' }));
-  await recordReadingEvent(session, { kind: 'result', action_id: first.action_id });
+  await recordReadingEvent(session, { kind: 'result', action_id: first.action_id, observation });
   assert.equal((await nextReadingAction(session)).role, 'methods');
 });
 
@@ -215,9 +238,7 @@ test('synthetic host runs both drafts, editor, candidate and review through the 
   const f = await configuredFixture(t);
   const template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
   let session = await createReadingSession(f.options);
-  const runRoot = join(f.root, 'runs', 'run');
-  await mkdir(join(runRoot, 'native'), { recursive: true });
-  const observe = action => ({ action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port, tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-' + action.action_id }) });
+  const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, nativePath, value) => {
     const observation = observe(action);
     await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
@@ -227,16 +248,16 @@ test('synthetic host runs both drafts, editor, candidate and review through the 
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session);
     assert.equal(action.action, 'dispatch');
-    await accept(action, action.role, { role: action.role, text: 'synthetic', ...(action.role === 'integration' ? { presentation: template.presentationCatalog } : {}) });
+    await accept(action, action.role, content(action.role));
   }
   let action = await nextReadingAction(session);
   assert.equal(action.stage, 'reading');
   const writerObservation = observe(action);
   await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation: writerObservation });
   const update = { kind: 'host_update', action_id: action.action_id, agent_id: 'host-' + action.action_id, raw_result_text: 'working', tool_call: { name: 'query', arguments: {} } };
-  const updateEvent = { kind: 'host_update', action_id: action.action_id, host_event_id: 'progress-1', observation: update };
+  const updateEvent = { kind: 'host_update', action_id: action.action_id, host_event_id: 'progress-1', observation: withEvidence(update) };
   assert.deepEqual(await recordReadingEvent(session, updateEvent), await recordReadingEvent(session, updateEvent));
-  await assert.rejects(() => recordReadingEvent(session, { ...updateEvent, observation: { ...update, raw_result_text: 'changed' } }), /REQUEST_EVENT_CONFLICT/);
+  await assert.rejects(() => recordReadingEvent(session, { ...updateEvent, observation: withEvidence({ ...update, raw_result_text: 'changed' }) }), /REQUEST_EVENT_CONFLICT/);
   await writeFile(join(runRoot, 'native', 'en.json'), JSON.stringify(template.views[0]));
   const writerResult = await recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation: writerObservation });
   session = await resumeReadingSession({ runRoot });
@@ -250,22 +271,20 @@ test('synthetic host runs both drafts, editor, candidate and review through the 
   await accept(action, 'presentation', template.editor);
   assert.equal((await nextReadingAction(session)).kind, 'render-assets');
   const source = f.options.scientificInput.sources[0];
-  const resources = [{ path: template.presentationCatalog.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length }, template.resources[1]];
-  await recordReadingEvent(session, { kind: 'render-assets', resources, renderOptions: {} });
+  await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
   const reviewBoundary = await nextAction(session);
   assert.deepEqual({ ...reviewBoundary, summary: undefined }, { action: 'provide-input', kind: 'compaction-observation', boundary_id: 'before-review', summary: undefined });
   assert.equal(reviewBoundary.summary.next_action, 'provide-input');
   assert.deepEqual(await nextAction(session), reviewBoundary);
   session = await resumeReadingSession({ runRoot });
   await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
-  assert.deepEqual({ ...(await nextAction(session)), summary: undefined }, { action: 'provide-input', kind: 'render-assets', summary: undefined });
-  await recordReadingEvent(session, { kind: 'render-assets', resources, renderOptions: {} });
+  // 2.2 reloads the persisted render parameters, so recovery needs no new render input.
   assert.deepEqual(await nextAction(session), reviewBoundary);
   await recordReadingEvent(session, { kind: 'compaction', input: { observation: { manual_compaction: { available: false, source: 'synthetic host has no manual entry' } } } });
   action = await nextAction(session);
   assert.equal(action.action, 'await-user'); assert.match(action.message, /推荐.*压缩/);
   assert.ok(action.compaction_prompt.includes('before-review'));
-  assert.ok(action.compaction_prompt.includes(JSON.stringify(resources[0].source_path)));
+  assert.ok(action.compaction_prompt.includes(JSON.stringify(source.path)));
   const reviewCapsule = JSON.parse(action.compaction_prompt.split('\n\n').find(part => part.startsWith('{')));
   assert.equal(reviewCapsule.presentation_profile, 'reading-editor-1.3');
   assert.equal(reviewCapsule.candidate_paths.length, 2);
@@ -274,8 +293,6 @@ test('synthetic host runs both drafts, editor, candidate and review through the 
   const reviewCheckpoint = action.receipt.path;
   session = await resumeReadingSession({ runRoot });
   await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
-  assert.deepEqual({ ...(await nextAction(session)), summary: undefined }, { action: 'provide-input', kind: 'render-assets', summary: undefined });
-  await recordReadingEvent(session, { kind: 'render-assets', resources, renderOptions: {} });
   action = await nextAction(session);
   assert.equal(action.action, 'await-user');
   assert.equal(JSON.parse(await readFile(join(runRoot, reviewCheckpoint), 'utf8')).state.compaction_reminders['before-review'].compaction_prompt, reviewPrompt);
@@ -289,24 +306,21 @@ test('synthetic host runs both drafts, editor, candidate and review through the 
   assert.equal(done.publishable, false);
   session = await resumeReadingSession({ runRoot });
   await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
-  assert.equal((await nextReadingAction(session)).kind, 'render-assets');
-  await recordReadingEvent(session, { kind: 'render-assets', resources, renderOptions: {} });
   assert.equal((await nextReadingAction(session)).status, 'reading_complete');
 });
 
 test('synthetic science completes in dependency order and restores the pending writer', async t => {
   const f = await configuredFixture(t);
   let session = await createReadingSession(f.options);
-  const seen = [];
+  const content = await scienceOutputs(f), seen = [];
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session);
     assert.equal(action.action, 'dispatch');
     seen.push(action.role);
-    const observation = { action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port, tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: `host-${action.role}` }) };
+    const observation = observe(action, `host-${action.role}`);
     await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
-    await mkdir(join(f.root, 'runs', 'run', 'native'), { recursive: true });
-    await writeFile(join(f.root, 'runs', 'run', 'native', action.role + '.json'), JSON.stringify({ role: action.role, text: 'synthetic' }));
-    await recordReadingEvent(session, { kind: 'result', action_id: action.action_id });
+    await writeFile(join(f.root, 'runs', 'run', 'native', action.role + '.json'), JSON.stringify(content(action.role)));
+    await recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
   }
   assert.deepEqual(seen, ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration']);
   const writer = await nextReadingAction(session);
@@ -322,15 +336,14 @@ test('synthetic science completes in dependency order and restores the pending w
 test('accepted result with failed checkpoint remains recoverable without redispatch', async t => {
   const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
   let session = await createReadingSession(f.options);
-  const runRoot = join(f.root, 'runs', 'run'); await mkdir(join(runRoot, 'native'), { recursive: true });
-  const observationFor = action => ({ action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port, tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-' + action.action_id }) });
+  const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   for (let i = 0; i < 6; i++) {
-    const action = await nextReadingAction(session), observation = observationFor(action);
+    const action = await nextReadingAction(session), observation = observe(action);
     await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
-    await writeFile(join(runRoot, 'native', action.role + '.json'), JSON.stringify({ role: action.role, text: 'synthetic', ...(action.role === 'integration' ? { presentation: template.presentationCatalog } : {}) }));
-    await recordReadingEvent(session, { kind: 'result', action_id: action.action_id });
+    await writeFile(join(runRoot, 'native', action.role + '.json'), JSON.stringify(content(action.role)));
+    await recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
   }
-  const action = await nextReadingAction(session), observation = observationFor(action);
+  const action = await nextReadingAction(session), observation = observe(action);
   await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
   await writeFile(join(runRoot, 'native', 'en.json'), JSON.stringify(template.views[0]));
   const occupied = join(runRoot, 'control', 'reading-checkpoint-7.json');
@@ -349,13 +362,13 @@ test('accepted result with failed checkpoint remains recoverable without redispa
 
 test('before-writer compaction pause is recovered from the owned decision checkpoint', async t => {
   const f = await configuredFixture(t); let session = await createReadingSession(f.options);
-  const runRoot = join(f.root, 'runs', 'run'); await mkdir(join(runRoot, 'native'), { recursive: true });
+  const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f);
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session);
-    const observation = { action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port, tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-' + action.action_id }) };
+    const observation = observe(action);
     await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
-    await writeFile(join(runRoot, 'native', action.role + '.json'), JSON.stringify({ role: action.role, text: 'synthetic' }));
-    await recordReadingEvent(session, { kind: 'result', action_id: action.action_id });
+    await writeFile(join(runRoot, 'native', action.role + '.json'), JSON.stringify(content(action.role)));
+    await recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
   }
   const now = new Date().toISOString();
   await recordReadingEvent(session, { kind: 'compaction', input: { sessionId: 'main', observation: { session_id: 'main', observed_at: now, context: { tokens: 190000, kind: 'current-context', measured_at: now, fresh: true, source: 'synthetic meter' }, manual_compaction: { available: true, method: 'synthetic compact', source: 'synthetic host' } }, progress: { remaining_work: { multiple_responses: true, reason: 'writing remains' }, growth: { substantial: true, reason: 'science grew' } } } });
@@ -372,7 +385,7 @@ test('1.2 freezes the evidenced host entry and waits at science and Writer bound
   const entry = { status: 'detected', method: '/compact', scope: 'current-session', evidence: [{ source: 'host-docs', reference: 'synthetic host manual entry' }], limitations: [] };
   f.profile.capabilities = { manual_compaction: entry };
   let session = await createReadingSession(f.options);
-  const runRoot = join(f.root, 'runs', 'run'); await mkdir(join(runRoot, 'native'), { recursive: true });
+  const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f);
   const saved = JSON.parse(await readFile(join(runRoot, 'control', 'science-state.json'), 'utf8'));
   const policy = saved.data.prepared.runControl.reading_first_binding.compaction_policy;
   assert.equal(policy.profile, 'boundary-reminders-1.2');
@@ -393,10 +406,10 @@ test('1.2 freezes the evidenced host entry and waits at science and Writer bound
       action = await nextAction(session);
     }
     assert.equal(action.action, 'dispatch');
-    const observation = { action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port, tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-' + action.role }) };
+    const observation = observe(action, 'host-' + action.role);
     await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
-    await writeFile(join(runRoot, 'native', action.role + '.json'), JSON.stringify({ role: action.role, text: 'synthetic' }));
-    await recordReadingEvent(session, { kind: 'result', action_id: action.action_id });
+    await writeFile(join(runRoot, 'native', action.role + '.json'), JSON.stringify(content(action.role)));
+    await recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
   }
   const missing = await nextAction(session);
   assert.equal(missing.action, 'provide-input'); assert.equal(missing.boundary_id, 'before-writer');
@@ -433,10 +446,10 @@ test('1.2 with an unknown entry persists a mandatory reminder and waits through 
   const f = await configuredFixture(t);
   let session = await createReadingSession(f.options);
   const runRoot = join(f.root, 'runs', 'run'); await mkdir(join(runRoot, 'native'), { recursive: true });
-  const action = await nextAction(session);
-  await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation: { action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port, tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-evidence' }) } });
+  const action = await nextAction(session), observation = observe(action, 'host-evidence');
+  await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
   await writeFile(join(runRoot, 'native', 'evidence.json'), JSON.stringify({ role: 'evidence', text: 'synthetic' }));
-  await recordReadingEvent(session, { kind: 'result', action_id: action.action_id });
+  await recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
   const evidenceBoundary = await nextAction(session);
   assert.deepEqual({ ...evidenceBoundary, summary: undefined }, { action: 'provide-input', kind: 'compaction-observation', boundary_id: 'evidence-accepted', summary: undefined });
   assert.equal(evidenceBoundary.summary.budget.status, 'known');
@@ -460,13 +473,13 @@ test('1.2 with an unknown entry persists a mandatory reminder and waits through 
 
 test('control slot exhaustion blocks dispatch without changing the model-call budget', async t => {
   const f = await configuredFixture(t), session = await createReadingSession({ ...f.options, maxControlCheckpoints: 4 });
-  const runRoot = join(f.root, 'runs', 'run'); await mkdir(join(runRoot, 'native'), { recursive: true });
+  const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f);
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session);
-    const observation = { action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port, tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-' + action.action_id }) };
+    const observation = observe(action);
     await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
-    await writeFile(join(runRoot, 'native', action.role + '.json'), JSON.stringify({ role: action.role, text: 'synthetic' }));
-    await recordReadingEvent(session, { kind: 'result', action_id: action.action_id });
+    await writeFile(join(runRoot, 'native', action.role + '.json'), JSON.stringify(content(action.role)));
+    await recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
   }
   const blocked = await nextReadingAction(session);
   assert.equal(blocked.action, 'reconcile');
@@ -476,23 +489,21 @@ test('control slot exhaustion blocks dispatch without changing the model-call bu
 test('material editor issue receives one bounded repair and a second candidate', async t => {
   const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
   let session = await createReadingSession(f.options);
-  const runRoot = join(f.root, 'runs', 'run'); await mkdir(join(runRoot, 'native'), { recursive: true });
+  const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, path, value) => {
-    const observation = { action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port, tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-' + action.action_id }) };
+    const observation = observe(action);
     await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
     await writeFile(join(runRoot, 'native', path + '.json'), JSON.stringify(value));
     return recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
   };
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session);
-    await accept(action, action.role, { role: action.role, text: 'synthetic', ...(action.role === 'integration' ? { presentation: template.presentationCatalog } : {}) });
+    await accept(action, action.role, content(action.role));
   }
   await accept(await nextReadingAction(session), 'en', template.views[0]);
   await accept(await nextReadingAction(session), 'zh-CN', template.views[1]);
   await accept(await nextReadingAction(session), 'presentation', template.editor);
-  const source = f.options.scientificInput.sources[0];
-  const resources = [{ path: template.presentationCatalog.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length }, template.resources[1]];
-  await recordReadingEvent(session, { kind: 'render-assets', resources, renderOptions: {} });
+  await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
   const review = { ...template.review, issues: [{ severity: 'material', kind: 'presentation', detail: 'Clarify the finding overview.', repair_owner: 'editor', repair_scope: { status: 'located', section_ids: ['findings'], knowledge_ids: [], visual_ids: [], editor_fields: [] } }] };
   const first = await nextReadingAction(session);
   assert.equal((await accept(first, 'review', review)).status, 'revision_required');
@@ -506,29 +517,28 @@ test('material editor issue receives one bounded repair and a second candidate',
   assert.equal((await nextReadingAction(session)).status, 'reading_complete');
   session = await resumeReadingSession({ runRoot });
   await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
-  await recordReadingEvent(session, { kind: 'render-assets', resources, renderOptions: {} });
+  await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
   assert.equal((await nextReadingAction(session)).status, 'reading_complete');
 });
 
 test('rejected review is checkpointed as completed with limits and stays terminal', async t => {
   const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
   let session = await createReadingSession(f.options);
-  const runRoot = join(f.root, 'runs', 'run'); await mkdir(join(runRoot, 'native'), { recursive: true });
+  const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, path, value) => {
-    const observation = { action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port, tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-' + action.action_id }) };
+    const observation = observe(action);
     await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
     await writeFile(join(runRoot, 'native', path + '.json'), JSON.stringify(value));
     return { result: await recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation }), observation };
   };
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session);
-    await accept(action, action.role, { role: action.role, text: 'synthetic', ...(action.role === 'integration' ? { presentation: template.presentationCatalog } : {}) });
+    await accept(action, action.role, content(action.role));
   }
   await accept(await nextReadingAction(session), 'en', template.views[0]);
   await accept(await nextReadingAction(session), 'zh-CN', template.views[1]);
   await accept(await nextReadingAction(session), 'presentation', template.editor);
-  const source = f.options.scientificInput.sources[0];
-  await recordReadingEvent(session, { kind: 'render-assets', resources: [{ path: template.presentationCatalog.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length }, template.resources[1]], renderOptions: {} });
+  await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
   const action = await nextReadingAction(session);
   const review = { ...template.review, issues: [{ severity: 'material', kind: 'presentation', detail: 'Unknown location.', repair_owner: 'editor', repair_scope: { status: 'unresolved', section_ids: [], knowledge_ids: [], visual_ids: [], editor_fields: [] } }] };
   const { result, observation } = await accept(action, 'review', review);
@@ -543,22 +553,21 @@ test('rejected review is checkpointed as completed with limits and stays termina
 test('renderer-only issue requests repaired inputs and performs one local review', async t => {
   const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
   const session = await createReadingSession(f.options), runRoot = join(f.root, 'runs', 'run');
-  await mkdir(join(runRoot, 'native'), { recursive: true });
+  const content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, path, value) => {
-    const observation = { action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port, tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-' + action.action_id }) };
+    const observation = observe(action);
     await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
     await writeFile(join(runRoot, 'native', path + '.json'), JSON.stringify(value));
     return recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
   };
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session);
-    await accept(action, action.role, { role: action.role, text: 'synthetic', ...(action.role === 'integration' ? { presentation: template.presentationCatalog } : {}) });
+    await accept(action, action.role, content(action.role));
   }
   await accept(await nextReadingAction(session), 'en', template.views[0]);
   await accept(await nextReadingAction(session), 'zh-CN', template.views[1]);
   await accept(await nextReadingAction(session), 'presentation', template.editor);
-  const source = f.options.scientificInput.sources[0];
-  await recordReadingEvent(session, { kind: 'render-assets', resources: [{ path: template.presentationCatalog.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length }, template.resources[1]], renderOptions: {} });
+  await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
   const review = { ...template.review, issues: [{ severity: 'material', kind: 'layout', detail: 'Correct the rendered finding.', repair_owner: 'renderer', affected_paths: [template.candidate.notes[0].path], repair_scope: { status: 'located', section_ids: ['findings'], knowledge_ids: [], visual_ids: [], editor_fields: [] } }] };
   assert.equal((await accept(await nextReadingAction(session), 'review', review)).status, 'revision_required');
   assert.equal((await nextReadingAction(session)).kind, 'renderer-repair');
@@ -620,13 +629,12 @@ test('initial enrichment preserves the observed task across source snapshot reco
   const f = await configuredFixture(t), runRoot = join(f.root, 'runs', 'run');
   const gap = { id: 'design', question: 'What allocation was used?', impact: 'Changes interpretation', severity: 'material', owner_role: 'evidence', source_kind: 'cited_method', source_ids: [], target_sections: ['Study'] };
   let session = await createReadingSession({ ...f.options, enrichmentPolicy: { sources: [], allow_targeted_methods: true } });
-  await mkdir(join(runRoot, 'native'), { recursive: true });
-  const observe = action => ({ action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port, tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-' + action.action_id }) });
+  const content = await scienceOutputs(f);
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session), observation = observe(action);
     await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
-    await writeFile(join(runRoot, 'native', action.role + '.json'), JSON.stringify({ role: action.role, text: 'synthetic', ...(action.role === 'integration' ? { important_gaps: [gap] } : {}) }));
-    await recordReadingEvent(session, { kind: 'result', action_id: action.action_id });
+    await writeFile(join(runRoot, 'native', action.role + '.json'), JSON.stringify(content(action.role, action.role === 'integration' ? { important_gaps: [gap] } : {})));
+    await recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
   }
   const action = await nextReadingAction(session), observation = observe(action);
   assert.equal(action.action, 'dispatch');
@@ -658,13 +666,12 @@ for (const total of [10, 11]) test(`initial enrichment reserves the full chain a
   const f = await configuredFixture(t), runRoot = join(f.root, 'runs', 'run');
   const gap = { id: 'design', question: 'What allocation was used?', impact: 'Changes interpretation', severity: 'material', owner_role: 'evidence', source_kind: 'original_page', source_ids: [], target_sections: ['Study'] };
   const session = await createReadingSession({ ...f.options, maxCalls: 4, maxTotalCalls: total, enrichmentPolicy: { sources: [], allow_targeted_methods: true } });
-  await mkdir(join(runRoot, 'native'), { recursive: true });
+  const content = await scienceOutputs(f);
   for (let i = 0; i < 6; i++) {
-    const action = await nextReadingAction(session);
-    const observation = { action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port, tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-' + action.action_id }) };
+    const action = await nextReadingAction(session), observation = observe(action);
     await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
-    await writeFile(join(runRoot, 'native', action.role + '.json'), JSON.stringify({ role: action.role, text: 'synthetic', ...(action.role === 'integration' ? { important_gaps: [gap] } : {}) }));
-    await recordReadingEvent(session, { kind: 'result', action_id: action.action_id });
+    await writeFile(join(runRoot, 'native', action.role + '.json'), JSON.stringify(content(action.role, action.role === 'integration' ? { important_gaps: [gap] } : {})));
+    await recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
   }
   const next = await nextReadingAction(session);
   if (total === 10) { assert.equal(next.action, 'reconcile'); assert.equal(next.code, 'READING_FIRST_CALL_BUDGET_EXHAUSTED'); }
@@ -681,23 +688,22 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
   if (chartTypeCorrection || blockedRecovery) template.presentationCatalog.visuals[0].chart_types = [{ knowledge_id: 'method', label: { en: 'Intervals', 'zh-CN': '区间图' }, panel: 'b,d,e' }];
   if (blockedRecovery) f.profile.capabilities = { task_continuation: continuationCapability() };
   let session = await createReadingSession({ ...f.options, sourceLanguage, includeRepairs: !noRepairs, maxTotalCalls: shortBudget ? 14 : 15, enrichmentPolicy: { sources: [], allow_targeted_methods: true } });
-  const runRoot = join(f.root, 'runs', 'run'); await mkdir(join(runRoot, 'native'), { recursive: true });
+  const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, path, value) => {
     assert.equal(action.action, 'dispatch');
     assert.match(action.arguments.prompt, new RegExp('native[\\\\/]' + path.replace('-', '\\-') + '\\.json'));
-    const observation = { action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port, tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-' + action.action_id }) };
+    const observation = observe(action);
     await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
     await writeFile(join(runRoot, 'native', path + '.json'), JSON.stringify(value));
     return recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
   };
-  for (let i = 0; i < 6; i++) { const action = await nextReadingAction(session); await accept(action, action.role, { role: action.role, text: 'synthetic', ...(action.role === 'integration' ? { presentation: template.presentationCatalog } : {}) }); }
+  for (let i = 0; i < 6; i++) { const action = await nextReadingAction(session); await accept(action, action.role, content(action.role)); }
   const targetLanguage = sourceLanguage === 'en' ? 'zh-CN' : 'en';
   const viewFor = language => template.views.find(view => view.language === language);
   await accept(await nextReadingAction(session), sourceLanguage, viewFor(sourceLanguage));
   await accept(await nextReadingAction(session), targetLanguage, viewFor(targetLanguage));
   await accept(await nextReadingAction(session), 'presentation', template.editor);
-  const source = f.options.scientificInput.sources[0];
-  await recordReadingEvent(session, { kind: 'render-assets', resources: [{ path: template.presentationCatalog.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length }, template.resources[1]], renderOptions: {} });
+  await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
   const gap = { id: 'late', question: 'What allocation was used?', impact: 'Changes interpretation', severity: 'material', owner_role: 'evidence', source_kind: 'original_page', source_ids: [], target_sections: ['Study'] };
   const issue = { severity: 'material', kind: 'scientific-gap', detail: 'Allocation unclear', repair_owner: 'science', affected_languages: [targetLanguage], scientific_gap: gap, repair_scope: { status: 'located', section_ids: [template.views[1].sections[0].id], knowledge_ids: [], visual_ids: visualCorrection || blockedRecovery ? ['fig-one'] : [], editor_fields: [] } };
   if (translationOnly) { issue.repair_owner = 'writer'; delete issue.scientific_gap; }
@@ -727,7 +733,7 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
   }
   const revisedEditor = { ...structuredClone(template.editor), views_fingerprint: readingFirstViewsFingerprint([en, zh]) };
   if (blockedRecovery) {
-    const observation = { action_id: editorAction.action_id, run_id: editorAction.run_id, input_fingerprint: editorAction.input_fingerprint, port: editorAction.port, tool_call: { name: editorAction.host_action, arguments: editorAction.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-' + editorAction.action_id }) };
+    const observation = observe(editorAction);
     await recordReadingEvent(session, { kind: 'host_observation', action_id: editorAction.action_id, observation });
     const intent = { kind: 'continuation-intent', action_id: editorAction.action_id, execution_id: 'editor-scope-recovery', message: 'Complete the original scoped Editor task.' };
     await assert.rejects(() => recordReadingEvent(session, intent), /CALL_BUDGET_EXHAUSTED/);
@@ -742,16 +748,16 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
     assert.deepEqual(await readFile(waiting.summary.state_ref), checkpointBytes);
     session = await resumeReadingSession({ runRoot });
     await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
-    await recordReadingEvent(session, { kind: 'render-assets', resources: [{ path: template.presentationCatalog.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length }, template.resources[1]], renderOptions: {} });
+    await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
     await recordReadingEvent(session, intent);
     const continuation = await nextReadingAction(session);
     assert.equal(continuation.host_action, 'ContinueTask');
     assert.equal(continuation.host_handle, 'host-' + editorAction.action_id);
-    await recordReadingEvent(session, { kind: 'continuation-receipt', execution_id: intent.execution_id, observation: { execution_id: intent.execution_id, action_id: continuation.action_id, agent_id: continuation.host_handle, tool_call: { name: continuation.host_action, arguments: continuation.arguments }, raw_result_text: 'continued', status: 'observed' } });
+    await recordReadingEvent(session, { kind: 'continuation-receipt', execution_id: intent.execution_id, observation: withEvidence({ execution_id: intent.execution_id, action_id: continuation.action_id, agent_id: continuation.host_handle, tool_call: { name: continuation.host_action, arguments: continuation.arguments }, raw_result_text: 'continued', status: 'observed' }) });
   }
   if (editorRecovery) {
     for (const language of ['en', 'zh-CN']) revisedEditor.languages[language].visuals = [{ id: 'fig-one', title: 'Recovered title', notes: [] }];
-    const observation = { action_id: editorAction.action_id, run_id: editorAction.run_id, input_fingerprint: editorAction.input_fingerprint, port: editorAction.port, tool_call: { name: editorAction.host_action, arguments: editorAction.arguments }, raw_result_text: JSON.stringify({ agent_id: 'synthetic-editor-r2' }) };
+    const observation = observe(editorAction, 'synthetic-editor-r2');
     await recordReadingEvent(session, { kind: 'host_observation', action_id: editorAction.action_id, observation });
     await writeFile(join(runRoot, 'native/presentation-r2.json'), JSON.stringify(revisedEditor));
     const { data } = JSON.parse(await readFile(join(runRoot, 'control/science-state.json'), 'utf8'));
@@ -784,7 +790,7 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
     session = await resumeReadingSession({ runRoot });
     await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
     assert.deepEqual(await recordReadingEvent(session, recovery), recovered);
-    await recordReadingEvent(session, { kind: 'render-assets', resources: [{ path: template.presentationCatalog.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length }, template.resources[1]], renderOptions: {} });
+    await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
   } else await accept(editorAction, 'presentation-r2', revisedEditor);
   const local = await nextReadingAction(session);
   if (chartTypeCorrection || blockedRecovery) {
@@ -815,17 +821,17 @@ test('empty enrichment policy preserves exact requests and instructions without 
   const runRoot = join(f.root, 'runs', 'run');
   const run = async withPolicy => {
     const session = await createReadingSession({ ...f.options, ...(withPolicy ? { enrichmentPolicy: { sources: [], allow_targeted_methods: true } } : {}) });
-    await mkdir(join(runRoot, 'native'), { recursive: true });
+    const content = await scienceOutputs(f, template.presentationCatalog);
     const accept = async (action, path, value) => {
-      const observation = { action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port, tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: 'host-' + action.action_id }) };
+      const observation = observe(action);
       await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
       await writeFile(join(runRoot, 'native', path + '.json'), JSON.stringify(value));
       await recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
     };
-    for (let i = 0; i < 6; i++) { const action = await nextReadingAction(session); await accept(action, action.role, { role: action.role, text: 'synthetic', ...(action.role === 'integration' ? { presentation: template.presentationCatalog } : {}) }); }
+    for (let i = 0; i < 6; i++) { const action = await nextReadingAction(session); await accept(action, action.role, content(action.role)); }
     const captured = [];
     for (const [path, value] of [['en', template.views[0]], ['zh-CN', template.views[1]], ['presentation', template.editor], ['review', template.review]]) {
-      if (path === 'review') { const source = f.options.scientificInput.sources[0]; await recordReadingEvent(session, { kind: 'render-assets', resources: [{ path: template.presentationCatalog.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length }, template.resources[1]], renderOptions: {} }); }
+      if (path === 'review') await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
       const action = await nextReadingAction(session);
       assert.ok(action.action_id);
       captured.push({ name: action.host_action, arguments: action.arguments, instruction: await readFile(join(runRoot, 'instructions', path + '.txt')) });

@@ -24,6 +24,8 @@ async function inputBytes(path) {
 async function run() {
   const [command,...args]=process.argv.slice(2); const options={};
   for (let i=0;i<args.length;i+=2) { if (!args[i]?.startsWith('--') || args[i+1] === undefined) throw new Error('READING_CLI_ARGUMENT_INVALID'); options[args[i].slice(2)]=args[i+1]; }
+  // Check before opening a session: a dispatch intent persisted without an export target has no exit.
+  if (['create','resume','next'].includes(command) && !options['export-dir']) throw new Error('READING_CLI_EXPORT_DIRECTORY_REQUIRED');
   let session;
   if (command === 'create') session=await createReadingSession(JSON.parse((await inputBytes(options.input)).toString('utf8')));
   else if (['resume','next','event'].includes(command)) session=await resumeReadingSession({runRoot:options['run-root']});
@@ -54,7 +56,6 @@ async function run() {
   } else {
     result=await nextReadingAction(session);
     if (result.action === 'dispatch') {
-      if (!options['export-dir']) throw new Error('READING_CLI_EXPORT_DIRECTORY_REQUIRED');
       const path=await exportReadingAction(options['export-dir'],result); result={...result,export_path:path};
     }
   }

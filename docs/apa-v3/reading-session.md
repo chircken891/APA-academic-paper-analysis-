@@ -34,9 +34,9 @@ await recordReadingEvent(session, {
 
 **执行与记录**
 
-新 `configured-reading-2.2` 保留六科学角色、单原文语言 Writer、Translation、可选 Editor、一次整体审查和最多一次局部复核；模型、用户选定的写作指导及压缩边界沿原冻结合同。旧绑定保持原版本。 未提供 `maxCalls` 时按 `min(8, maxTotalCalls - 6)`（启用 Editor）或 `min(6, maxTotalCalls - 6)`（普通模式）推导并冻结；低于编辑模式 4 或普通模式 3 时拒绝。
+新 `configured-reading-2.2` 保留六科学角色、单原文语言 Writer、Translation、可选 Editor、一次整体审查和最多一次局部复核；模型、用户选定的写作指导及压缩边界沿原冻结合同。未提供 `maxCalls` 时按 `min(8, maxTotalCalls - 6)`（启用 Editor）或 `min(6, maxTotalCalls - 6)`（普通模式）推导并冻结；低于编辑模式 4 或普通模式 3 时拒绝。
 
-`maxCalls` 限制任务数量，补缺任务不计入阅读任务数量；`maxTotalCalls` 计入全部首次派发与原句柄续接的实际执行，并预留后续步骤所需额度。`host_update`、查询和等待不计入执行次数。`prior_calls=6` 保留科学任务基线，科学续接次数另账传递；旧绑定的实际剩余额度无法确定时记录 `unknown`。
+`maxCalls` 限制任务数量，补缺任务不计入阅读任务数量；`maxTotalCalls` 计入全部首次派发与原句柄续接的实际执行，并预留后续步骤所需额度。`host_update`、查询和等待不计入执行次数。`prior_calls=6` 保留科学任务基线，科学续接次数另账传递。
 
 主 Controller 按动作消费字段白名单短摘要，最多 8192 UTF-8 字节和 8 个引用；更多信息沿完整状态文件按需查阅。常态不整读正文、角色包或规则源码，具体错误按定位读取。新翻译通过文件引用按需读取，进度清单锁定完成片段，续接只处理剩余 ID；清单不能代替完整性验收，既有镜像校验仍须执行。
 
@@ -112,7 +112,7 @@ await recordReadingEvent(session, {
 
 入口预登记 Evidence、Methods、Results 三个初始补缺任务，仅派发实际有缺口的角色。`includeRepairs:true` 时再登记三个后期补缺任务；未使用的登记不消耗调用，也不加入发布依赖。每项任务使用自身的 native、owned、指令路径和 `source_root`。
 
-初始补缺按既有科学输出中的重要缺口分组，全部接收后才进入原文 Writer、Translation、可选 Editor 和整体审查。设本批尚未准备的补缺角色数为 N，Editor 启用时 E=1，否则 E=0，2.1 派发前以执行账本占用加上尚未准备的补缺及后续步骤核对 `maxTotalCalls`，并满足语言阶段 `maxCalls`；已登记预留不重复计入。这里的后续步骤为 Writer、Translation、可选 Editor 和一次审查，不预留 r2。旧绑定沿用 `callsUsed + N + 3 + E <= maxTotalCalls`。不足时返回 `reconcile` 和 `READING_FIRST_CALL_BUDGET_EXHAUSTED`。
+初始补缺按既有科学输出中的重要缺口分组，全部接收后才进入原文 Writer、Translation、可选 Editor 和整体审查。设本批尚未准备的补缺角色数为 N，Editor 启用时 E=1，否则 E=0，2.1 派发前以执行账本占用加上尚未准备的补缺及后续步骤核对 `maxTotalCalls`，并满足语言阶段 `maxCalls`；已登记预留不重复计入。这里的后续步骤为 Writer、Translation、可选 Editor 和一次审查，不预留 r2。不足时返回 `reconcile` 和 `READING_FIRST_CALL_BUDGET_EXHAUSTED`。
 
 新补缺会话中，首次审查的 science 问题会在预算判断前把两种语言加入修订范围。流程为科学补缺、原文 Writer 修订、Translation、可选 Editor、一次局部复核；仅译稿中的 writer 类问题仍只修译稿。后期补缺角色数与完整修订链均计入原总预算，语言修订另受原 `maxCalls` 约束；不足时在补缺派发前保存 `completed_with_limits`。`includeRepairs:false` 与补缺策略可以同时使用，此时审查后的科学缺口直接按有限完成处理。
 
@@ -145,7 +145,7 @@ await recordReadingEvent(session, {
 });
 ```
 
-两个指纹必须对应当前已保存的终态检查点及其 `state.rejection`。2.1 直接核对持久化执行账本，禁止传入 `host_calls_used`，并须在原总预算内为局部复核留有额度；旧绑定继续要求授权对象中的 `host_calls_used` 报告原句柄续接等实际执行轮次。事件需要本次用户明确批准，配置或剩余额度不能代替授权。恢复不会调用模型；它在新 owned 检查点的 `state.repairRecoveries` 追加批准、原检查点、原拒收及新的验证结果。原终态、请求事件、拒收回执和调用计数保留。同一批准重复提交保持幂等，发生冲突或字节变化时拒绝。
+两个指纹必须对应当前已保存的终态检查点及其 `state.rejection`。2.2 直接核对持久化执行账本，禁止传入 `host_calls_used`，并须在原总预算内为局部复核留有额度。事件需要本次用户明确批准，配置或剩余额度不能代替授权。恢复不会调用模型；它在新 owned 检查点的 `state.repairRecoveries` 追加批准、原检查点、原拒收及新的验证结果。原终态、请求事件、拒收回执和调用计数保留。同一批准重复提交保持幂等，发生冲突或字节变化时拒绝。
 
 范围校验允许插入审查 `visual_ids` 明确批准的新图旁条目；新增条目的 notes 仅可引用该审查的 `section_ids`，既有条目和相对顺序继续按原规则校验。其余列表和范围外内容保持。恢复成功后重新物化第二版候选，再使用既有的一次局部复核；原模型、来源、截止时间、额度和发布权限保持原合同。
 
@@ -155,7 +155,7 @@ await recordReadingEvent(session, {
 
 ## 已派发Editor的明确续接授权
 
-`configured-reading-2.1` 的 `presentation-r2` 已派发、尚未接收且局部复核尚未派发时，用户可对具体恢复另行批准有限执行额度。通过 `authorize-repair-continuation` 事件提交 `authorization_id`、`reason`、当前owned检查点的 `checkpoint_fingerprint`、原 `action_id`、`max_additional_calls` 和与原绑定完全一致的 `deadline`。接口核验原检查点与待续接请求，将新批准、原额度和原账本前缀单独保存到 `state.repairContinuation`，保留原binding及历史请求。配置、角色自行要求和剩余额度均不构成此授权。
+`configured-reading-2.2` 的 `presentation-r2` 已派发、尚未接收且局部复核尚未派发时，用户可对具体恢复另行批准有限执行额度。通过 `authorize-repair-continuation` 事件提交 `authorization_id`、`reason`、当前owned检查点的 `checkpoint_fingerprint`、原 `action_id`、`max_additional_calls` 和与原绑定完全一致的 `deadline`。接口核验原检查点与待续接请求，将新批准、原额度和原账本前缀单独保存到 `state.repairContinuation`，保留原binding及历史请求。配置、角色自行要求和剩余额度均不构成此授权。
 
 获准的原页图型更正可附 `chart_type_corrections:[{visual_id,chart_types}]`，图必须在首次审查已定位的science原页问题范围内，知识身份须已登记，图片和其他图表字段保持。更正随渲染、恢复及发布来源捕获消费。待续接角色通过原句柄接收原审查范围的补充说明，原指令文件不覆写。后续执行仍使用 `continuation-intent` 和真实 `continuation-receipt`；局部复核次数保持原上限。
 
@@ -164,7 +164,7 @@ await recordReadingEvent(session, {
 
 ## 命令行会话与回执
 
-`npm run apa:session -- create --input <JSON文件> --export-dir <目录>` 创建会话；`next`、`resume` 和 `event` 使用 `--run-root <运行目录>` 恢复，`event` 用 `--input <JSON文件>` 读取事件。`--input -` 可从标准输入读取。返回派发动作时需要 `--export-dir`，完整动作按身份写入该目录；已有同名内容冲突会报错。
+`npm run apa:session -- create --input <JSON文件> --export-dir <目录>` 创建会话；`next`、`resume` 和 `event` 使用 `--run-root <运行目录>` 恢复，`event` 用 `--input <JSON文件>` 读取事件。`--input -` 可从标准输入读取。`create`、`next` 和 `resume` 必须提供 `--export-dir`，在打开会话前检查；返回派发动作时，完整动作按身份写入该目录，已有同名内容冲突会报错。
 
 记录真实宿主返回时，`event --raw-result <文件> --export-dir <目录>` 保存原始字节并形成宿主回执；`--raw-result -` 从标准输入读取原始返回，此时事件须从文件提供。对于转录证据可使用 `--source <文件>`，记录其路径与指纹，不能同时使用 `--raw-result`。缺失或未观测的容量信息保持未知。`npm run apa:controller:audit -- <日志路径> <线程ID>` 按线程检查 Controller 工具调用，并返回覆盖程度与可识别事件；审计输出不能代替宿主回执。
 

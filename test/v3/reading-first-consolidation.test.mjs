@@ -7,31 +7,30 @@ import { acceptReadingFirstResult, createReadingFirstPresentationRequest, readin
 import { commitOwnedArtifact } from '../../scripts/v3/owned-artifact-store.mjs';
 import { readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 import { readingEditorInstructions } from '../../scripts/v3/reading-first-editor-contract.mjs';
 import { buildConfiguredReadingInstructions } from '../../scripts/v3/configured-reading.mjs';
 import { dirname } from 'node:path';
 
 const options = { runId:'run', scientificInput:{identity:{run_id:'run'}}, mainSession:{model:'gpt-6-astra',reasoning_effort:'high'}, authorizationId:'synthetic', deadline:'2099-01-01T00:00:00Z', taskBindings:{}, presentationMode:'reading-editor' };
 
-test('new controls freeze the selected editor profile', () => {
-  assert.equal(createReadingFirstRunControl(options).reading_first_binding.presentation_profile, 'reading-editor-1.2');
-  for (const profile of ['reading-editor-1.0','reading-editor-1.1','reading-editor-1.2','reading-editor-1.3']) {
-    assert.equal(createReadingFirstRunControl({...options,presentationProfile:profile}).reading_first_binding.presentation_profile, profile);
+test('new controls freeze the current editor profile and refuse retired ones', () => {
+  assert.equal(createReadingFirstRunControl(options).reading_first_binding.presentation_profile, 'reading-editor-1.3');
+  assert.equal(createReadingFirstRunControl({...options,presentationProfile:'reading-editor-1.3'}).reading_first_binding.presentation_profile, 'reading-editor-1.3');
+  for (const profile of ['reading-editor-1.0','reading-editor-1.1','reading-editor-1.2']) {
+    assert.throws(() => createReadingFirstRunControl({...options,presentationProfile:profile}), { code: 'READING_BINDING_RETIRED' });
   }
   assert.throws(() => createReadingFirstRunControl({...options,presentationProfile:'invalid'}), /READING_FIRST_EDITOR_PROFILE_INVALID/);
 });
 
-test('1.3 removes only knowledge content already supplied by the same language view', () => {
+test('the editor presentation removes only knowledge content already supplied by the same language view', () => {
   const presentation={knowledge_layout:'shared-bilingual-1.0',knowledge:[{id:'k',paragraphs:{en:['old'], 'zh-CN':['保留']},sections:{en:[{heading:'Keep',paragraphs:['section']}],'zh-CN':[{heading:'保留',paragraphs:['内容']}]}}]};
   const views=[{language:'en',knowledge_content:[{id:'k',paragraphs:['new']}]}];
-  const reduced=readingFirstEditorPresentation({presentation,views,profile:'reading-editor-1.3'});
+  const reduced=readingFirstEditorPresentation({presentation,views});
   assert.equal(reduced.knowledge[0].paragraphs.en,undefined);
   assert.deepEqual(reduced.knowledge[0].paragraphs['zh-CN'],['保留']);
   assert.deepEqual(reduced.knowledge[0].sections.en,presentation.knowledge[0].sections.en);
   assert.deepEqual(presentation.knowledge[0].paragraphs.en,['old']);
-  assert.deepEqual(readingFirstEditorPresentation({presentation,views,profile:'reading-editor-1.2'}).knowledge[0].paragraphs.en,['new']);
 });
 
 test('rejected editor revision survives an owned checkpoint without a new dispatch', async t => {
@@ -69,11 +68,11 @@ test('an unresolved verifier scope records the real output and ends without repa
   assert.throws(()=>createReadingFirstPresentationRequest({controller:s.controller}),/EDITOR_UNAVAILABLE/);
 });
 
-test('configured 2.0 material review without repair owner is retained as a limited terminal result', async t => {
-  const configured=buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-2.0'});
+test('configured material review without repair owner is retained as a limited terminal result', async t => {
+  const configured=buildConfiguredReadingInstructions({});
   const issue={severity:'material',kind:'layout',detail:'An ownership decision is missing.',repair_scope:{status:'located',section_ids:['findings'],knowledge_ids:[],visual_ids:[],editor_fields:[]}};
   const review={overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[issue],scope:'overall'};
-  const s=await reviewedReadingFirstFixture(t,{translationLanguage:null,controlOptions:{presentationProfile:'reading-editor-1.3'},review,createRunControl:args=>createReadingFirstRunControl({...args,configuredSetup:{...configured,paths:{runRoot:dirname(args.scientificInput.sources[0].path)}}})});
+  const s=await reviewedReadingFirstFixture(t,{translationLanguage:null,controlOptions:{presentationProfile:'reading-editor-1.3'},review,createRunControl:args=>createReadingFirstRunControl({...args,maxTotalCalls:20,configuredSetup:{...configured,paths:{runRoot:dirname(args.scientificInput.sources[0].path)}}})});
   const state=getReadingFirstState(s.controller);
   assert.equal(state.status,'completed_with_limits');
   assert.equal(state.rejection.reason,'READING_FIRST_REPAIR_OWNER_REQUIRED');
@@ -88,8 +87,8 @@ test('configured 2.0 material review without repair owner is retained as a limit
   assert.deepEqual(getReadingFirstPendingRequests(restored.controller),[]);
 });
 
-test('legacy material review without an owner keeps its prior routing', async t => {
-  const review={overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[{severity:'material',kind:'content',detail:'A correction is required.',affected_languages:['zh-CN']}],scope:'overall'};
+test('unconfigured material review without an owner is routed to the Writer', async t => {
+  const review={overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[{severity:'material',kind:'layout',detail:'A correction is required.',affected_languages:['zh-CN'],repair_scope:{status:'located',section_ids:['findings'],knowledge_ids:[],visual_ids:[],editor_fields:[]}}],scope:'overall'};
   const s=await reviewedReadingFirstFixture(t,{review});
   assert.equal(getReadingFirstState(s.controller).status,'revision_required');
   assert.equal(getReadingFirstState(s.controller).rejection,undefined);
@@ -116,17 +115,8 @@ test('scope validates actual identifiers and confines editor changes', () => {
   assert.throws(()=>assertEditorRepairScope(base,expanded,review),/SCOPE_EXCEEDED/);
 });
 
-test('legacy editor guidance keeps its captured bytes', () => {
-  const prompt=readFileSync(new URL('../../prompts/v3/reading-first-contracts.md',import.meta.url),'utf8');
-  const section=[...prompt.matchAll(/^## (.+)\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/gm)].find(match=>match[1]==='Reading Editor')[2].trim();
-  assert.equal(createHash('sha256').update(readingEditorInstructions(section,'reading-editor-1.2')).digest('hex'),'0a6d5c0b9194d7119ae69ed6b5356975f25512b7901d4a390cdb93a4ddb00523');
-});
-
-test('1.2 synthetic editor request matches the pre-change runtime baseline', async t => {
-  const s=await reviewedReadingFirstFixture(t,{runId:'run_'+'a'.repeat(32)});
-  let message=snapshotReadingFirstRuntime(s.controller).state.request_entries.find(row=>row.key==='presentation').request.emittedStep.arguments.message;
-  message=message.replaceAll(JSON.stringify(resolve(s.root)).slice(1,-1),'<ROOT>').replaceAll(resolve(s.root),'<ROOT>').replaceAll(JSON.stringify(s.root).slice(1,-1),'<ROOT>').replaceAll(s.root,'<ROOT>').replace(/"input_fingerprint":"sha256:[a-f0-9]{64}"/g,'"input_fingerprint":"<INPUT>"').replaceAll(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z/g,'<TIME>');
-  assert.equal(createHash('sha256').update(message).digest('hex'),'5684727cf78dafcd06b8197c0706f80aa62500ea1da80e50d0429d40a1191bfd');
+test('unconfigured editor guidance is the complete 1.3 contract', () => {
+  assert.equal(readingEditorInstructions(),readFileSync(new URL('../../prompts/v3/reading-editor-1.3.md',import.meta.url),'utf8').trim());
 });
 
 test('request events and original request bytes survive restoration', async t => {
@@ -170,9 +160,9 @@ test('terminal checkpoint callback persists an unresolved review before return',
   assert.deepEqual(getReadingFirstPendingRequests(restored.controller),[]);
 });
 
-test('configured 2.0 uses its already assembled editor section once', async t => {
-  const configured=buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-2.0'});
-  const s=await reviewedReadingFirstFixture(t,{translationLanguage:null,controlOptions:{presentationProfile:'reading-editor-1.3'},createRunControl:args=>createReadingFirstRunControl({...args,configuredSetup:{...configured,paths:{runRoot:dirname(args.scientificInput.sources[0].path)}}})});
+test('configured runs use their already assembled editor section once', async t => {
+  const configured=buildConfiguredReadingInstructions({});
+  const s=await reviewedReadingFirstFixture(t,{translationLanguage:null,controlOptions:{presentationProfile:'reading-editor-1.3'},createRunControl:args=>createReadingFirstRunControl({...args,maxTotalCalls:20,configuredSetup:{...configured,paths:{runRoot:dirname(args.scientificInput.sources[0].path)}}})});
   const entry=snapshotReadingFirstRuntime(s.controller).state.request_entries.find(row=>row.key==='presentation');
   const message=entry.request.emittedStep.arguments.message, section=configured.sections['Reading Editor'];
   assert.equal(message.split(section).length-1,1);

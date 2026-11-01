@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, linkSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, linkSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -60,4 +60,43 @@ test('resource tool extracts requested DOCX media into a recorded output', () =>
   const manifest = JSON.parse(run.stdout);
   assert.equal(manifest.resources.length, 2);
   assert.equal(manifest.resources[0].sha256, hash('image'));
+});
+
+const createPdf = (source, pages = 1) => spawnSync('python', ['-c', `import fitz,sys; d=fitz.open(); [d.new_page(width=100,height=100) for _ in range(${pages})]; d.save(sys.argv[1])`, source], { encoding: 'utf8' });
+
+test('resource tool round-trips non-ASCII paths under a non-UTF-8 locale', t => {
+  const base = mkdtempSync(join(tmpdir(), 'apa-utf8-')), root = join(base, '文献资料');
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const source = join(root, '主文.pdf'), output = join(root, '输出'); mkdirSync(output, { recursive: true });
+  assert.equal(createPdf(source).status, 0);
+  const request = { source_id: 'paper', source_path: source, resources_root: output, items: [{ id: 'fig-1', locator: { kind: 'pdf-page', page: 1 }, filename: 'figure-1.png', path: 'Figures/paper/figure-1.png' }] };
+  const run = spawnSync('python', ['scripts/lib/reading-resource-tool.py'], { input: JSON.stringify(request), encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'gbk', PYTHONUTF8: '0' } });
+  assert.equal(run.status, 0, run.stderr);
+  const out = JSON.parse(run.stdout);
+  assert.equal(out.resources[0].source_path, join(output, 'figure-1.png'));
+  assert.equal(out.resources[0].parent.path, source);
+});
+
+test('resource tool writes nothing when a later item fails', t => {
+  const root = mkdtempSync(join(tmpdir(), 'apa-atomic-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const source = join(root, 'source.pdf'), output = join(root, 'out'); mkdirSync(output);
+  assert.equal(createPdf(source).status, 0);
+  const valid = { id: 'fig-1', locator: { kind: 'pdf-page', page: 1 }, filename: 'fig-1.png', path: 'Figures/paper/fig-1.png' };
+  const run = items => spawnSync('python', ['scripts/lib/reading-resource-tool.py'], { input: JSON.stringify({ source_id: 'paper', source_path: source, resources_root: output, items }), encoding: 'utf8' });
+  const first = run([valid, { id: 'fig-2', locator: { kind: 'pdf-page', page: 99 }, filename: 'fig-2.png', path: 'Figures/paper/fig-2.png' }]);
+  assert.notEqual(first.status, 0);
+  assert.deepEqual(readdirSync(output), []);
+  const second = run([valid]);
+  assert.equal(second.status, 0, second.stderr);
+});
+
+test('resource tool accepts a UTF-8 BOM request', t => {
+  const root = mkdtempSync(join(tmpdir(), 'apa-bom-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const source = join(root, 'source.pdf'), output = join(root, 'out'); mkdirSync(output);
+  assert.equal(createPdf(source).status, 0);
+  const request = { source_id: 'paper', source_path: source, resources_root: output, items: [] };
+  const run = spawnSync('python', ['scripts/lib/reading-resource-tool.py'], { input: Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify(request))]) });
+  assert.equal(run.status, 0, String(run.stderr));
 });

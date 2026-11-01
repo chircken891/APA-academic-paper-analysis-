@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { readerIndexFixture } from './helpers/phase221-index-fixtures.mjs';
+import { readingFirstIndexFixture } from './helpers/reading-first-index-fixtures.mjs';
 import { syncCommittedGraph } from '../../scripts/v3/obsidian-graph-sync.mjs';
 import { inspectV3Graph } from '../../scripts/v3/obsidian-graph.mjs';
 
 async function fixture(t) {
-  const f = await readerIndexFixture(t), built = await f.build();
+  const f = await readingFirstIndexFixture(t), built = await f.build();
   await f.save(built);
   const graph = join(f.vaultRoot, '.obsidian/graph.json');
   await mkdir(join(f.vaultRoot, '.obsidian'), { recursive: true });
@@ -60,9 +60,9 @@ test('a current configuration is not rewritten and stale state can be recovered'
   assert.equal((await syncCommittedGraph({ vaultRoot: f.vaultRoot })).status, 'current');
   state.generation_id = 'older'; await writeFile(f.state, JSON.stringify(state));
   const recovered = await syncCommittedGraph({ vaultRoot: f.vaultRoot });
-  assert.equal(recovered.generation_id, 'synthetic-reader-g1');
+  assert.equal(recovered.generation_id, 'rf-a');
   assert.deepEqual(await readFile(f.graph), before);
-  assert.equal(JSON.parse(await readFile(f.state, 'utf8')).generation_id, 'synthetic-reader-g1');
+  assert.equal(JSON.parse(await readFile(f.state, 'utf8')).generation_id, 'rf-a');
 });
 
 test('automatic synchronization preserves user policy changes and explicit sync can reclaim them', async t => {
