@@ -389,3 +389,37 @@ test('edited registered Wiki note still publishes under current policy', async t
   await registerBilingualPublication({ vaultRoot: prepare.vaultRoot, run: prepare.g.runId, plan: prepared.plan, sourceInputs: prepared.sourceInputs, ...authority });
   assert.equal((await applyBilingualPublication({ vaultRoot: prepare.vaultRoot, run: prepare.g.runId, plan: prepared.plan, ...authority })).status, 'committed');
 });
+
+
+test('rebased publication preserves manual content, binds its derivation and rejects later drift', async t => {
+  const runtime = await import('../../scripts/v3/reading-first-runtime.mjs');
+  assert.equal(typeof runtime.deriveRebasedReadingFirstPublicationSource, 'function');
+  const f = await readingFirstPublicationFixture(t);
+  await applyBilingualPublication(applyReadingFirstFixture(f));
+  const g = await reviewedReadingFirstFixture(t, { currentRegistryRoot: f.vaultRoot,
+    runId: 'run_' + 'e'.repeat(32), paperId: 'pap_' + 'e'.repeat(32),
+    title: { en: 'Rebased reading', 'zh-CN': '变基论文' } });
+  const source = await captureReadingFirstPublicationSource({ controller: g.controller, presentation: g.candidate });
+  const target = join(f.vaultRoot, g.candidate.supportNotes[0].path);
+  const original = await readFile(target, 'utf8');
+  const edited = original.replace('<!-- AUTO:END shared-knowledge -->', 'HumanChangedAfterRenderNeedle\n<!-- AUTO:END shared-knowledge -->') + '\nOutside human content.\n';
+  await writeFile(target, edited);
+  const args = { vaultRoot: f.vaultRoot, generation: 'rebased-manual', evidenceMode: 'synthetic', resources: g.resources };
+  await assert.rejects(prepareReadingFirstPublication({ ...args, source }), /RF_PUBLICATION_KNOWLEDGE_CHANGED_SINCE_RENDER/);
+  const result = await runtime.deriveRebasedReadingFirstPublicationSource({ source, vaultRoot: f.vaultRoot });
+  assert.equal(result.status, 'rebased');
+  const data = await runtime.inspectReadingFirstPublicationSource(result.source);
+  assert.deepEqual(data.candidate.notes, g.candidate.notes);
+  assert.equal((await runtime.inspectReadingFirstPublicationSource(source)).candidate.presentation_fingerprint, g.candidate.presentation_fingerprint);
+  const prepared = await prepareReadingFirstPublication({ ...args, source: result.source });
+  assert.equal(prepared.review.reviewManifest.dependencies.knowledge_rebase, result.record.rebase_fingerprint);
+  const bytes = prepared.review.outputInventory.find(row => row.path === g.candidate.supportNotes[0].path).bytes;
+  assert.match(bytes.toString(), /HumanChangedAfterRenderNeedle/);
+  assert.match(bytes.toString(), /Outside human content/);
+  assert.equal(await readFile(target, 'utf8'), edited);
+  await writeFile(target, edited + 'Later edit.\n');
+  await assert.rejects(prepareReadingFirstPublication({ ...args, source: result.source }), /RF_PUBLICATION_KNOWLEDGE_CHANGED_SINCE_RENDER/);
+  const again = await runtime.deriveRebasedReadingFirstPublicationSource({ source, vaultRoot: f.vaultRoot });
+  await prepareReadingFirstPublication({ ...args, source: again.source });
+  await assert.rejects(runtime.deriveRebasedReadingFirstPublicationSource({ source: result.source, vaultRoot: f.vaultRoot }));
+});

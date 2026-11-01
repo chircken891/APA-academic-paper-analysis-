@@ -19,7 +19,7 @@
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/execution-and-recovery.md",
-      "sha256": "1e57ff3fda1dbd1aab4b60ba4325fca1114977fe07d747d55609bc1a0c7766a5"
+      "sha256": "eaf281d3bd1acc4e8a94b068f4a786f41f88b1304accd1957151d43db58da540"
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/presentation-and-reading-review.md",
@@ -107,7 +107,7 @@
     },
     {
       "path": "config/apa-public-files.json",
-      "sha256": "253d36b233ef45cd7a8d305bc1ed518c8cf23690dfa1d283540b1e675638a855"
+      "sha256": "79fc0bc60ff91d3f0c807e40456746ef21d320293fb7d66e9797f0e4acabaf5d"
     },
     {
       "path": "config/environment.json",
@@ -127,7 +127,7 @@
     },
     {
       "path": "docs/apa-v3/reading-first-publication.md",
-      "sha256": "82e1c4057bf3be752712fd831f79ba7d32ad7263653ad6ff0f710c8d89a00527"
+      "sha256": "efdcaabd36a91a137508bfd072e474735284c0ee8dfd1159accce64e7ec426be"
     },
     {
       "path": "docs/apa-v3/reading-session.md",
@@ -167,7 +167,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "0680aae871288e1024fc346fa95d1df475ef90f67faf36bd9e2bfb89b7d04f4c"
+      "sha256": "4cc5bc4028319b7b271155878da1d64a703f6bab55e90c23b4ffb24214092bb8"
     },
     {
       "path": "prompts/v3/phase21-scientific-contracts.md",
@@ -575,7 +575,7 @@
     },
     {
       "path": "scripts/v3/phase22-publication.mjs",
-      "sha256": "f4b081d684d67e73858c654610a9bc47e613e8df8ff4f0ccc10eca053aabe5f9"
+      "sha256": "190da09dff4f7a7ee7229f2d2b30824f449046354c5bd580ff5969e2401948e2"
     },
     {
       "path": "scripts/v3/phase22-render-context.mjs",
@@ -635,7 +635,7 @@
     },
     {
       "path": "scripts/v3/reading-first-knowledge.mjs",
-      "sha256": "f16ee4a9329c12fbf7f44bdfbf936a43df8f33257bc776ea0c223ab02b6096d2"
+      "sha256": "2332ec09e3f448fe26ed416934146e748e6f893b40f3b21d6bf8540c32a9d693"
     },
     {
       "path": "scripts/v3/reading-first-obsidian.mjs",
@@ -647,7 +647,11 @@
     },
     {
       "path": "scripts/v3/reading-first-publication.mjs",
-      "sha256": "f0d02b0c65df30a512c39da07c471ff65ee775e3410ded2d30b401d21c0e2450"
+      "sha256": "e6ae46cf935b1f3cd9b18ae3acb66ada86bde799397440582a3bc112435fb252"
+    },
+    {
+      "path": "scripts/v3/reading-first-rebase.mjs",
+      "sha256": "665e6dd4b255a0a2b5e325543003217a41d86d647cbf02291a190e8501c3085d"
     },
     {
       "path": "scripts/v3/reading-first-repair-scope.mjs",
@@ -655,7 +659,7 @@
     },
     {
       "path": "scripts/v3/reading-first-runtime.mjs",
-      "sha256": "08272c48c7b447bb37aaff7f307a3ef831d89aee645a41a93223dbf4d1c4ccd0"
+      "sha256": "cd7fd36f9390d672c65520277bc236804e49b28ca30fddcf6d8a3233c2c523f7"
     },
     {
       "path": "scripts/v3/reading-host-evidence.mjs",
@@ -979,11 +983,15 @@
     },
     {
       "path": "test/v3/reading-first-external-publication.test.mjs",
-      "sha256": "9cb829e076b8d56b49d622d1ee8001132f308de46411368dde773474f9da29ab"
+      "sha256": "e002e7b6afdf8646ca514ea65c06f6449d0adee2e15d35caf504831d02943617"
     },
     {
       "path": "test/v3/reading-first-index.test.mjs",
       "sha256": "41a47c90b675b718e0d710b52cfef742ed1929dec239ffee89d957abb9385175"
+    },
+    {
+      "path": "test/v3/reading-first-knowledge-rebase.test.mjs",
+      "sha256": "05fbd802622364ed649e23796814ad204a720104190039738b07f6967c30494b"
     },
     {
       "path": "test/v3/reading-first-knowledge-registry.test.mjs",
@@ -1011,7 +1019,15 @@
     },
     {
       "path": "test/v3/reading-first-publication.test.mjs",
-      "sha256": "019045021a651f4963908ed83dad213f769e55c760d73cac6185a34c085677a1"
+      "sha256": "e6a3408aa67a7b0373a833079abee35e749f8ba83d6de8f17e19490bbfc7abbd"
+    },
+    {
+      "path": "test/v3/reading-first-rebase-registration.test.mjs",
+      "sha256": "b1081251ae7f23405b7b955f810084b0c42879c2c10737058a435a5533bd3fcd"
+    },
+    {
+      "path": "test/v3/reading-first-rebase-runtime.test.mjs",
+      "sha256": "eddb6c6d43fd62b9ac4fa2d27ea67ce570e573f4fc9c1d4a63bc4bed72efaf44"
     },
     {
       "path": "test/v3/reading-first-runtime.test.mjs",

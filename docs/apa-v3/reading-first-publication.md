@@ -48,6 +48,30 @@ owned Integrator 使用 `visual_handoff.registered_resources` 时，消费者读
 
 会话入口的 `complete` 动作返回已审候选的 `publication_source`，可直接交给上述准备接口。恢复完成态时，先通过原资源重新渲染并核对已有候选与已审指纹。若使用外部已审候选接口 `prepareExternalReviewedReadingFirstPublication`，Editor 1.3 产物还须传入实际冻结的 `readingFirstBinding`；接口及恢复路径会校验输入、Editor 版本和提示文件，历史 1.2 调用保持原合同。
 
+## 并行阅读的共享节点变基
+
+每篇论文使用独立会话及 `runId`，完成后逐篇准备和批准发布。前一篇发布后，后一篇需重新准备发布审阅。如果共享节点在原候选渲染后变化，保留 `complete` 返回的原 `publication_source`，由 Controller 调用受控派生入口：
+
+```js
+import { deriveRebasedReadingFirstPublicationSource } from '../../scripts/v3/reading-first-publication.mjs';
+
+const rebased = await deriveRebasedReadingFirstPublicationSource({ source, vaultRoot });
+const effectiveSource = rebased.status === 'rebased' ? rebased.source : source;
+const prepared = await prepareReadingFirstPublication({
+  source: effectiveSource, vaultRoot, generation, evidenceMode: 'actual', resources,
+});
+```
+
+入口使用当前已登记节点重新渲染，要求论文笔记逐字节不变、未受影响节点不变，并保留受影响节点当前全部可见正文。只允许替换内嵌知识状态及追加本篇已接受的内容；原候选新建与复用节点分别提取本篇段落、章节、公式、来源和别名进行确定性比较。重复段落的省略进入变基记录。该过程不派发模型、不增加审查轮次，也不改变调用账本。
+
+外部宿主使用 `prepareExternalReviewedReadingFirstPublication` 时，可传入原候选的 `rendering:{targetRegistry,existingTargets,knowledgeRegistry}`；未传时按空登记渲染。接口从 owned 回执读取原 views 与 Editor，核对重算结果与原候选完全一致，再保存渲染输入。已有节点复用时须提供原登记内容，不能使用发布时的新正文代替原渲染底稿。
+
+原来源、原候选、原审查和候选目录保持原样。变基来源在原配方上附加 `knowledge_rebase`，绑定新的渲染底稿、候选和变基指纹。Controller 将记录及差异独占保存到本次运行的 `publication/rebase-<n>.json` 和 `rebase-<n>.diff.md`。用户审阅差异后，按新发布清单重新批准；批准后的目标再变化时停止写入，并从原来源重新派生。变基来源不能再次叠加派生。
+
+原来复用的目标缺失、论文笔记因链接解析等原因变化、本篇内容不满足保留规则或当前可见正文无法保留时，入口拒绝变基并给出具体错误。不要手改候选或配方绕过校验。
+
+变基注册在现行逐文件签名清单中额外保存本篇原来源及变基段。跨进程加载先验证原来源，再使用记录中的底稿重算变基候选，并与签名输出核对。重算不依赖后来变化的正式节点；正式写入前仍校验实际目标。普通注册继续沿用现行输出加载方式。
+
 ## 审阅、批准与事务
 
 新配置化运行冻结 `current-shared-nodes-1.0`。发布准备保留无关正式笔记的当前修改，仅对实际读取依赖及写入目标绑定指纹；共享节点增补保留当前正文。复用节点在候选渲染后发生变化时，发布准备要求刷新候选；批准后写入目标变化时停止覆盖并重新展示差异。新发布取消完整旧代快照，只为实际覆盖的目标保存原文件；原文件的个人区继续保留，人工修改内容不会取得旧科学审查的含义。旧冻结记录及已有历史来源仍可沿原合同读取。

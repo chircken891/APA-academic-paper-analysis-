@@ -196,3 +196,57 @@ export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, p
   const entry = { id: item.id, languages, path: target, source_kind: item.source_kind, content, bytes: Buffer.from(content) };
   return { note: entry, proposal: paths.length ? { id: item.id, path: target, languages, action: 'proposed-addition', canonical_key: item.canonical_key ?? item.id } : undefined };
 }
+
+/** Extract state rather than rendered links; the registry determines creation mode. */
+export function extractOwnKnowledge({ content, paperId, item, mode }) {
+  let node;
+  try {
+    const encoded = content.match(/<!-- KNOWLEDGE_STATE ([A-Za-z0-9+/=]+) -->/)?.[1];
+    node = JSON.parse(Buffer.from(encoded ?? '', 'base64').toString('utf8')).item;
+  } catch { fail('RF_OBSIDIAN_KNOWLEDGE_REGION_INVALID'); }
+  if (!node || !['created', 'reused'].includes(mode)) fail('RF_OBSIDIAN_KNOWLEDGE_REGION_INVALID');
+  if (mode === 'created' && (node.id !== item.id || (node.paper_additions ?? []).some(row => row.paper_id !== paperId))) fail('RF_OBSIDIAN_KNOWLEDGE_REGION_INVALID');
+  const own = mode === 'created' ? node : node.paper_additions?.find(row => row.paper_id === paperId) ?? {};
+  const metadata = mode === 'created' ? node : item;
+  return {
+    mode,
+    paragraphs: Object.fromEntries(languages.map(language => [language, structuredClone(own.paragraphs?.[language] ?? [])])),
+    sections: Object.fromEntries(languages.map(language => [language, structuredClone(own.sections?.[language] ?? [])])),
+    formulas: structuredClone(metadata.formulas ?? []),
+    sources: structuredClone(metadata.sources ?? []),
+    aliases: structuredClone(metadata.aliases ?? []),
+    node: structuredClone(node)
+  };
+}
+
+/** A rebase may only drop paragraphs already present in the new base. */
+export function compareOwnKnowledge({ original, rebased, existing, path }) {
+  const missing = [];
+  const dropped = [];
+  const base = existing?.node ?? existing?.item ?? existing ?? {};
+  const node = rebased.node;
+  for (const language of languages) {
+    const known = new Set([...(base.paragraphs?.[language] ?? []),
+      ...(base.sections?.[language] ?? []).flatMap(section => section.paragraphs),
+      ...(base.paper_additions ?? []).flatMap(addition => [...(addition.paragraphs?.[language] ?? []),
+        ...(addition.sections?.[language] ?? []).flatMap(section => section.paragraphs)])].map(normalized));
+    const groups = value => [{ heading: null, paragraphs: value.paragraphs?.[language] ?? [] }, ...(value.sections?.[language] ?? [])];
+    const before = groups(original), after = groups(rebased);
+    for (const group of before) for (const paragraph of group.paragraphs) {
+      if (after.some(other => other.heading === group.heading && other.paragraphs.some(value => normalized(value) === normalized(paragraph)))) continue;
+      if (known.has(normalized(paragraph))) dropped.push({ language, section: group.heading, paragraph });
+      else missing.push({ kind: group.heading === null ? 'paragraph' : 'section', language, section: group.heading, paragraph });
+    }
+    for (const group of after) for (const paragraph of group.paragraphs) {
+      if (!before.some(other => other.heading === group.heading && other.paragraphs.some(value => normalized(value) === normalized(paragraph)))) missing.push({ kind: 'unexpected_paragraph', language, section: group.heading, paragraph });
+    }
+  }
+  for (const formula of original.formulas) {
+    const found = node.formulas?.find(value => value.latex === formula.latex);
+    if (!found || languages.some(language => found.description?.[language] !== formula.description?.[language])) missing.push({ kind: 'formula', latex: formula.latex });
+  }
+  for (const source of original.sources) if (!node.sources?.some(value => value.url === source.url)) missing.push({ kind: 'source', url: source.url });
+  for (const alias of original.aliases) if (!node.aliases?.includes(alias)) missing.push({ kind: 'alias', alias });
+  if (missing.length) throw Object.assign(new Error('RF_REBASE_OWN_KNOWLEDGE_CHANGED'), { code: 'RF_REBASE_OWN_KNOWLEDGE_CHANGED', details: { path, mode_before: original.mode, mode_after: rebased.mode, missing } });
+  return { dropped_paragraphs: dropped };
+}

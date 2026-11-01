@@ -1,4 +1,5 @@
 import { captureTopicPublicationRegistration, rebuildRegisteredTopicReview, assertTopicPublicationReviewLive, usesCurrentTopicPublication } from './topic-publication.mjs';
+import { restoreReadingFirstPublicationSource, inspectReadingFirstPublicationSource } from './reading-first-runtime.mjs';
 import { loadApaConfig } from '../lib/apa-config.mjs';
 import { createHash, randomUUID, generateKeyPairSync, createPublicKey, sign, verify } from 'node:crypto';
 import { readFile, writeFile, open, lstat, realpath, mkdir, rename, link, unlink } from 'node:fs/promises';
@@ -1157,6 +1158,20 @@ export async function loadBilingualPublication({ vaultRoot, run, requireApproval
       artifact_root: root, authorized_bindings: [], run_controls: [{ run_id: run, phase22_publication_binding: authority }] });
     control = { dispatchContext: broker.dispatchContext, runId: run };
   } else if (requireApproval) fail('P22_PUBLICATION_CONTROL_REQUIRED');
+  let restoredReadingSource = null;
+  if (simple && bundle.reading_first_source) {
+    if (bundle.reviewManifest.profile !== 'reading-first-obsidian-1.0' || !bundle.reading_first_source.knowledge_rebase) fail('P221_REGISTERED_REBUILD_MISMATCH');
+    restoredReadingSource = await restoreReadingFirstPublicationSource(bundle.reading_first_source);
+    const data = await inspectReadingFirstPublicationSource(restoredReadingSource);
+    const dependencies = bundle.reviewManifest.dependencies;
+    if (dependencies.knowledge_rebase !== data.recipe.knowledge_rebase.rebase_fingerprint
+      || dependencies.presentation !== data.candidate.presentation_fingerprint
+      || dependencies.reading_review !== data.reading_review_fingerprint) fail('P221_REGISTERED_REBUILD_MISMATCH');
+    for (const note of [...data.candidate.notes, ...data.candidate.supportNotes]) {
+      const output = plan.inventory.find(row => row.path === note.path);
+      if (!output || !output.bytes.equals(Buffer.from(note.content))) fail('P221_REGISTERED_REBUILD_MISMATCH');
+    }
+  }
   let rebuiltReview = null;
   if (!simple && ['phase24-topic-1.0', 'reading-first-obsidian-1.0'].includes(bundle.reviewManifest.profile)) {
     if (bundle.reviewManifest.profile === 'phase24-topic-1.0') {
@@ -1174,6 +1189,7 @@ export async function loadBilingualPublication({ vaultRoot, run, requireApproval
     if (!same(expected.map(row => ({ path: row.path, kind: row.kind, sha256: row.byte_sha256 })), rebuiltReview.outputInventory.map(row => ({ path: row.path, kind: row.kind, sha256: row.byte_sha256 })).sort((a, b) => a.path.localeCompare(b.path)))) fail('P221_REGISTERED_REBUILD_MISMATCH');
   }
   const validate = async () => {
+    if (restoredReadingSource) await inspectReadingFirstPublicationSource(restoredReadingSource);
     if (rebuiltReview) await assertBilingualReviewCurrent(rebuiltReview);
     assertFileBindings(ownBindings); assertFileBindings(bundle.source_bindings); assertFileBindings(bundle.tool_bindings);
   };

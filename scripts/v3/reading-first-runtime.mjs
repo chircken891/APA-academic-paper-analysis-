@@ -8,7 +8,8 @@ import { validateRepairScopes, assertEditorRepairScope } from './reading-first-r
 import { validateReadingFirstEditor, readingFirstViewsFingerprint } from './reading-first-editor.mjs';
 import { READING_EDITOR_PROFILE, loadReadingEditorContract, readingEditorInstructions, assertReadingEditorContract } from './reading-first-editor-contract.mjs';
 import { renderReadingFirstObsidian } from './reading-first-obsidian.mjs';
-import { applyReadingFirstKnowledgeContent } from './reading-first-knowledge.mjs';
+import { computeKnowledgeRebase } from './reading-first-rebase.mjs';
+import { applyReadingFirstKnowledgeContent, matchReadingFirstKnowledgeIdentity } from './reading-first-knowledge.mjs';
 import { readFileSync, realpathSync, lstatSync, mkdirSync, writeFileSync, linkSync, unlinkSync } from 'node:fs';
 import { resolve, relative, isAbsolute, sep, dirname } from 'node:path';
 import { fingerprintV3Json } from './semantic-package-validator.mjs';
@@ -16,7 +17,7 @@ import { createApaRoleModelPolicy, validateApaRoleModelPolicy, resolveApaRoleMod
 import { getRunControlForDispatch, readOwnedArtifact, commitOwnedArtifact, createOwnedArtifactBroker } from './owned-artifact-store.mjs';
 import { emitApprovedRunStep, ingestObservedRunStep } from './phase21-runner.mjs';
 import { loadRoleReplyContract } from './role-reply-contract.mjs';
-import { assertCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
+import { readCommittedReadingFirstKnowledgeRegistry, inspectCommittedReadingFirstRegistry, assertCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
 import { COMPACTION_POLICY, createCompactionPolicy, compactionEnabled, evaluateCompactionBoundary, assertCompactionSettled, registerCompactionDispatch } from './reading-compaction.mjs';
 
 export const READING_FIRST_PROFILE = 'reading-first-1.0';
@@ -928,7 +929,7 @@ function readingFirstSnapshot(state) {
 const publicationTools = [
   './reading-first-runtime.mjs', './reading-first-obsidian.mjs', './reading-first-editor.mjs',
   './reading-first-editor-contract.mjs',
-  './reading-first-knowledge.mjs', './phase22-managed-markdown.mjs', './phase221-targets.mjs',
+  './reading-first-knowledge.mjs', './reading-first-rebase.mjs', './phase22-managed-markdown.mjs', './phase221-targets.mjs',
   './owned-artifact-store.mjs', './phase21-runner.mjs', '../apa-model-policy.mjs',
   '../../prompts/v3/reading-first-contracts.md', '../../docs/apa-v3/scientific-writing-modules.md',
 ];
@@ -1098,12 +1099,82 @@ function publicationSource(state,recipe,reviewReceipt,origin='live') {
   publicationSources.set(source,{state,recipe,reviewReceipt,origin,stateStamp:publicationStateStamp(state)});
   return source;
 }
+function originalPublicationRecipe(recipe) {
+  const {knowledge_rebase,recipe_fingerprint,...body}=recipe;
+  return {...body,recipe_fingerprint:fingerprintV3Json(body)};
+}
+function externalRenderedContent(recipe, rendering) {
+  if (!recipe.render_inputs) fail('RF_REBASE_EXTERNAL_RENDER_INPUTS_REQUIRED');
+  const output=renderReadingFirstObsidian({...recipe.render_inputs,...decodePublicationRendering(rendering)});
+  const {notes,supportNotes,...rest}=output;
+  return {...rest,notes:notes.map(({bytes,...note})=>({...note,draft_receipt:recipe.view_receipts[note.language]})),
+    ...(supportNotes ? {supportNotes:supportNotes.map(({bytes,...note})=>note)} : {})};
+}
+function verifiedRebase(record, readingReviewFingerprint) {
+  const recipe=record.recipe, rebase=recipe.knowledge_rebase;
+  if (!rebase) return null;
+  const original=originalPublicationRecipe(recipe);
+  const render=record.external ? rendering=>externalRenderedContent(original,rendering)
+    : rendering=>renderedPublicationContent(record.state,decodePublicationRendering(rendering));
+  const result=computeKnowledgeRebase({recipe:original,rendering:rebase.rendering,render,
+    presentation:record.external ? recipe.presentation : effectivePresentation(record.state),
+    identity:recipe.scientific_input.identity,readingReviewFingerprint,generationId:rebase.base_generation_id});
+  if (fingerprintV3Json(result.record)!==fingerprintV3Json(rebase)) fail('RF_REBASE_RECORD_INVALID');
+  return rebase;
+}
+/** Derive a new publication token; original reviewed artifacts and execution budgets stay frozen. */
+export async function deriveRebasedReadingFirstPublicationSource({source,vaultRoot}={}) {
+  const data=await inspectReadingFirstPublicationSource(source), original=publicationSources.get(source);
+  if (data.recipe.knowledge_rebase) fail('RF_REBASE_ORIGINAL_SOURCE_REQUIRED');
+  if (!data.recipe.rendering) fail('RF_REBASE_EXTERNAL_RENDER_INPUTS_REQUIRED');
+  const registry=await readCommittedReadingFirstKnowledgeRegistry({vaultRoot,...(data.recipe.binding?.configured_setup?.knowledge_registry ? {binding:data.recipe.binding} : {})});
+  const paths=new Set((data.candidate.supportNotes ?? []).map(note=>note.path));
+  const old=data.recipe.rendering.knowledgeRegistry;
+  for (const path of paths) {
+    const before=old.find(row=>row.path===path || row.canonical_path===path);
+    const after=registry.find(row=>row.path===path || row.canonical_path===path);
+    if (before && (!after || after.unavailable || after.content === undefined)) {
+      throw Object.assign(new Error('RF_REBASE_KNOWLEDGE_TARGET_MISSING'),{code:'RF_REBASE_KNOWLEDGE_TARGET_MISSING',details:{path}});
+    }
+  }
+  const relevant=new Set(paths);
+  for (const item of data.presentation.knowledge ?? []) {
+    const match=matchReadingFirstKnowledgeIdentity({item,knowledgeRegistry:registry,vaultPath:value=>value});
+    for (const path of match.paths) relevant.add(path);
+  }
+  const changed=[...paths].some(path=>(old.find(row=>row.path===path)?.content ?? null)!==(registry.find(row=>row.path===path)?.content ?? null));
+  if (!changed && !registry.some(row=>relevant.has(row.path) && !paths.has(row.path))) return {status:'not_needed'};
+  // Refresh only targets this paper writes; unrelated registry entries retain the original rendering inputs.
+  const knowledgeRegistry=[...old.filter(row=>!paths.has(row.path)),...registry.filter(row=>relevant.has(row.path))];
+  const rendering={...copy(data.recipe.rendering),knowledgeRegistry:copy(knowledgeRegistry)};
+  const render=original.external ? value=>externalRenderedContent(data.recipe,value)
+    : value=>renderedPublicationContent(original.state,decodePublicationRendering(value));
+  const {record,diff}=computeKnowledgeRebase({recipe:data.recipe,rendering,render,presentation:data.presentation,identity:data.identity,
+    readingReviewFingerprint:data.reading_review_fingerprint,generationId:inspectCommittedReadingFirstRegistry({vaultRoot,registry}).generation_id});
+  const recipe={...copy(data.recipe),knowledge_rebase:record};delete recipe.recipe_fingerprint;recipe.recipe_fingerprint=fingerprintV3Json(recipe);
+  const runRoot=data.recipe.run_root ?? original.state?.binding.configured_setup?.paths?.runRoot ?? data.recipe.artifact_root;
+  const directory=resolve(runRoot,'publication');mkdirSync(directory,{recursive:true});
+  for (let index=1;;index++) {
+    const path=resolve(directory,`rebase-${index}.json`);
+    try {writeFileSync(path,JSON.stringify(record,null,2)+'\n',{flag:'wx'});} catch(error) {if(error.code==='EEXIST') continue;throw error;}
+    writeFileSync(resolve(directory,`rebase-${index}.diff.md`),diff+'\n',{flag:'wx'});break;
+  }
+  const derived=original.external ? createExternalReadingFirstPublicationSource(recipe)
+    : publicationSource(original.state,freeze(recipe),original.reviewReceipt,original.origin);
+  publicationSources.get(derived).origin=original.origin;
+  return {status:'rebased',source:derived,record:copy(record),diff};
+}
 function externalPublicationData(recipe) {
   const {recipe_fingerprint,...body}=recipe??{};
   if(recipe?.schema_version!==externalPublicationRecipeSchema||recipe_fingerprint!==fingerprintV3Json(body)
     ||recipe.run_id!==recipe.scientific_input?.identity?.run_id||!recipe.candidate||!recipe.review
     ||!recipe.review_receipt||!recipe.view_receipts?.en||!recipe.view_receipts?.['zh-CN']
     ||!recipe.reading_editor_receipt) fail('READING_FIRST_EXTERNAL_PUBLICATION_RECIPE_INVALID');
+  if (recipe.render_inputs) {
+    const {profile,identity,review_status,publishable,presentation_fingerprint,...content}=recipe.candidate;
+    const rendered=externalRenderedContent(recipe,recipe.rendering);
+    if (fingerprintV3Json(rendered)!==presentation_fingerprint || fingerprintV3Json(rendered)!==fingerprintV3Json(content)) fail('READING_FIRST_PUBLICATION_CANDIDATE_CHANGED');
+  }
   assertReadingBindingCurrent(recipe.binding);
   assertPublicationFiles(recipe.source_bindings);
   assertPublicationFiles(recipe.tool_bindings);
@@ -1138,13 +1209,17 @@ export function createExternalReadingFirstPublicationSource(recipe) {
 export async function inspectReadingFirstPublicationSource(source) {
   const record=publicationSources.get(source);
   if (!record) fail('READING_FIRST_PUBLICATION_SOURCE_REQUIRED');
-  if (record.external) return freeze(copy(externalPublicationData(record.recipe)));
+  if (record.external) {
+    const data=externalPublicationData(record.recipe), rebase=verifiedRebase(record,data.reading_review_fingerprint);
+    return freeze({...data,origin:record.origin,...(rebase ? {candidate:copy(rebase.candidate),knowledge_rebase:copy(rebase)} : {})});
+  }
   const {state,recipe}=record;
   if (publicationStateStamp(state)!==record.stateStamp) fail('READING_FIRST_PUBLICATION_SOURCE_CHANGED');
   current(state,{completedPublication:true});
   assertPublicationFiles(recipe.source_bindings);assertPublicationFiles(recipe.tool_bindings);
   await acceptedPublicationArtifacts(state);
-  return freeze({origin:record.origin,recipe,candidate:recipe.candidate,identity:copy(state.handoff.identity),scientific_input_fingerprint:state.handoff.input_fingerprint,
+  const rebase=verifiedRebase(record,fingerprintV3Json({review:state.review,receipt:record.reviewReceipt,presentation:state.reviewedPresentationFingerprint}));
+  return freeze({origin:record.origin,recipe,...(rebase ? {knowledge_rebase:rebase} : {}),candidate:rebase?.candidate ?? recipe.candidate,identity:copy(state.handoff.identity),scientific_input_fingerprint:state.handoff.input_fingerprint,
     review:copy(state.review),reading_review_fingerprint:fingerprintV3Json({review:state.review,receipt:record.reviewReceipt,presentation:state.reviewedPresentationFingerprint}),
     review_receipt:copy(record.reviewReceipt),view_receipts:Object.fromEntries(languages.map(language=>[language,copy(state.views[language].receipt)])),
     ...(state.readingEditor ? {reading_editor_receipt:copy(state.readingEditor.receipt)} : {}),source_bindings:recipe.source_bindings,tool_bindings:recipe.tool_bindings,
@@ -1162,9 +1237,21 @@ function validateReadingExecutionState(previous, binding, code) {
 }
 /** Rebuilds a Controller-signed registration recipe from original owned bytes; no model step is emitted. */
 export async function restoreReadingFirstPublicationSource(recipe) {
+  if (recipe?.knowledge_rebase) {
+    const {recipe_fingerprint,...body}=recipe;
+    if (recipe_fingerprint!==fingerprintV3Json(body)) fail('READING_FIRST_PUBLICATION_RECIPE_INVALID');
+    const original=await restoreReadingFirstPublicationSource(originalPublicationRecipe(recipe));
+    const record=publicationSources.get(original);
+    const derived=record.external ? createExternalReadingFirstPublicationSource(recipe)
+      : publicationSource(record.state,freeze(copy(recipe)),record.reviewReceipt,'registered');
+    publicationSources.get(derived).origin='registered';
+    await inspectReadingFirstPublicationSource(derived);
+    return derived;
+  }
+
   if(recipe?.schema_version===externalPublicationRecipeSchema){
     externalPublicationData(recipe);
-    return createExternalReadingFirstPublicationSource(recipe);
+    const source=createExternalReadingFirstPublicationSource(recipe);publicationSources.get(source).origin='registered';return source;
   }
   const {recipe_fingerprint,...body}=recipe ?? {};
   if (recipe?.schema_version!=='reading-first-publication-source-1.0' || recipe_fingerprint!==fingerprintV3Json(body)

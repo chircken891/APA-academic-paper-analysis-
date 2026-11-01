@@ -144,3 +144,14 @@ test('external registration and reload reject changed receipt bytes', async t =>
   await assert.rejects(loadBilingualPublication({ vaultRoot: f.vaultRoot, run: f.runId, trustAnchor: registration.trust_anchor }), /P22_REGISTERED_DEPENDENCY_CHANGED/);
   for (const note of f.args.candidate.notes) await assert.rejects(lstat(join(f.vaultRoot, note.path)), { code: 'ENOENT' });
 });
+
+
+test('external preparation binds reproducible rendering inputs to accepted owned views', async t => {
+  const f = await externalFixture(t, true);
+  const prepared = await prepareExternalReviewedReadingFirstPublication({ ...f.args, rendering: f.renderOptions });
+  const recipe = prepared.external_source_recipe;
+  assert.deepEqual(recipe.render_inputs.views, f.views);
+  assert.deepEqual(recipe.render_inputs.readingEditor, f.editor);
+  assert.deepEqual(recipe.rendering.knowledgeRegistry, f.renderOptions.knowledgeRegistry);
+  await restoreReadingFirstPublicationSource(recipe);
+});

@@ -16,6 +16,9 @@ import { captureReadingFirstPublicationSource, createExternalReadingFirstPublica
 import { createPhase22ContractValidator } from './phase22-contract-loader.mjs';
 import { readOwnedArtifact } from './owned-artifact-store.mjs';
 import { validateReadingResources } from './reading-resources.mjs';
+import { renderReadingFirstObsidian } from './reading-first-obsidian.mjs';
+
+export { deriveRebasedReadingFirstPublicationSource } from './reading-first-runtime.mjs';
 
 const records = new WeakMap();
 let contractValidator;
@@ -399,11 +402,11 @@ async function buildReview({ source, data, options, base, preimages }) {
     const path = safePath(note.path), reviewed = Buffer.from(note.content), original = before(path), migration = migrations.get(path);
     if (!/^Wiki\/(methods|concepts)\/[^/]+\.md$/.test(path)) fail('RF_PUBLICATION_SUPPORT_PATH_INVALID');
     if (data.recipe.binding?.configured_setup?.knowledge_registry?.policy === 'current-shared-nodes-1.0' && original !== null && !migration) {
-      const matches = (data.recipe.rendering?.knowledgeRegistry ?? []).filter(row => row.path === path || row.canonical_path === path);
+      const matches = ((data.recipe.knowledge_rebase?.rendering ?? data.recipe.rendering)?.knowledgeRegistry ?? []).filter(row => row.path === path || row.canonical_path === path);
       if (matches.length !== 1 || matches[0].current_content !== true || typeof matches[0].content !== 'string'
         || sha(Buffer.from(matches[0].content)) !== matches[0].content_sha256
         || sha(original) !== matches[0].content_sha256) {
-        fail('RF_PUBLICATION_KNOWLEDGE_CHANGED_SINCE_RENDER', { path, action: 'refresh_candidate' });
+        fail('RF_PUBLICATION_KNOWLEDGE_CHANGED_SINCE_RENDER', { path, action: 'refresh_candidate', next: 'deriveRebasedReadingFirstPublicationSource' });
       }
     }
     let bytes = reviewed, comparison = original;
@@ -428,7 +431,8 @@ async function buildReview({ source, data, options, base, preimages }) {
     else { files.set(resource.path, bytes); readDependencies.push({ path: resource.path, byte_sha256: sha(bytes), byte_length: bytes.length }); }
   }
   const dependencies = { scientific_input: data.scientific_input_fingerprint,
-    reading_review: data.reading_review_fingerprint, presentation: candidate.presentation_fingerprint };
+    reading_review: data.reading_review_fingerprint, presentation: candidate.presentation_fingerprint,
+    ...(data.recipe.knowledge_rebase ? { knowledge_rebase: data.recipe.knowledge_rebase.rebase_fingerprint } : {}) };
   if (options.presentationAssetRegistrations?.length) dependencies.presentation_asset_registrations = hash(options.presentationAssetRegistrations);
   const manifestPath = '.apa-v3/reading-first/presentation/' + identity.run_id + '-' + hash(identity).slice(7, 31) + '.json';
   const presentation = { schema_version: 'reading-first-publication-1.0', profile, identity,
@@ -471,7 +475,8 @@ async function buildReview({ source, data, options, base, preimages }) {
   readDependencies.sort((a, b) => a.path.localeCompare(b.path));
   const scientificReviewHash = hash({ input: data.scientific_input_fingerprint, reading_review: data.reading_review_fingerprint,
     review_receipt: data.review_receipt, view_receipts: data.view_receipts,
-    ...(data.reading_editor_receipt ? { reading_editor_receipt: data.reading_editor_receipt } : {}), presentation: candidate.presentation_fingerprint });
+    ...(data.reading_editor_receipt ? { reading_editor_receipt: data.reading_editor_receipt } : {}),
+    ...(data.recipe.knowledge_rebase ? { knowledge_rebase: data.recipe.knowledge_rebase.rebase_fingerprint } : {}), presentation: candidate.presentation_fingerprint });
   const assetApprovals = options.presentationAssetRegistrations ?? [];
   const toolBindings = tools(), sourceBindings = [...new Map([...data.source_bindings, ...options.resources.map(row => binding(row.source_path)),
     ...assetApprovals.flatMap(row => [row.approval_binding, row.approved_candidate])]
@@ -542,6 +547,7 @@ export async function captureReadingFirstPublicationRegistration({ review, sourc
   const data = await inspectReadingFirstPublicationSource(record.source);
   if (data.origin !== 'live' || sourceInputs?.readingFirst?.source !== record.source) fail('RF_PUBLICATION_LIVE_SOURCE_REQUIRED');
   return { source_bindings: clone(record.sourceBindings),
+    ...(data.recipe.knowledge_rebase ? { reading_first_source: clone(data.recipe) } : {}),
     tool_bindings: [...new Map([...data.tool_bindings, ...record.toolBindings].map(row => [row.path, row])).values()],
     control_snapshot: { schema_version: 'reading-first-publication-control-1.0', run_id: review.reviewManifest.identity.run_id,
       evidence_mode: review.reviewManifest.evidence_mode, source_fingerprint: hash(record.recipe.source) } };
@@ -706,7 +712,7 @@ export async function prepareReadingFirstCitationCorrection({ vaultRoot, runId, 
 /** Prepare a reviewed candidate completed by an external host transport without claiming native dispatch. */
 export async function prepareExternalReviewedReadingFirstPublication({
   vaultRoot, generation, evidenceMode = 'actual', resources, runRoot, candidateRoot,
-  scientificInput, candidate, presentation, review, reviewReceipt, viewReceipts, readingEditorReceipt, readingFirstBinding, callsUsed = 0,
+  scientificInput, candidate, presentation, review, reviewReceipt, viewReceipts, readingEditorReceipt, readingFirstBinding, callsUsed = 0, rendering,
 } = {}) {
   const receiptValid = receipt => typeof receipt?.path === 'string' && receipt.path.length > 0
     && typeof receipt?.artifact_id === 'string' && receipt.artifact_id.length > 0;
@@ -740,13 +746,34 @@ export async function prepareExternalReviewedReadingFirstPublication({
   if (editorValue.schema_version === 'reading-editor-1.3' && !readingFirstBinding) fail('RF_PUBLICATION_EXTERNAL_BINDING_REQUIRED');
   if (readingFirstBinding && ((readingFirstBinding.presentation_profile ?? 'reading-editor-1.3') !== editorValue.schema_version
     || readingFirstBinding.input_fingerprint !== hash(scientificInput))) fail('RF_PUBLICATION_EXTERNAL_BINDING_INVALID');
+  const renderOptions = rendering ?? { existingTargets: [], knowledgeRegistry: [] };
+  if (!Array.isArray(renderOptions.existingTargets) || !Array.isArray(renderOptions.knowledgeRegistry)) fail('READING_FIRST_PUBLICATION_RENDERING_INVALID');
+  const ownedValue = async receipt => {
+    const artifact = await readOwnedArtifact({ artifactRoot: runRoot, artifactId: receipt.artifact_id });
+    if (!artifact || !same(artifact.receipt, receipt)) fail('READING_FIRST_PUBLICATION_RECEIPT_CHANGED');
+    return JSON.parse(artifact.bytes.toString('utf8'));
+  };
+  const renderInputs = { identity: clone(scientificInput.identity), views: await Promise.all(languages.map(language => ownedValue(viewReceipts[language]))),
+    presentation: clone(presentation), readingEditor: await ownedValue(readingEditorReceipt),
+    ...(readingFirstBinding?.note_layout ? { noteLayout: readingFirstBinding.note_layout } : {}),
+    ...(readingFirstBinding?.source_language ? { sourceLanguage: readingFirstBinding.source_language } : {}) };
+  const rendered = renderReadingFirstObsidian({ ...renderInputs, ...renderOptions });
+  const { notes, supportNotes, ...renderedRest } = rendered;
+  const content = { ...renderedRest, notes: notes.map(({ bytes, ...note }) => ({ ...note, draft_receipt: viewReceipts[note.language] })),
+    ...(supportNotes ? { supportNotes: supportNotes.map(({ bytes, ...note }) => note) } : {}) };
+  const { profile: candidateProfile, identity: candidateIdentity, review_status, publishable, presentation_fingerprint, ...candidateContent } = candidate;
+  if (!same(content, candidateContent) || hash(content) !== presentation_fingerprint) fail('READING_FIRST_PUBLICATION_CANDIDATE_CHANGED');
+  const encodedRendering = { ...clone(renderOptions), existingTargets: renderOptions.existingTargets.map(({ bytes, bytes_base64, ...row }) => ({
+    ...row, bytes_base64: bytes == null ? bytes_base64 ?? null : Buffer.from(bytes).toString('base64'),
+  })) };
   const sourceRecipe = {
     schema_version: 'external-reviewed-reading-first-publication-source-1.0',
+    rendering: encodedRendering, render_inputs: renderInputs,
     run_id: scientificInput.identity.run_id,
     identity_fingerprint: hash(scientificInput),
     reading_review_fingerprint: hash({ review, receipt: reviewReceipt, presentation: candidate.presentation_fingerprint }),
     scientific_input: clone(scientificInput),
-    ...(readingFirstBinding ? { binding: clone(readingFirstBinding), run_root: resolve(runRoot) } : {}),
+    run_root: resolve(runRoot), ...(readingFirstBinding ? { binding: clone(readingFirstBinding) } : {}),
     candidate: clone(candidate),
     review: clone(review),
     review_receipt: clone(reviewReceipt),
@@ -762,7 +789,8 @@ export async function prepareExternalReviewedReadingFirstPublication({
   sourceRecipe.recipe_fingerprint = hash(sourceRecipe);
   let source = createExternalReadingFirstPublicationSource(sourceRecipe);
   let data = await inspectReadingFirstPublicationSource(source);
-  const base = await baseFor(root);
+  const policy = readingFirstBinding?.configured_setup?.knowledge_registry;
+  const base = await baseFor(root, policy?.policy === 'current-shared-nodes-1.0' && resolve(policy.vault_root) === root);
   const options = { vaultRoot: root, generation, evidenceMode, resources: await resourceBindings(data, resources) };
   const resultReview = await buildReview({ source, data, options, base, preimages: null });
   source = createExternalReadingFirstPublicationSource(sourceRecipe);
