@@ -13,6 +13,12 @@ Accept PDF sources by user-provided filesystem path. If the user invokes APA wit
 
 Recommend `Raw/` under the user's selected repository; never substitute a fixed drive or repository name. An external PDF may remain at a stable readable absolute path. Do not casually move, rename or overwrite source PDFs: runs bind their source paths, hashes and byte lengths, and later recovery and verification depend on them. Before a necessary relocation, identify affected runs and references and obtain authorization for the migration; preserve frozen records.
 
+## Existing-paper check
+
+Before creating a new reading session, check whether the vault already holds this paper. Compare the source PDF's SHA-256 and the paper's DOI, title and first author/year against the committed registration (`.apa-v3/phase22/COMMITTED.json` and its bound inventory), the registered `Wiki/sources/` and `Wiki/translations/` notes, and `node scripts/apa-query.mjs search --query "<title or DOI>"`. Also look for an unfinished reading-first run or candidate bound to the same source. A supplement of an already-read paper is not a new paper.
+
+If a match is found, do not start a new analysis. Report the existing note paths or run, and offer the matching route: answer from the existing note through apa-query, resume an unfinished V3 run (committed runs stay read-only), or a correction through the controlled transaction. Start a fresh reading only when the user explicitly asks to re-analyze that paper. If no match is found, state briefly what was checked and continue.
+
 ## Locate the current task
 
 Use the APA repository root explicitly selected or confirmed by the user. Before first acquisition, installation or configuration writes, ask the user to choose or confirm its absolute folder; never default to the current chat folder or a child directory. Recommend setting that folder as the agent's working directory. Do not re-ask for the same target already confirmed in this conversation. Locate its `AGENTS.md`, `scripts/`, `Schema/` and `docs/`; preserve historical frozen paths and protected user content. An installed skill remains attached to its selected repository.

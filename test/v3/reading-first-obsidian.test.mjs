@@ -404,6 +404,24 @@ function compactInput() {
   return data;
 }
 
+test('reading editor preserves uppercase research-map IDs and their relations in both languages', () => {
+  const data = compactInput();
+  data.presentation.map.steps[0].id = 'D1';
+  data.presentation.map.findings[0].id = 'F1';
+  data.presentation.map.relations = [{ step_id: 'D1', finding_id: 'F1' }];
+  data.readingEditor.map.nodes = [{ id: 'D1', stage: 'measurement' }, { id: 'F1', stage: 'finding', primary: true }];
+
+  const result = renderReadingFirstObsidian(data);
+  for (const note of result.notes) {
+    assert.match(note.content, /D1\["/);
+    assert.match(note.content, /F1\["/);
+    assert.match(note.content, /D1 --> F1/);
+    assert.match(note.content, /class F1 primary/);
+  }
+  assert.equal(data.presentation.map.steps[0].id, 'D1');
+  assert.equal(data.presentation.map.findings[0].id, 'F1');
+});
+
 test('reading editor renders omitted findings as bilingual section links', () => {
   const data = compactInput();
   data.presentation.map.findings.push({ id: 'other', label: { en: 'Other finding', 'zh-CN': '其他发现' }, section_id: 'findings' });

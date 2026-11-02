@@ -161,7 +161,10 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
   const map = p.map ?? { steps: [], findings: [], relations: [] };
   const nodes = [...map.steps, ...map.findings];
   if (new Set(nodes.map(node => node.id)).size !== nodes.length) fail('RF_OBSIDIAN_MAP_INVALID');
-  for (const node of nodes) { requireId(node.id); localized(node.label); if (!byId.has(node.section_id)) fail('RF_OBSIDIAN_MAP_INVALID'); }
+  for (const node of nodes) {
+    if (typeof node.id !== 'string' || !/^[a-z][a-z0-9-]*$/i.test(node.id)) fail('RF_OBSIDIAN_ID_INVALID');
+    localized(node.label); if (!byId.has(node.section_id)) fail('RF_OBSIDIAN_MAP_INVALID');
+  }
   for (const relation of map.relations) if (!map.steps.some(node => node.id === relation.step_id) || !map.findings.some(node => node.id === relation.finding_id)) fail('RF_OBSIDIAN_MAP_INVALID');
   const supportNotes = [], knowledgeProposals = [], destinations = new Map();
   for (const item of knowledge) {

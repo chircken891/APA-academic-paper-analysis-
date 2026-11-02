@@ -31,7 +31,7 @@
     },
     {
       "path": ".agents/skills/academic-paper-analysis/SKILL.md",
-      "sha256": "4569f848a11ca31b5f7a2638c623f6f0195c0b8304690512fb18ea5ebfd956bd"
+      "sha256": "fb0de6b33c720f204ae2d46180ee548592157ce92595731328d45466e0cb97e8"
     },
     {
       "path": ".agents/skills/apa-query/agents/openai.yaml",
@@ -639,7 +639,7 @@
     },
     {
       "path": "scripts/v3/reading-first-obsidian.mjs",
-      "sha256": "238943f03083560ca4cc510f782c7342f99772aa4a6c86b80c5344d7934ca5a8"
+      "sha256": "a84251e3d563275325e1b6152e0a990758d52f25b63111414666db73a732b8fc"
     },
     {
       "path": "scripts/v3/reading-first-preview.mjs",
@@ -1011,7 +1011,7 @@
     },
     {
       "path": "test/v3/reading-first-obsidian.test.mjs",
-      "sha256": "3527faaf8703b25073de482a9498568457494e7145bc7ca3b172a371afffb79f"
+      "sha256": "c0e005a6c6781cbd1af71fa5570620963eb75b63921a0aeb14f629c8a7bcaa72"
     },
     {
       "path": "test/v3/reading-first-preview.test.mjs",
