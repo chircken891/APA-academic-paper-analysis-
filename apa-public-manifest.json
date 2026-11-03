@@ -11,7 +11,7 @@
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/controller-apis.md",
-      "sha256": "d3e91d54ec9e533c6bbace911da4d70649322ce263dad3753ee2719b6cec5dd3"
+      "sha256": "bae2e208ce1468ee8dbe641a0dd033832155bfee07a6063fd0dc46a6d6e35485"
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/evaluation.md",
@@ -19,19 +19,19 @@
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/execution-and-recovery.md",
-      "sha256": "eaf281d3bd1acc4e8a94b068f4a786f41f88b1304accd1957151d43db58da540"
+      "sha256": "95c525c228af6298cc1fb9d6f0dae7819220670469663016f9320baceb80ef9e"
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/presentation-and-reading-review.md",
-      "sha256": "f83750f6ac5cf280d8b61202eb1367c2e8967c671e9b9ae7908f7d071b987666"
+      "sha256": "b7dd56fc4f38afb5b1bdf645e7de8b94748518a5dc9c4acbd2c540f7bb2b586c"
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/scientific-reading.md",
-      "sha256": "4cbe0b3c4d056db12e325ac11e7220ae3e19255fdb90caeac2d5a42314066479"
+      "sha256": "3bf1c6c8443e48bdefd988c1a52d565884afeb94005e6bf3782af491b752e591"
     },
     {
       "path": ".agents/skills/academic-paper-analysis/SKILL.md",
-      "sha256": "fb0de6b33c720f204ae2d46180ee548592157ce92595731328d45466e0cb97e8"
+      "sha256": "4df7e3b7ed5e883f1153f7a761f2e0296aeb0cd82eec0b21974e21d790af70c5"
     },
     {
       "path": ".agents/skills/apa-query/agents/openai.yaml",
@@ -99,7 +99,7 @@
     },
     {
       "path": "CLAUDE.md",
-      "sha256": "3c37a3ba1bddab9c8d3319a701d4a6dd1be50b3a78ebb3577b4c99f1078cf7f2"
+      "sha256": "650ea42e2617f1649044a500916de7a00864a7e527f0c29803ad6c0ffdb02874"
     },
     {
       "path": "Clippings/.gitkeep",
@@ -123,7 +123,7 @@
     },
     {
       "path": "docs/apa-v3/reading-first-obsidian.md",
-      "sha256": "bc60e3c5ec08df325cb34c928ad1fc55c3b0fe7dc05316e9d9f004c890442716"
+      "sha256": "eecb70c310b7b28af1db0f1663e2e0989f9c88ac70bf69240054375933367930"
     },
     {
       "path": "docs/apa-v3/reading-first-publication.md",
@@ -131,7 +131,7 @@
     },
     {
       "path": "docs/apa-v3/reading-session.md",
-      "sha256": "c20a2897b645a34f3ea1808b6a7fe5a8a973b43f7729edf99cdd32a4c963b037"
+      "sha256": "f72d039091ac51acef965a30a50a5872801d28ffbfc0fbf352a61e15464ec896"
     },
     {
       "path": "docs/apa-v3/scientific-writing-modules.md",
@@ -139,7 +139,7 @@
     },
     {
       "path": "docs/CONFIGURATION.md",
-      "sha256": "d036fc595d7d331a6ca1b80987c444fb6fae3b93e0d8304a7705291ec3234bd6"
+      "sha256": "967e8d51733cfa36fd3b1840790dc1ea5991afebc0c1ba3f2e1631831f2ae957"
     },
     {
       "path": "Figures/.gitkeep",
@@ -391,7 +391,7 @@
     },
     {
       "path": "scripts/setup/apa-compact-context.mjs",
-      "sha256": "76120980dcbede830aae67e5b7de13825e6faa274515558dde2a78e51943ae01"
+      "sha256": "e495fa77fd523a8956ed871b668402840e0b44ffb5857c28a04f81431ebbe1d5"
     },
     {
       "path": "scripts/setup/apa-host-settings.mjs",
@@ -639,7 +639,7 @@
     },
     {
       "path": "scripts/v3/reading-first-obsidian.mjs",
-      "sha256": "a84251e3d563275325e1b6152e0a990758d52f25b63111414666db73a732b8fc"
+      "sha256": "2304311d26a7ebd719030d34bbdc599160f426e62603b32cd85ccd245aa336bb"
     },
     {
       "path": "scripts/v3/reading-first-preview.mjs",
@@ -659,7 +659,7 @@
     },
     {
       "path": "scripts/v3/reading-first-runtime.mjs",
-      "sha256": "cd7fd36f9390d672c65520277bc236804e49b28ca30fddcf6d8a3233c2c523f7"
+      "sha256": "3b360262128c6c209f6c4e7323d079137a021c36ffd333a3b8c91b8e9285f9c8"
     },
     {
       "path": "scripts/v3/reading-host-evidence.mjs",
@@ -683,7 +683,7 @@
     },
     {
       "path": "scripts/v3/reading-session.mjs",
-      "sha256": "6af7843c089ccf71fff45327db9d4058f3cb89b752eab0bcc6f01c81f803e31a"
+      "sha256": "b166871f3860c26559762c2c9ab1e5aff197f937e793c024c7668932de3b7306"
     },
     {
       "path": "scripts/v3/reading-translation-progress.mjs",
@@ -699,7 +699,7 @@
     },
     {
       "path": "scripts/v3/science-controller.mjs",
-      "sha256": "73f9c0ecbef1ead8b352073441b596269b631f04ee745abe43db4a711be1ed37"
+      "sha256": "8738502fe4a05fabc63836de17dd2379f439c2889e625d14b5a3064554959991"
     },
     {
       "path": "scripts/v3/scientific-input-validator.mjs",
@@ -783,7 +783,7 @@
     },
     {
       "path": "Templates/apa-public/CLAUDE.md",
-      "sha256": "3c37a3ba1bddab9c8d3319a701d4a6dd1be50b3a78ebb3577b4c99f1078cf7f2"
+      "sha256": "650ea42e2617f1649044a500916de7a00864a7e527f0c29803ad6c0ffdb02874"
     },
     {
       "path": "Templates/apa-setup/page.css",
@@ -799,7 +799,7 @@
     },
     {
       "path": "test/setup/apa-compact-context.test.mjs",
-      "sha256": "cde7a851532682af754c2406b21051b999fdee974c0cd705a4536df7af1ba334"
+      "sha256": "6aa94eaa5f462f838f2a99db919db69fe66e8233ae00601fc1e392e3ca10c570"
     },
     {
       "path": "test/setup/apa-companion-skills.test.mjs",
@@ -979,7 +979,7 @@
     },
     {
       "path": "test/v3/reading-first-enrichment.test.mjs",
-      "sha256": "471696080d28eb756a68e26d258802d7b054fb632a9e16a5acdbacc3ceb68cd8"
+      "sha256": "e2c5907c4897a6acbbd6e5e76e7485be28157ae896cd464c98bdb1bd0a8c571a"
     },
     {
       "path": "test/v3/reading-first-external-publication.test.mjs",
@@ -1011,7 +1011,7 @@
     },
     {
       "path": "test/v3/reading-first-obsidian.test.mjs",
-      "sha256": "c0e005a6c6781cbd1af71fa5570620963eb75b63921a0aeb14f629c8a7bcaa72"
+      "sha256": "683e7bb2ef4deaa410312aa3843742c99762f42f4dfab4ae771c3bfec3549641"
     },
     {
       "path": "test/v3/reading-first-preview.test.mjs",
@@ -1031,7 +1031,7 @@
     },
     {
       "path": "test/v3/reading-first-runtime.test.mjs",
-      "sha256": "ee5c4fdb2bddb86cba2a7906e12097395cbc485481bb80be48c695f443f3dfba"
+      "sha256": "193fa87e6a21dafa62fe8e3553ccdfc7490d42fc0fd3b44b0838912be6c3454b"
     },
     {
       "path": "test/v3/reading-first-source-labels.test.mjs",
@@ -1067,7 +1067,7 @@
     },
     {
       "path": "test/v3/reading-session.test.mjs",
-      "sha256": "8e4ed8ae161e29d3673c4418556616af6225a380899c380d6bee36e854ccd4da"
+      "sha256": "5534d3245dd588771de0134916cc9a4e76fdd03eb0825e35d2e9c4727eb3bfbc"
     },
     {
       "path": "test/v3/reading-translation-progress.test.mjs",
@@ -1075,11 +1075,11 @@
     },
     {
       "path": "test/v3/science-controller-22.test.mjs",
-      "sha256": "77c46e753eb5bb462ab674ee4518d679bb6e0d31abbe6bfd2640bb9d33902eb0"
+      "sha256": "380381f74b55c2976cf9fc1077267a9d82e4d6a059cfd938c6898f06aeefffe0"
     },
     {
       "path": "test/v3/science-controller.test.mjs",
-      "sha256": "574672d17afe93bd6fd719f3537dc5605ef8592fa4f4028bd47ea1b2b35bbf47"
+      "sha256": "a3cd0eac633256f6b38a3811d755a8ff849aebfd649eb80953c2df79fec38d54"
     },
     {
       "path": "test/v3/topic-cancellation.test.mjs",

@@ -161,8 +161,8 @@ const downstreamNext = summary => {
 
 // A run is listed unless it is closed: a final result record (RESULT.json/md), status completed_with_limits, or
 // reading_complete with a recorded publication. reading_complete without either is still open (publication follows it).
-// A run past its deadline is listed and marked expired, never hidden.
-function inspectRun(runDirectory, now) {
+// Runs have no time limit; a deadline in an older binding is shown as history only.
+function inspectRun(runDirectory) {
   const name = runDirectory.split(/[\\/]/).pop();
   if (RESULT_FILES.some(file => existsSync(join(runDirectory, file)))) return null;
   const stateFile = findScienceStateFile(runDirectory);
@@ -184,19 +184,18 @@ function inspectRun(runDirectory, now) {
   let runRecord = {};
   try { runRecord = readJson(join(runDirectory, 'RUN.json')); } catch { /* RUN.json is optional here */ }
   const deadline = science?.deadline ?? (typeof runRecord.deadline === 'string' ? runRecord.deadline : null);
-  const expired = Boolean(deadline) && Number.isFinite(Date.parse(deadline)) && now >= Date.parse(deadline);
   const maxTotal = science?.maxTotalCalls ?? (Number.isInteger(runRecord.max_total_calls) ? runRecord.max_total_calls : null);
   return {
     runId: science?.runId ?? (typeof runRecord.run_id === 'string' ? runRecord.run_id : name),
     runRoot: runDirectory,
     runRecord: existsSync(join(runDirectory, 'RUN.json')) ? join(runDirectory, 'RUN.json') : null,
-    stateFile, science, checkpoint, downstream, deadline, expired, maxTotal, oversize,
+    stateFile, science, checkpoint, downstream, deadline, maxTotal, oversize,
     accepted: acceptedFiles(runDirectory),
   };
 }
 
 function formatRun(run, omitted = 0) {
-  const lines = [`APA run in progress: ${clean(run.runId, 120)}${run.expired ? ' [expired]' : ''}`];
+  const lines = [`APA run in progress: ${clean(run.runId, 120)}`];
   if (omitted) lines.push(`${omitted} older run director${omitted === 1 ? 'y was' : 'ies were'} not scanned (only the ${MAX_RUN_DIRECTORIES} most recently modified are).`);
   lines.push(`run root: ${run.runRoot}`);
   if (run.oversize.length) lines.push(`too large to summarize (over ${MAX_FILE_BYTES} bytes), read directly: ${run.oversize.join(', ')}`);
@@ -216,15 +215,14 @@ function formatRun(run, omitted = 0) {
     if (run.downstream.observed.length) lines.push(`observed host tasks: ${run.downstream.observed.map(id => clean(id, 80)).join(', ')}`);
   }
   const detail = run.downstream && (!run.science || run.science.transferred) ? [downstreamNext(run.downstream)] : run.science?.next ?? [];
-  const next = run.downstream?.status === 'reading_complete' ? ['等待发布或确认收尾']
-    : run.expired ? ['expired: the deadline has passed and the runtime accepts no new calls; report this to the user, do not dispatch'] : detail;
+  const next = run.downstream?.status === 'reading_complete' ? ['等待发布或确认收尾'] : detail;
   lines.push(`next step: ${next.length ? next.join('; ') : 'reconcile process status and status files, then continue the same Controller'}`);
   const budget = [];
   if (run.maxTotal !== null) {
     const used = run.downstream?.callsUsed ?? run.science?.reservedCalls ?? null;
     budget.push(`total call cap ${run.maxTotal}${used === null ? '' : `, used ${used}, remaining ${Math.max(0, run.maxTotal - used)}`}`);
   }
-  if (run.deadline) budget.push(`deadline ${clean(run.deadline, 60)}${run.expired ? ' (expired)' : ''}`);
+  if (run.deadline) budget.push(`historical deadline ${clean(run.deadline, 60)} (not enforced)`);
   if (budget.length) lines.push(`budget: ${budget.join('; ')}`);
   lines.push('Continue the existing Controller process; a compaction is not a restart. Never redispatch an already dispatched unfinished task.', RECOVERY_RULE);
   return lines;
@@ -233,7 +231,7 @@ function formatRun(run, omitted = 0) {
 function formatMany(runs, omitted = 0) {
   return [`Several APA runs look in progress (${runs.length}); none was chosen. Check each and decide which to continue:`,
     ...(omitted ? [`${omitted} older run director${omitted === 1 ? 'y was' : 'ies were'} not scanned (only the ${MAX_RUN_DIRECTORIES} most recently modified are).`] : []),
-    ...runs.map(run => `- ${clean(run.runId, 120)}${run.expired ? ' [expired]' : ''}: ${run.runRoot}`), RECOVERY_RULE];
+    ...runs.map(run => `- ${clean(run.runId, 120)}: ${run.runRoot}`), RECOVERY_RULE];
 }
 
 // Keeps whole lines and ends with a marker; the result is never longer than the cap.
@@ -254,7 +252,7 @@ export function fitContext(lines, limit = MAX_CONTEXT) {
   return kept + marker;
 }
 
-export function buildHookOutput({ repoRoot = defaultRepoRoot, now = Date.now(), warn = () => {} } = {}) {
+export function buildHookOutput({ repoRoot = defaultRepoRoot, warn = () => {} } = {}) {
   const runsRoot = runsRootOf(repoRoot);
   if (!existsSync(runsRoot) || !statSync(runsRoot).isDirectory()) return {};
   const active = [];
@@ -271,7 +269,7 @@ export function buildHookOutput({ repoRoot = defaultRepoRoot, now = Date.now(), 
   const omitted = Math.max(0, directories.length - MAX_RUN_DIRECTORIES);
   for (const { name } of directories.slice(0, MAX_RUN_DIRECTORIES).sort((left, right) => left.name.localeCompare(right.name))) {
     try {
-      const run = inspectRun(join(runsRoot, name), now);
+      const run = inspectRun(join(runsRoot, name));
       if (run) active.push(run);
     } catch (cause) {
       warn(`skipped ${relative(repoRoot, join(runsRoot, name)) || name}: ${clean(cause.message, 160)}`);

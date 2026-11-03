@@ -81,6 +81,35 @@ test('2.2 Results manifest is owned and passed to Integrator after source valida
   await assert.rejects(() => restoreScienceController(f.options));
 });
 
+test('2.2 Integrator research map is checked at acceptance and legacy from/to edges are normalized', async () => {
+  const f = await fixture(), controller = await createScienceController(f.options);
+  const root = f.root, images = join(root, 'resources', 'results'); await mkdir(images, { recursive: true });
+  const image = Buffer.from('image'); await writeFile(join(images, 'figure.png'), image);
+  const source = f.options.prepared.scientificInput.sources[0];
+  const manifest = { version: 'reading-resources-1.0', resources: [{ id: 'fig-1', source_id: 'paper', locator: { kind: 'pdf-page', page: 1 }, source_path: join(images, 'figure.png'), path: 'Figures/paper/figure.png', ...{ sha256: hash(image), byte_length: image.length }, parent: { path: source.path, sha256: source.sha256, byte_length: source.byte_length } }] };
+  const manifestBytes = Buffer.from(JSON.stringify(manifest)); await writeFile(join(root, 'native/results-resources.json'), manifestBytes);
+  const ref = { path: join(root, 'science/results-resources.json'), resources_root: images, sha256: hash(manifestBytes), byte_length: manifestBytes.length };
+  const label = text => ({ en: text, 'zh-CN': text });
+  const presentation = relations => ({ visuals: [{ id: 'fig-1', path: manifest.resources[0].path, source_id: 'paper', locator: manifest.resources[0].locator }], sections: [{ id: 'design' }, { id: 'findings' }],
+    map: { steps: [{ id: 'S1', label: label('Step'), section_id: 'design' }], findings: [{ id: 'F-01', label: label('Finding'), section_id: 'findings' }], relations } });
+  for (let batch = 0; batch < 5; batch++) {
+    for (const { role, request } of await prepareScienceRequests({ controller })) {
+      await recordScienceDispatchIntent({ controller, role });
+      const step = request.emittedStep, raw = JSON.stringify({ agent_id: 'host-' + role }), evidencePath = join(root, 'evidence-' + role + '.txt');
+      await writeFile(evidencePath, raw);
+      await recordScienceHostObservation({ controller, role, observation: { action_id: step.action_id, run_id: 'run', input_fingerprint: step.input_fingerprint, port: 'current-collaboration', tool_call: { name: step.action, arguments: step.arguments }, raw_result_text: raw, evidence: { kind: 'raw', capture: 'direct', sha256: hash(Buffer.from(raw)).slice(7), source_reference: evidencePath } } });
+      const native = join(root, f.options.tasks[role].native_path);
+      if (role === 'integration') {
+        await writeFile(native, JSON.stringify({ role, visual_handoff: { resource_manifest: ref }, presentation: presentation([{ id: 'R1', from: 'F-01', to: 'S1' }]) }));
+        await assert.rejects(() => acceptScienceResult({ controller, role }), error => error.code === 'SCIENCE_CONTENT_INVALID' && error.details?.field === 'presentation.map');
+        await writeFile(native, JSON.stringify({ role, visual_handoff: { resource_manifest: ref }, presentation: presentation([{ id: 'R1', from: 'S1', to: 'F-01' }]) }));
+      } else await writeFile(native, JSON.stringify(role === 'results' ? { role, resource_manifest: ref } : { role }));
+      await acceptScienceResult({ controller, role });
+    }
+  }
+  assert.equal(getScienceState(controller).accepted_results, 6);
+});
+
 test('2.2 science request retains frozen prompt sections after prompt file changes', async () => {
   const f = await fixture(); await createScienceController(f.options);
   await writeFile(join(f.root, 'prompt.md'), 'changed external file');

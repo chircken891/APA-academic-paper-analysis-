@@ -739,11 +739,10 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
     await assert.rejects(() => recordReadingEvent(session, intent), /CALL_BUDGET_EXHAUSTED/);
     const waiting = await nextReadingAction(session), checkpointBytes = await readFile(waiting.summary.state_ref), checkpoint = JSON.parse(checkpointBytes);
     const { data } = JSON.parse(await readFile(join(runRoot, 'control/science-state.json'), 'utf8'));
-    const authorization = { authorization_id: 'synthetic-explicit-editor-recovery', reason: 'User approved scoped continuation and chart correction.', checkpoint_fingerprint: checkpoint.checkpoint_fingerprint, action_id: editorAction.action_id, max_additional_calls: 3, deadline: data.prepared.runControl.reading_first_binding.deadline,
+    const authorization = { authorization_id: 'synthetic-explicit-editor-recovery', reason: 'User approved scoped continuation and chart correction.', checkpoint_fingerprint: checkpoint.checkpoint_fingerprint, action_id: editorAction.action_id, max_additional_calls: 3,
       chart_type_corrections: [{ visual_id: 'fig-one', chart_types: [{ knowledge_id: 'method', label: { en: 'Intervals', 'zh-CN': '区间图' }, panel: 'd,e' }] }] };
     await assert.rejects(() => recordReadingEvent(session, { kind: 'authorize-repair-continuation', authorization: { ...authorization, checkpoint_fingerprint: 'wrong' } }), /AUTHORIZATION_INVALID/);
     await assert.rejects(() => recordReadingEvent(session, { kind: 'authorize-repair-continuation', authorization: { ...authorization, chart_type_corrections: [{ ...authorization.chart_type_corrections[0], visual_id: 'unreviewed' }] } }), /VISUAL_CORRECTION_INVALID/);
-    await assert.rejects(() => recordReadingEvent(session, { kind: 'authorize-repair-continuation', authorization: { ...authorization, deadline: '2100-01-01T00:00:00Z' } }), /AUTHORIZATION_INVALID/);
     await recordReadingEvent(session, { kind: 'authorize-repair-continuation', authorization });
     assert.deepEqual(await readFile(waiting.summary.state_ref), checkpointBytes);
     session = await resumeReadingSession({ runRoot });

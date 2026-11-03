@@ -265,7 +265,6 @@ test('authorized correction retains a rejected original, counts both calls, and 
   await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant, authorizationId: 'synthetic' }), /SCIENCE_CORRECTION_UNAUTHORIZED/);
   await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant, maxScienceCalls: 6 }), /SCIENCE_CORRECTION_UNAUTHORIZED/);
   await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant, maxTotalCalls: 15 }), /SCIENCE_CORRECTION_UNAUTHORIZED/);
-  await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant, deadline: '2098-01-01T00:00:00Z' }), /SCIENCE_CORRECTION_UNAUTHORIZED/);
   await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant, task: { ...f.grant.task, native_path: f.tasks.evidence.native_path } }), /SCIENCE_CORRECTION_TASK_INVALID/);
   await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant, task: { ...f.grant.task, owner_actor_id: 'another-owner' } }), /SCIENCE_CORRECTION_TASK_INVALID/);
   await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant, role: 'evidence' }), /SCIENCE_CORRECTION_UNAVAILABLE/);
@@ -303,11 +302,9 @@ test('authorized correction retains a rejected original, counts both calls, and 
   await assert.rejects(() => createScienceHandoff({ controller, checkpointTask: f.checkpointTask }), /SCIENCE_READING_BUDGET_REBIND_REQUIRED/);
 });
 
-test('correction is rejected when its budget or original deadline cannot cover reading', async t => {
+test('correction is rejected when its budget cannot cover reading', async t => {
   const f = await failedFinalDispatch(t, { maxTotalCalls: 9, maxCalls: 3 });
   await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant }), /SCIENCE_CORRECTION_UNAUTHORIZED/);
-  t.mock.timers.enable({ apis: ['Date'], now: new Date('2099-01-01T00:00:00Z') });
-  await assert.rejects(() => prepareScienceCorrection({ controller: f.controller, ...f.grant }), /SCIENCE_DEADLINE_EXPIRED/);
 });
 test('intent is durable and never reissued while outcome is unknown', async t=>{
   const f=await fixture(t), controller=await createScienceController(f.options);
@@ -568,12 +565,18 @@ test('source and frozen binding drift refuse restore without changing the saved 
   await writeFile(join(f.root,'paper.pdf'),'different source');
   await assert.rejects(()=>restoreScienceController(f.options),/SCIENCE_SOURCE_CHANGED/);
 });
-test('expired restored run permits status but blocks new action', async t=>{
-  const f=await fixture(t), controller=await createScienceController(f.options);
+test('a historical deadline in the binding no longer blocks a restored run', async t=>{
+  const f=await fixture(t);
+  f.options.prepared=structuredClone(f.options.prepared); f.options.prepared.runControl.reading_first_binding.deadline='2000-01-01T00:00:00Z';
+  f.options.brokerConfig.run_controls=[f.options.prepared.runControl];
+  const controller=await createScienceController(f.options);
   await prepareScienceRequests({controller});
   t.mock.method(Date,'now',()=>Date.parse('2100-01-01T00:00:00Z'));
-  const recovered=await restoreScienceController(f.options); assert.equal(getScienceState(recovered).expired,true);
-  await assert.rejects(()=>recordScienceDispatchIntent({controller:recovered,role:'evidence'}),/SCIENCE_DEADLINE_EXPIRED/);
+  const recovered=await restoreScienceController(f.options), state=getScienceState(recovered);
+  assert.equal(state.expired,undefined); assert.equal(state.deadline,undefined);
+  assert.notDeepEqual(state.next_actions,[{action:'expired_blocked'}]);
+  await recordScienceDispatchIntent({controller:recovered,role:'evidence'});
+  assert.equal(getScienceState(recovered).reserved_calls,1);
 });
 test('wrong orphan bytes cannot acquire a receipt and host updates retain the original handle', async t=>{
   const f=await fixture(t), controller=await createScienceController(f.options);

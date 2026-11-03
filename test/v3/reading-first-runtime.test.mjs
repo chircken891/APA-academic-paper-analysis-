@@ -393,7 +393,7 @@ test('restored science index state keeps the captured note and detects a later c
   changeScienceIndexNote(t);
   assert.throws(() => snapshotReadingFirstRuntime(recovered.controller), /READING_FIRST_SCIENCE_INDEX_NOTE_CHANGED/);
 });
-for (const enabled of [false, true]) test(`${enabled ? 'new' : 'legacy'} reply binding restores pending actions and preserves future requests, counts and deadline`, async t => {
+for (const enabled of [false, true]) test(`${enabled ? 'new' : 'legacy'} reply binding restores pending actions and preserves future requests and counts without a time limit`, async t => {
   const roleReplyContract = enabled ? getRoleReplyContract() : undefined;
   const rule = loadRoleReplyContract(getRoleReplyContract());
   const s = await setup(t, { writingMode: 'source-first', priorCalls: 6, maxTotalCalls: 12, roleReplyContract });
@@ -422,7 +422,7 @@ for (const enabled of [false, true]) test(`${enabled ? 'new' : 'legacy'} reply b
   }
   assert.equal(getReadingFirstState(recovered.controller).calls_used, 8);
   t.mock.method(Date, 'now', () => Date.parse('2100-01-01T00:00:00Z'));
-  assert.throws(() => snapshotReadingFirstRuntime(recovered.controller), /READING_FIRST_DEADLINE_EXPIRED/);
+  assert.ok(snapshotReadingFirstRuntime(recovered.controller));
 });
 
 test('reply contract rejects malformed metadata and only accepts its fixed profile and exact bytes', () => {
@@ -458,6 +458,7 @@ test('prior call count and independent total cap must be valid and reserve downs
   for(const patch of [{priorCalls:-1},{priorCalls:0.5},{priorCalls:3},{priorCalls:3,maxTotalCalls:5},{maxTotalCalls:2}]) assert.throws(()=>createReadingFirstRunControl({...args,...patch}),/CALL_BUDGET_INVALID/);
   assert.equal(createReadingFirstRunControl({...args,priorCalls:3,maxTotalCalls:10}).reading_first_binding.prior_calls,3);
   assert.equal(createReadingFirstRunControl({...args,maxTotalCalls:10}).reading_first_binding.max_total_calls,10);
+  assert.equal('deadline' in createReadingFirstRunControl({...args,maxTotalCalls:10}).reading_first_binding,false);
 });
 test('Writer knowledge content is validated before owned commit and composed for Reading Editor',async t=>{
   const presentation={knowledge_layout:'shared-bilingual-1.0',knowledge:[{id:'method',paragraphs:{en:['Original English.'],'zh-CN':['原中文。']}}]};
@@ -1282,6 +1283,33 @@ test('translation request carries the accepted source view and no science handof
   assert.equal(Object.hasOwn(request.packet.backend.configuration, 'science_index'), false);
   const result = await s.complete(request, moduleView('zh-CN'));
   assert.equal(result.status, 'pending_review');
+});
+
+test('authorized continuation adopts a source draft with its mirrored Translation and goes straight to the Reading Editor', async t => {
+  const presentation = modulePresentation();
+  const s = await setup(t, { writingMode: 'source-translation', handoffProfile: SCIENCE_INDEX_PROFILE, presentation, integrationContent: { terminology: terminologyLedger } });
+  const source = await s.complete(s.created.requests[0], moduleView('en'));
+  const [translation] = createReadingFirstDraftRequests({ controller: s.created.controller });
+  const translated = await s.complete(translation, moduleView('zh-CN'));
+  const entry = accepted => ({ artifact_root: s.root, artifact_id: accepted.receipt.artifact_id, receipt: accepted.receipt });
+  assert.equal(translated.receipt.role, 'translation');
+  const science = s.handoff.science.map(item => ({ artifact_root: s.root, artifact_id: item.receipt.artifact_id, receipt: item.receipt }));
+  const continuation = async (adoptedViews, extra = {}) => {
+    const input = { profile: READING_FIRST_PROFILE, identity: { run_id: 'continue', paper_id: s.handoff.identity.paper_id }, context: 'Explicitly approved continuation.', sources: s.handoff.sources, role_artifacts: [], adopted_science: science, adopted_views: adoptedViews, ...extra };
+    const tasks = Object.fromEntries(['presentation', 'presentation-r2', 'review', 'review-r2'].map(key => [key, { task_id: key, task_name: key.replaceAll('-', '_'), owner_actor_id: key, role: key.startsWith('presentation') ? 'reading-editor' : 'independent-verifier', artifact_id: key, artifact_path: 'continue/' + key + '.json', native_path: 'continue-native/' + key + '.json', revision: '1' }]));
+    const control = createReadingFirstRunControl({ runId: 'continue', presentationRequired: false, scientificInput: input, presentationMode: 'reading-editor', writingMode: 'source-first', sourceLanguage: 'en', mainSession: { model: 'gpt-6-astra', reasoning_effort: 'high' }, authorizationId: 'new-explicit-budget', maxCalls: 4, taskBindings: tasks });
+    const broker = createOwnedArtifactBroker({ control_actor_id: 'controller', artifact_root: s.root, authorized_bindings: [], run_controls: [control] });
+    const handoff = await buildReadingFirstHandoff({ run: { run_id: 'continue' }, dispatchContext: broker.dispatchContext, artifactRoot: s.root, scientificInput: input });
+    return { handoff, runControl: { runId: 'continue', artifactRoot: s.root, dispatchContext: broker.dispatchContext } };
+  };
+  const { handoff, runControl } = await continuation([entry(source), entry(translated)]);
+  const created = createLanguageRequests({ handoff, runControl });
+  assert.equal(created.ok, true, JSON.stringify(created.errors));
+  assert.equal(created.requests.length, 0);
+  assert.equal(getReadingFirstState(created.controller).status, 'pending_presentation');
+  await assert.rejects(() => continuation([entry(translated)]), /VIEW_RECEIPT_INVALID/);
+  const brokenMap = { steps: [{ id: 'S1', label: { en: 'Step', 'zh-CN': '步骤' }, section_id: 'design' }], findings: [], relations: [{ step_id: 'S1', finding_id: 'F-09' }] };
+  await assert.rejects(() => continuation([entry(source), entry(translated)], { presentation: { ...presentation, map: brokenMap } }), /RF_OBSIDIAN_MAP_INVALID/);
 });
 
 const requestPayloadMessage = request => request.emittedStep.arguments.message;

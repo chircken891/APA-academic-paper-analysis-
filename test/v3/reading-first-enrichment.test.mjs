@@ -171,12 +171,12 @@ test('old binding without policy cannot issue or admit enrichment',async t=>{
  assert.throws(()=>runtime.createReadingFirstEnrichmentRequests({controller:s.created.controller}),/UNAVAILABLE/);
  await assert.rejects(()=>runtime.acceptReadingFirstEnrichmentArtifact({controller:s.created.controller,artifactId:'evidence'}),/UNAVAILABLE/);
 });
-test('scientific output keeps owner/run identity and frozen deadline',async t=>{
+test('scientific output keeps owner/run identity and has no time limit',async t=>{
  const g=gap(),s=await setup(t,[g]),[request]=runtime.createReadingFirstEnrichmentRequests({controller:s.created.controller});
  await assert.rejects(()=>s.complete(request,{run_id:'other',role:'evidence',resolutions:[answer(g)]}),/RESULT_INVALID/);
  await assert.rejects(()=>s.complete(request,{run_id:'run',role:'methods',resolutions:[answer(g)]}),/RESULT_INVALID/);
  t.mock.method(Date,'now',()=>Date.parse('2100-01-01T00:00:00Z'));
- await assert.rejects(()=>s.complete(request,{run_id:'run',role:'evidence',resolutions:[answer(g)]}),/DEADLINE_EXPIRED/);assert.equal(getReadingFirstState(s.created.controller).calls_used,1);
+ await s.complete(request,{run_id:'run',role:'evidence',resolutions:[answer(g)]});assert.equal(getReadingFirstState(s.created.controller).calls_used,1);
 });
 test('new method sources must stay in the assigned snapshot root and cannot become study facts',async t=>{
  const g=gap('method',{owner_role:'methods',source_kind:'cited_method'}),s=await setup(t,[g]),[request]=runtime.createReadingFirstEnrichmentRequests({controller:s.created.controller});

@@ -9,6 +9,7 @@ import { fingerprintReadingFirst, assertReadingBindingCurrent, buildReadingFirst
 import { compactionEnabled, compactionControlBindings, evaluateCompactionBoundary, assertCompactionSettled, registerCompactionDispatch } from './reading-compaction.mjs';
 import { normalizeHostReceipt, validateHostReceiptEvidence } from './reading-host-evidence.mjs';
 import { validateReadingResources } from './reading-resources.mjs';
+import { normalizeReadingFirstMap } from './reading-first-obsidian.mjs';
 
 const roles = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'];
 const dependencies = { evidence: [], methods: ['evidence'], results: ['evidence'], interpretation: ['evidence', 'methods', 'results'], 'scientific-reading': ['evidence', 'methods', 'results', 'interpretation'], integration: ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading'] };
@@ -58,7 +59,7 @@ function validateCorrection(data, statePath, role, correction) {
   const binding = data.prepared.runControl.reading_first_binding;
   const auth = correction?.authorization;
   if (!auth || typeof auth.authorizationId !== 'string' || !auth.authorizationId.trim() || auth.authorizationId === binding.authorization_id
-    || auth.maxScienceCalls !== 7 || auth.maxTotalCalls !== binding.max_total_calls || auth.deadline !== binding.deadline
+    || auth.maxScienceCalls !== 7 || auth.maxTotalCalls !== binding.max_total_calls
     || auth.maxTotalCalls - auth.maxScienceCalls < (binding.presentation_mode === 'reading-editor' ? 4 : 3)) fail('SCIENCE_CORRECTION_UNAUTHORIZED');
   if (!entry?.intent || !entry.raw_observation || entry.observation?.status !== 'blocked' || entry.observation.blocked_reason !== 'OBSERVATION_CORRELATION_MISMATCH'
     || entry.receipt || roles.some(key => !data.entries[key].intent || key !== role && !data.entries[key].receipt)
@@ -83,9 +84,8 @@ function validateComputerControlObservations(rows) {
     ids.add(row.event_id);
   }
 }
-async function validateCurrent(state, { deadline = true } = {}) {
+async function validateCurrent(state) {
   const { data } = state, binding = data.prepared.runControl.reading_first_binding;
-  if (deadline && Date.now() >= Date.parse(binding.deadline)) fail('SCIENCE_DEADLINE_EXPIRED');
   {
     validateExecutionLedger(data.executionLedger,binding.max_total_calls,{strict:true});
     validateComputerControlObservations(data.computer_control_observations ?? []);
@@ -191,7 +191,7 @@ function serial(state, fn) {
 function validateSetup(prepared, tasks, brokerConfig, statePath) {
   const binding = prepared?.runControl?.reading_first_binding, runId = prepared?.runControl?.run_id;
   if (binding?.configured_setup) assertReadingBindingCurrent(binding);
-  if (!binding?.configured_setup || binding.profile !== 'reading-first-1.0' || binding.prior_calls !== 6 || !Number.isInteger(binding.max_total_calls) || binding.max_total_calls < binding.max_calls + 6 || !Number.isFinite(Date.parse(binding.deadline))) fail('SCIENCE_BINDING_INVALID');
+  if (!binding?.configured_setup || binding.profile !== 'reading-first-1.0' || binding.prior_calls !== 6 || !Number.isInteger(binding.max_total_calls) || binding.max_total_calls < binding.max_calls + 6) fail('SCIENCE_BINDING_INVALID');
   if (prepared.scientificInput?.profile !== 'reading-first-1.0' || prepared.scientificInput.identity?.run_id !== runId || !Array.isArray(prepared.scientificInput.sources) || !prepared.scientificInput.sources.length || !same(prepared.scientificInput, { ...prepared.scientificInput, profile: 'reading-first-1.0' }) || fingerprintReadingFirst(prepared.scientificInput) !== binding.input_fingerprint) fail('SCIENCE_INPUT_INVALID');
   if (!Array.isArray(prepared.scientificInput.role_artifacts) || prepared.scientificInput.role_artifacts.length !== roles.length || new Set(prepared.scientificInput.role_artifacts).size !== roles.length) fail('SCIENCE_INPUT_INVALID');
   if (binding.configured_setup.config_fingerprint !== prepared.configurationFingerprint || !same(binding.configured_setup.paths, prepared.paths)) fail('SCIENCE_BINDING_INVALID');
@@ -252,11 +252,11 @@ export async function restoreScienceController({ statePath, prepared, tasks, pay
   validateSetup(prepared, tasks, brokerConfig, statePath);
   if (!same(saved.data.prepared, prepared) || !same(saved.data.tasks, tasks) || !same(saved.data.payloads, payloads) || !same(saved.data.brokerConfig, brokerConfig)) fail('SCIENCE_BINDING_CHANGED');
   const controller = makeController(statePath, saved.data), state = controllerState(controller);
-  await validateCurrent(state, { deadline: false }); return controller;
+  await validateCurrent(state); return controller;
 }
 function scienceBudget(data) { const b=data.prepared.runControl.reading_first_binding; return {...executionBudgetSummary(data.executionLedger,b.max_total_calls),task_calls_used:scienceCalls(data)}; }
 export async function recordScienceComputerControlObservation({controller,observation} = {}) {
-  const state=controllerState(controller); return serial(state,async()=>{ await validateCurrent(state,{deadline:false});
+  const state=controllerState(controller); return serial(state,async()=>{ await validateCurrent(state);
     validateComputerControlObservations([observation]);
     const rows=state.data.computer_control_observations ?? [], prior=rows.find(row=>row.event_id===observation.event_id);
     if (prior) { if (!same(prior,observation)) fail('SCIENCE_COMPUTER_CONTROL_CONFLICT'); return copy(prior); }
@@ -278,11 +278,11 @@ export async function reserveScienceContinuation({controller,role,executionId,ac
 export async function markScienceContinuationDispatched({controller,executionId} = {}) { const s=controllerState(controller); return serial(s,async()=>{ await validateCurrent(s); const row=s.data.executionLedger?.find(x=>x.execution_id===executionId); if (row?.kind!=='continuation' || row.status!=='prepared') fail('EXECUTION_INTENT_INVALID'); const result=markExecutionDispatched(s.data.executionLedger,executionId); await save(s); return result; }); }
 export async function recordScienceContinuationReceipt({controller,executionId,receipt} = {}) { const s=controllerState(controller); return serial(s,async()=>{ await validateCurrent(s); if (s.data.executionLedger?.find(row=>row.execution_id===executionId)?.kind!=='continuation') fail('EXECUTION_RECEIPT_INVALID'); const normalized=normalizeHostReceipt(receipt,{strict:true}); const result=recordExecutionReceipt(s.data.executionLedger,executionId,normalized,{strict:true}); await save(s); return result; }); }
 export function getScienceState(controller) {
-  const state = controllerState(controller), { data, path } = state, expired = Date.now() >= Date.parse(data.prepared.runControl.reading_first_binding.deadline);
-  return copy({ version: data.version, run_id: data.prepared.runControl.run_id, state_path: path, deadline: data.prepared.runControl.reading_first_binding.deadline, expired,
+  const state = controllerState(controller), { data, path } = state;
+  return copy({ version: data.version, run_id: data.prepared.runControl.run_id, state_path: path,
     reserved_calls: scienceCalls(data), observed_calls: roles.reduce((total, role) => total + (data.entries[role].observation?.status === 'observed' ? 1 : 0) + (data.entries[role].correction?.observation?.status === 'observed' ? 1 : 0), 0),
     accepted_results: roles.filter(role => activeEntry(data, role).receipt).length,
-    next_actions: expired ? [{action:'expired_blocked'}] : data.handoff?.status === 'transferred' ? [{action:'continue_downstream'}] : roles.every(role => activeEntry(data, role).receipt) ? [{action: scienceCalls(data) > data.prepared.runControl.reading_first_binding.prior_calls ? 'prepare_adopted_reading' : data.handoff ? 'continue_handoff' : 'create_handoff'}] : roles.flatMap(role => { const e = activeEntry(data, role); return e.receipt ? [] : e.observation?.status === 'observed' ? (e.content_base64 ? [{role,action:'accept_result'}] : [{role,action:'wait_or_query_host'},{role,action:'accept_result_if_complete'}]) : e.intent ? [{role,action:'reconcile_host'}] : e.request ? [{role,action:'record_dispatch_intent'}] : dependencies[role].every(dep => activeEntry(data, dep).receipt) ? [{role,action:'prepare_request'}] : []; }),
+    next_actions: data.handoff?.status === 'transferred' ? [{action:'continue_downstream'}] : roles.every(role => activeEntry(data, role).receipt) ? [{action: scienceCalls(data) > data.prepared.runControl.reading_first_binding.prior_calls ? 'prepare_adopted_reading' : data.handoff ? 'continue_handoff' : 'create_handoff'}] : roles.flatMap(role => { const e = activeEntry(data, role); return e.receipt ? [] : e.observation?.status === 'observed' ? (e.content_base64 ? [{role,action:'accept_result'}] : [{role,action:'wait_or_query_host'},{role,action:'accept_result_if_complete'}]) : e.intent ? [{role,action:'reconcile_host'}] : e.request ? [{role,action:'record_dispatch_intent'}] : dependencies[role].every(dep => activeEntry(data, dep).receipt) ? [{role,action:'prepare_request'}] : []; }),
     roles: Object.fromEntries(roles.map(role => { const e = activeEntry(data, role); return [role, { status: e.receipt ? 'accepted' : e.observation?.status === 'observed' ? 'observed' : e.intent ? 'outcome_unknown' : e.request ? 'prepared' : 'waiting', action_id: e.request?.emittedStep.action_id ?? null, agent_id: e.observation?.agent_id ?? null, receipt: e.receipt ?? null }]; })),
     handoff: data.handoff ? { status: data.handoff.status, checkpoint_receipt: data.handoff.checkpointReceipt ?? null } : null,
     compaction_boundary: scienceCompactionBoundary(state) });
@@ -303,7 +303,7 @@ export async function recordScienceCompactionBoundary({ controller, id, status, 
   const state = controllerState(controller);
   if (compactionEnabled(state.data.prepared.runControl.reading_first_binding)) fail('APA_COMPACTION_POLICY_DECISION_REQUIRED');
   return serial(state, async () => {
-    await validateCurrent(state, { deadline: false });
+    await validateCurrent(state);
     const boundary = scienceCompactionBoundary(state);
     if (!boundary || boundary.id !== id || boundary.running_count !== 0 || !boundary.recovery.saved) fail('SCIENCE_COMPACTION_UNAVAILABLE');
     if (!['prompted', 'skipped', 'completed'].includes(status) || typeof reason !== 'string' || !reason.trim()) fail('SCIENCE_COMPACTION_INVALID');
@@ -361,12 +361,12 @@ export function getScienceRequest({ controller, role } = {}) {
     ...(original.correction ? { original: { request: original.request, intent: original.intent ?? null, observations: original.observations ?? [], host_updates: original.host_updates ?? [] } } : {}) });
 }
 /** Register one explicitly authorized correction before its instruction or native output is written. */
-export async function prepareScienceCorrection({ controller, role, task, authorizationId, maxScienceCalls, maxTotalCalls, deadline } = {}) {
+export async function prepareScienceCorrection({ controller, role, task, authorizationId, maxScienceCalls, maxTotalCalls } = {}) {
   const state = controllerState(controller);
   return serial(state, async () => {
     await validateCurrent(state);
     if (!roles.includes(role) || roles.some(key => state.data.entries[key].correction)) fail('SCIENCE_CORRECTION_UNAVAILABLE');
-    const correction = { task: copy(task), authorization: { authorizationId, maxScienceCalls, maxTotalCalls, deadline } };
+    const correction = { task: copy(task), authorization: { authorizationId, maxScienceCalls, maxTotalCalls } };
     validateCorrection(state.data, state.path, role, correction);
     if (scienceCalls(state.data) !== 6) fail('SCIENCE_CORRECTION_UNAVAILABLE');
     for (const p of [task.native_path, task.instruction_path]) {
@@ -513,6 +513,11 @@ export async function acceptScienceResult({ controller, role } = {}) {
         const handoff=await checkedResultsResources(state), visuals=value.presentation?.visuals ?? value.visual_resources;
         if (!same(value.visual_handoff?.resource_manifest,handoff.resource_manifest) || !Array.isArray(visuals)
           || visuals.some(visual=>!handoff.resources.some(row=>row.id===visual.id && row.path===visual.path && row.source_id===visual.source_id && same(row.locator,visual.locator)))) fail('SCIENCE_RESOURCE_HANDOFF_INVALID');
+        // Check the research map here so a malformed map returns to the Integrator instead of failing at final render.
+        if (value.presentation?.map != null) {
+          const sectionIds=Array.isArray(value.presentation.sections) ? new Set(value.presentation.sections.map(section=>section?.id)) : undefined;
+          try { normalizeReadingFirstMap(value.presentation.map,sectionIds); } catch (cause) { throw Object.assign(new Error('SCIENCE_CONTENT_INVALID'),{code:'SCIENCE_CONTENT_INVALID',details:{field:'presentation.map',cause:cause.code ?? cause.message}}); }
+        }
       }
     }
     if (!entry.content_base64) {

@@ -4,7 +4,7 @@
 
 **创建和预检**
 
-先完成来源和解析产物准备，并取得本次阅读的明确授权、截止时间和调用额度。`scientificInput` 包含 `reading-first-1.0`、论文和运行身份、实际来源的绝对路径及 SHA-256/字节长度、文本 `context`，以及依 Evidence、Methods、Results、Interpretation、scientific-reading、Integration 顺序给出的六个 `role_artifacts`。`sourceLanguage` 依据原文确定。当前主会话身份写入 `sessionContext`，本库配置中的模型选择在创建时冻结。
+先完成来源和解析产物准备，并取得本次阅读的明确授权和调用额度。运行不设时间限制，只受调用次数限制（`maxCalls`、`maxTotalCalls` 与续接额度）；`createReadingSession` 不再要求 `deadline`，传入会被忽略，旧绑定中的 `deadline` 保留为历史记录且不再执行。等待用户或压缩不消耗调用，也不使额度失效；额度耗尽或运行完成、被明确关闭后才关闭，之后续接仍须另行批准新的调用额度（`adopted_science` / `adopted_views`）并保留原记录。`scientificInput` 包含 `reading-first-1.0`、论文和运行身份、实际来源的绝对路径及 SHA-256/字节长度、文本 `context`，以及依 Evidence、Methods、Results、Interpretation、scientific-reading、Integration 顺序给出的六个 `role_artifacts`。`sourceLanguage` 依据原文确定。当前主会话身份写入 `sessionContext`，本库配置中的模型选择在创建时冻结。
 
 ```js
 import {
@@ -13,7 +13,7 @@ import {
 
 const session = await createReadingSession({
   repoRoot, runId, scientificInput, sourceLanguage,
-  authorizationId, deadline, maxCalls, maxTotalCalls,
+  authorizationId, maxCalls, maxTotalCalls,
   sessionContext: { model, effort },
   hostProfile, evidence,
   includeRepairs: true,
@@ -94,7 +94,7 @@ await recordReadingEvent(session, {
 
 新配置化运行冻结 `boundary-reminders-1.2` 和本宿主有依据的手动压缩入口；既有 1.0 和 1.1 绑定沿用原合同。1.2 在四个安全边界保存状态后均返回 `await-user`，向用户推荐压缩，等待用户明确选择后继续。入口未知或不可用、用量低或未知、此前已压缩或提示均不自动跳过；入口未知时说明未知。四个压缩边界缺少临时观测时，`nextReadingAction` 返回 `provide-input`、`kind:'compaction-observation'` 和 `boundary_id`。调用方从当前宿主及可信运行记录收集一次观测，以 `recordReadingEvent(session, {kind:'compaction', input:{observation, sessionId, progress}})` 回传，并立即调用 `nextReadingAction`；观测和用量测量须在 60 秒内，无法取得的字段保持未知。缺少临时入口观测时使用绑定中本宿主已有证据的入口，不能跨宿主套用。
 
-返回 `await-user` 时展示消息与可复制的阶段压缩提示词并结束当前回复；用户决定后重新记录 `compaction` 并继续，检查点和原额度保持不变。提示词包含可用的运行和论文身份、原预算与期限、来源及产物引用、检查点和绑定路径等续接元数据，并要求压缩时保留已完成阶段、下一步、关键科学结论及证据、限制、待决事项和真实任务句柄；完整角色模型策略按需从绑定路径回读。未知字段标明未知，原文及角色全文不写入提示词。Evidence 后突出设计和证据，Methods/Results 后突出关键方法、结果、数值与限制，Writer 前突出综合主线、分歧及写作、翻译、呈现下一步，整体审查前突出候选路径、呈现版本、审查范围及最多一次局部复核。生成提示词不增加模型调用。边界若记录 `skipped`，从已保存的 science-state `data.compaction_reminders` 或 owned 阅读检查点 `state.compaction_reminders` 读取原因并向用户简短说明。自动压缩事件只有关联当前主会话且有实际成功证据时才能记录；无成功事件时保留未核实状态。
+返回 `await-user` 时展示消息与可复制的阶段压缩提示词并结束当前回复；用户决定后重新记录 `compaction` 并继续，检查点和原额度保持不变。提示词包含可用的运行和论文身份、原预算、来源及产物引用、检查点和绑定路径等续接元数据，并要求压缩时保留已完成阶段、下一步、关键科学结论及证据、限制、待决事项和真实任务句柄；完整角色模型策略按需从绑定路径回读。未知字段标明未知，原文及角色全文不写入提示词。Evidence 后突出设计和证据，Methods/Results 后突出关键方法、结果、数值与限制，Writer 前突出综合主线、分歧及写作、翻译、呈现下一步，整体审查前突出候选路径、呈现版本、审查范围及最多一次局部复核。生成提示词不增加模型调用。边界若记录 `skipped`，从已保存的 science-state `data.compaction_reminders` 或 owned 阅读检查点 `state.compaction_reminders` 读取原因并向用户简短说明。自动压缩事件只有关联当前主会话且有实际成功证据时才能记录；无成功事件时保留未核实状态。
 
 渲染前的 `provide-input` 会要求 `render-assets`。资源必须绑定实际来源文件及其 SHA-256、字节长度；按既有预览合同提供资源和可选渲染参数：
 
@@ -147,7 +147,7 @@ await recordReadingEvent(session, {
 
 两个指纹必须对应当前已保存的终态检查点及其 `state.rejection`。2.2 直接核对持久化执行账本，禁止传入 `host_calls_used`，并须在原总预算内为局部复核留有额度。事件需要本次用户明确批准，配置或剩余额度不能代替授权。恢复不会调用模型；它在新 owned 检查点的 `state.repairRecoveries` 追加批准、原检查点、原拒收及新的验证结果。原终态、请求事件、拒收回执和调用计数保留。同一批准重复提交保持幂等，发生冲突或字节变化时拒绝。
 
-范围校验允许插入审查 `visual_ids` 明确批准的新图旁条目；新增条目的 notes 仅可引用该审查的 `section_ids`，既有条目和相对顺序继续按原规则校验。其余列表和范围外内容保持。恢复成功后重新物化第二版候选，再使用既有的一次局部复核；原模型、来源、截止时间、额度和发布权限保持原合同。
+范围校验允许插入审查 `visual_ids` 明确批准的新图旁条目；新增条目的 notes 仅可引用该审查的 `section_ids`，既有条目和相对顺序继续按原规则校验。其余列表和范围外内容保持。恢复成功后重新物化第二版候选，再使用既有的一次局部复核；原模型、来源、额度和发布权限保持原合同。
 
 补缺任务在 `source_root` 写入快照后、结果接收前中断，恢复返回 `reconcile`，调用方核对原任务并沿原事件接收。尚未登记的快照不会被视为已登记来源漂移，也不会自动取得来源身份。已接收结果及其来源沿原检查点和指纹恢复，不重新派发。
 
@@ -155,11 +155,11 @@ await recordReadingEvent(session, {
 
 ## 已派发Editor的明确续接授权
 
-`configured-reading-2.2` 的 `presentation-r2` 已派发、尚未接收且局部复核尚未派发时，用户可对具体恢复另行批准有限执行额度。通过 `authorize-repair-continuation` 事件提交 `authorization_id`、`reason`、当前owned检查点的 `checkpoint_fingerprint`、原 `action_id`、`max_additional_calls` 和与原绑定完全一致的 `deadline`。接口核验原检查点与待续接请求，将新批准、原额度和原账本前缀单独保存到 `state.repairContinuation`，保留原binding及历史请求。配置、角色自行要求和剩余额度均不构成此授权。
+`configured-reading-2.2` 的 `presentation-r2` 已派发、尚未接收且局部复核尚未派发时，用户可对具体恢复另行批准有限执行额度。通过 `authorize-repair-continuation` 事件提交 `authorization_id`、`reason`、当前owned检查点的 `checkpoint_fingerprint`、原 `action_id`、`max_additional_calls`。接口核验原检查点与待续接请求，将新批准、原额度和原账本前缀单独保存到 `state.repairContinuation`，保留原binding及历史请求。配置、角色自行要求和剩余额度均不构成此授权。
 
 获准的原页图型更正可附 `chart_type_corrections:[{visual_id,chart_types}]`，图必须在首次审查已定位的science原页问题范围内，知识身份须已登记，图片和其他图表字段保持。更正随渲染、恢复及发布来源捕获消费。待续接角色通过原句柄接收原审查范围的补充说明，原指令文件不覆写。后续执行仍使用 `continuation-intent` 和真实 `continuation-receipt`；局部复核次数保持原上限。
 
-预算摘要分别报告 `original_total_limit`、`additional_limit`、`additional_used`，总执行账本连续保留。原额度优先消费，超出原上限的部分计入新增授权；不能重置已用次数、延长原截止时间或增加阅读任务数量。派发与Editor范围验收共同采用原审查的实质问题范围，原页补缺没有图注更正时仍须传递相关science范围。
+预算摘要分别报告 `original_total_limit`、`additional_limit`、`additional_used`，总执行账本连续保留。原额度优先消费，超出原上限的部分计入新增授权；不能重置已用次数或增加阅读任务数量。派发与Editor范围验收共同采用原审查的实质问题范围，原页补缺没有图注更正时仍须传递相关science范围。
 
 
 ## 命令行会话与回执

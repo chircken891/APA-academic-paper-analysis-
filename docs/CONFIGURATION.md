@@ -53,7 +53,7 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 
 `threshold_compaction` 的非空 `step.command` 必须同时包含 `<N>` 并提供 `range`，否则屏蔽该命令；`effective_target_verified` 为 `false` 时屏蔽该能力的命令。只读调查命令写入 `instruction`、`verify` 或 `evidence`，`step.command` 可为 `null`。`range` 的 `min`、`max` 为数值或 `null`，`unit` 为 `tokens`、`ratio` 或 `percent`，表示命令参数单位。页面使用用户输入的 token 候选值及已核实的公式换算，未知条件保留未知。检查实际启用的后端、覆盖目标、作用范围、计量口径和阈值约束；设置由用户选择，具体目标文件、键和值经预览确认后才能应用。所需设置工具应支持预览、确认、备份及回读，宿主设置备份放在 `config/backups/<owner>/`，仅更改用户选中的设置。
 
-科学阶段恢复沿用 `dispatch.result_handle` 的文本正则提取规则，由代理依据真实结果确定格式；静态达成还须核对本库已保存的派发声明与本次检测一致、提取配置与派发结果匹配，记录查询工具及参数并确认原宿主可访问。尚未保存时报告需要配置，由用户选择并确认后再保存。控制器持久化自身状态，不主动查询或等待宿主；真实续接仍需单独验证。
+科学阶段恢复沿用 `dispatch.result_handle` 的文本正则提取规则，由代理依据真实结果确定格式；静态达成还须核对本库已保存的派发声明与本次检测一致、提取配置与派发结果匹配，记录查询工具及参数并确认原宿主可访问。尚未保存时报告需要配置，由用户选择并确认后再保存。控制器持久化自身状态，不主动查询或等待宿主；真实续接仍需单独验证。DSH 的 `result_handle` 模式匹配其先返回的激活通知（如 `{"kind":"activation","subagentId":"…"}`）。
 
 每项能力可选 `investigation.searched`，按 `tool-schema`、`system-context`、`host-config`、`runtime-log`、`installed-software`、`local-code`、`host-docs` 七类来源各记一条 `{source, location, result, note}`（`result` 为 `found`、`absent` 或 `not-applicable`；前两者须有非空 `location`）。`inspect` 据此输出 `setup_issues`，每项含 `id`（`<category>:<kind>:<key>`）、`category`、`subject`、`summary`，类别依次为 `investigate`、`page-choice`、`authorize`、`known-limit`；未查完七类来源而状态未知或未找到的可选能力、以及缺少达成方式的可选能力归为 `known-limit`，保留具体缺口。配置页面可以先打开，用户选择进一步调查或暂缓高级能力；待安装或待授权事项在页面展示，实际操作仍须单独授权。传入的台账 `profile_sha256` 与档案文件字节的 SHA-256 不符时仍报 `APA_ISSUE_LEDGER_STALE`，退出且不写 HTML。台账 `apa-setup-issue-ledger-1.0`（结构见 schema 的 `issueLedger`）每条含 `id`、`disposition`（`deferred`、`declined`、`resolved-elsewhere`）、非空 `note` 与 `decided_by:'user'`，只记录用户的实际决定；台账中已不存在的问题条目被忽略。页面在“自检遗留问题”中分组展示其余问题；阈值卡片总是提供候选 token 输入，没有可用命令模板时只提示把数值交给助手用 `scripts/setup/apa-host-settings.mjs` 预览。
 
@@ -96,7 +96,7 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 
 ## 安装与固定规则
 
-保存或去除配置不安装依赖、不改全局环境。缺少项目按 [SETUP](../SETUP.md) 单独安装。来源、每次运行预算、截止时间、补充材料范围及正式发布仍需逐次授权。
+保存或去除配置不安装依赖、不改全局环境。缺少项目按 [SETUP](../SETUP.md) 单独安装。来源、每次运行预算、补充材料范围及正式发布仍需逐次授权。
 
 新阅读遵循 [当前合同](apa-v3/current-contracts.md)、[呈现接口](apa-v3/reading-first-obsidian.md) 与 [发布桥](apa-v3/reading-first-publication.md)。非现行绑定以 `READING_BINDING_RETIRED` 拒绝，不提供 V2 论文入口，不自动升级笔记。新方法在 Wiki/methods/，保护原始资料和人工内容。
 

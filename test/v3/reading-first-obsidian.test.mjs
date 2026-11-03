@@ -612,3 +612,12 @@ test('reading editor 1.3 retains full map and navigation with no folded content'
     assert.match(next[i].content, /other|其他发现/i);
   }
 });
+test('research map accepts legacy from/to edge keys without changing nodes or edges', () => {
+  const data = input();
+  data.presentation.map.relations = [{ id: 'RM01', from: 'estimate', to: 'burden' }];
+  const result = renderReadingFirstObsidian(data);
+  assert.match(result.notes[0].content, /estimate --> burden/);
+  assert.match(result.notes[1].content, /estimate --> burden/);
+  assert.equal(result.notes[0].content.includes('undefined'), false);
+});
+

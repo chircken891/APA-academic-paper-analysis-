@@ -94,7 +94,7 @@ test('active science-stage run yields state path, received roles and next step',
   assert.match(text, /evidence=accepted, methods=accepted, results=waiting/);
   assert.match(text, /results: prepare_request/);
   assert.match(text, /not established/);
-  assert.match(text, /deadline /);
+  assert.match(text, /historical deadline .*(not enforced)/);
   assert.match(text, /total call cap 14/);
   assert.ok(!text.includes(CANARY));
 });
@@ -220,16 +220,16 @@ test('reading_complete without a result or publication record is still listed an
   assert.deepEqual(hook(root).out, {});
 });
 
-test('a run past its deadline is listed and marked expired, not hidden', t => {
+test('a run with a past historical deadline is listed as continuing, not expired', t => {
   const root = temporaryRepo(t);
   scienceState(root, 'late_run', { accepted: ['evidence'], deadline: PAST });
   const single = hook(root).out.hookSpecificOutput.additionalContext;
-  assert.match(single, /late_run \[expired\]/);
-  assert.match(single, /deadline .*\(expired\)/);
-  assert.match(single, /next step: expired:/);
+  assert.doesNotMatch(single, /expired/);
+  assert.match(single, /historical deadline .*\(not enforced\)/);
+  assert.match(single, /next step: methods: prepare_request/);
   scienceState(root, 'live_run', { accepted: [] });
   const many = hook(root).out.hookSpecificOutput.additionalContext;
-  assert.match(many, /- late_run \[expired\]: /);
+  assert.match(many, /- late_run: /);
   assert.match(many, /- live_run: /);
 });
 

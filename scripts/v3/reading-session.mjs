@@ -201,15 +201,15 @@ async function saveReading(state, snapshot = snapshotReadingFirstRuntime(state.r
 
 /** Start an explicitly authorized configured reading; no host invocation occurs here. */
 export async function createReadingSession(options = {}) {
-  const { repoRoot, runId, scientificInput, sourceLanguage, authorizationId, deadline, maxCalls, maxTotalCalls, sessionContext, hostProfile, evidence = {}, sciencePayloads = {}, maxControlCheckpoints = 16 + 8 * maxTotalCalls } = options;
-  if (![repoRoot, runId, authorizationId, deadline].every(text) || !scientificInput || !sessionContext || !Number.isSafeInteger(maxTotalCalls) || !Number.isSafeInteger(maxControlCheckpoints) || maxControlCheckpoints < 4) fail('READING_SESSION_INPUT_INVALID');
+  const { repoRoot, runId, scientificInput, sourceLanguage, authorizationId, maxCalls, maxTotalCalls, sessionContext, hostProfile, evidence = {}, sciencePayloads = {}, maxControlCheckpoints = 16 + 8 * maxTotalCalls } = options;
+  if (![repoRoot, runId, authorizationId].every(text) || !scientificInput || !sessionContext || !Number.isSafeInteger(maxTotalCalls) || !Number.isSafeInteger(maxControlCheckpoints) || maxControlCheckpoints < 4) fail('READING_SESSION_INPUT_INVALID');
   const inspection = inspectApaConfig({ repoRoot, hostProfile });
   const presentationMode = inspection.config?.reading?.presentation_mode;
   if (options.presentationMode !== undefined && options.presentationMode !== presentationMode) fail('READING_SESSION_PRESENTATION_CONFLICT');
   const instructionProfile = options.instructionProfile ?? DEFAULT_CONFIGURED_INSTRUCTION_PROFILE;
   if (instructionProfile !== DEFAULT_CONFIGURED_INSTRUCTION_PROFILE) fail('READING_BINDING_RETIRED');
   const tasks = buildReadingSessionTasks({ runId, scientificInput, sourceLanguage, instructionProfile, checkpointCount: maxControlCheckpoints, controllerActorId: options.controllerActorId, taskOverrides: options.taskOverrides, scienceTaskOverrides: options.scienceTaskOverrides, includeRepairs: options.includeRepairs === true, presentationMode, enrichmentPolicy: options.enrichmentPolicy });
-  const prepared = prepareConfiguredReading({ repoRoot, runId, scientificInput, sourceLanguage, instructionProfile, authorizationId, deadline, maxCalls, maxTotalCalls, priorCalls: 6, sessionContext, hostProfile, taskBindings: tasks.taskBindings, controllerActorId: options.controllerActorId, ...(options.enrichmentPolicy !== undefined ? { enrichmentPolicy: options.enrichmentPolicy, enrichmentSessionProfile: 'reading-session-enrichment-1.0' } : {}) });
+  const prepared = prepareConfiguredReading({ repoRoot, runId, scientificInput, sourceLanguage, instructionProfile, authorizationId, maxCalls, maxTotalCalls, priorCalls: 6, sessionContext, hostProfile, taskBindings: tasks.taskBindings, controllerActorId: options.controllerActorId, ...(options.enrichmentPolicy !== undefined ? { enrichmentPolicy: options.enrichmentPolicy, enrichmentSessionProfile: 'reading-session-enrichment-1.0' } : {}) });
   const configBytes = await readFile(join(repoRoot, 'config', 'apa.local.json'));
   if (createHash('sha256').update(configBytes).digest('hex') !== prepared.configurationFingerprint || !same(JSON.parse(configBytes), inspection.config)) fail('READING_SESSION_CONFIG_CHANGED');
   const actor = prepared.runControl.reading_first_binding.controller_actor_id;
@@ -356,7 +356,6 @@ async function nextSessionAction(session) {
   }
   const continuation = pendingContinuations(state)[0];
   if (continuation) {
-    if (Date.now() >= Date.parse(state.prepared.runControl.reading_first_binding.deadline)) return { action: 'reconcile', code: 'READING_SESSION_DEADLINE_EXPIRED' };
     const stage = state.reading ? 'reading' : 'science';
     if (continuation.status !== 'prepared') return { action: 'reconcile', kind: 'continuation', stage, execution_id: continuation.execution_id, action_id: continuation.action_id, code: 'HOST_CONTINUATION_OUTCOME_UNKNOWN' };
     if (state.reading) {
@@ -370,7 +369,6 @@ async function nextSessionAction(session) {
   }
   if (!state.reading) {
     let current = getScienceState(state.science);
-    if (current.expired) return { action: 'reconcile', code: 'READING_SESSION_DEADLINE_EXPIRED' };
     const boundary = current.compaction_boundary;
     if (boundary && !['skipped', 'completed'].includes(boundary.reminder.status)) {
       if (needsCompactionObservation(state, boundary.reminder)) return { action: 'provide-input', kind: 'compaction-observation', boundary_id: boundary.id };
@@ -535,7 +533,7 @@ async function continuationIntent(state, event) {
     if (!found || found[1].status !== 'observed') fail('READING_SESSION_CONTINUATION_INVALID');
     role = found[0]; handle = found[1].agent_id;
   }
-  let message = event.message + '\nContinue only the original task, output ownership, model, deadline and authorized scope. Desktop control and native observation require explicit user authorization.';
+  let message = event.message + '\nContinue only the original task, output ownership, model and authorized scope. Desktop control and native observation require explicit user authorization.';
   if (entry?.request.task.role === 'translation') {
     try { progress = await readingProgress(state, entry); }
     catch (error) { if (error.message === 'READING_TRANSLATION_PROGRESS_RECONCILE') return { action: 'reconcile', code: error.message, action_id: event.action_id }; throw error; }

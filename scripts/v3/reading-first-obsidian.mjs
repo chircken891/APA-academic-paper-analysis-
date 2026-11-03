@@ -50,6 +50,25 @@ function document({ language, paperId, title, alternate, source, reading, resour
   return ['---', YAML.stringify(frontmatter, { lineWidth: 0 }).trimEnd(), '---', ...[['source', source], ['reading', reading], ['resources', resources]].flatMap(([id, text]) => [`<!-- AUTO:START ${id} -->`, text, `<!-- AUTO:END ${id} -->`, '']), `## ${language === 'en' ? 'Personal Notes' : '个人笔记'}`, ''].join('\n');
 }
 
+/** Normalizes and checks the research map; shared by Integrator acceptance and rendering. */
+export function normalizeReadingFirstMap(declaredMap = { steps: [], findings: [], relations: [] }, sectionIds) {
+  // Accepted handoffs may label research-map edges `from`/`to` (older Integrator output); normalize to the documented keys without changing nodes, edges or wording.
+  const map = { ...declaredMap, steps: declaredMap.steps ?? [], findings: declaredMap.findings ?? [], relations: (declaredMap.relations ?? []).map(relation => ({
+    ...relation,
+    ...(relation.step_id === undefined && relation.from !== undefined ? { step_id: relation.from } : {}),
+    ...(relation.finding_id === undefined && relation.to !== undefined ? { finding_id: relation.to } : {}),
+  })) };
+  if (![map.steps, map.findings, map.relations].every(Array.isArray)) fail('RF_OBSIDIAN_MAP_INVALID');
+  const nodes = [...map.steps, ...map.findings];
+  if (new Set(nodes.map(node => node.id)).size !== nodes.length) fail('RF_OBSIDIAN_MAP_INVALID');
+  for (const node of nodes) {
+    if (typeof node.id !== 'string' || !/^[a-z][a-z0-9-]*$/i.test(node.id)) fail('RF_OBSIDIAN_ID_INVALID');
+    localized(node.label); if (sectionIds && !sectionIds.has(node.section_id)) fail('RF_OBSIDIAN_MAP_INVALID');
+  }
+  for (const relation of map.relations) if (!map.steps.some(node => node.id === relation.step_id) || !map.findings.some(node => node.id === relation.finding_id)) fail('RF_OBSIDIAN_MAP_INVALID');
+  return map;
+}
+
 /** Pure candidate rendering. Paths are vault relative; assets are copied by the caller. */
 export function renderReadingFirstObsidian({ identity, views, presentation, targetRegistry, existingTargets = [], knowledgeRegistry = [], readingEditor, noteLayout, sourceLanguage } = {}) {
   if (!presentation || presentation.schema_version !== 'reading-first-obsidian-1.0' || !Array.isArray(views) || views.length !== 2 || languages.some(language => views.filter(view => view.language === language).length !== 1)) fail('RF_OBSIDIAN_INPUT_INVALID');
@@ -158,14 +177,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
       : (language === 'en' ? `Original p. ${visualPage(visual)}` : `原文第${visualPage(visual)}页`);
   }
   const visualSourceHref = (target, visual) => href(target, visualSources.get(visual.id)) + (visual.locator?.kind === 'docx-figure' ? '' : '#page=' + visualPage(visual));
-  const map = p.map ?? { steps: [], findings: [], relations: [] };
-  const nodes = [...map.steps, ...map.findings];
-  if (new Set(nodes.map(node => node.id)).size !== nodes.length) fail('RF_OBSIDIAN_MAP_INVALID');
-  for (const node of nodes) {
-    if (typeof node.id !== 'string' || !/^[a-z][a-z0-9-]*$/i.test(node.id)) fail('RF_OBSIDIAN_ID_INVALID');
-    localized(node.label); if (!byId.has(node.section_id)) fail('RF_OBSIDIAN_MAP_INVALID');
-  }
-  for (const relation of map.relations) if (!map.steps.some(node => node.id === relation.step_id) || !map.findings.some(node => node.id === relation.finding_id)) fail('RF_OBSIDIAN_MAP_INVALID');
+  const map = normalizeReadingFirstMap(p.map ?? undefined, new Set(byId.keys())), nodes = [...map.steps, ...map.findings];
   const supportNotes = [], knowledgeProposals = [], destinations = new Map();
   for (const item of knowledge) {
     requireId(item.id); localized(item.title);
