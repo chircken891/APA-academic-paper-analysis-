@@ -707,6 +707,9 @@
         },
         {
           "$ref": "#/$defs/sourceChangeCandidate"
+        },
+        {
+          "$ref": "#/$defs/projectCandidate"
         }
       ]
     },
@@ -1179,6 +1182,333 @@
               }
             }
           }
+        }
+      }
+    }
+  ,
+    "writingProject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "project_id",
+        "revision",
+        "previous_revision",
+        "question",
+        "language",
+        "title",
+        "query_terms",
+        "managed_hash",
+        "dependencies",
+        "entity_type",
+        "evidence_records",
+        "ideas",
+        "discarded_ideas",
+        "sections",
+        "citation_plan"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "writing-project-1.0"
+        },
+        "project_id": {
+          "type": "string",
+          "pattern": "^project-[a-f0-9]{24}$"
+        },
+        "revision": {
+          "$ref": "#/$defs/topic/properties/revision"
+        },
+        "previous_revision": {
+          "$ref": "#/$defs/topic/properties/previous_revision"
+        },
+        "question": {
+          "$ref": "#/$defs/topic/properties/question"
+        },
+        "language": {
+          "$ref": "#/$defs/topic/properties/language"
+        },
+        "title": {
+          "$ref": "#/$defs/topic/properties/title"
+        },
+        "query_terms": {
+          "$ref": "#/$defs/topic/properties/query_terms"
+        },
+        "managed_hash": {
+          "$ref": "#/$defs/topic/properties/managed_hash"
+        },
+        "dependencies": {
+          "$ref": "#/$defs/topic/properties/dependencies"
+        },
+        "resolved_event_ids": {
+          "$ref": "#/$defs/topic/properties/resolved_event_ids"
+        },
+        "event_resolutions": {
+          "$ref": "#/$defs/topic/properties/event_resolutions"
+        },
+        "entity_type": {
+          "const": "writing-project"
+        },
+        "evidence_records": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "evidence_id",
+              "citations",
+              "polarity",
+              "strength",
+              "allowed_statement",
+              "forbidden_statement",
+              "relationship"
+            ],
+            "properties": {
+              "evidence_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "polarity": {
+                "type": "string",
+                "minLength": 1
+              },
+              "strength": {
+                "type": "string",
+                "minLength": 1
+              },
+              "allowed_statement": {
+                "type": "string",
+                "minLength": 1
+              },
+              "forbidden_statement": {
+                "type": "string",
+                "minLength": 1
+              },
+              "method": {
+                "type": "string"
+              },
+              "data": {
+                "type": "string"
+              },
+              "metrics": {
+                "type": "string"
+              },
+              "limitations": {
+                "type": "string"
+              },
+              "relationship": {
+                "type": "string",
+                "minLength": 1
+              },
+              "citations": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "paper_id",
+                    "path",
+                    "anchor",
+                    "sha256"
+                  ],
+                  "properties": {
+                    "paper_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "anchor": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^sha256:[a-f0-9]{64}$"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "ideas": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "discarded_ideas": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "citation_plan": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "projectCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "topic",
+        "operation_id",
+        "expected_generation_id",
+        "input_hash",
+        "source_declaration",
+        "note_path",
+        "topic_path",
+        "note_sha256",
+        "topic_sha256",
+        "config_fingerprint"
+      ],
+      "properties": {
+        "topic": {
+          "$ref": "#/$defs/writingProject"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/topicCandidate/properties/operation_id"
+        },
+        "expected_generation_id": {
+          "$ref": "#/$defs/topicCandidate/properties/expected_generation_id"
+        },
+        "input_hash": {
+          "$ref": "#/$defs/topicCandidate/properties/input_hash"
+        },
+        "source_declaration": {
+          "$ref": "#/$defs/topicCandidate/properties/source_declaration"
+        },
+        "note_path": {
+          "$ref": "#/$defs/topicCandidate/properties/note_path"
+        },
+        "topic_path": {
+          "$ref": "#/$defs/topicCandidate/properties/topic_path"
+        },
+        "note_sha256": {
+          "$ref": "#/$defs/topicCandidate/properties/note_sha256"
+        },
+        "topic_sha256": {
+          "$ref": "#/$defs/topicCandidate/properties/topic_sha256"
+        },
+        "config_fingerprint": {
+          "$ref": "#/$defs/topicCandidate/properties/config_fingerprint"
+        },
+        "execution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "project_id",
+            "base_revision",
+            "generation_id",
+            "input_hash",
+            "output_hash",
+            "requested_identity",
+            "observable_identity",
+            "selected_sources"
+          ],
+          "properties": {
+            "status": {
+              "const": "answered"
+            },
+            "base_revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "generation_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$"
+            },
+            "input_hash": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "base_managed_hash": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "output_hash": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "requested_identity": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "model",
+                "reasoning_effort"
+              ],
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "reasoning_effort": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                }
+              }
+            },
+            "observable_identity": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "model",
+                "reasoning_effort"
+              ],
+              "properties": {
+                "status": {
+                  "enum": [
+                    "reported",
+                    "unknown"
+                  ]
+                },
+                "model": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "reasoning_effort": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "selected_sources": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/dependency"
+              }
+            },
+            "project_id": {
+              "type": "string",
+              "pattern": "^project-[a-f0-9]{24}$"
+            }
+          }
+        },
+        "changes": {
+          "$ref": "#/$defs/topicCandidate/properties/changes"
         }
       }
     }

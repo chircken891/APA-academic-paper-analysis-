@@ -203,7 +203,7 @@ export async function dryRunBilingualPublication({ vaultRoot, run, review, plan:
   }
   if (!identifier(run)) fail('P22_RUN_REQUIRED');
   await assertBilingualReviewCurrent(review);
-  if (review.reviewManifest.profile === 'phase24-topic-1.0') await assertTopicPublicationReviewLive(review);
+  if (['phase24-topic-1.0', 'writing-project-1.0'].includes(review.reviewManifest.profile)) await assertTopicPublicationReviewLive(review);
   if (review.reviewManifest.profile === 'reading-first-obsidian-1.0') await assertReadingFirstPublicationReviewLive(review);
   if (!review.ok || !review.hashes.output_inventory_hash || review.reviewManifest.identity.run_id !== run) fail('P22_REVIEW_NOT_APPROVABLE');
   const rootInfo = await rootState(vaultRoot), root = rootInfo.root;
@@ -598,7 +598,7 @@ function resultFor(journal) {
 
 async function withTopicHints(result, plan, record) {
   const paperId = record.review?.reviewManifest.identity.paper_id;
-  if (result.status !== 'committed' || !paperId || record.review.reviewManifest.profile === 'phase24-topic-1.0') return result;
+  if (result.status !== 'committed' || !paperId || ['phase24-topic-1.0', 'writing-project-1.0'].includes(record.review.reviewManifest.profile)) return result;
   try {
     const { getTopicUpdateHints } = await import('./topic-library.mjs');
     const hints = await getTopicUpdateHints({ vaultRoot: plan.vault_root, generationId: result.generation, changedPaperIds: [paperId] });
@@ -638,7 +638,7 @@ export async function applyBilingualPublication(args = {}) {
   try {
     lock = await acquireLock(ctx, hash(authority));
     await currentPlan(plan); await assertAuthority(args, plan); await checkPreimages(ctx.root, plan);
-    if (planRecord.review?.reviewManifest.profile === 'phase24-topic-1.0'
+    if (['phase24-topic-1.0', 'writing-project-1.0'].includes(planRecord.review?.reviewManifest.profile)
       && !(await observe(ctx.root, CONTROL + '/runs/' + plan.run_id + '/CURRENT.json')).exists) {
       const { getTopicPublicationCandidate } = await import('./topic-publication.mjs');
       const candidate = getTopicPublicationCandidate(planRecord.review);
@@ -924,7 +924,7 @@ async function topicRegistration(vaultRoot, operationId, trustAnchor) {
   if (!stored.exists || stored.sha256 !== pointer.bundle.sha256) fail('P22_REGISTERED_BUNDLE_CHANGED');
   const bundle = JSON.parse(stored.bytes);
   const candidateFingerprint = bundle.topic_candidate_fingerprint ?? (bundle.topic_recipe?.options?.candidate ? hash(bundle.topic_recipe.options.candidate) : null);
-  if (bundle.reviewManifest?.profile !== 'phase24-topic-1.0' || !candidateFingerprint
+  if (bundle.reviewManifest?.profile !== 'phase24-topic-1.0' && bundle.reviewManifest?.profile !== 'writing-project-1.0' || !candidateFingerprint
     || bundle.vault_root !== root || bundle.run_id !== operationId || !identifier(bundle.transaction_id)) fail('P24_CANCELLATION_INPUT_INVALID');
   return { root, pointer, bundle, anchor, candidateFingerprint };
 }
@@ -1050,7 +1050,7 @@ export async function registerBilingualPublication(args = {}) {
   const { plan, sourceInputs } = args, record = await currentPlan(plan);
   if (!record.review || args.run !== plan.run_id || resolve(args.vaultRoot ?? '') !== plan.vault_root) fail('P22_REGISTERED_LIVE_REVIEW_REQUIRED');
   await checkPreimages(plan.vault_root, plan);
-  const captured = record.review.reviewManifest.profile === 'phase24-topic-1.0'
+  const captured = ['phase24-topic-1.0', 'writing-project-1.0'].includes(record.review.reviewManifest.profile)
     ? await captureTopicPublicationRegistration({ sourceInputs, review: record.review })
     : record.review.reviewManifest.profile === 'reading-first-obsidian-1.0'
     ? await captureReadingFirstPublicationRegistration({ sourceInputs, review: record.review })
@@ -1173,8 +1173,8 @@ export async function loadBilingualPublication({ vaultRoot, run, requireApproval
     }
   }
   let rebuiltReview = null;
-  if (!simple && ['phase24-topic-1.0', 'reading-first-obsidian-1.0'].includes(bundle.reviewManifest.profile)) {
-    if (bundle.reviewManifest.profile === 'phase24-topic-1.0') {
+  if (!simple && ['phase24-topic-1.0', 'writing-project-1.0', 'reading-first-obsidian-1.0'].includes(bundle.reviewManifest.profile)) {
+    if (['phase24-topic-1.0', 'writing-project-1.0'].includes(bundle.reviewManifest.profile)) {
       if (!bundle.topic_recipe) fail('P24_RECIPE_REQUIRED');
       rebuiltReview = await rebuildRegisteredTopicReview(bundle.topic_recipe, { registration: pointer,
         bundleBytes: stored.bytes, trustAnchor: trustedAnchor });

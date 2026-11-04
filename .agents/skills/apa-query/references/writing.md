@@ -1,6 +1,6 @@
-# Writing for evidence answers and topics
+# Writing from the APA library
 
-Use these principles while composing a substantive answer or a newly requested topic/update. A lookup list, status reply or saving an already accepted answer does not need a new writing pass. The user's explicit language, depth and audience requirements determine the output; otherwise use the prepared task's resolved preferences from [configuration](configuration.md). A topic does not require both languages; an update retains its existing language.
+Provide writing-ready wording for synthesis and ideation by default, and draft complete sections on explicit request. Use these principles while composing a substantive answer or a newly requested topic/update. A lookup list, status reply or saving an already accepted answer does not need a new writing pass. The user's explicit language, depth and audience requirements determine the output; otherwise use the prepared task's resolved preferences from [configuration](configuration.md). A topic does not require both languages; an update retains its existing language.
 
 ## Select existing guidance
 

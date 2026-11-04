@@ -46,7 +46,7 @@ function parseNote(bytes, path, generation, index) {
       || ((managedProfile || fm.run_id !== undefined) && fm.run_id !== paper.run_id)
       || ((managedProfile || fm.analysis_revision !== undefined) && fm.analysis_revision !== paper.analysis_revision)) fail('P23_CURRENT_IDENTITY_MISMATCH', { path });
   } else if (topic) {
-    if (fm.type !== 'topic' || fm.pipeline_version !== '3.0' || fm.topic_id !== topic.topic_id || fm.revision !== topic.revision || fm.language !== topic.language
+    if (fm.type !== (topic.project_id ? 'writing-project' : 'topic') || fm.pipeline_version !== '3.0' || (fm.project_id ?? fm.topic_id) !== (topic.project_id ?? topic.topic_id) || fm.revision !== topic.revision || fm.language !== topic.language
       || fm.rendering_profile !== topic.schema_version) fail('P23_CURRENT_IDENTITY_MISMATCH', { path });
   } else if (node) {
     const id = fm.knowledge_id ?? fm.measure_id ?? fm.concept_id;

@@ -11,7 +11,8 @@ import { deriveSetupIssues } from './apa-setup-issues.mjs';
 export const APA_CONFIG_VERSION = 'apa-local-config-1.0';
 export const APA_SCIENCE_ROLES = Object.freeze(['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration']);
 export const APA_CONFIG_ROLES = Object.freeze(['english-writer', 'chinese-writer', 'translation', 'reading-editor', 'independent-verifier']);
-export const APA_WRITING_SKILLS = Object.freeze(['nature-writing', 'nature-polishing', 'nature-shared', 'humanizer', 'humanizer-zh', 'stss']);
+export const APA_IDEATION_SKILLS = Object.freeze(['brainstorming-research-ideas', 'creative-thinking-for-research']);
+export const APA_WRITING_SKILLS = Object.freeze(['nature-writing', 'nature-polishing', 'nature-shared', 'humanizer', 'humanizer-zh', 'stss', ...APA_IDEATION_SKILLS]);
 const schemaPath = fileURLToPath(new URL('../../Schema/config/apa-config.schema.json', import.meta.url));
 const configSchema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
 const checkSchema = new Ajv({ allErrors: true }).compile(configSchema);
@@ -48,7 +49,7 @@ export function validateApaConfig(config, { repoRoot = process.cwd(), complete =
     ? modelChoiceEntries(config).filter(([key, choice]) => choice?.mode === 'explicit' && (capability === 'reading' || key === 'models.query')).map(([key]) => `${key} requires follow-main: host ${config.host.name} cannot select the model`)
     : [];
   if (capability === 'query') return { valid: errors.length === 0, complete: errors.length === 0 && conflicts.length === 0, errors, missing, conflicts };
-  for (const key of ['models.science', ...APA_CONFIG_ROLES.map(role => `models.roles.${role}`), 'paths.runs', 'paths.parse', 'paths.candidates', 'parser.runtime_home', 'reading.presentation_mode', ...APA_WRITING_SKILLS.map(skill => `writing_skills.${skill}.enabled`)]) {
+  for (const key of ['models.science', ...APA_CONFIG_ROLES.map(role => `models.roles.${role}`), 'paths.runs', 'paths.parse', 'paths.candidates', 'parser.runtime_home', 'reading.presentation_mode', ...APA_WRITING_SKILLS.filter(skill => !APA_IDEATION_SKILLS.includes(skill)).map(skill => `writing_skills.${skill}.enabled`)]) {
     if (get(config, key) === undefined) missing.push(key);
   }
   for (const key of APA_WRITING_SKILLS) if (config?.writing_skills?.[key]?.enabled && !config.writing_skills[key].path) missing.push(`writing_skills.${key}.path`);
@@ -234,7 +235,7 @@ export function resolveApaConfig({ config, repoRoot = process.cwd(), mainSession
   const writingSkills = {};
   for (const key of APA_WRITING_SKILLS) {
     const skill = config.writing_skills[key];
-    if (!skill.enabled) continue;
+    if (!skill?.enabled) continue;
     const skillPath = absolute(repoRoot, skill.path);
     try { writingSkills[key] = { path: skillPath, content: fs.readFileSync(skillPath, 'utf8') }; } catch { throw error('APA_SKILL_UNAVAILABLE', key); }
   }

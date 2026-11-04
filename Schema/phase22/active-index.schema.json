@@ -361,7 +361,14 @@
         "topics": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/topic"
+            "oneOf": [
+              {
+                "$ref": "#/$defs/topic"
+              },
+              {
+                "$ref": "#/$defs/writingProject"
+              }
+            ]
           }
         },
         "source_events": {
@@ -413,6 +420,9 @@
               },
               {
                 "$ref": "#/$defs/topicDocument"
+              },
+              {
+                "$ref": "#/$defs/writingProjectDocument"
               }
             ]
           }
@@ -1236,6 +1246,253 @@
           }
         }
       ]
+    }
+  ,
+    "writingProject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "project_id",
+        "revision",
+        "previous_revision",
+        "question",
+        "language",
+        "title",
+        "query_terms",
+        "managed_hash",
+        "dependencies",
+        "path",
+        "entity_type",
+        "evidence_records",
+        "ideas",
+        "discarded_ideas",
+        "sections",
+        "citation_plan"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "writing-project-1.0"
+        },
+        "project_id": {
+          "type": "string",
+          "pattern": "^project-[a-f0-9]{24}$"
+        },
+        "revision": {
+          "$ref": "#/$defs/topic/properties/revision"
+        },
+        "previous_revision": {
+          "$ref": "#/$defs/topic/properties/previous_revision"
+        },
+        "question": {
+          "$ref": "#/$defs/topic/properties/question"
+        },
+        "language": {
+          "$ref": "#/$defs/topic/properties/language"
+        },
+        "title": {
+          "$ref": "#/$defs/topic/properties/title"
+        },
+        "query_terms": {
+          "$ref": "#/$defs/topic/properties/query_terms"
+        },
+        "managed_hash": {
+          "$ref": "#/$defs/topic/properties/managed_hash"
+        },
+        "dependencies": {
+          "$ref": "#/$defs/topic/properties/dependencies"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^Wiki/writing/project-[a-f0-9]{24}\\.md$"
+        },
+        "resolved_event_ids": {
+          "$ref": "#/$defs/topic/properties/resolved_event_ids"
+        },
+        "event_resolutions": {
+          "$ref": "#/$defs/topic/properties/event_resolutions"
+        },
+        "entity_type": {
+          "const": "writing-project"
+        },
+        "evidence_records": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "evidence_id",
+              "citations",
+              "polarity",
+              "strength",
+              "allowed_statement",
+              "forbidden_statement",
+              "relationship"
+            ],
+            "properties": {
+              "evidence_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "polarity": {
+                "type": "string",
+                "minLength": 1
+              },
+              "strength": {
+                "type": "string",
+                "minLength": 1
+              },
+              "allowed_statement": {
+                "type": "string",
+                "minLength": 1
+              },
+              "forbidden_statement": {
+                "type": "string",
+                "minLength": 1
+              },
+              "method": {
+                "type": "string"
+              },
+              "data": {
+                "type": "string"
+              },
+              "metrics": {
+                "type": "string"
+              },
+              "limitations": {
+                "type": "string"
+              },
+              "relationship": {
+                "type": "string",
+                "minLength": 1
+              },
+              "citations": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "paper_id",
+                    "path",
+                    "anchor",
+                    "sha256"
+                  ],
+                  "properties": {
+                    "paper_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "anchor": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^sha256:[a-f0-9]{64}$"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "ideas": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "discarded_ideas": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "citation_plan": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "writingProjectDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "entity_type",
+        "project_id",
+        "revision",
+        "language",
+        "path",
+        "managed_hash",
+        "section_id",
+        "span_id",
+        "anchor",
+        "unit_ids",
+        "content",
+        "aliases",
+        "title"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/topicDocument/properties/id"
+        },
+        "entity_type": {
+          "const": "writing-project"
+        },
+        "project_id": {
+          "type": "string",
+          "pattern": "^project-[a-f0-9]{24}$"
+        },
+        "revision": {
+          "$ref": "#/$defs/topicDocument/properties/revision"
+        },
+        "language": {
+          "$ref": "#/$defs/topicDocument/properties/language"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^Wiki/writing/project-[a-f0-9]{24}\\.md$"
+        },
+        "managed_hash": {
+          "$ref": "#/$defs/topicDocument/properties/managed_hash"
+        },
+        "section_id": {
+          "$ref": "#/$defs/topicDocument/properties/section_id"
+        },
+        "span_id": {
+          "$ref": "#/$defs/topicDocument/properties/span_id"
+        },
+        "anchor": {
+          "$ref": "#/$defs/topicDocument/properties/anchor"
+        },
+        "unit_ids": {
+          "$ref": "#/$defs/topicDocument/properties/unit_ids"
+        },
+        "content": {
+          "$ref": "#/$defs/topicDocument/properties/content"
+        },
+        "aliases": {
+          "$ref": "#/$defs/topicDocument/properties/aliases"
+        },
+        "title": {
+          "$ref": "#/$defs/topicDocument/properties/title"
+        }
+      }
     }
   }
 }

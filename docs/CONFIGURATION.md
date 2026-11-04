@@ -41,7 +41,7 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 | parser.python/config_path | 可选显式路径；否则从运行目录派生 |
 | reading.source_language | 旧字段，新阅读运行忽略；可缺省，已有的 en 或 zh-CN 值保留且合法。写作顺序由每篇论文的实际原文语言决定 |
 | reading.presentation_mode | reading-editor 或 writer |
-| writing_skills | 六技能各自明确 enabled；启用时提供 SKILL.md 路径 |
+| writing_skills | 六项写作指导各自明确 enabled；两项构思指导可选；启用时提供 SKILL.md 路径 |
 
 新配置阅读调用必须按实际主论文向 `prepareConfiguredReading` 显式传入 `sourceLanguage`（`en` 或 `zh-CN`）；原文语言属于每篇文献的事实，不从个人偏好推定。运行将其冻结为 `binding.source_language`，决定 `Wiki/sources/` 与 `Wiki/translations/` 的归属；新运行以同一 `sourceLanguage` 冻结 `first_writing_language`：只有原文语言对应的 Writer 接收科学材料，另一语言由 Translation 角色（`models.roles.translation`）依据已接受的原文稿翻译。
 
@@ -72,6 +72,8 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 专题增量更新复用 `models.query`、详略与讲解对象偏好和当前宿主能力，保持专题原有语言，不新增模型、路径或后台任务配置。相关提示不调用模型；用户选定来源后才准备一次更新任务。任务准备、宿主实际执行、差异候选与正式提交是不同状态；请求模型与可观察身份分别保存，身份不符时不重试或切换模型。
 
 技能键为 nature-writing、nature-polishing、nature-shared、humanizer、humanizer-zh、stss。Nature Writing/Polishing 还要求 Shared。仅选中的指导注入对应语言的 Writer 或 Translation（新运行为原文语言 Writer 与译文语言 Translation）；停用项不暗中保留。科学事实、证据和发布边界属于固定合同，不随文风技能关闭。
+
+构思模式还可选 `brainstorming-research-ideas`、`creative-thinking-for-research`，均沿用 `{enabled,path}`。这两项不默认启用，未配置时保持缺省，不影响既有阅读配置完整性。通过配置页选择并确认应用后，同一次构思任务按需读取启用指导；保存配置不安装技能，也不增加模型调用。
 
 ## 页面与操作
 

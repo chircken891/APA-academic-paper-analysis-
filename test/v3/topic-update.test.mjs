@@ -274,3 +274,198 @@ test('topic updates reject managed edits after the model reply and after candida
   await assert.rejects(prepareTopicPublication({ vaultRoot: f.vaultRoot, candidate: candidate.candidate }), /P24_TOPIC_BASE_CHANGED/);
   assert.equal(await readFile(path, 'utf8'), edited);
 });
+import { linkedPaths } from '../../scripts/v3/library-map.mjs';
+import { relatedProjectEvidence } from '../../scripts/v3/topic-library.mjs';
+test('project hints select only related evidence and retain matching reasons', () => {
+  const project = { evidence_records: [{ evidence_id: 'yes', allowed_statement: 'Photon uptake', citations: [] }, { evidence_id: 'no', allowed_statement: 'Plant taxonomy', citations: [] }] };
+  assert.deepEqual(relatedProjectEvidence(project, ['photon'], [], new Map()), [{ evidence_id: 'yes', matched_terms: ['photon'], shared_nodes: [] }]);
+  assert.deepEqual(relatedProjectEvidence(project, ['unrelated'], [], new Map()), []);
+});
+
+test('writing project new-paper hints identify related evidence without updating the project', async t => {
+  const { prepareWritingProjectSave } = await import('../../scripts/v3/writing-project.mjs');
+  const { readCurrentVaultContent, getCurrentNote } = await import('../../scripts/v3/current-vault-content.mjs');
+  const { createHash } = await import('node:crypto');
+  const f = await createTopicFixture(t);
+  let snapshot = await publishTopicFixture(f);
+  const presentations = readCommittedReadingFirstPresentations(snapshot);
+  const papers = snapshot.generation.papers;
+  const current = await readCurrentVaultContent({ vaultRoot: f.vaultRoot });
+  const evidence = await Promise.all(papers.map(async (paper, index) => {
+    const path = paper.paths.en, bytes = await readFile(join(f.vaultRoot, path));
+    return { evidence_id: index ? 'unrelated' : 'related', citations: [{ paper_id: paper.paper_id, path,
+      anchor: getCurrentNote(current, path).sections.find(row => row.anchor).anchor,
+      sha256: 'sha256:' + createHash('sha256').update(bytes).digest('hex') }],
+    polarity: 'support', strength: 'observation', allowed_statement: index ? 'Plant taxonomy' : 'Photon uptake',
+    forbidden_statement: 'Unconditional causality', relationship: index ? 'Botanical classification' : 'Photon experiment' };
+  }));
+  const adoptedSources = presentations.map(({ paper, presentation }) => {
+    const source = presentation.citation.sources[0];
+    return { paper_id: paper.paper_id, analysis_revision: paper.analysis_revision, adopted_generation_id: snapshot.generation_id,
+      source_id: source.source_id, source_sha256: source.sha256, source_version: source.source_version ?? null, locators: source.locators, adopted_for: ['project evidence'] };
+  });
+  const operationId = 'project-hint-save';
+  const saved = await prepareWritingProjectSave({ repoRoot: f.vaultRoot, operationId, question: 'Photon uptake?', title: 'Photon uptake', language: 'en',
+    answer: 'Conditional photon evidence.', queryTerms: ['photon'], adoptedSources, expectedGenerationId: snapshot.generation_id, saveIntent: 'save',
+    projectData: { evidence_records: evidence, ideas: [], discarded_ideas: [], sections: [{ section_id: 'intro', evidence_ids: ['related'], outline: 'Photon', body: 'Conditional uptake.' }], citation_plan: [] } });
+  const prepared = await prepareTopicPublication({ vaultRoot: f.vaultRoot, candidate: saved.candidate });
+  const authority = await readingFirstPublicationAuthority({ root: f.root, vaultRoot: f.vaultRoot, runId: operationId }, prepared.plan);
+  await registerBilingualPublication({ vaultRoot: f.vaultRoot, run: operationId, plan: prepared.plan, sourceInputs: prepared.sourceInputs, ...authority });
+  snapshot = await publishTopicFixture({ ...f, run: operationId, ...prepared, authority });
+  assert.equal(snapshot.ok, true, JSON.stringify(snapshot));
+  const project = snapshot.generation.topics.find(row => row.project_id);
+  const before = await readFile(join(f.vaultRoot, project.path));
+  const shared = snapshot.generation.shared_nodes[0];
+  for (const [index, related] of [true, false].entries()) {
+    const paperId = 'pap_' + (index ? 'f' : 'e').repeat(32);
+    const next = await readingFirstPublicationFixture(t, { vaultRoot: f.vaultRoot, generation: 'project-hint-paper-' + index,
+      runId: 'run_' + (index ? 'f' : 'e').repeat(32), paperId,
+      title: { en: related ? 'Photon uptake experiment' : 'Botanical taxonomy', 'zh-CN': related ? '光子实验' : '植物分类' },
+      sourceText: related ? 'Photon experiment evidence.' : 'Botanical classification evidence.',
+      findingText: related ? 'Photon uptake requires illumination.' : 'Plant families differ.',
+      knowledgeRegistry: [{ id: 'method', canonical_key: 'synthetic-method', path: shared.path, content: await readFile(join(f.vaultRoot, shared.path), 'utf8') }] });
+    const applied = await applyBilingualPublication(applyReadingFirstFixture(next));
+    const originalNotes = new Map();
+    // The unrelated evidence cites a paper whose current prose has no shared-node links.
+    for (const path of Object.values(papers[1].paths)) {
+      const absolute = join(f.vaultRoot, path);
+      originalNotes.set(absolute, await readFile(absolute));
+      await writeFile(absolute, (await readFile(absolute, 'utf8')).replace(/\[\[[^\]]+\]\]/g, '').replace(/!?\[[^\]]*\]\(([^)]*)\)/g, (match, href) => /(?:methods|concepts)\//.test(decodeURI(href)) ? '' : match));
+    }
+    const live = await readCurrentVaultContent({ vaultRoot: f.vaultRoot });
+    const found = await (await import('../../scripts/v3/topic-library.mjs')).getTopicUpdateHints({ vaultRoot: f.vaultRoot, generationId: live.generation_id, changedPaperIds: [paperId] });
+    const hints = found.hints.filter(row => row.project_id === project.project_id && row.source?.paper_id === paperId);
+    if (related) {
+      assert.ok(hints.length);
+      for (const hint of hints) {
+        assert.deepEqual(hint.evidence_ids, ['related']);
+        assert.ok(hint.evidence_matches[0].matched_terms.includes('photon'));
+        assert.equal(hint.automatic_update, false);
+      }
+    } else assert.deepEqual(hints, []);
+    assert.deepEqual(await readFile(join(f.vaultRoot, project.path)), before);
+    for (const [path, bytes] of originalNotes) await writeFile(path, bytes);
+    const after = await readCommittedGeneration({ vaultRoot: f.vaultRoot });
+    assert.equal(after.generation.topics.find(row => row.project_id === project.project_id).revision, 1);
+  }
+});
+
+test('project hints resolve URL-encoded relative Markdown shared nodes without term matches', async t => {
+  const { prepareWritingProjectSave } = await import('../../scripts/v3/writing-project.mjs');
+  const { readCurrentVaultContent, getCurrentNote } = await import('../../scripts/v3/current-vault-content.mjs');
+  const { createHash } = await import('node:crypto');
+  const f = await createTopicFixture(t);
+  let snapshot = await publishTopicFixture(f);
+  const presentations = readCommittedReadingFirstPresentations(snapshot);
+  const papers = snapshot.generation.papers;
+  const current = await readCurrentVaultContent({ vaultRoot: f.vaultRoot });
+  const evidence = await Promise.all(papers.map(async (paper, index) => {
+    const path = paper.paths.en, bytes = await readFile(join(f.vaultRoot, path));
+    return { evidence_id: index ? 'unrelated' : 'related', citations: [{ paper_id: paper.paper_id, path,
+      anchor: getCurrentNote(current, path).sections.find(row => [...linkedPaths(row.content, path)].includes(snapshot.generation.shared_nodes[0].path.replace(/\.md$/, ''))).anchor,
+      sha256: 'sha256:' + createHash('sha256').update(bytes).digest('hex') }],
+    polarity: 'support', strength: 'observation', allowed_statement: index ? 'Plant taxonomy' : 'Measured response',
+    forbidden_statement: 'Unconditional causality', relationship: index ? 'Botanical classification' : 'Experimental observation' };
+  }));
+  const adoptedSources = presentations.map(({ paper, presentation }) => {
+    const source = presentation.citation.sources[0];
+    return { paper_id: paper.paper_id, analysis_revision: paper.analysis_revision, adopted_generation_id: snapshot.generation_id,
+      source_id: source.source_id, source_sha256: source.sha256, source_version: source.source_version ?? null, locators: source.locators, adopted_for: ['project evidence'] };
+  });
+  const operationId = 'project-hint-save';
+  const saved = await prepareWritingProjectSave({ repoRoot: f.vaultRoot, operationId, question: 'Photon uptake?', title: 'Measured response', language: 'en',
+    answer: 'Conditional photon evidence.', queryTerms: ['photon'], adoptedSources, expectedGenerationId: snapshot.generation_id, saveIntent: 'save',
+    projectData: { evidence_records: evidence, ideas: [], discarded_ideas: [], sections: [{ section_id: 'intro', evidence_ids: ['related'], outline: 'Photon', body: 'Conditional uptake.' }], citation_plan: [] } });
+  const prepared = await prepareTopicPublication({ vaultRoot: f.vaultRoot, candidate: saved.candidate });
+  const authority = await readingFirstPublicationAuthority({ root: f.root, vaultRoot: f.vaultRoot, runId: operationId }, prepared.plan);
+  await registerBilingualPublication({ vaultRoot: f.vaultRoot, run: operationId, plan: prepared.plan, sourceInputs: prepared.sourceInputs, ...authority });
+  snapshot = await publishTopicFixture({ ...f, run: operationId, ...prepared, authority });
+  assert.equal(snapshot.ok, true, JSON.stringify(snapshot));
+  const project = snapshot.generation.topics.find(row => row.project_id);
+  const before = await readFile(join(f.vaultRoot, project.path));
+  const shared = snapshot.generation.shared_nodes[0];
+  for (const [index, related] of [true, false].entries()) {
+    const paperId = 'pap_' + (index ? 'f' : 'e').repeat(32);
+    const next = await readingFirstPublicationFixture(t, { vaultRoot: f.vaultRoot, generation: 'project-hint-paper-' + index,
+      runId: 'run_' + (index ? 'f' : 'e').repeat(32), paperId,
+      title: { en: related ? 'Photon uptake experiment' : 'Botanical taxonomy', 'zh-CN': related ? '光子实验' : '植物分类' },
+      sourceText: related ? 'Photon experiment evidence.' : 'Botanical classification evidence.',
+      findingText: related ? 'Photon uptake requires illumination.' : 'Plant families differ.',
+      knowledgeRegistry: [{ id: 'method', canonical_key: 'synthetic-method', path: shared.path, content: await readFile(join(f.vaultRoot, shared.path), 'utf8') }] });
+    const applied = await applyBilingualPublication(applyReadingFirstFixture(next));
+    const originalNotes = new Map();
+    // The unrelated evidence cites a paper whose current prose has no shared-node links.
+    for (const path of Object.values(papers[1].paths)) {
+      const absolute = join(f.vaultRoot, path);
+      originalNotes.set(absolute, await readFile(absolute));
+      await writeFile(absolute, (await readFile(absolute, 'utf8')).replace(/\[\[[^\]]+\]\]/g, '').replace(/!?\[[^\]]*\]\(([^)]*)\)/g, (match, href) => /(?:methods|concepts)\//.test(decodeURI(href)) ? '' : match));
+    }
+    const { posix } = await import('node:path');
+    for (const path of Object.values(papers[0].paths)) {
+      const absolute = join(f.vaultRoot, path);
+      originalNotes.set(absolute, await readFile(absolute));
+      const raw = await readFile(absolute, 'utf8');
+      await writeFile(absolute, raw.replace(/\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g, (_, target, label) => '[' + (label ?? 'shared') + '](' + encodeURI(posix.relative(posix.dirname(path), target + '.md')) + ')'));
+    }
+    const live = await readCurrentVaultContent({ vaultRoot: f.vaultRoot });
+    const found = await (await import('../../scripts/v3/topic-library.mjs')).getTopicUpdateHints({ vaultRoot: f.vaultRoot, generationId: live.generation_id, changedPaperIds: [paperId] });
+    const hints = found.hints.filter(row => row.project_id === project.project_id && row.source?.paper_id === paperId);
+    if (related) {
+      assert.ok(hints.length);
+      for (const hint of hints) {
+        assert.deepEqual(hint.evidence_ids, ['related']);
+        assert.deepEqual(hint.evidence_matches[0].matched_terms, []);
+        assert.ok(hint.evidence_matches[0].shared_nodes.length > 0);
+        assert.equal(hint.automatic_update, false);
+      }
+    } else assert.deepEqual(hints, []);
+    assert.deepEqual(await readFile(join(f.vaultRoot, project.path)), before);
+    for (const [path, bytes] of originalNotes) await writeFile(path, bytes);
+    const after = await readCommittedGeneration({ vaultRoot: f.vaultRoot });
+    assert.equal(after.generation.topics.find(row => row.project_id === project.project_id).revision, 1);
+  }
+});
+
+test('project shared-node evidence is scoped to cited sections and skips unreadable citations', async t => {
+  const { readCurrentVaultContent, getCurrentNote } = await import('../../scripts/v3/current-vault-content.mjs');
+  const f = await createTopicFixture(t);
+  await publishTopicFixture(f);
+  let snapshot = await readCurrentVaultContent({ vaultRoot: f.vaultRoot });
+  const path = snapshot.generation.papers[0].paths.en;
+  const node = snapshot.generation.shared_nodes[0].path;
+  const sections = getCurrentNote(snapshot, path).sections;
+  const linked = sections.find(row => [...linkedPaths(row.content, path)].includes(node.replace(/\.md$/, '')));
+  const project = { evidence_records: [
+    { evidence_id: 'linked', citations: [{ path, anchor: linked.anchor }] },
+    { evidence_id: 'other', citations: [{ path, anchor: sections[0].anchor }] },
+    { evidence_id: 'missing', citations: [{ path, anchor: 'absent' }, { path: 'missing', anchor: linked.anchor }] },
+  ] };
+  assert.deepEqual(relatedProjectEvidence(project, [], [node], snapshot), [{ evidence_id: 'linked', matched_terms: [], shared_nodes: [node] }]);
+});
+
+test('project shared-node evidence excludes registered chart nodes', async t => {
+  const { readingFirstIndexFixture, digest } = await import('./helpers/reading-first-index-fixtures.mjs');
+  const { readCurrentVaultContent, getCurrentNote } = await import('../../scripts/v3/current-vault-content.mjs');
+  const f = await readingFirstIndexFixture(t);
+  const support = f.files.find(row => row.kind === 'support');
+  let body = support.bytes.toString('utf8').replace('knowledge_id: rate', 'knowledge_id: chart-rate');
+  body = body.replace(/<!-- KNOWLEDGE_STATE ([A-Za-z0-9+/=]+) -->/, (_, encoded) => {
+    const state = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+    state.item.id = 'chart-rate';
+    return '<!-- KNOWLEDGE_STATE ' + Buffer.from(JSON.stringify(state)).toString('base64') + ' -->';
+  });
+  support.bytes = Buffer.from(body);
+  f.generation.shared_nodes.find(row => row.path === support.path).entity_id = 'chart-rate';
+  f.generation.objects.find(row => row.path === support.path).sha256 = digest(support.bytes);
+  const manifestFile = f.files.find(row => row.kind === 'reader-presentation');
+  manifestFile.bytes = Buffer.from(JSON.stringify(f.manifest) + '\n');
+  f.paper.reader_presentation.sha256 = digest(manifestFile.bytes);
+  f.generation.objects.find(row => row.path === manifestFile.path).sha256 = digest(manifestFile.bytes);
+  await f.save(await f.build());
+  const snapshot = await readCurrentVaultContent({ vaultRoot: f.vaultRoot });
+  assert.equal(getCurrentNote(snapshot, support.path).fm.knowledge_id, 'chart-rate');
+  const path = f.paper.paths.en;
+  const section = getCurrentNote(snapshot, path).sections.find(row => [...linkedPaths(row.content, path)].includes(support.path.replace(/\.md$/, '')));
+  const project = { evidence_records: [{ evidence_id: 'chart', citations: [{ path, anchor: section.anchor }] }] };
+  assert.deepEqual(relatedProjectEvidence(project, [], [support.path], snapshot), []);
+});

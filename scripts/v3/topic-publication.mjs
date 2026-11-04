@@ -24,6 +24,7 @@ topicValidator.addSchema(JSON.parse(readFileSync(new URL('../../Schema/phase22/a
 topicValidator.addSchema(JSON.parse(readFileSync(new URL('../../Schema/phase24/topic.schema.json', import.meta.url))));
 const checkCandidate = topicValidator.compile({ $ref: 'phase24/topic-1.0#/$defs/candidate' });
 const checkRecipe = topicValidator.compile({ $ref: 'phase24/topic-1.0#/$defs/registration' });
+const checkProject = topicValidator.compile({ $ref: 'phase24/topic-1.0#/$defs/writingProject' });
 const checkTopic = topicValidator.getSchema('phase24/topic-1.0');
 const decode = rows => new Map(rows.map(row => {
   const bytes = row.bytes_base64 === null ? null : Buffer.from(row.bytes_base64, 'base64');
@@ -52,7 +53,7 @@ function bytesAt(root, path, missing = false) {
   binding(cursor);
   return readFileSync(cursor);
 }
-const toolBindings = (currentContentPolicy = false) => ['./topic-publication.mjs', './topic-library.mjs', './phase22-publication.mjs', './phase22-review.mjs',
+const toolBindings = (currentContentPolicy = false) => ['./writing-project.mjs', './topic-publication.mjs', './topic-library.mjs', './phase22-publication.mjs', './phase22-review.mjs',
   './phase22-active-version.mjs', './phase22-managed-markdown.mjs', './phase22-search.mjs', '../../Schema/phase24/topic.schema.json',
   '../../Schema/phase22/active-index.schema.json', '../../Schema/phase22/review-manifest.schema.json', '../../Schema/phase22/publication-transaction.schema.json',
   ...(currentContentPolicy ? ['./current-vault-content.mjs'] : [])]
@@ -72,10 +73,20 @@ async function build({ options, base, preimages, restored = false }) {
   if (sourceChange ? !same(candidate, JSON.parse(readFileSync(candidate.candidate_path, 'utf8')))
     : candidate.topic_sha256 !== sourceBindings[0].sha256 || candidate.note_sha256 !== sourceBindings[1].sha256) fail('P24_CANDIDATE_CHANGED');
   const topic = sourceChange ? null : JSON.parse(readFileSync(candidate.topic_path, 'utf8')), note = sourceChange ? null : readFileSync(candidate.note_path);
-  if (!sourceChange && (!checkTopic(topic) || !same(candidate.topic, topic) || !same(candidate.source_declaration, topic.dependencies))) fail('P24_CANDIDATE_INVALID');
+  if (topic?.project_id) {
+    const { validateWritingProjectData } = await import('./writing-project.mjs');
+    const projectData = Object.fromEntries(['evidence_records', 'ideas', 'discarded_ideas', 'sections', 'citation_plan'].map(key => [key, topic[key]]));
+    if (!restored) await validateWritingProjectData({ repoRoot: root, generationId: base.generation.generation_id, projectData, adoptedSources: topic.dependencies });
+    for (const citation of topic.evidence_records.flatMap(row => row.citations)) {
+      const bound = binding(join(root, citation.path));
+      if (bound.sha256 !== citation.sha256) fail('WQ_PROJECT_CITATION_CHANGED');
+      if (!sourceBindings.some(row => row.path === bound.path)) sourceBindings.push(bound);
+    }
+  }
+  if (!sourceChange && (!(topic.project_id ? checkProject(topic) : checkTopic(topic)) || !same(candidate.topic, topic) || !same(candidate.source_declaration, topic.dependencies))) fail('P24_CANDIDATE_INVALID');
   const run = options.operationId ?? candidate.operation_id;
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/.test(run ?? '')) fail('P24_OPERATION_INVALID');
-  if (run !== candidate.operation_id || (!sourceChange && topic.revision === 1 && topic.topic_id !== 'topic-' + hash(run).slice(7, 31))) fail('P24_OPERATION_INVALID');
+  if (run !== candidate.operation_id || (!sourceChange && topic.revision === 1 && (topic.project_id ?? topic.topic_id) !== (topic.project_id ? 'project-' : 'topic-') + hash(run).slice(7, 31))) fail('P24_OPERATION_INVALID');
   if (candidate.expected_generation_id !== undefined && candidate.expected_generation_id !== base.generation.generation_id) fail('P24_GENERATION_CHANGED');
   if (!sourceChange && (!Array.isArray(topic.dependencies) || !topic.dependencies.length)) fail('P24_ADOPTED_SOURCES_REQUIRED');
   if (sourceChange) {
@@ -93,9 +104,9 @@ async function build({ options, base, preimages, restored = false }) {
     if (!sourceBindings.some(row => row.path === sourceBinding.path)) sourceBindings.push(sourceBinding);
   }
   const inspected = sourceChange ? null : inspectManagedNote(note);
-  if (!sourceChange && (inspected.managedHash !== topic.managed_hash || inspected.frontmatter.topic_id !== topic.topic_id
-    || inspected.frontmatter.revision !== topic.revision || inspected.frontmatter.rendering_profile !== profile)) fail('P24_CANDIDATE_INVALID');
-  const path = sourceChange ? null : 'Wiki/topics/' + topic.topic_id + '.md';
+  if (!sourceChange && (inspected.managedHash !== topic.managed_hash || (inspected.frontmatter.project_id ?? inspected.frontmatter.topic_id) !== (topic.project_id ?? topic.topic_id)
+    || inspected.frontmatter.revision !== topic.revision || inspected.frontmatter.rendering_profile !== topic.schema_version)) fail('P24_CANDIDATE_INVALID');
+  const path = sourceChange ? null : (topic.project_id ? 'Wiki/writing/' : 'Wiki/topics/') + (topic.project_id ?? topic.topic_id) + '.md';
   const beforeFiles = preimages ?? new Map();
   const before = path => {
     if (!beforeFiles.has(path)) {
@@ -104,7 +115,7 @@ async function build({ options, base, preimages, restored = false }) {
     }
     return beforeFiles.get(path);
   };
-  const old = sourceChange ? null : before(path), previous = sourceChange ? null : base.generation.topics?.find(row => row.topic_id === topic.topic_id);
+  const old = sourceChange ? null : before(path), previous = sourceChange ? null : base.generation.topics?.find(row => (row.project_id ?? row.topic_id) === (topic.project_id ?? topic.topic_id));
   if (!sourceChange && (previous ? topic.revision !== previous.revision + 1 || topic.previous_revision !== previous.revision : topic.revision !== 1 || topic.previous_revision !== null)) fail('P24_REVISION_INVALID');
   if (old !== null && !previous) fail('P24_TARGET_UNREGISTERED');
   if (previous) validateTopicEventResolutions({ topic, previous, answer: inspected.regions.find(r => r.id === 'topic').bytes.toString('utf8'),
@@ -126,7 +137,7 @@ async function build({ options, base, preimages, restored = false }) {
   const row = sourceChange ? null : add(path, 'topic', merged.bytes, { language: topic.language, managed_hash: merged.managedHash, before_managed_hash: previous?.managed_hash ?? null });
   const active = { ...clone(base.generation), generation_id: generation,
     ...(sourceChange ? { source_events: [...(base.generation.source_events ?? []), candidate.event] }
-      : { topics: [...(base.generation.topics ?? []).filter(t => t.topic_id !== topic.topic_id), { ...topic, path }] }),
+      : { topics: [...(base.generation.topics ?? []).filter(t => (t.project_id ?? t.topic_id) !== (topic.project_id ?? topic.topic_id)), { ...topic, path }] }),
     objects: sourceChange ? clone(base.generation.objects) : [...base.generation.objects.filter(o => o.path !== path), { path, kind: 'topic', sha256: merged.managedHash }] };
   delete active.index_manifest;
   assertActiveGeneration(active);
@@ -141,9 +152,9 @@ async function build({ options, base, preimages, restored = false }) {
   const scientificReviewHash = hash({ topic, candidate: sourceBindings, ...(sourceChange ? { event: candidate.event } : { adopted_sources: topic.dependencies }) });
   const evidenceMode = base.generation.evidence_mode;
   const status = evidenceMode === 'actual' ? 'review_ready' : 'synthetic_prepared';
-  const reviewManifest = { schema_version: 'phase22/review-manifest-1.0', profile,
+  const reviewManifest = { schema_version: 'phase22/review-manifest-1.0', profile: topic?.schema_version ?? profile,
     ...(sourceChange ? { operation: 'source-change' } : { operation: previous ? 'update' : 'save' }),
-    identity: sourceChange ? { run_id: run, analysis_revision: 'source-change' } : { topic_id: topic.topic_id, topic_revision: topic.revision, run_id: run, analysis_revision: String(topic.revision) },
+    identity: sourceChange ? { run_id: run, analysis_revision: 'source-change' } : { [topic.project_id ? 'project_id' : 'topic_id']: topic.project_id ?? topic.topic_id, [topic.project_id ? 'project_revision' : 'topic_revision']: topic.revision, run_id: run, analysis_revision: String(topic.revision) },
     status, evidence_mode: evidenceMode, review_ready: evidenceMode === 'actual', publishable: false,
     scientific_review_hash: scientificReviewHash, generation, previous_generation: base.generation.generation_id,
     previews: sourceChange ? [] : [{ language: topic.language, path, byte_sha256: row.byte_sha256, byte_length: row.byte_length, managed_hash: merged.managedHash,

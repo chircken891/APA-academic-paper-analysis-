@@ -1,6 +1,6 @@
 ---
 name: apa-query
-description: Search and compare papers already in the current APA knowledge vault, answer research questions with source citations, and save or update requested Obsidian topics. Use for 库内检索、跨论文比较、保存专题、更新专题; use academic-paper-analysis for reading a new paper.
+description: Find research clues, synthesize themes and shared knowledge, propose research ideas, and support writing from the current APA vault with traceable evidence. Use for 库内检索、找线索、找共同点、跨论文比较、有什么创新点、帮我写相关工作、写作项目、保存专题、更新专题; use academic-paper-analysis for reading a new paper.
 ---
 
 # apa-query（Claude Code 入口）

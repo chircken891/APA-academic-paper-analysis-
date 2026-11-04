@@ -109,7 +109,9 @@ test('short explicit retrieval query recalls evidence while one task answers the
   const f = await fixture(t);
   const { executeLibraryQuery, prepareLibraryQuery } = await library();
   const question = 'Explain how finalresultneedle was established and which study conditions limit its use for clinical practice.';
-  assert.equal((await prepareLibraryQuery({ ...inputs(f.vaultRoot), question })).status, 'no_matches');
+  const fallback = await prepareLibraryQuery({ ...inputs(f.vaultRoot), question });
+  assert.equal(fallback.status, 'prepared');
+  assert.equal(fallback.match_mode, 'any');
   let calls = 0;
   const result = await executeLibraryQuery({ ...inputs(f.vaultRoot), question, searchQuery: 'finalresultneedle', executeHost: async task => {
     calls++;

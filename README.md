@@ -187,9 +187,27 @@ node scripts/apa-setup.mjs inspect --repo-root "$apaProjectRoot"
 
 新论文由维护中的[阅读会话入口](docs/apa-v3/reading-session.md)衔接科学角色、原文 Writer、Translation、可选 Editor、候选渲染与审查。新配置化运行使用 `configured-reading-2.2` 提示，已有运行从原检查点续接。
 
-### 查询与比较已入库论文
+### 面向写作的库内查询
 
 新分析按原文语言整理笔记：同语言稿放在 `Wiki/sources/`，另一语言稿放在 `Wiki/translations/`。两稿相互链接、按同一论文检索；中文原文会保留中文稿在 sources。旧冻结运行不自动改路径；已入库笔记需要受控迁移，不能直接拖动后跳过索引更新。
+
+查询以论文写作为目的：从问题或论文出发找线索，归纳多篇文献的共性、分歧和知识，提出有依据的候选创新点，再转成可用于写作的表述。整节起草按请求触发，例如“帮我写相关工作”。
+
+写作导向扩展已提供 W0—W6 工程接口，覆盖检索、综合、构思、外部新颖性核对和写作项目。下表列出使用入口；合成工程验证、真实模型执行与正式发布分别记录；未运行的验收保留 `not_run`。
+
+| 入口 | 用途 | 阶段 |
+| --- | --- | --- |
+| `inventory`、`landscape`、`dossier`、`clues` | 盘点论文，找共同知识与桥接线索，零模型调用 | W2 |
+| `request` 的 `themes`、`dossier`、`compare`、`clues` 模式 | 主题综合、概念脉络、比较矩阵与线索解读 | W3 |
+| `request` 的 `ideas` 模式 | 在同一任务内发散与收敛，保留依据、风险和淘汰原因 | W4 |
+| `project-save`、`project-update-request`、`draft --section`、`review`、`export-refs` | 维护写作项目，逐节起草与参考文献导出 | W6 |
+| `novelty --input` | 针对一个明确选定的想法核对外部新颖性 | W5 |
+
+综合与构思默认提供可用于写作的表述，并标明来源、证据强度与适用范围。库内综合按实际范围命名，不宣称系统综述；不编造来源或数值，区分作者结论与跨篇推断，也区分“库内未见证据”与“有证据表明不存在”。
+
+综合、构思与起草每次请求只消费一个模型任务，写作指导及过度表述审查在该任务内完成。外部新颖性核对仅在用户对具体想法明确开启并约定检索与调用预算后运行；PubMed 为主、OpenAlex 为辅的来源方案在执行前确认。外部论文仅作为待读线索，深入阅读时由用户提供 PDF 路径。
+
+查询结果按明确保存请求进入专题或写作项目候选，正式写入须审阅精确候选并批准受控事务。写作项目使用 `Wiki/writing/<project_id>.md`、独立身份与 revision，采用 `writing-project-1.0` profile，维护可见 Markdown 证据登记表、提纲、正文、引用计划及 Personal Notes，默认不进入图谱。`draft` 与 `review` 可读取已登记的 `projectId`，也可消费临时 `writingContext`，无需先正式保存项目；二者不能同时提供。CLI 准备单次模型任务，由当前宿主执行。具体输入、保存与参考文献导出见[写作项目合同](.agents/skills/apa-query/references/writing-project.md)。
 
 在 Codex 或已有本地工具能力的 Obsidian/Claudian 对话中，可以让助手“用 APA 在当前知识库查找某个主题”。两个入口使用同一条只读命令：
 

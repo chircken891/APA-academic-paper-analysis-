@@ -19,6 +19,9 @@
     },
     {
       "$ref": "#/$defs/sourceChange"
+    },
+    {
+      "$ref": "#/$defs/writingProject"
     }
   ],
   "$defs": {
@@ -1893,6 +1896,158 @@
         },
         "operation": {
           "const": "source-change"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "evidence_mode": {
+                "const": "actual"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "const": "review_ready"
+              },
+              "review_ready": {
+                "const": true
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "status": {
+                "const": "synthetic_prepared"
+              },
+              "review_ready": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    }
+  ,
+    "writingProject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "profile",
+        "identity",
+        "status",
+        "evidence_mode",
+        "review_ready",
+        "publishable",
+        "scientific_review_hash",
+        "generation",
+        "previous_generation",
+        "previews",
+        "support_notes",
+        "assets",
+        "read_dependencies",
+        "dependencies",
+        "tools",
+        "index",
+        "active",
+        "write_set",
+        "diagnostics",
+        "provenance_limits"
+      ],
+      "properties": {
+        "schema_version": {
+          "$ref": "#/$defs/topic/properties/schema_version"
+        },
+        "profile": {
+          "const": "writing-project-1.0"
+        },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "project_id",
+            "project_revision",
+            "run_id",
+            "analysis_revision"
+          ],
+          "properties": {
+            "project_id": {
+              "type": "string",
+              "pattern": "^project-[a-f0-9]{24}$"
+            },
+            "project_revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "run_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "analysis_revision": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/topic/properties/status"
+        },
+        "evidence_mode": {
+          "$ref": "#/$defs/topic/properties/evidence_mode"
+        },
+        "review_ready": {
+          "$ref": "#/$defs/topic/properties/review_ready"
+        },
+        "publishable": {
+          "$ref": "#/$defs/topic/properties/publishable"
+        },
+        "scientific_review_hash": {
+          "$ref": "#/$defs/topic/properties/scientific_review_hash"
+        },
+        "generation": {
+          "$ref": "#/$defs/topic/properties/generation"
+        },
+        "previous_generation": {
+          "$ref": "#/$defs/topic/properties/previous_generation"
+        },
+        "previews": {
+          "$ref": "#/$defs/topic/properties/previews"
+        },
+        "support_notes": {
+          "$ref": "#/$defs/topic/properties/support_notes"
+        },
+        "assets": {
+          "$ref": "#/$defs/topic/properties/assets"
+        },
+        "read_dependencies": {
+          "$ref": "#/$defs/topic/properties/read_dependencies"
+        },
+        "dependencies": {
+          "$ref": "#/$defs/topic/properties/dependencies"
+        },
+        "tools": {
+          "$ref": "#/$defs/topic/properties/tools"
+        },
+        "index": {
+          "$ref": "#/$defs/topic/properties/index"
+        },
+        "active": {
+          "$ref": "#/$defs/topic/properties/active"
+        },
+        "write_set": {
+          "$ref": "#/$defs/topic/properties/write_set"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/topic/properties/diagnostics"
+        },
+        "provenance_limits": {
+          "$ref": "#/$defs/topic/properties/provenance_limits"
+        },
+        "operation": {
+          "$ref": "#/$defs/topic/properties/operation"
         }
       },
       "allOf": [

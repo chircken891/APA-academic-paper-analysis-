@@ -152,7 +152,7 @@ function buildIndex(validatedInputs, generation, previous) {
   }
   for (const topic of generation.topics ?? []) {
     if (validatedInputs.carryHistoricalDocuments && previous?.generation.topics?.some(row => hash(row) === hash(topic))) {
-      documents.push(...previous.index.documents.filter(row => row.entity_type === 'topic' && row.topic_id === topic.topic_id).map(row => structuredClone(row)));
+      documents.push(...previous.index.documents.filter(row => ['topic', 'writing-project'].includes(row.entity_type) && (row.project_id ?? row.topic_id) === (topic.project_id ?? topic.topic_id)).map(row => structuredClone(row)));
       coveredPaths.add(topic.path);
       continue;
     }
@@ -190,11 +190,11 @@ export function queryBilingualIndex({ index, activeSnapshot, query } = {}) {
   const groups = new Map(), papers = new Map(activeSnapshot.generation.papers.map(paper => [paper.paper_id, paper]));
   for (const match of engine(index).search(query)) {
     const doc = docs.get(match.id), paper = papers.get(doc.paper_id);
-    const topic = doc.entity_type === 'topic' ? activeSnapshot.generation.topics.find(row => row.topic_id === doc.topic_id) : null;
-    const key = topic ? 'topic:' + doc.topic_id : 'paper:' + doc.paper_id;
+    const topic = ['topic', 'writing-project'].includes(doc.entity_type) ? activeSnapshot.generation.topics.find(row => (row.project_id ?? row.topic_id) === (doc.project_id ?? doc.topic_id)) : null;
+    const key = topic ? 'topic:' + (doc.project_id ?? doc.topic_id) : 'paper:' + doc.paper_id;
     let group = groups.get(key);
     if (!group) {
-      group = topic ? { entity_type: 'topic', topic_id: topic.topic_id, revision: topic.revision, language: topic.language,
+      group = topic ? { entity_type: topic.project_id ? 'writing-project' : 'topic', [topic.project_id ? 'project_id' : 'topic_id']: (topic.project_id ?? topic.topic_id), revision: topic.revision, language: topic.language,
         claim_verification: 'not_performed',
         path: topic.path, dependencies: structuredClone(topic.dependencies),
         underlying_papers: [...new Set(topic.dependencies.map(row => row.paper_id))], score: match.score, hits: [] }
@@ -211,7 +211,7 @@ export function queryBilingualIndex({ index, activeSnapshot, query } = {}) {
   for (const group of groups.values()) group.hits.sort((a, b) =>
     b.score - a.score || Number(a.span_id.startsWith('section:')) - Number(b.span_id.startsWith('section:')) || a.span_id.localeCompare(b.span_id));
   return { generation_id: index.generation_id, evidence_mode: index.evidence_mode,
-    scientific_approval: index.evidence_mode === 'actual' && ![...groups.values()].some(group => group.entity_type === 'topic'),
-    results: [...groups.values()].sort((a, b) => b.score - a.score || (a.paper_id ?? a.topic_id).localeCompare(b.paper_id ?? b.topic_id)) };
+    scientific_approval: index.evidence_mode === 'actual' && ![...groups.values()].some(group => ['topic', 'writing-project'].includes(group.entity_type)),
+    results: [...groups.values()].sort((a, b) => b.score - a.score || (a.paper_id ?? a.project_id ?? a.topic_id).localeCompare(b.paper_id ?? b.project_id ?? b.topic_id)) };
 }
 

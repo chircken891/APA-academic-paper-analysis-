@@ -1,6 +1,19 @@
 {
   "version": 1,
   "files": [
+    "scripts/lib/paper-note-path.mjs",
+    "test/v3/library-writing-cli.test.mjs",
+    "test/v3/writing-project.test.mjs",
+    "scripts/lib/query-terms.mjs",
+    "scripts/v3/library-map.mjs",
+    "scripts/v3/library-synthesis.mjs",
+    "scripts/v3/writing-project.mjs",
+    "scripts/v3/external-novelty.mjs",
+    "test/v3/library-query-search.test.mjs",
+    "test/v3/library-map.test.mjs",
+    "test/v3/library-synthesis.test.mjs",
+    "test/v3/external-novelty.test.mjs",
+    "test/setup/apa-ideation-config.test.mjs",
     ".agents/skills/academic-paper-analysis/SKILL.md",
     ".agents/skills/academic-paper-analysis/agents/openai.yaml",
     ".agents/skills/academic-paper-analysis/references/contracts-and-tools.md",
@@ -16,6 +29,9 @@
     ".agents/skills/apa-query/references/contracts-and-tools.md",
     ".agents/skills/apa-query/references/writing.md",
     ".agents/skills/apa-query/references/configuration.md",
+    ".agents/skills/apa-query/references/synthesis.md",
+    ".agents/skills/apa-query/references/ideation.md",
+    ".agents/skills/apa-query/references/writing-project.md",
     ".agents/skills/apa-setup/SKILL.md",
     ".agents/skills/apa-setup/agents/openai.yaml",
     ".agents/skills/apa-setup/references/host-detection.md",
@@ -270,7 +286,9 @@
     "test/v3/fixtures/phase21/evaluation-cases.json",
     "Templates/apa-public/.gitignore",
     "test/v3/topic-source-continuity.test.mjs",
-    "test/v3/phase22-transaction.test.mjs"
+    "test/v3/phase22-transaction.test.mjs",
+    "scripts/v3/synthesis-renderer.mjs",
+    "test/v3/synthesis-renderer.test.mjs"
   ],
   "directories": [
     "Raw",
@@ -302,6 +320,13 @@
     }
   ],
   "tests": [
+    "test/v3/library-writing-cli.test.mjs",
+    "test/v3/writing-project.test.mjs",
+    "test/v3/library-query-search.test.mjs",
+    "test/v3/library-map.test.mjs",
+    "test/v3/library-synthesis.test.mjs",
+    "test/v3/external-novelty.test.mjs",
+    "test/setup/apa-ideation-config.test.mjs",
     "test/setup/apa-companion-skills.test.mjs",
     "test/setup/apa-compact-context.test.mjs",
     "test/setup/apa-config-core.test.mjs",
@@ -368,6 +393,7 @@
     "test/v3/phase21-runner.test.mjs",
     "test/v3/reading-first-preview.test.mjs",
     "test/v3/topic-source-continuity.test.mjs",
-    "test/v3/phase22-transaction.test.mjs"
+    "test/v3/phase22-transaction.test.mjs",
+    "test/v3/synthesis-renderer.test.mjs"
   ]
 }

@@ -2,7 +2,7 @@
 
 Follow root `AGENTS.md`. Begin with `README.md` and `SETUP.md`. Configure this checkout through the repository `apa-setup` skill; do not invent model, parser or path answers for a new user.
 
-Use `academic-paper-analysis` for reading papers and `apa-query` for questions about committed library content, topic saving and selected updates.
+Use `academic-paper-analysis` for reading papers. Use `apa-query` for writing-oriented questions about registered current library content, clues, synthesis, candidate ideas, requested section drafting, and topic or writing-project saving and selected updates. Follow the skill’s current interface availability. Each synthesis, ideation or drafting request uses one configured task in the current session or one supported native delegation. External novelty checks require an explicit request for one idea and a stated budget; saving and formal publication retain their separate intent and exact-approval requirements.
 
 ## Claude Code 宿主适配
 

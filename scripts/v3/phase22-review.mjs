@@ -286,7 +286,7 @@ export function buildBilingualReview({ basis, context, views, parity, rendered, 
 
 /** Revalidate a prepared in-memory review; exact authorization still belongs to the publisher. */
 export function assertBilingualReviewCurrent(review, currentArgs) {
-  if (review?.reviewManifest?.profile === 'phase24-topic-1.0') return assertTopicPublicationReviewCurrent(review);
+  if (['phase24-topic-1.0', 'writing-project-1.0'].includes(review?.reviewManifest?.profile)) return assertTopicPublicationReviewCurrent(review);
   if (review?.reviewManifest?.profile === NOTE_RELOCATION_PROFILE) return assertNoteRelocationReviewCurrent(review);
   if (review?.reviewManifest?.profile === 'reading-first-obsidian-1.0') return assertReadingFirstPublicationReviewCurrent(review);
   const record = records.get(review);

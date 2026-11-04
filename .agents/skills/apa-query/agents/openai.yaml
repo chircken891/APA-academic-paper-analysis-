@@ -1,6 +1,6 @@
 interface:
   display_name: "APA Query"
-  short_description: "Search cited evidence and maintain APA vault topics"
-  default_prompt: "Use $apa-query to answer my question from this knowledge vault and cite the sources."
+  short_description: "Find research clues, synthesize evidence and support writing"
+  default_prompt: "Use $apa-query to find shared themes and research clues in this vault, with writing-ready wording and source citations."
 policy:
   allow_implicit_invocation: true

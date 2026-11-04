@@ -18,3 +18,16 @@ All executable paths are relative to the selected APA repository. Inspect live e
 | Cancel a pending topic operation | `topic-cancel --input` / `cancelTopicOperation` require operationId/candidateFingerprint; unregistered candidates also name candidatePath. Registered cancellation consumes `createTopicCancellationGrant` from the existing trusted Controller and its original key. Trust anchor is the trusted-process/environment channel, not input JSON. Uses the same publication lock, retains candidate files and refuses already committed/in-progress operations. |
 
 Preparation, actual host execution and exact approved publication are separate outcomes. The original Controller and transaction handle topic writes; a serialized review or a skill instruction cannot supply publication authority.
+
+## 写作导向接口
+
+| 需要 | 入口 |
+| --- | --- |
+| 盘点和知识地图 | inventory；landscape [--canvas]；dossier --node；clues --from。详见 synthesis.md。 |
+| 综合、构思 | request --input 中提供 mode:themes/dossier/compare/clues/ideas，沿用一次配置任务。 |
+| 按节起草或批注 | draft --section related-work/introduction/discussion --input；review --input。使用 projectId 或显式临时 writingContext。 |
+| 写作项目候选 | project-save／project-update-request／project-update-candidate --input，独立 project_id，受控事务详见 writing-project.md。 |
+| 参考文献 | export-refs --project-id --format bibtex/ris/both，只返回JSON中的content，调用方按授权保存。 |
+| 结构校验 | validate-result --input {generationId,mode,output,materials}，不调用模型。 |
+| 可见稿呈现 | render-result --input {mode,output,outputPath?}，零模型；outputPath为仓库相对目标Markdown路径。构思保留来源、近邻、风险／投入与收敛分类；草稿在主张后显示强度和归属。review原文保留。 |
+| 外部新颖性 | novelty --input，准备不联网；network_authorized:true执行，phase:assess消费已保存记录。预算与来源须先明确授权。 |

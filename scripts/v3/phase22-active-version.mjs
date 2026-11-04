@@ -51,7 +51,7 @@ export function getIndexManagedBinding(bytes, { pipelineVersion = '3.0', profile
   if (!(bytes instanceof Uint8Array)) fail('P22_NOTE_BYTES_REQUIRED');
   if (pipelineVersion !== '3.0') fail('P22_NOTE_PROFILE_INVALID');
   if (profile === INDEX_READING_FIRST_PROFILE) return getReadingFirstManagedBinding(bytes);
-  if (profile === INDEX_TOPIC_PROFILE) {
+  if ([INDEX_TOPIC_PROFILE, 'writing-project-1.0'].includes(profile)) {
     const inspected = inspectManagedNote(bytes);
     if (inspected.frontmatter.rendering_profile !== profile || pipelineVersion !== '3.0') fail('P22_NOTE_PROFILE_INVALID');
     return { ...inspected, regions: inspected.regions.map(region => ({ ...region, text: region.bytes.toString('utf8'),
@@ -118,7 +118,7 @@ function unique(values, code) {
 export function assertActiveGeneration(generation) {
   assertActiveIndexContract(generation, 'active');
   unique(generation.papers.map(p => p.paper_id), 'P22_ACTIVE_PAPER_DUPLICATE');
-  unique((generation.topics ?? []).map(row => row.topic_id), 'P24_TOPIC_DUPLICATE');
+  unique((generation.topics ?? []).map(row => (row.project_id ?? row.topic_id)), 'P24_TOPIC_DUPLICATE');
   unique((generation.source_events ?? []).map(row => row.event_id), 'P24_SOURCE_EVENT_DUPLICATE');
   unique(generation.objects.map(o => normalizeIndexPath(o.path).normalize('NFC').toLowerCase()), 'P22_ACTIVE_PATH_COLLISION');
   unique(generation.shared_nodes.map(o => o.entity_id), 'P22_SHARED_ENTITY_DUPLICATE');
@@ -141,7 +141,7 @@ export function assertActiveGeneration(generation) {
   }
   unique(selected, 'P22_ACTIVE_PATH_COLLISION');
   for (const topic of generation.topics ?? []) {
-    if (topic.path !== 'Wiki/topics/' + topic.topic_id + '.md' || objects.get(topic.path)?.kind !== 'topic'
+    if (topic.path !== (topic.project_id ? 'Wiki/writing/' : 'Wiki/topics/') + (topic.project_id ?? topic.topic_id) + '.md' || objects.get(topic.path)?.kind !== 'topic'
       || objects.get(topic.path).sha256 !== topic.managed_hash
       || (topic.revision === 1 ? topic.previous_revision !== null : topic.previous_revision !== topic.revision - 1)) fail('P24_TOPIC_BINDING_INVALID');
     const ids = topic.resolved_event_ids ?? [], resolutions = topic.event_resolutions ?? [];
@@ -199,15 +199,15 @@ function readRegular(root, path) {
 
 /** Derive searchable topic content solely from its managed byte regions. */
 export function topicIndexDocuments({ topic, bytes, generation }) {
-  const binding = getIndexManagedBinding(bytes, { profile: INDEX_TOPIC_PROFILE });
-  const expected = { type: 'topic', pipeline_version: '3.0', rendering_profile: INDEX_TOPIC_PROFILE,
-    topic_id: topic.topic_id, revision: topic.revision, language: topic.language, title: topic.title, graph_scope: 'v3-candidate' };
+  const binding = getIndexManagedBinding(bytes, { profile: topic.schema_version });
+  const expected = { type: topic.project_id ? 'writing-project' : 'topic', pipeline_version: '3.0', rendering_profile: topic.schema_version,
+    [topic.project_id ? 'project_id' : 'topic_id']: (topic.project_id ?? topic.topic_id), revision: topic.revision, language: topic.language, title: topic.title, graph_scope: 'v3-candidate' };
   if (Object.entries(expected).some(([key, value]) => binding.frontmatter[key] !== value)
     || !Array.isArray(binding.frontmatter.aliases) || binding.frontmatter.aliases.some(value => typeof value !== 'string')
     || binding.managedHash !== topic.managed_hash
     || generation.objects.find(row => row.path === topic.path)?.sha256 !== topic.managed_hash) fail('P24_TOPIC_MANAGED_BINDING_INVALID');
-  return binding.regions.map(region => ({ id: hash({ topic_id: topic.topic_id, revision: topic.revision, section_id: region.id }),
-    entity_type: 'topic', topic_id: topic.topic_id, revision: topic.revision, language: topic.language,
+  return binding.regions.map(region => ({ id: hash({ [topic.project_id ? 'project_id' : 'topic_id']: (topic.project_id ?? topic.topic_id), revision: topic.revision, section_id: region.id }),
+    entity_type: topic.project_id ? 'writing-project' : 'topic', [topic.project_id ? 'project_id' : 'topic_id']: (topic.project_id ?? topic.topic_id), revision: topic.revision, language: topic.language,
     path: topic.path, managed_hash: topic.managed_hash, section_id: region.id, span_id: 'section:' + region.id,
     anchor: null, unit_ids: [], content: region.content, aliases: binding.frontmatter.aliases.join(' '), title: topic.title }));
 }
@@ -216,7 +216,7 @@ function verifyObjects(root, generation, index) {
   const readerPaths = new Set();
   for (const topic of generation.topics ?? []) {
     const expected = topicIndexDocuments({ topic, bytes: readRegular(root, topic.path), generation }).sort((a, b) => a.id.localeCompare(b.id));
-    const actual = index.documents.filter(row => row.entity_type === 'topic' && row.topic_id === topic.topic_id).sort((a, b) => a.id.localeCompare(b.id));
+    const actual = index.documents.filter(row => ['topic', 'writing-project'].includes(row.entity_type) && (row.project_id ?? row.topic_id) === (topic.project_id ?? topic.topic_id)).sort((a, b) => a.id.localeCompare(b.id));
     if (hash(expected) !== hash(actual)) fail('P24_TOPIC_INDEX_MAPPING_MISMATCH');
     readerPaths.add(topic.path);
   }
@@ -256,8 +256,8 @@ export function assertIndexGeneration(index, generation) {
   const papers = new Map(generation.papers.map(p => [p.paper_id, p]));
   const represented = new Set();
   for (const doc of index.documents) {
-    if (doc.entity_type === 'topic') {
-      const topic = (generation.topics ?? []).find(row => row.topic_id === doc.topic_id);
+    if (['topic', 'writing-project'].includes(doc.entity_type)) {
+      const topic = (generation.topics ?? []).find(row => (row.project_id ?? row.topic_id) === (doc.project_id ?? doc.topic_id));
       if (!topic || ['revision', 'language', 'path', 'managed_hash'].some(key => doc[key] !== topic[key])
         || doc.span_id !== 'section:' + doc.section_id) fail('P24_TOPIC_INDEX_STALE');
       represented.add(doc.path);
@@ -274,7 +274,7 @@ export function assertIndexGeneration(index, generation) {
   }
   if (generation.papers.some(p => Object.values(p.paths).some(path => !represented.has(path)
     || (p.profile === INDEX_READING_FIRST_PROFILE ? READING_FIRST_INDEX_REGIONS : PHASE22_REGIONS).some(id => !index.documents.some(d => d.path === path && d.section_id === id && d.span_id === 'section:' + id))))) fail('P22_INDEX_INCOMPLETE');
-  if ((generation.topics ?? []).some(topic => ['topic', 'sources'].some(id => !index.documents.some(doc => doc.entity_type === 'topic' && doc.topic_id === topic.topic_id && doc.section_id === id)))) fail('P24_TOPIC_INDEX_INCOMPLETE');
+  if ((generation.topics ?? []).some(topic => ['topic', 'sources'].some(id => !index.documents.some(doc => ['topic', 'writing-project'].includes(doc.entity_type) && (doc.project_id ?? doc.topic_id) === (topic.project_id ?? topic.topic_id) && doc.section_id === id)))) fail('P24_TOPIC_INDEX_INCOMPLETE');
   return index;
 }
 

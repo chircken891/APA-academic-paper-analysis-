@@ -33,7 +33,7 @@ function graphProposal(activeSnapshot, entityInventory, readingFirst) {
   const paths = entityInventory.map(entry => normalizeIndexPath(entry?.path));
   if (new Set(paths.map(path => path.normalize('NFC').toLowerCase())).size !== paths.length) fail('P22_GRAPH_PATH_COLLISION');
   const { generation } = activeSnapshot;
-  const topics = generation.topics ?? [];
+  const topics = (generation.topics ?? []).filter(row => row.schema_version !== 'writing-project-1.0');
   const expectedNodes = [
     ...generation.papers.map(paper => {
       const sourcePaths = Object.values(paper.paths).filter(path => path.startsWith('Wiki/sources/'));
