@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { renderReadingFirstObsidian } from './reading-first-obsidian.mjs';
 import { inspectCommittedReadingFirstRegistry, readCommittedReadingFirstRegistryResource, assertCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
 
@@ -57,6 +57,47 @@ export function validateReadingFirstPreviewFiles(files) {
     }
   }
   return { status: 'passed', local_links: links, files: files.length, scientific_review: 'not_run', native_obsidian: 'not_run' };
+}
+
+/** Compare one saved render inventory with the current files and validate current links independently. */
+export async function inspectReadingFirstCandidate({outputRoot,inventory}={}) {
+  if (typeof outputRoot!=='string' || !path.isAbsolute(outputRoot) || !Array.isArray(inventory)) fail('RF_PREVIEW_INPUT_INVALID');
+  const expected=new Map();
+  for (const row of inventory) {
+    if (expected.has(localPath(row.path)) || !/^[a-f0-9]{64}$/.test(row.sha256) || !Number.isSafeInteger(row.byte_length) || row.byte_length<0) fail('RF_PREVIEW_INVENTORY_INVALID');
+    expected.set(row.path,row);
+  }
+  const actual=new Map();
+  async function walk(directory,prefix='') {
+    for (const entry of await readdir(directory,{withFileTypes:true})) {
+      const relative=prefix+entry.name, absolute=path.join(directory,entry.name);
+      if (entry.isDirectory()) await walk(absolute,relative+'/');
+      else actual.set(relative,entry.isFile() ? await readFile(absolute) : null);
+    }
+  }
+  try {
+    const root=await lstat(outputRoot);
+    if (!root.isDirectory() || root.isSymbolicLink()) fail('RF_PREVIEW_PATH_INVALID',{path:outputRoot});
+    await walk(outputRoot);
+  } catch (error) { if (error.code!=='ENOENT') throw error; }
+  const modified=[], missing=[], extra=[];
+  for (const [relative,row] of expected) {
+    if (!actual.has(relative)) missing.push(relative);
+    else {
+      const bytes=actual.get(relative);
+      if (!bytes || bytes.length!==row.byte_length || digest(bytes)!==row.sha256) modified.push(relative);
+    }
+  }
+  for (const relative of actual.keys()) if (!expected.has(relative)) extra.push(relative);
+  const consistency={status:modified.length || missing.length || extra.length ? 'failed' : 'passed',
+    modified:modified.sort(),missing:missing.sort(),extra:extra.sort()};
+  let links;
+  try {
+    links=validateReadingFirstPreviewFiles([...actual].flatMap(([path,bytes])=>bytes ? [{path,bytes}] : []));
+  } catch (error) {
+    links={status:'failed',code:error.code,details:error.details};
+  }
+  return {status:consistency.status==='passed' && links.status==='passed' ? 'passed' : 'failed',consistency,links};
 }
 
 /** Export a new self-contained candidate only after all resources and local links pass. */
@@ -155,10 +196,11 @@ export async function exportReadingFirstPreview({ outputRoot, identity, views, p
       ...(file.kind.startsWith('historical-') ? { generation_id: history.generation_id, source_path: file.path, publishable: false } : {}) })) };
   // mkdir is deliberately non-recursive: a second invocation can never merge into an old candidate.
   try { await mkdir(root); } catch (error) { if (error.code === 'EEXIST') fail('RF_PREVIEW_OUTPUT_EXISTS', { outputRoot: root }); throw error; }
-  for (const file of [...files, { path: manifestPath, bytes: Buffer.from(JSON.stringify(manifest, null, 2) + '\n') }]) {
+  const outputFiles=[...files,{path:manifestPath,bytes:Buffer.from(JSON.stringify(manifest,null,2)+'\n')}];
+  for (const file of outputFiles) {
     const destination = path.join(root, ...file.path.split('/'));
     await mkdir(path.dirname(destination), { recursive: true });
     await writeFile(destination, file.bytes, { flag: 'wx' });
   }
-  return { outputRoot: root, files: [...files.map(file => file.path), manifestPath], notes: rendered.notes, supportNotes: rendered.supportNotes, knowledgeProposals: rendered.knowledgeProposals, ...(rendered.visual_resources ? { visual_resources: rendered.visual_resources } : {}), targetRegistry: rendered.targetRegistry, manifest, validation };
+  return { outputRoot: root, files: outputFiles.map(file=>file.path), inventory:outputFiles.map(file=>({path:file.path,sha256:digest(file.bytes),byte_length:file.bytes.length})), notes: rendered.notes, supportNotes: rendered.supportNotes, knowledgeProposals: rendered.knowledgeProposals, ...(rendered.visual_resources ? { visual_resources: rendered.visual_resources } : {}), targetRegistry: rendered.targetRegistry, manifest, validation };
 }

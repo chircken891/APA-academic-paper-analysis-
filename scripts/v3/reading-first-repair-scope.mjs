@@ -3,13 +3,17 @@ import { fingerprintV3Json } from './semantic-package-validator.mjs';
 const fail = code => { throw Object.assign(new Error(code), {code}); };
 const keys = ['section_ids','knowledge_ids','visual_ids','editor_fields'];
 
-export function validateRepairScopes(review, views, presentation) {
+export function repairScopeCatalog(views, presentation) {
   const catalogs = {
     section_ids:new Set(views.flatMap(view => view.sections.map(section => section.id))),
     knowledge_ids:new Set((presentation?.knowledge ?? []).map(item => item.id)),
     visual_ids:new Set((presentation?.visuals ?? []).map(item => item.id)),
     editor_fields:new Set(['map']),
   };
+  return catalogs;
+}
+export function validateRepairScopes(review, views, presentation) {
+  const catalogs=repairScopeCatalog(views,presentation);
   for (const issue of review.issues.filter(issue => issue.severity === 'material')) {
     const scope=issue.repair_scope;
     if (!scope || Object.keys(scope).sort().join() !== ['status',...keys].sort().join()
@@ -20,8 +24,15 @@ export function validateRepairScopes(review, views, presentation) {
   }
 }
 
-export function assertEditorRepairScope(base, revised, review) {
-  const scopes=review.issues.filter(issue=>issue.severity==='material').map(issue=>issue.repair_scope);
+export function assertEditorRepairScope(base, revised, review, presentation) {
+  const methods = new Set((presentation?.knowledge ?? []).filter(row=>row.type==='method' || row.kind==='method').map(row=>row.id));
+  const newMethodLinks = new Map();
+  const links = row => [...new Set([...(row.knowledge_id===undefined ? [] : [row.knowledge_id]),...(row.knowledge_ids ?? [])])].sort();
+  const materialIssues=review.issues.filter(issue=>issue.severity==='material');
+  const scopes=materialIssues.map(issue=>issue.repair_scope);
+  const inventorySections=materialIssues
+    .filter(issue=>issue.kind==='method-inventory' && issue.repair_owner==='editor' && issue.repair_scope.status==='located')
+    .map(issue=>new Set(issue.repair_scope.section_ids));
   const ids=key=>new Set(scopes.flatMap(scope=>scope[key]));
   const sections=ids('section_ids'), knowledge=ids('knowledge_ids'), visuals=ids('visual_ids');
   const inScope=(item, kind) => kind==='sections' ? sections.has(item.section_id)
@@ -45,6 +56,24 @@ export function assertEditorRepairScope(base, revised, review) {
       // still pass the same identity, order and outside-content checks below.
       after=right.languages[language][kind]=after.filter(item=>existing.has(item.id));
     }
+    if (kind==='methods') {
+      const existing=new Set(before.map(item=>item.id));
+      if (new Set(after.map(item=>item.id)).size!==after.length) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
+      for (const item of after.filter(item=>!existing.has(item.id))) {
+        const references=item.section_ids ?? [];
+        const linked=links(item);
+        if (linked.some(id=>!methods.has(id))) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
+        if (linked.length || newMethodLinks.has(item.id)) {
+          const existingLinks=newMethodLinks.get(item.id);
+          if (language==='zh-CN' && JSON.stringify(existingLinks)!==JSON.stringify(linked)) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
+          newMethodLinks.set(item.id,linked);
+        }
+        if (!references.length
+          || !inventorySections.some(scope=>references.every(id=>scope.has(id)))) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
+      }
+      // Existing entries still go through the checks for identity, order and out-of-scope edits.
+      after=right.languages[language][kind]=after.filter(item=>existing.has(item.id));
+    }
     if (before.length!==after.length) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
     for (let i=0;i<before.length;i++) {
       const a=before[i], b=after[i], identity=kind==='sections'?'section_id':kind==='methods'||kind==='visuals'?'id':null;
@@ -58,5 +87,6 @@ export function assertEditorRepairScope(base, revised, review) {
       before[i]=null; after[i]=null;
     }
   }
+  for (const [id] of newMethodLinks) if (!(revised.languages['zh-CN'].methods ?? []).some(row=>row.id===id)) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
   if (fingerprintV3Json(left)!==fingerprintV3Json(right)) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
 }

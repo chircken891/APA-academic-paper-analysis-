@@ -11,7 +11,7 @@
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/controller-apis.md",
-      "sha256": "bae2e208ce1468ee8dbe641a0dd033832155bfee07a6063fd0dc46a6d6e35485"
+      "sha256": "fd277e35e1a7024527751d19bf98e9a24b6996b60bc9cc0f42ce49f8cc4a6dab"
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/evaluation.md",
@@ -19,7 +19,7 @@
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/execution-and-recovery.md",
-      "sha256": "95c525c228af6298cc1fb9d6f0dae7819220670469663016f9320baceb80ef9e"
+      "sha256": "464f656d13d3e7548647a8e65b144293d854ecbba580728e235c96558ba29169"
     },
     {
       "path": ".agents/skills/academic-paper-analysis/references/presentation-and-reading-review.md",
@@ -31,7 +31,7 @@
     },
     {
       "path": ".agents/skills/academic-paper-analysis/SKILL.md",
-      "sha256": "4df7e3b7ed5e883f1153f7a761f2e0296aeb0cd82eec0b21974e21d790af70c5"
+      "sha256": "7c3e2821d0fb78922a6a8f2af5bebafde20f4a7607076b5c1974ecc43e9b238d"
     },
     {
       "path": ".agents/skills/apa-query/agents/openai.yaml",
@@ -131,7 +131,7 @@
     },
     {
       "path": "docs/apa-v3/current-contracts.md",
-      "sha256": "e2c62993dbe684c65eb44f8782360a5c21a4a4d80ad50b1cffa84525cdf087f2"
+      "sha256": "7f490d4dba7419cf21d4826055683ff73d638c21833686b8dc312468c379e3a8"
     },
     {
       "path": "docs/apa-v3/reading-first-obsidian.md",
@@ -139,11 +139,11 @@
     },
     {
       "path": "docs/apa-v3/reading-first-publication.md",
-      "sha256": "efdcaabd36a91a137508bfd072e474735284c0ee8dfd1159accce64e7ec426be"
+      "sha256": "80ab3e52c1c17a5ee55934a126b975fa5c704030f1b8ab48b6aeeab582d7ad7a"
     },
     {
       "path": "docs/apa-v3/reading-session.md",
-      "sha256": "f72d039091ac51acef965a30a50a5872801d28ffbfc0fbf352a61e15464ec896"
+      "sha256": "92acb0f8cc4b5f93ca78e630675458be4b6b8e0b4d6c90e2710d16e1dca28585"
     },
     {
       "path": "docs/apa-v3/scientific-writing-modules.md",
@@ -471,7 +471,7 @@
     },
     {
       "path": "scripts/v3/configured-reading.mjs",
-      "sha256": "632bf2018fc7b99d03e85f7d19fdc9c779180e0de623c2bd626bfccb33799447"
+      "sha256": "1ac41cffffaf9b8f7d509e7c3c5727dc32b8764f52e80dff5402fa76ff34db44"
     },
     {
       "path": "scripts/v3/contract-validator.mjs",
@@ -675,11 +675,11 @@
     },
     {
       "path": "scripts/v3/reading-first-preview.mjs",
-      "sha256": "982f611bffc5e841c0c4ddd3c3313625d9381e9e483b745c3a455db04da60098"
+      "sha256": "74c1d0b7e977d63d472adbee6930b64352d037c48669f6aba57ef12c2a02c6b9"
     },
     {
       "path": "scripts/v3/reading-first-publication.mjs",
-      "sha256": "e6ae46cf935b1f3cd9b18ae3acb66ada86bde799397440582a3bc112435fb252"
+      "sha256": "c43621ea338f7965e9bf05f9e826b391abf95061f8afbe759665e5849d33bf11"
     },
     {
       "path": "scripts/v3/reading-first-rebase.mjs",
@@ -687,11 +687,11 @@
     },
     {
       "path": "scripts/v3/reading-first-repair-scope.mjs",
-      "sha256": "1f8b25dcdb57f22480eee5b2fe7a015e6d299884e61353c95fd9f44413564039"
+      "sha256": "abb220b10f1c7749d90a8e62cf32a59ac4c386b63c996bd8c3acca61823b1f9b"
     },
     {
       "path": "scripts/v3/reading-first-runtime.mjs",
-      "sha256": "3b360262128c6c209f6c4e7323d079137a021c36ffd333a3b8c91b8e9285f9c8"
+      "sha256": "68b9b64afd59ed04ba616d242e1735d59f2663fb39f0db038c1e976cb7a2971f"
     },
     {
       "path": "scripts/v3/reading-host-evidence.mjs",
@@ -707,7 +707,7 @@
     },
     {
       "path": "scripts/v3/reading-session-cli.mjs",
-      "sha256": "b85903d33ceccacd7ff3e8d230904a43430bb6d1cada15670f5072e9767aebea"
+      "sha256": "ff2ad6d744e47ef0687ec69af2b357cce2a494cda9eb982d136cb4ec477ee9bd"
     },
     {
       "path": "scripts/v3/reading-session-tasks.mjs",
@@ -715,7 +715,7 @@
     },
     {
       "path": "scripts/v3/reading-session.mjs",
-      "sha256": "b166871f3860c26559762c2c9ab1e5aff197f937e793c024c7668932de3b7306"
+      "sha256": "081a79548d726d01b91f1a589fa135753d1034e879dd7cd24296fe7c14315ca4"
     },
     {
       "path": "scripts/v3/reading-translation-progress.mjs",
@@ -915,7 +915,7 @@
     },
     {
       "path": "test/v3/configured-reading.test.mjs",
-      "sha256": "28f9cecde41333fcbc4209cc751586998866b871f1eef57e699613b400697447"
+      "sha256": "0c35926b57f848cc36f6ccc145b28fb361da39dfaae72e823940ee10c55d2783"
     },
     {
       "path": "test/v3/current-vault-content.test.mjs",
@@ -959,7 +959,7 @@
     },
     {
       "path": "test/v3/helpers/reading-first-publication-source-fixtures.mjs",
-      "sha256": "85786955798564d830c3c8fbb6b393338a8cc3cce228cb43533c4e7920443ab4"
+      "sha256": "79bb788b1fbe42cb33ca95e9ea03f263f84f6a09f206e5f4ffea0667dcd39a1d"
     },
     {
       "path": "test/v3/helpers/topic-fixtures.mjs",
@@ -1035,7 +1035,7 @@
     },
     {
       "path": "test/v3/reading-first-consolidation.test.mjs",
-      "sha256": "c24f0364599c15e5df393b59ae0d9c0d41652011781337122bc2a0f133223df7"
+      "sha256": "9be77f0e872132e05656ec5e068909c4a48f104838206dcd0e777ce9aa497e5c"
     },
     {
       "path": "test/v3/reading-first-editor.test.mjs",
@@ -1079,7 +1079,7 @@
     },
     {
       "path": "test/v3/reading-first-preview.test.mjs",
-      "sha256": "754bf121d1a9bd71cf69b1a6723346002e91bea13963f37917343b55ad6bd220"
+      "sha256": "01d5f2f1442db87b8374540c28d46196fa8f19ccae33ded036ca4f315be4b839"
     },
     {
       "path": "test/v3/reading-first-publication.test.mjs",
@@ -1111,7 +1111,7 @@
     },
     {
       "path": "test/v3/reading-resources-publication.test.mjs",
-      "sha256": "73cf18bc0da6321f070be30cec5db8ded670425c25e437519865264ace428909"
+      "sha256": "46b1249df479edb9351ced4a227e21071733a746a6c4751b4a0e5da4bc23737d"
     },
     {
       "path": "test/v3/reading-resources.test.mjs",
@@ -1131,7 +1131,7 @@
     },
     {
       "path": "test/v3/reading-session.test.mjs",
-      "sha256": "5534d3245dd588771de0134916cc9a4e76fdd03eb0825e35d2e9c4727eb3bfbc"
+      "sha256": "a19b0148675517bf2f1b9f26f0c9a90cea0fc471515acf0decee585ec165f201"
     },
     {
       "path": "test/v3/reading-translation-progress.test.mjs",

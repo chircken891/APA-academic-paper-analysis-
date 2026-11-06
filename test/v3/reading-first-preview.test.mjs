@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readingFirstViewsFingerprint } from '../../scripts/v3/reading-first-editor.mjs';
-import { exportReadingFirstPreview } from '../../scripts/v3/reading-first-preview.mjs';
+import { exportReadingFirstPreview, inspectReadingFirstCandidate } from '../../scripts/v3/reading-first-preview.mjs';
 import { readingFirstIndexFixture } from './helpers/reading-first-index-fixtures.mjs';
 import { readCommittedReadingFirstKnowledgeRegistry } from '../../scripts/v3/reading-first-knowledge-registry.mjs';
 
@@ -169,4 +169,20 @@ test('exports the fingerprint-bound editor layout and validates its numbered hea
   assert.match(content, /A \*\*complete explanation\*\*\./);
   assert.equal(result.validation.status, 'passed');
   assert.equal(result.validation.native_obsidian, 'not_run');
+});
+
+test('candidate inspection reports changed, missing and additional files independently of links',async t=>{
+  const input=await fixture(t), output=await exportReadingFirstPreview(input);
+  assert.equal((await inspectReadingFirstCandidate(output)).status,'passed');
+  const note=output.notes[0].path;
+  const notePath=path.join(output.outputRoot,note);
+  const bytes=await readFile(notePath);
+  bytes[bytes.length-1]^=1;
+  await writeFile(notePath,bytes);
+  await rm(path.join(output.outputRoot,'.apa-v3/presentation.json'));
+  await writeFile(path.join(output.outputRoot,'added.txt'),'additional');
+  const report=await inspectReadingFirstCandidate(output);
+  assert.equal(report.status,'failed');
+  assert.deepEqual(report.consistency,{status:'failed',modified:[note],missing:['.apa-v3/presentation.json'],extra:['added.txt']});
+  assert.equal(report.links.status,'passed');
 });

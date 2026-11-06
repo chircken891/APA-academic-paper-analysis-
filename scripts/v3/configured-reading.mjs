@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync, mkdirSync, writeFileSync, linkSync, unlinkSync, lstatSync, cpSync, readdirSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync, linkSync, unlinkSync, lstatSync, cpSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectApaConfig, resolveApaConfig } from '../lib/apa-config.mjs';
 import { createConfiguredApaRoleModelPolicy, resolveApaRoleModel, buildHostDispatchArguments } from '../apa-model-policy.mjs';
-import { SCIENCE_INDEX_PROFILE, createReadingFirstRunControl, fingerprintReadingFirst, getReadingFirstPresentation, renderReadingFirstNotes, snapshotReadingFirstRuntime } from './reading-first-runtime.mjs';
-import { exportReadingFirstPreview } from './reading-first-preview.mjs';
+import { SCIENCE_INDEX_PROFILE, createReadingFirstRunControl, fingerprintReadingFirst, getReadingFirstPresentation, renderReadingFirstNotes, snapshotReadingFirstRuntime, getReadingFirstState, recordReadingFirstCandidateInventory } from './reading-first-runtime.mjs';
+import { exportReadingFirstPreview, inspectReadingFirstCandidate } from './reading-first-preview.mjs';
 import { emitApprovedRunStep, createCurrentMineruBaselinePort } from './phase21-runner.mjs';
 import { getRoleReplyContract } from './role-reply-contract.mjs';
 import { readCommittedReadingFirstKnowledgeRegistry, assertCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
@@ -216,24 +216,26 @@ export function createConfiguredMineruPort({ prepared, repoRoot, dependencies } 
 /** Save the same rendered Obsidian candidate through the existing self-contained exporter; grants no publication authority. */
 export async function materializeConfiguredReadingCandidate({ prepared, controller, handoff, resources, onDependencyBoundary, candidateRevision = 1, reuseExisting = false, ...renderOptions } = {}) {
   const checkpoint = snapshotReadingFirstRuntime(controller);
+  const current=getReadingFirstState(controller);
   if (checkpoint.control_fingerprint !== fingerprintReadingFirst(prepared.runControl.reading_first_binding)
     || checkpoint.handoff_fingerprint !== handoff?.handoff_fingerprint) throw new Error('APA_CONFIGURED_CANDIDATE_BINDING_MISMATCH');
   const policy = prepared.runControl.reading_first_binding.configured_setup?.knowledge_registry;
   const boundRoot = prepared.runControl.reading_first_binding.configured_setup?.paths?.candidateRoot;
   if ((candidateRevision !== 1 || reuseExisting) && (typeof boundRoot !== 'string' || resolve(prepared.paths.candidateRoot) !== resolve(boundRoot))) throw new Error('APA_CONFIGURED_CANDIDATE_BINDING_MISMATCH');
-  if (![1, 2].includes(candidateRevision) || typeof reuseExisting !== 'boolean') throw new Error('APA_CONFIGURED_CANDIDATE_REVISION_INVALID');
-  const material = checkpoint.state.review?.issues?.filter(issue => issue.severity === 'material') ?? [];
+  const maxRevision=current.review_round_limit+(checkpoint.state.user_revisions ?? []).filter(row=>!row.scientific).length;
+  if (!Number.isInteger(candidateRevision) || candidateRevision < 1 || candidateRevision > maxRevision || typeof reuseExisting !== 'boolean') throw new Error('APA_CONFIGURED_CANDIDATE_REVISION_INVALID');
+  const material = current.review?.issues?.filter(issue => issue.severity === 'material') ?? [];
   const rendererOnly = checkpoint.state.status === 'revision_required' && material.length > 0 && material.every(issue => issue.repair_owner === 'renderer');
-  const revisionReady = checkpoint.state.reviews === 1 && checkpoint.state.review && (checkpoint.state.status === 'pending_review' || rendererOnly);
-  const recoveringReviewed = reuseExisting && checkpoint.state.reviews === 2 && checkpoint.state.review && ['reviewing', 'reading_complete', 'completed_with_limits'].includes(checkpoint.state.status);
-  if (candidateRevision === 2 && !revisionReady && !recoveringReviewed) throw new Error('APA_CONFIGURED_CANDIDATE_REVISION_INVALID');
-  const candidateRoot = candidateRevision === 2 ? prepared.paths.candidateRoot + '-r2' : prepared.paths.candidateRoot;
+  const revisionReady = current.candidate_revision===candidateRevision-1 && checkpoint.state.review && (checkpoint.state.status==='pending_review' || rendererOnly);
+  const recoveringReviewed = reuseExisting && current.candidate_revision === candidateRevision && checkpoint.state.review && ['reviewing', 'reading_complete', 'completed_with_limits'].includes(checkpoint.state.status);
+  if (candidateRevision > 1 && !revisionReady && !recoveringReviewed) throw new Error('APA_CONFIGURED_CANDIDATE_REVISION_INVALID');
+  const candidateRoot = candidateRevision > 1 ? prepared.paths.candidateRoot + '-r' + candidateRevision : prepared.paths.candidateRoot;
   if (policy?.policy !== 'current-shared-nodes-1.0') throw Object.assign(new Error('READING_BINDING_RETIRED'), { code: 'READING_BINDING_RETIRED' });
   if (typeof policy.vault_root !== 'string' || resolve(policy.vault_root) !== policy.vault_root) throw new Error('APA_CONFIGURED_KNOWLEDGE_REGISTRY_POLICY_INVALID');
   let exists = false;
   try { lstatSync(candidateRoot); exists = true; } catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (exists && !reuseExisting) throw Object.assign(new Error('RF_PREVIEW_OUTPUT_EXISTS'), { code: 'RF_PREVIEW_OUTPUT_EXISTS' });
-  if (candidateRevision === 2 && recoveringReviewed && !exists) throw new Error('APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH');
+  if (candidateRevision > 1 && recoveringReviewed && !exists) throw new Error('APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH');
   const scratch = join(policy.vault_root, '.tmp', 'reading-first-candidates');
   mkdirSync(scratch, { recursive: true });
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -260,24 +262,14 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
       assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: trusted, policy: policy.policy, paths });
       if (exists) {
         try {
-          const walk = (root, prefix = '') => readdirSync(join(root, prefix), { withFileTypes: true }).flatMap(entry => {
-            const relativePath = prefix ? prefix + '/' + entry.name : entry.name;
-            if (entry.isDirectory()) return walk(root, relativePath);
-            if (!entry.isFile()) throw new Error('invalid entry');
-            return [relativePath];
-          });
-          if (!lstatSync(candidateRoot).isDirectory()) throw new Error('invalid root');
-          const actual = walk(candidateRoot).sort(), expected = [...exported.files].sort();
-          if (fingerprintReadingFirst(actual) !== fingerprintReadingFirst(expected)) throw new Error('file set');
-          for (const path of expected) {
-            const oldBytes = readFileSync(join(candidateRoot, ...path.split('/'))), newBytes = readFileSync(join(stage, ...path.split('/')));
-            if (oldBytes.length !== newBytes.length || sha(oldBytes) !== sha(newBytes)) throw new Error('file bytes');
-          }
+          const report=await inspectReadingFirstCandidate({outputRoot:candidateRoot,inventory:exported.inventory});
+          if (report.status!=='passed') throw Object.assign(new Error('file set, bytes or links'),{report});
           assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: trusted, policy: policy.policy, paths });
         } catch (error) {
           if (error.code === 'P23_CURRENT_CHANGED') throw error;
-          throw Object.assign(new Error('APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH'), { code: 'APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH' });
+          throw Object.assign(new Error('APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH'), { code: 'APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH', ...(error.report ? {report:error.report} : {}) });
         }
+        recordReadingFirstCandidateInventory({controller,presentation:candidate,outputRoot:candidateRoot,inventory:exported.inventory,revision:candidateRevision});
         return { candidate, exported: { ...exported, outputRoot: candidateRoot }, staging_root: stage, reused: true };
       }
       mkdirSync(dirname(candidateRoot), { recursive: true });
@@ -291,6 +283,7 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
         error.details = { ...error.details, owned_output_path: candidateRoot, staging_root: stage };
         throw error;
       }
+      recordReadingFirstCandidateInventory({controller,presentation:candidate,outputRoot:candidateRoot,inventory:exported.inventory,revision:candidateRevision});
       return { candidate, exported: { ...exported, outputRoot: candidateRoot }, staging_root: stage };
     } catch (error) {
       if (error.code !== 'P23_CURRENT_CHANGED' || attempt === 2) throw error;

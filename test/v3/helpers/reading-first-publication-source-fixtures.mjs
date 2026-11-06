@@ -28,6 +28,7 @@ const titles = {
 
 /** Synthetic owned artifacts and host observations; never dispatches a real model. */
 export async function reviewedReadingFirstFixture(t, options = {}) {
+  const adopted = options.adoptedFrom;
   const root = options.artifactRoot ?? await mkdtemp(join(tmpdir(), 'apa-rf-publication-'));
   if (!options.artifactRoot) t.after(() => rm(root, { recursive: true, force: true }));
   const runId = options.runId ?? 'run_' + 'a'.repeat(32);
@@ -61,7 +62,7 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
     if (!options.manifestDocx) await writeFile(supplement.path, supplementBytes);
     await writeFile(display.path, displayBytes);
   }
-  const presentation = options.presentation ?? {
+  const presentation = options.presentation ?? adopted?.presentationCatalog ?? {
     schema_version: 'reading-first-obsidian-1.0', layout: 'writer-modules-1.0',
     knowledge_layout: 'shared-bilingual-1.0',
     bibliography: { title: options.title ?? { en: 'Synthetic publication study', 'zh-CN': '合成发布研究' }, first_author: 'Tester', year: 2026 },
@@ -110,14 +111,17 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
   }]));
   const input = {
     identity: { paper_id: paperId, run_id: runId, ...(options.analysisRevision ? { analysis_revision: options.analysisRevision } : {}) },
-    sources: [source, ...(registeredDocx ? [supplement] : [])],
-    presentation_assets: [...(options.omitPresentationAssets || options.manifestDocx ? [] : [figure]), ...(registeredDocx && !options.manifestDocx && !options.unregisteredDisplay ? [display] : [])],
-    context: 'Explain the registered source as one connected scientific account.', role_artifacts: roles,
+    sources: adopted?.input.sources ?? [source, ...(registeredDocx ? [supplement] : [])],
+    presentation_assets: adopted?.input.presentation_assets ?? [...(options.omitPresentationAssets || options.manifestDocx ? [] : [figure]), ...(registeredDocx && !options.manifestDocx && !options.unregisteredDisplay ? [display] : [])],
+    context: 'Explain the registered source as one connected scientific account.', role_artifacts: adopted ? [] : roles,
+    ...(adopted ? { presentation, adopted_science: adopted.handoff.science.map(({ receipt }) => ({
+      artifact_root: adopted.root, artifact_id: receipt.artifact_id, receipt,
+    })) } : {}),
   };
   const runBinding = (options.createRunControl ?? createReadingFirstRunControl)({ runId, scientificInput: input, mainSession: { model: 'gpt-6-astra', reasoning_effort: 'high' },
     authorizationId: 'synthetic-publication-source-only', deadline: options.deadline ?? '2099-01-01T00:00:00Z', maxCalls: 7,
     writingMode: 'source-first', sourceLanguage: 'en', presentationMode: 'reading-editor', taskBindings: tasks, ...options.controlOptions,
-    ...(options.manifestDocx ? {maxTotalCalls:20,presentationProfile:'reading-editor-1.3',configuredSetup:{...buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-2.2'}),paths:{runRoot:root},results_resources:{output_root:'resources/results',manifest_task:manifestTask}}} : {}),
+    ...(options.manifestDocx || adopted ? {maxTotalCalls:20,presentationProfile:'reading-editor-1.3',configuredSetup:{...buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-2.2'}),paths:{runRoot:root},results_resources:{output_root:'resources/results',manifest_task:manifestTask}}} : {}),
     ...(options.currentRegistryRoot ? { maxTotalCalls: 20, configuredSetup: { ...buildConfiguredReadingInstructions({}), paths: { runRoot: root },
       knowledge_registry: { policy: 'current-shared-nodes-1.0', vault_root: options.currentRegistryRoot } } } : {}) });
   const binding = runBinding.reading_first_binding;
@@ -145,7 +149,7 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
     : assetMapping ? { resource_handoff: { asset_mapping: options.assetMappingChange ? options.assetMappingChange(assetMapping) : assetMapping } }
     : ownedVisualResources ? { visual_resources: ownedVisualResources } : {};
   if (options.manifestDocx) await commitOwnedArtifact({artifactRoot:root,dispatchContext:broker.dispatchContext,capability:broker.issueCapability({runId,actorId:'results',role:'results',artifactPath:manifestTask.artifact_path,revision:'1'}),artifact:{artifact_id:manifestTask.artifact_id,content:manifestBytes},expectedRevision:'1'});
-  for (const role of roles) await commitOwnedArtifact({ artifactRoot: root, dispatchContext: broker.dispatchContext,
+  for (const role of input.role_artifacts) await commitOwnedArtifact({ artifactRoot: root, dispatchContext: broker.dispatchContext,
     capability: broker.issueCapability({ runId, actorId: role, role, artifactPath: 'science/' + role + '.json', revision: '1' }),
     artifact: { artifact_id: role, content: JSON.stringify({ context: 'Registered synthetic scientific output for ' + role,
       ...(role === 'integration' ? { presentation, ...ownedRegistration } : {}) }) }, expectedRevision: '1' });
@@ -222,7 +226,7 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
     { kind: 'key_design', location: 'design', finding: 'The key design is explained.' },
   ], issues: [], scope: 'Synthetic overall review of the exact complete bilingual candidate.' };
   const acceptedReview = options.completeReview === false ? null : await complete(reviewRequest, review);
-  const resources = [
+  const resources = adopted?.resources ?? [
     { path: presentation.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length },
     { path: presentation.visuals[0].path, source_path: figure.path, sha256: figure.sha256, byte_length: figure.byte_length },
     ...(registeredDocx ? [

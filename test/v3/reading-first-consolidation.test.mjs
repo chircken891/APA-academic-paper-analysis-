@@ -56,34 +56,34 @@ test('rejected editor revision survives an owned checkpoint without a new dispat
   assert.throws(()=>createReadingFirstPresentationRequest({controller:restored.controller}),/EDITOR_UNAVAILABLE/);
 });
 
-test('an unresolved verifier scope records the real output and ends without repair', async t => {
+test('an unresolved verifier scope records the real output while repair waits for routing', async t => {
   const issue={severity:'material',kind:'presentation',detail:'Scope is unknown.',repair_owner:'editor',repair_scope:{status:'unresolved',section_ids:[],knowledge_ids:[],visual_ids:[],editor_fields:[]}};
   const review={overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[issue],scope:'overall'};
   const s=await reviewedReadingFirstFixture(t,{controlOptions:{presentationProfile:'reading-editor-1.3'},review});
   const state=getReadingFirstState(s.controller);
-  assert.equal(state.status,'completed_with_limits');
-  assert.equal(state.rejection.reason,'READING_FIRST_REPAIR_SCOPE_UNRESOLVED');
-  assert.equal(state.rejection.receipt.artifact_id,'review');
-  assert.ok(state.rejection.sha256);
+  assert.equal(state.status,'review_unroutable');
+  assert.deepEqual(state.routing.gaps,[{issue_id:'issue-1',missing_fields:['repair_scope']}]);
+  assert.equal(state.observations.at(-1).receipt.artifact_id,'review');
+  assert.deepEqual(state.review,review);
   assert.throws(()=>createReadingFirstPresentationRequest({controller:s.controller}),/EDITOR_UNAVAILABLE/);
 });
 
-test('configured material review without repair owner is retained as a limited terminal result', async t => {
+test('configured material review without repair owner retains its receipt and waits for routing', async t => {
   const configured=buildConfiguredReadingInstructions({});
   const issue={severity:'material',kind:'layout',detail:'An ownership decision is missing.',repair_scope:{status:'located',section_ids:['findings'],knowledge_ids:[],visual_ids:[],editor_fields:[]}};
   const review={overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[issue],scope:'overall'};
   const s=await reviewedReadingFirstFixture(t,{translationLanguage:null,controlOptions:{presentationProfile:'reading-editor-1.3'},review,createRunControl:args=>createReadingFirstRunControl({...args,maxTotalCalls:20,configuredSetup:{...configured,paths:{runRoot:dirname(args.scientificInput.sources[0].path)}}})});
   const state=getReadingFirstState(s.controller);
-  assert.equal(state.status,'completed_with_limits');
-  assert.equal(state.rejection.reason,'READING_FIRST_REPAIR_OWNER_REQUIRED');
-  assert.equal(state.rejection.receipt.artifact_id,'review');
-  assert.ok(state.rejection.sha256);
+  assert.equal(state.status,'review_unroutable');
+  assert.deepEqual(state.routing.gaps,[{issue_id:'issue-1',missing_fields:['repair_owner']}]);
+  assert.equal(state.observations.at(-1).receipt.artifact_id,'review');
+  assert.deepEqual(state.review,review);
   assert.throws(()=>createReadingFirstPresentationRequest({controller:s.controller}),/EDITOR_UNAVAILABLE/);
   const snapshot=snapshotReadingFirstRuntime(s.controller);
   const receipt=await commitOwnedArtifact({artifactRoot:s.root,dispatchContext:s.broker.dispatchContext,capability:s.broker.issueCapability({runId:s.runId,actorId:'controller',role:'control',artifactPath:'checkpoint.json',revision:'1'}),artifact:{artifact_id:'checkpoint',content:JSON.stringify(snapshot)},expectedRevision:'1'});
   const restored=await restoreReadingFirstRuntime({handoff:s.handoff,runControl:s.runControl,checkpointReceipt:receipt});
   assert.equal(restored.ok,true,JSON.stringify(restored.errors));
-  assert.equal(getReadingFirstState(restored.controller).rejection.reason,'READING_FIRST_REPAIR_OWNER_REQUIRED');
+  assert.equal(getReadingFirstState(restored.controller).status,'review_unroutable');
   assert.deepEqual(getReadingFirstPendingRequests(restored.controller),[]);
 });
 
@@ -146,17 +146,22 @@ test('an already committed result can be reconciled after a checkpoint failure',
   assert.equal(result.status,'reading_complete');
 });
 
-test('terminal checkpoint callback persists an unresolved review before return', async t => {
+test('unresolved review uses the normal owned checkpoint path', async t => {
   const s=await reviewedReadingFirstFixture(t,{completeReview:false,controlOptions:{presentationProfile:'reading-editor-1.3'}});
   const review={...s.review,issues:[{severity:'material',kind:'presentation',detail:'Unknown location',repair_owner:'editor',repair_scope:{status:'unresolved',section_ids:[],knowledge_ids:[],visual_ids:[],editor_fields:[]}}]};
   const request=s.reviewRequest, step=request.emittedStep;
   await writeFile(join(s.root,request.task.native_path),JSON.stringify(review));
   let checkpoint;
   const result=await acceptReadingFirstResult({controller:s.controller,request,observation:{action_id:step.action_id,run_id:s.runId,input_fingerprint:step.input_fingerprint,port:'current-collaboration',tool_call:{name:step.action,arguments:step.arguments},raw_result_text:JSON.stringify({agent_id:'synthetic-'+request.task.task_id})},capability:s.broker.issueCapability({runId:s.runId,actorId:request.task.owner_actor_id,role:request.task.role,artifactPath:request.task.artifact_path,revision:'1'}),terminalCheckpoint:async snapshot=>{checkpoint=await commitOwnedArtifact({artifactRoot:s.root,dispatchContext:s.broker.dispatchContext,capability:s.broker.issueCapability({runId:s.runId,actorId:'controller',role:'control',artifactPath:'checkpoint.json',revision:'1'}),artifact:{artifact_id:'checkpoint',content:JSON.stringify(snapshot)},expectedRevision:'1'});}});
-  assert.equal(result.checkpoint_required,false);
+  assert.equal(result.status,'review_unroutable');
+  assert.equal(checkpoint,undefined);
+  const snapshot=snapshotReadingFirstRuntime(s.controller);
+  checkpoint=await commitOwnedArtifact({artifactRoot:s.root,dispatchContext:s.broker.dispatchContext,
+    capability:s.broker.issueCapability({runId:s.runId,actorId:'controller',role:'control',artifactPath:'checkpoint.json',revision:'1'}),
+    artifact:{artifact_id:'checkpoint',content:JSON.stringify(snapshot)},expectedRevision:'1'});
   const restored=await restoreReadingFirstRuntime({handoff:s.handoff,runControl:s.runControl,checkpointReceipt:checkpoint});
   assert.equal(restored.ok,true,JSON.stringify(restored.errors));
-  assert.equal(getReadingFirstState(restored.controller).rejection.reason,'READING_FIRST_REPAIR_SCOPE_UNRESOLVED');
+  assert.equal(getReadingFirstState(restored.controller).status,'review_unroutable');
   assert.deepEqual(getReadingFirstPendingRequests(restored.controller),[]);
 });
 

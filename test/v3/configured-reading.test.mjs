@@ -694,7 +694,7 @@ test('local repair revises the source draft first and then retranslates it, whil
   assert.equal(only[0].packet.host_action_scope.role, 'translation');
 });
 
-test('a configured material review without an owner is a terminal rejection and cannot request a repair', async t => {
+test('a configured material review without an owner is retained and awaits routing', async t => {
   const { root } = await configuredRepo(t);
   const review = owner => ({ overall: { complete: false, coherent: true, bilingual_consistent: true }, key_nodes: [],
     issues: [{ severity: 'material', kind: 'content', detail: 'The missing owner must not trigger a Writer revision.', affected_languages: ['zh-CN'], ...(owner ? { repair_owner: owner } : {}),
@@ -704,8 +704,9 @@ test('a configured material review without an owner is a terminal rejection and 
   const missing = await build('4');
   assert.equal(missing.binding.repair_routing, 'owner-routed-1.0');
   const result = await missing.complete(missing.reviewRequest, review());
-  assert.equal(result.status, 'completed_with_limits');
-  assert.equal(result.rejection.reason, 'READING_FIRST_REPAIR_OWNER_REQUIRED');
+  assert.equal(result.status, 'review_unroutable');
+  assert.deepEqual(result.routing.gaps, [{ issue_id:'issue-1',missing_fields:['repair_owner'] }]);
+  assert.deepEqual(JSON.parse(await readFile(join(missing.root,result.receipt.path))),review());
   assert.equal(result.publishable, false);
   assert.throws(() => createReadingFirstRevisionRequests({ controller: missing.controller }), /READING_FIRST_REVISION_UNAVAILABLE/);
   const named = await build('5');

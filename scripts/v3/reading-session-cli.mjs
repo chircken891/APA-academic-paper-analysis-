@@ -26,9 +26,11 @@ async function run() {
   for (let i=0;i<args.length;i+=2) { if (!args[i]?.startsWith('--') || args[i+1] === undefined) throw new Error('READING_CLI_ARGUMENT_INVALID'); options[args[i].slice(2)]=args[i+1]; }
   // Check before opening a session: a dispatch intent persisted without an export target has no exit.
   if (['create','resume','next'].includes(command) && !options['export-dir']) throw new Error('READING_CLI_EXPORT_DIRECTORY_REQUIRED');
+  const inspection=['inspect-candidate','inspect-continuation'].includes(command);
+  if (inspection && options['runtime-input']) throw new Error('READING_CLI_READ_ONLY');
   let session;
   if (command === 'create') session=await createReadingSession(JSON.parse((await inputBytes(options.input)).toString('utf8')));
-  else if (['resume','next','event'].includes(command)) session=await resumeReadingSession({runRoot:options['run-root']});
+  else if (['resume','next','event','inspect-candidate','inspect-continuation'].includes(command)) session=await resumeReadingSession({runRoot:options['run-root'],readOnly:inspection});
   else throw new Error('READING_CLI_COMMAND_INVALID');
   if (options['runtime-input']) {
     const runtimeEvent = JSON.parse((await inputBytes(options['runtime-input'])).toString('utf8'));
@@ -36,7 +38,9 @@ async function run() {
     await recordReadingEvent(session,runtimeEvent);
   }
   let result;
-  if (command === 'event') {
+  if (inspection) {
+    result=await recordReadingEvent(session,{kind:command,...(options.revision ? {revision:Number(options.revision)} : {})});
+  } else if (command === 'event') {
     const event=JSON.parse((await inputBytes(options.input)).toString('utf8'));
     if (options['raw-result'] && options.source) throw new Error('READING_CLI_EVIDENCE_CONFLICT');
     if (options['raw-result']) {
@@ -61,4 +65,4 @@ async function run() {
   }
   process.stdout.write(JSON.stringify(result,null,2)+'\n');
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) run().catch(error=>{process.stderr.write(`${error.code ?? error.message}\n`);process.exitCode=1;});
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) run().catch(error=>{process.stderr.write(`${error.message ?? error.code}\n`);process.exitCode=1;});

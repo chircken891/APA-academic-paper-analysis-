@@ -153,14 +153,17 @@ await recordReadingEvent(session, {
 
 本入口的自动化测试使用合成宿主及合成论文产物。真实宿主派发、科学阅读、原生 Obsidian 展示和正式发布分别需要对应的实际证据与授权。
 
-## 已派发Editor的明确续接授权
+## 续接额度与候选修订
 
-`configured-reading-2.2` 的 `presentation-r2` 已派发、尚未接收且局部复核尚未派发时，用户可对具体恢复另行批准有限执行额度。通过 `authorize-repair-continuation` 事件提交 `authorization_id`、`reason`、当前owned检查点的 `checkpoint_fingerprint`、原 `action_id`、`max_additional_calls`。接口核验原检查点与待续接请求，将新批准、原额度和原账本前缀单独保存到 `state.repairContinuation`，保留原binding及历史请求。配置、角色自行要求和剩余额度均不构成此授权。
+先执行 `npm run apa:session -- inspect-continuation --run-root <运行目录>`，也可向会话发送 `{kind:'inspect-continuation'}`。只读报告给出检查点指纹、问题 ID、待协调结果、剩余任务键、确定缺口、按已完成翻译任务的实际续接次数估计的余量和建议额度。已观测但未接收的 Editor 先走原 `result`；登记拒收后，可按符合条件的 `recover-rejected-editor` 恢复，或重新推算所需任务。账本中有未观测执行时先协调实际宿主结果。
 
-获准的原页图型更正可附 `chart_type_corrections:[{visual_id,chart_types}]`，图必须在首次审查已定位的science原页问题范围内，知识身份须已登记，图片和其他图表字段保持。更正随渲染、恢复及发布来源捕获消费。待续接角色通过原句柄接收原审查范围的补充说明，原指令文件不覆写。后续执行仍使用 `continuation-intent` 和真实 `continuation-receipt`；局部复核次数保持原上限。
+用户批准后发送 `{kind:'authorize-continuation',authorization:{authorization_id,reason,checkpoint_fingerprint,max_additional_calls,max_additional_review_rounds,issue_ids}}`。新增执行上限可高于确定缺口。新增复核轮数仅可为 0 或 1，`includes_local_review` 单独报告本链是否要用复核。新增任务键和拥有者绑定随授权进入检查点。运行 ID 或论文 ID 已登记发布时拒绝续接，包括已被接替的运行；同一授权可重交，同号异内容报冲突。旧 `repairContinuation` 与 `reviewExtension` 用于读取历史检查点。会话终态和需追加额度的修订返回同一份推算报告。若原科学补缺任务未登记，报告给出科学范围未获授权的具体原因。余量按剩余翻译任务数乘本运行同一方向已完成任务的最大实测续接次数，已完成且无续接计为 0，没有可用历史时每任务计 1。原页图型更正仍可附 `chart_type_corrections`，其图、节点和来源须符合原范围校验。
 
-预算摘要分别报告 `original_total_limit`、`additional_limit`、`additional_used`，总执行账本连续保留。原额度优先消费，超出原上限的部分计入新增授权；不能重置已用次数或增加阅读任务数量。派发与Editor范围验收共同采用原审查的实质问题范围，原页补缺没有图注更正时仍须传递相关science范围。
+`review_unroutable` 保留 Verifier 原回执，按问题 ID 报告缺字段、可用范围和描述中明确引用的 ID。Controller 可用 `annotate-review-scope` 补齐可定位范围。显式注记使用 `annotations:[{issue_id,fields}]`，仅可填报告中的缺失字段。反引号内或含连字符的 ID 唯一匹配时可省略 `annotations`，由 Controller 形成确定性范围注记。需要原 Verifier 澄清时，对同一 `action_id` 使用 `continuation-intent`、`continuation-receipt`，再用 `{kind:'accept-review-scope',execution_id}` 接收单独的原生范围文件。宿主续接计一次实际执行，余额不足先推算和授权。补齐后进入 `revision_required`，按责任方安排修订。新增方法目录条目可链接候选中已有方法身份，两个语言版本的链接一致。
 
+`npm run apa:session -- inspect-candidate --run-root <运行目录>` 读取已登记的候选文件清单，`--revision <整数>` 可选定版本。报告分别给出 `consistency` 和 `links`；修改、缺失、多出文件均使整体失败。缺少原渲染清单时报告不可用。
+
+用户要求改候选时，登记 `{kind:'user-revision',request:{revision_id,request,repair_owner,scientific,target_entries,repair_scope}}`，renderer 修订另带 `affected_paths`。内部 `request` 字段保留原话；Controller 定位条目、选择 Writer、Editor 或 renderer，并记录是否涉及科学内容。角色继续使用原有受控产物。涉及科学内容的修改需要一次局部复核；现有任务绑定、调用余额和复核轮次均够用时直接修订，缺少任一项才申请续接批准。标题、措辞及呈现修改还须保留对应文本中的数字、常用单位、引用目标和图表编号，通过范围、链接和双语镜像检查后使用原审查。若这类修改需新增额度，在同一批准请求中给出零调用选项：获准发布已审稿后，在正式 Wiki 中人工编辑。用户选择此方案且尚未新增调用时，用 `{kind:'retain-reviewed-candidate',revision_id}` 保存该选择并回到已审候选。
 
 ## 命令行会话与回执
 
@@ -171,7 +174,7 @@ await recordReadingEvent(session, {
 
 ## Results 资源交接
 
-2.2 为 Results 预登记 `resources/results` 输出目录及 `science/results-resources.json` 受控资源清单。Results 使用已选择的 Python 调用 `scripts/lib/reading-resource-tool.py`，通过标准输入指定来源、输出目录和项目；PDF 使用物理页及可选点坐标裁剪，DOCX 指定原始 media、图号和段落位置。按来源分别生成后，Results 合并返回的 `reading-resources-1.0` 项并写入指定 native 清单。每项保留源文件与生成文件的路径、指纹、长度和定位；图像判读与裁剪结果检查由 Results 负责。Results 的科学输出包含 `resource_manifest`，其中 `path` 使用派发提供的 `owned_manifest_path`，并附 `resources_root`、清单原始字节的 `sha256` 和 `byte_length`。Integrator 将该对象原样写入 `visual_handoff.resource_manifest`，`presentation.visuals` 的 `id`、`path`、`source_id`、`locator` 须与清单一致。Controller 接收清单并验证身份、来源和产物，再交接后续步骤。
+2.2 为 Results 预登记 `resources/results` 输出目录及 `science/results-resources.json` 受控资源清单。Results 使用已选择的 Python 调用 `scripts/lib/reading-resource-tool.py`，通过标准输入指定来源、输出目录和项目；PDF 使用物理页及可选点坐标裁剪，DOCX 指定原始 media、图号和段落位置。按来源分别生成后，Results 合并返回的 `reading-resources-1.0` 项并写入指定 native 清单。每项保留源文件与生成文件的路径、指纹、长度和定位；图像判读与裁剪结果检查由 Results 负责。Results 的科学输出包含 `resource_manifest`，其中 `path` 使用派发提供的 `owned_manifest_path`，并附 `resources_root`、清单原始字节的 `sha256` 和 `byte_length`。Integrator 将该对象原样写入 `visual_handoff.resource_manifest`，`presentation.visuals` 的 `id`、`path`、`source_id`、`locator` 须与清单一致。Controller 接收清单并验证身份、来源和产物，再交接后续步骤。采用已有科学产物时，在首次派发 Writer 前按原 Integrator 的运行目录和运行 ID 核验资源路径、清单回执、源定位和图片字节。检查点恢复及发布准备会重新核验。
 
 
 ## 运行时漂移与修复批准

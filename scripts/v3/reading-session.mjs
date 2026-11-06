@@ -14,11 +14,10 @@ import { ingestObservedRunStep } from './phase21-runner.mjs';
 import { COMPACTION_POLICY } from './reading-compaction.mjs';
 import { validateHostReceiptEvidence, normalizeHostReceipt } from './reading-host-evidence.mjs';
 import { inspectReadingRuntime, validateRuntimeRepairApproval, validateHistoricalRuntimeRepairApproval } from './reading-runtime-binding.mjs';
-import { validateReadingResources } from './reading-resources.mjs';
 import { createOwnedArtifactBroker, commitOwnedArtifact, readOwnedArtifact } from './owned-artifact-store.mjs';
-import { recoverReadingFirstRejectedEditor, authorizeReadingFirstRepairContinuation } from './reading-first-runtime.mjs';
+import { recoverReadingFirstRejectedEditor, authorizeReadingFirstContinuation, inspectReadingFirstContinuation, annotateReadingFirstReviewScope, inspectReadingFirstSavedCandidate, registerReadingFirstUserRevision, finalizeReadingFirstUserRevision, retainReviewedReadingFirstCandidate } from './reading-first-runtime.mjs';
 import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, getScienceRequest, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, createScienceHandoff, handleScienceCompactionBoundary } from './science-controller.mjs';
-import { fingerprintReadingFirst, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, getReadingFirstPendingRequests, getReadingFirstState, recordReadingFirstRequestEvent, getReadingFirstRequestEvents, acceptReadingFirstResult, createReadingFirstEnrichmentRequests, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstReviewRequest, createReadingFirstRevisionRequests, validateReadingFirstRenderRepair, handleReadingCompactionBoundary, captureReadingFirstPublicationSource } from './reading-first-runtime.mjs';
+import { fingerprintReadingFirst, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, getReadingFirstPendingRequests, getReadingFirstState, recordReadingFirstRequestEvent, getReadingFirstRequestEvents, acceptReadingFirstResult, createReadingFirstEnrichmentRequests, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstReviewRequest, createReadingFirstRevisionRequests, validateReadingFirstRenderRepair, handleReadingCompactionBoundary, captureReadingFirstPublicationSource, verifyReadingFirstResourceManifest } from './reading-first-runtime.mjs';
 
 const sessions = new WeakMap();
 const fail = code => { throw Object.assign(new Error(code), { code }); };
@@ -72,21 +71,15 @@ async function readSessionMetadata(state) {
 }
 async function refreshSessionResources(state) {
   if (!state.reading) return;
-  const spec = state.prepared.runControl.reading_first_binding.configured_setup.results_resources;
-  const ref = state.visualHandoff?.resource_manifest;
-  const root = state.prepared.paths.runRoot;
-  if (!spec || !ref || ref.path !== resolve(root, spec.manifest_task.artifact_path) || ref.resources_root !== resolve(root, spec.output_root)) fail('READING_SESSION_RESOURCE_MANIFEST_INVALID');
-  const owned = await readOwnedArtifact({ artifactRoot: root, artifactId: spec.manifest_task.artifact_id });
-  if (!owned || owned.receipt.path !== spec.manifest_task.artifact_path || owned.receipt.run_id !== state.prepared.runControl.run_id
-    || owned.receipt.owner_actor_id !== spec.manifest_task.owner_actor_id || owned.receipt.role !== 'results' || owned.receipt.revision !== spec.manifest_task.revision
-    || owned.receipt.sha256 !== ref.sha256 || owned.receipt.byte_length !== ref.byte_length || !same(owned.receipt, state.visualHandoff.receipt)) fail('READING_SESSION_RESOURCE_MANIFEST_INVALID');
-  const sources = state.prepared.scientificInput.sources;
-  if (!same(sources, state.visualHandoff.sources)) fail('READING_SESSION_RESOURCE_MANIFEST_INVALID');
-  const rows = validateReadingResources({ manifest: JSON.parse(owned.bytes), resourcesRoot: ref.resources_root, sources });
-  const integration = await readOwnedArtifact({ artifactRoot: root, artifactId: state.tasks.integration.artifact_id });
-  if (!integration || integration.receipt.role !== 'integration' || integration.receipt.run_id !== state.prepared.runControl.run_id) fail('READING_SESSION_RESOURCE_MANIFEST_INVALID');
-  const value = JSON.parse(integration.bytes);
-  if (!same(value.visual_handoff?.resource_manifest, ref) || !Array.isArray(value.presentation?.sources)) fail('READING_SESSION_RESOURCE_MANIFEST_INVALID');
+  const binding=state.prepared.runControl.reading_first_binding;
+  const resource=await verifyReadingFirstResourceManifest({binding,handoff:state.handoff,artifactRoot:state.prepared.paths.runRoot});
+  if (!resource) fail('READING_SESSION_RESOURCE_MANIFEST_INVALID');
+  const {ref,receipt,resources:rows}=resource;
+  const integration=state.handoff.science.find(item=>item.receipt.role==='integration');
+  const value=integration.content, sources=state.handoff.sources;
+  if (!integration.artifact_root && (!same(ref,state.visualHandoff?.resource_manifest)
+    || !same(receipt,state.visualHandoff?.receipt) || !same(sources,state.visualHandoff?.sources))) fail('READING_SESSION_RESOURCE_MANIFEST_INVALID');
+  if (!Array.isArray(value.presentation?.sources)) fail('READING_SESSION_RESOURCE_MANIFEST_INVALID');
   const registered = value.presentation.sources.map(item => {
     const source = sources.find(row => row.id === item.id);
     if (!source || sources.filter(row => row.id === item.id).length !== 1 || typeof item.path !== 'string' || !/^Raw\//.test(item.path)) fail('READING_SESSION_RESOURCE_MANIFEST_INVALID');
@@ -141,6 +134,8 @@ const checkpointBindings = (brokerConfig, runId, actorId) => brokerConfig.author
 function extendsSnapshot(later, earlier) {
   const a = later.state, b = earlier.state;
   if (a.callsUsed < b.callsUsed || a.reviews < b.reviews) return false;
+  if (b.reviewExtension && (!a.reviewExtension || !same(a.reviewExtension,b.reviewExtension))) return false;
+  if ((b.continuationAuthorizations ?? []).some((row,index)=>!a.continuationAuthorizations?.[index] || !same(a.continuationAuthorizations[index],row))) return false;
   if (b.repairContinuation && (!a.repairContinuation || !same(a.repairContinuation,b.repairContinuation))) return false;
   if (b.executionLedger) {
     if (!a.executionLedger || a.executionLedger.length < b.executionLedger.length) return false;
@@ -152,7 +147,7 @@ function extendsSnapshot(later, earlier) {
         || oldReceipt && (!newReceipt || !same(oldReceipt, newReceipt)) && !(oldReceipt.status === 'outcome_unknown' && newReceipt && newReceipt.status !== 'outcome_unknown')) return false;
     }
   }
-  for (const key of ['observations', 'requestLog', 'enrichmentRecords', 'enrichmentSources', 'repairRecoveries']) {
+  for (const key of ['observations', 'requestLog', 'enrichmentRecords', 'enrichmentSources', 'repairRecoveries', 'reviewScopeNotes', 'candidateInventories', 'user_revisions', 'userRevisionChecks', 'userRevisionWithdrawals']) {
     const left = a[key] ?? [], right = b[key] ?? [];
     if (!Array.isArray(left) || !Array.isArray(right) || left.length < right.length || right.some((item, index) => !same(item, left[index]))) return false;
   }
@@ -226,7 +221,7 @@ export async function createReadingSession(options = {}) {
 }
 
 /** Rebuild the original controllers from their owned science state and registered checkpoints. */
-export async function resumeReadingSession({ runRoot } = {}) {
+export async function resumeReadingSession({ runRoot, readOnly = false } = {}) {
   if (!text(runRoot) || !isAbsolute(runRoot)) fail('READING_SESSION_ROOT_INVALID');
   const root = resolve(runRoot), statePath = controlPath(root);
   const envelope = JSON.parse(await readFile(statePath, 'utf8'));
@@ -261,6 +256,7 @@ export async function resumeReadingSession({ runRoot } = {}) {
   }
   const scienceState = getScienceState(science);
   if (!seal && (scienceState.reserved_calls || scienceState.handoff)) fail('READING_SESSION_PREFLIGHT_INVALID');
+  if (readOnly && scienceState.handoff && scienceState.handoff.status!=='transferred') fail('READING_SESSION_HANDOFF_RECONCILIATION_REQUIRED');
   if (scienceState.handoff) {
     const transferred = await createScienceHandoff({ controller: science, checkpointTask: checkpoints[2] });
     state.visualHandoff = clone(transferred.visual_handoff);
@@ -408,15 +404,28 @@ async function nextSessionAction(session) {
   }
   await refreshSessionResources(state);
   const current = getReadingFirstState(state.reading);
-  if (current.status === 'completed_with_limits') return { action: 'complete', status: current.status, publishable: false };
+  if (current.status==='user_revision_pending') return {action:'await-user',kind:'authorize-continuation',
+    continuation:await inspectReadingFirstContinuation({controller:state.reading,checkpointReceipt:state.checkpointReceipt}),
+    ...(current.user_revision?.scientific===false ? {zero_call_alternative:'Publish the exact reviewed baseline with separate approval, then edit the registered Wiki note manually.'} : {})};
+  const inspectContinuation=()=>inspectReadingFirstContinuation({controller:state.reading,checkpointReceipt:state.checkpointReceipt});
+  if (current.revision_needs_continuation) {
+    const continuation=await inspectContinuation();
+    return {action:'reconcile',code:continuation.can_continue ? 'READING_FIRST_CALL_BUDGET_EXHAUSTED' : continuation.reason,continuation};
+  }
+  if (current.status === 'review_unroutable') return { action:'provide-input', kind:'review-scope', routing:current.routing };
+  if (current.status === 'completed_with_limits') return { action: 'complete', status: current.status, publishable: false,continuation:await inspectContinuation() };
   if (current.status === 'reading_complete') {
     if (!state.presentation && state.reviewedPresentation) {
       if (!state.resources || !state.renderOptions) return { action: 'provide-input', kind: 'render-assets' };
-      const restored = await materializeConfiguredReadingCandidate({ prepared: state.prepared, controller: state.reading, handoff: state.handoff, resources: state.resources, ...state.renderOptions, candidateRevision: current.review_rounds, reuseExisting: true });
-      if (restored.candidate.presentation_fingerprint !== state.reviewedPresentation.presentation_fingerprint) fail('READING_SESSION_REVIEWED_CANDIDATE_CHANGED');
+      const restored = await materializeConfiguredReadingCandidate({ prepared: state.prepared, controller: state.reading, handoff: state.handoff, resources: state.resources, ...state.renderOptions, candidateRevision: current.candidate_revision, reuseExisting: true });
+      if (restored.candidate.presentation_fingerprint !== (current.candidate_fingerprint ?? state.reviewedPresentation.presentation_fingerprint)) fail('READING_SESSION_REVIEWED_CANDIDATE_CHANGED');
       state.presentation = restored.candidate;
     }
-    if (!state.presentation) return { action: 'reconcile', code: 'REVIEWED_PRESENTATION_UNAVAILABLE' };
+    if (!state.presentation) {
+      if (!state.resources || !state.renderOptions) return {action:'provide-input',kind:'render-assets'};
+      const restored=await materializeConfiguredReadingCandidate({prepared:state.prepared,controller:state.reading,handoff:state.handoff,resources:state.resources,...state.renderOptions,candidateRevision:current.candidate_revision,reuseExisting:true});
+      state.presentation=restored.candidate;
+    }
     const source = await captureReadingFirstPublicationSource({ controller: state.reading, presentation: state.presentation });
     return { action: 'complete', status: current.status, publication_source: source, publishable: false };
   }
@@ -432,27 +441,34 @@ async function nextSessionAction(session) {
       const rendererRepair = current.review_rounds && current.review?.issues?.some(issue => issue.severity === 'material' && issue.repair_owner === 'renderer');
       if (rendererRepair && !state.rendererRepairReady) return { action: 'provide-input', kind: 'renderer-repair', review: current.review };
       if (!state.resources || !state.renderOptions) return { action: 'provide-input', kind: 'render-assets' };
-      const result = await materializeConfiguredReadingCandidate({ prepared: state.prepared, controller: state.reading, handoff: state.handoff, resources: state.resources, ...state.renderOptions, candidateRevision: current.review_rounds + 1, reuseExisting: true,
+      const result = await materializeConfiguredReadingCandidate({ prepared: state.prepared, controller: state.reading, handoff: state.handoff, resources: state.resources, ...state.renderOptions, candidateRevision: current.candidate_revision + 1, reuseExisting: true,
         ...(rendererRepair ? { onDependencyBoundary: ({ phase, candidate }) => { if (phase === 'before-finalize') validateReadingFirstRenderRepair({ controller: state.reading, presentation: candidate }); } } : {}) });
       state.presentation = result.candidate;
+      if (current.user_revision?.scientific===false) {
+        await finalizeReadingFirstUserRevision({controller:state.reading,presentation:state.presentation});
+        await saveReading(state);
+        return nextSessionAction(session);
+      }
       createReadingFirstReviewRequest({ controller: state.reading, presentation: state.presentation, ...(rendererRepair ? { renderRepair: true } : {}) });
     } else if (current.status === 'revision_required' || current.status === 'revising') {
       const material = current.review?.issues?.filter(issue => issue.severity === 'material') ?? [];
       if (material.length && material.every(issue => issue.repair_owner === 'renderer')) {
         if (!state.rendererRepairReady) return { action: 'provide-input', kind: 'renderer-repair', review: current.review };
         if (!state.resources || !state.renderOptions) return { action: 'provide-input', kind: 'render-assets' };
-        const result = await materializeConfiguredReadingCandidate({ prepared: state.prepared, controller: state.reading, handoff: state.handoff, resources: state.resources, ...state.renderOptions, candidateRevision: 2, reuseExisting: true,
-          onDependencyBoundary: ({ phase, candidate }) => { if (phase === 'before-finalize') validateReadingFirstRenderRepair({ controller: state.reading, presentation: candidate }); } });
+        const result = await materializeConfiguredReadingCandidate({ prepared: state.prepared, controller: state.reading, handoff: state.handoff, resources: state.resources, ...state.renderOptions, candidateRevision: current.candidate_revision + 1, reuseExisting: true,
+          ...(current.user_revision?.scientific===false ? {} : {onDependencyBoundary: ({ phase, candidate }) => { if (phase === 'before-finalize') validateReadingFirstRenderRepair({ controller: state.reading, presentation: candidate }); } }) });
         state.presentation = result.candidate;
-        createReadingFirstReviewRequest({ controller: state.reading, presentation: state.presentation, renderRepair: true });
+        if (current.user_revision?.scientific===false) await finalizeReadingFirstUserRevision({controller:state.reading,presentation:state.presentation});
+        else createReadingFirstReviewRequest({ controller: state.reading, presentation: state.presentation, renderRepair: true });
         await saveReading(state);
         return nextSessionAction(session);
       }
       try { createReadingFirstRevisionRequests({ controller: state.reading }); }
       catch (error) {
+        if (error.code==='READING_FIRST_CALL_BUDGET_EXHAUSTED') return {action:'reconcile',code:error.code};
         if (error.code !== 'READING_FIRST_REVISION_UNAVAILABLE') throw error;
         try { createReadingFirstPresentationRequest({ controller: state.reading }); }
-        catch (editorError) { if (editorError.code === 'READING_FIRST_EDITOR_UNAVAILABLE') return { action: 'provide-input', kind: 'repair', review: current.review }; throw editorError; }
+        catch (editorError) { if (editorError.code==='READING_FIRST_CALL_BUDGET_EXHAUSTED') return {action:'reconcile',code:editorError.code}; if (editorError.code === 'READING_FIRST_EDITOR_UNAVAILABLE') return { action: 'provide-input', kind: 'repair', review: current.review }; throw editorError; }
       }
     } else return { action: 'reconcile', code: 'READING_SESSION_STAGE_UNAVAILABLE', status: current.status };
     await saveReading(state);
@@ -479,8 +495,8 @@ async function nextSessionAction(session) {
       ? request.task.task_id === state.prepared.runControl.reading_first_binding.task_bindings.review.task_id : current.review_rounds === 0);
   if (firstReview && !state.presentation && state.reviewedPresentation) {
     if (!state.resources || !state.renderOptions) return { action: 'provide-input', kind: 'render-assets' };
-    const restored = await materializeConfiguredReadingCandidate({ prepared: state.prepared, controller: state.reading, handoff: state.handoff, resources: state.resources, ...state.renderOptions, candidateRevision: current.review_rounds, reuseExisting: true });
-    if (restored.candidate.presentation_fingerprint !== state.reviewedPresentation.presentation_fingerprint) fail('READING_SESSION_REVIEWED_CANDIDATE_CHANGED');
+    const restored = await materializeConfiguredReadingCandidate({ prepared: state.prepared, controller: state.reading, handoff: state.handoff, resources: state.resources, ...state.renderOptions, candidateRevision: current.candidate_revision, reuseExisting: true });
+    if (restored.candidate.presentation_fingerprint !== (current.candidate_fingerprint ?? state.reviewedPresentation.presentation_fingerprint)) fail('READING_SESSION_REVIEWED_CANDIDATE_CHANGED');
     state.presentation = restored.candidate;
   }
   if (firstWriter || firstReview) {
@@ -520,10 +536,12 @@ async function continuationIntent(state, event) {
     if (!same(existing.context?.continuation_request, requestIdentity)) fail('READING_SESSION_CONTINUATION_CONFLICT');
     return { recorded: true, execution_id: existing.execution_id, status: existing.status };
   }
-  let handle, taskId, role, entry, progress, translationDecision;
+  let handle, taskId, role, entry, progress, translationDecision, scopeOutput;
   if (state.reading) {
     entry = snapshotReadingFirstRuntime(state.reading).state.request_entries.find(row => row.request.emittedStep.action_id === event.action_id);
-    if (!entry || entry.consumed || !entry.events?.host_observation
+    const current=getReadingFirstState(state.reading);
+    if (current.status==='review_unroutable' && entry?.consumed && entry.request.task.role==='independent-verifier') scopeOutput='native/'+entry.request.task.task_id+'-scope.json';
+    if (!entry || (entry.consumed && !scopeOutput) || !entry.events?.host_observation
       || entry.events.host_observation.payload?.status === 'outcome_unknown') fail('READING_SESSION_CONTINUATION_INVALID');
     const observed = ingestObservedRunStep({ packet: entry.request.packet, emittedStep: entry.request.emittedStep,
       run: { run_id: state.prepared.runControl.run_id }, observation: entry.events.host_observation.payload });
@@ -534,6 +552,10 @@ async function continuationIntent(state, event) {
     role = found[0]; handle = found[1].agent_id;
   }
   let message = event.message + '\nContinue only the original task, output ownership, model and authorized scope. Desktop control and native observation require explicit user authorization.';
+  if (scopeOutput) {
+    const routing=getReadingFirstState(state.reading).routing;
+    message+='\nSupply only the missing fields for these existing issue IDs. Preserve the original review file and all scientific judgments. Write an array of {issue_id, fields} to '+join(state.prepared.paths.runRoot,scopeOutput)+'\n'+JSON.stringify(routing);
+  }
   if (entry?.request.task.role === 'translation') {
     try { progress = await readingProgress(state, entry); }
     catch (error) { if (error.message === 'READING_TRANSLATION_PROGRESS_RECONCILE') return { action: 'reconcile', code: error.message, action_id: event.action_id }; throw error; }
@@ -558,7 +580,7 @@ async function continuationIntent(state, event) {
   const host = resolveHostContinuation(state.hostProfile, { hostName: binding.host?.name ?? state.hostProfile?.host, handle, message });
   if (host.status !== 'detected') return { action: 'provide-input', kind: 'host-continuation', code: host.code };
   const input = { executionId: event.execution_id, actionId: `${event.action_id}:continuation:${event.execution_id}`, handle, tool: host.host_action,
-    arguments: host.arguments, context: { continuation_request: requestIdentity, host_evidence: host.evidence, ...(progress ? { translation_progress: progress } : {}), ...(translationDecision ? { translation_decision: translationDecision, stop_reason: clone(event.stop_reason ?? { kind: 'unknown' }) } : {}) } };
+    arguments: host.arguments, context: { continuation_request: requestIdentity, host_evidence: host.evidence, ...(scopeOutput ? {review_scope_output:scopeOutput} : {}), ...(progress ? { translation_progress: progress } : {}), ...(translationDecision ? { translation_decision: translationDecision, stop_reason: clone(event.stop_reason ?? { kind: 'unknown' }) } : {}) } };
   let row;
   if (state.reading) {
     if (state.nextCheckpoint >= state.checkpoints.length - 3) return { action: 'reconcile', code: 'CONTROL_CHECKPOINT_CAPACITY' };
@@ -624,11 +646,47 @@ async function recordSessionEvent(session, event = {}) {
     return clone(state.preflight);
   }
   if (event.kind === 'compaction') { state.compactionInput = clone(event.input ?? {}); return { recorded: true }; }
-  if (event.kind === 'authorize-repair-continuation') {
+  if (event.kind==='inspect-candidate') {
+    if (!state.reading) fail('READING_SESSION_CANDIDATE_UNAVAILABLE');
+    return inspectReadingFirstSavedCandidate({controller:state.reading,revision:event.revision});
+  }
+  if (event.kind==='retain-reviewed-candidate') {
     if (!state.reading || state.preflight.status!=='pass') fail('READING_SESSION_RECOVERY_PREFLIGHT_REQUIRED');
     if (state.nextCheckpoint>=state.checkpoints.length-1) return {action:'reconcile',code:'CONTROL_CHECKPOINT_CAPACITY'};
-    const result=await authorizeReadingFirstRepairContinuation({controller:state.reading,checkpointReceipt:state.checkpointReceipt,authorization:event.authorization});
+    const result=retainReviewedReadingFirstCandidate({controller:state.reading,revisionId:event.revision_id});
     await saveReading(state);
+    return result;
+  }
+  if (event.kind==='user-revision') {
+    if (!state.reading || state.preflight.status!=='pass') fail('READING_SESSION_RECOVERY_PREFLIGHT_REQUIRED');
+    if (state.nextCheckpoint>=state.checkpoints.length-1) return {action:'reconcile',code:'CONTROL_CHECKPOINT_CAPACITY'};
+    const result=await registerReadingFirstUserRevision({controller:state.reading,request:event.request});
+    state.rendererRepairReady=false;
+    await saveReading(state);
+    return result;
+  }
+  if (event.kind === 'annotate-review-scope' || event.kind === 'accept-review-scope') {
+    if (!state.reading || state.preflight.status!=='pass') fail('READING_SESSION_RECOVERY_PREFLIGHT_REQUIRED');
+    if (state.nextCheckpoint>=state.checkpoints.length-1) return {action:'reconcile',code:'CONTROL_CHECKPOINT_CAPACITY'};
+    if (event.kind==='accept-review-scope' && !text(event.execution_id)) fail('READING_SESSION_CONTINUATION_INVALID');
+    const result=annotateReadingFirstReviewScope({controller:state.reading,
+      ...(event.kind==='accept-review-scope' ? {executionId:event.execution_id} : {annotations:event.annotations})});
+    await saveReading(state);
+    return result;
+  }
+  if (event.kind === 'inspect-continuation') {
+    if (!state.reading) fail('READING_SESSION_RECOVERY_PREFLIGHT_REQUIRED');
+    return inspectReadingFirstContinuation({controller:state.reading,checkpointReceipt:state.checkpointReceipt});
+  }
+  if (event.kind === 'authorize-continuation') {
+    if (!state.reading || state.preflight.status!=='pass') fail('READING_SESSION_RECOVERY_PREFLIGHT_REQUIRED');
+    const before=snapshotReadingFirstRuntime(state.reading);
+    if (state.nextCheckpoint>=state.checkpoints.length-1 && !before.state.continuationAuthorizations?.some(row=>row.authorization.authorization_id===event.authorization?.authorization_id)) return {action:'reconcile',code:'CONTROL_CHECKPOINT_CAPACITY'};
+    const result=await authorizeReadingFirstContinuation({controller:state.reading,checkpointReceipt:state.checkpointReceipt,authorization:event.authorization});
+    if (snapshotReadingFirstRuntime(state.reading).checkpoint_fingerprint!==before.checkpoint_fingerprint) {
+      await saveReading(state);
+      state.presentation=null;
+    }
     return result;
   }
   if (event.kind === 'recover-rejected-editor') {
@@ -705,7 +763,7 @@ async function recordSessionEvent(session, event = {}) {
   }
   if (event.kind !== 'result') return clone(payload);
   let result;
-  try { result = await acceptReadingFirstResult({ controller: state.reading, request, observation: payload, capability: capability(state, request.task), terminalCheckpoint: snapshot => saveReading(state, snapshot) }); }
+  try { result = await acceptReadingFirstResult({ controller: state.reading, request, observation: payload, capability: () => capability(state, request.task), terminalCheckpoint: snapshot => saveReading(state, snapshot) }); }
   catch (error) {
     const stopped = state.translationStop?.action_id === event.action_id && state.translationStop.decision?.action === 'complete';
     const finalized = finalizeContinuations(state, request.task.task_id).at(-1);

@@ -5,6 +5,9 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { inspectReadingFirstPublicationSource } from '../../scripts/v3/reading-first-runtime.mjs';
 import * as readingRuntime from '../../scripts/v3/reading-first-runtime.mjs';
 import { createOwnedArtifactBroker, commitOwnedArtifact, readOwnedArtifact } from '../../scripts/v3/owned-artifact-store.mjs';
@@ -12,6 +15,7 @@ import { readingFirstViewsFingerprint } from '../../scripts/v3/reading-first-edi
 import { buildReadingSessionTasks } from '../../scripts/v3/reading-session-tasks.mjs';
 import { createReadingSession, resumeReadingSession, nextReadingAction as nextAction, recordReadingEvent } from '../../scripts/v3/reading-session.mjs';
 import { reviewedReadingFirstFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
+import { readingFirstIndexFixture } from './helpers/reading-first-index-fixtures.mjs';
 import { writeTranslationProgress } from '../../scripts/v3/reading-translation-progress.mjs';
 
 const continuationCapability = () => ({ status: 'detected', method: 'ContinueTask target prompt', scope: 'current-session',
@@ -83,10 +87,10 @@ test('unsupported continuation spends no budget and retired bindings are refused
   for (const instructionProfile of ['configured-reading-2.0', 'configured-reading-2.1']) await assert.rejects(() => createReadingSession({ ...old.options, instructionProfile }), /READING_BINDING_RETIRED/);
 });
 
-test('translation continuation carries only remaining IDs and preserves completed fragments across recovery', async t => {
+for (const retries of [1,2]) test('translation continuation preserves completed fragments and projects '+retries+' observed calls',async t=>{
   const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
   f.profile.capabilities = { task_continuation: continuationCapability() };
-  let session = await createReadingSession({ ...f.options, maxTotalCalls: 22 });
+  let session = await createReadingSession({ ...f.options, maxTotalCalls:14 });
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, path, value) => {
     const observation = observe(action);
@@ -127,13 +131,31 @@ test('translation continuation carries only remaining IDs and preserves complete
   const changed = structuredClone(partial); changed.sections[0].paragraphs[0] += ' changed';
   await writeFile(join(runRoot, task.native_path), JSON.stringify(changed));
   await assert.rejects(() => recordReadingEvent(session, receipt), /READING_TRANSLATION_PROGRESS_RECONCILE/);
-  await writeFile(join(runRoot, task.native_path), JSON.stringify(template.views[1]));
-  writeTranslationProgress({ artifactRoot: runRoot, task, runId: 'run', sourceView: template.views[0], nativeOutput: template.views[1] });
-  await recordReadingEvent(session, receipt);
-  await recordReadingEvent(session, { kind: 'result', action_id: translation.action_id, observation: original });
-  const next = await nextReadingAction(session);
-  assert.equal(next.action, 'dispatch');
-  assert.equal(next.summary.budget.continuations, 1);
+  const nextPartial={...partial,sections:structuredClone(template.views[1].sections.slice(0,2))};
+  const firstResult=retries===1 ? template.views[1] : nextPartial;
+  await writeFile(join(runRoot,task.native_path),JSON.stringify(firstResult));
+  writeTranslationProgress({artifactRoot:runRoot,task,runId:'run',sourceView:template.views[0],nativeOutput:firstResult});
+  await recordReadingEvent(session,receipt);
+  if (retries===2) {
+    await recordReadingEvent(session,{...intent,execution_id:'translate-finish'});
+    const second=await nextReadingAction(session);
+    await writeFile(join(runRoot,task.native_path),JSON.stringify(template.views[1]));
+    writeTranslationProgress({artifactRoot:runRoot,task,runId:'run',sourceView:template.views[0],nativeOutput:template.views[1]});
+    await recordReadingEvent(session,{kind:'continuation-receipt',execution_id:'translate-finish',observation:withEvidence({
+      execution_id:'translate-finish',action_id:second.action_id,agent_id:second.host_handle,
+      tool_call:{name:second.host_action,arguments:second.arguments},raw_result_text:'finished',status:'observed',
+    })});
+  }
+  await recordReadingEvent(session,{kind:'result',action_id:translation.action_id,observation:original});
+  await accept(await nextReadingAction(session),'presentation',template.editor);
+  await recordReadingEvent(session,{kind:'render-assets',renderOptions:{}});
+  const issue={severity:'material',kind:'scientific_limitation',detail:'Clarify findings.',repair_owner:'writer',
+    affected_languages:['en','zh-CN'],repair_scope:{status:'located',section_ids:['findings'],knowledge_ids:[],visual_ids:[],editor_fields:[]}};
+  await accept(await nextReadingAction(session),'review',{...template.review,issues:[issue]});
+  const plan=(await nextReadingAction(session)).continuation;
+  assert.equal(plan.required_additional_calls,retries);
+  assert.equal(plan.translation_allowance,retries);
+  assert.equal(plan.recommended_additional_calls,2*retries);
 });
 
 // Synthetic scenarios explicitly choose to continue at each reminder.
@@ -521,9 +543,215 @@ test('material editor issue receives one bounded repair and a second candidate',
   assert.equal((await nextReadingAction(session)).status, 'reading_complete');
 });
 
-test('rejected review is checkpointed as completed with limits and stays terminal', async t => {
+for (const scenario of ['wording','scientific','scientific-short','retain','number','unit','citation','figure','markdown-label','wikilink-label','age-unit','writer-fact','renderer-fact']) test('user revision separates request provenance and scientific recheck: '+scenario,async t=>{
+  const scientific=scenario.startsWith('scientific');
   const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
+  const evidenceText=scenario==='markdown-label' ? 'See [12 mg](https://example.org/paper).'
+    : scenario==='wikilink-label' ? 'See [['+template.presentationCatalog.source_pdf+'|Figure 1]].'
+      : scenario==='age-unit' ? '小鼠高脂喂养 12 周。'
+        : 'The change was -2.5 mg (12%). See Figure 1 and [the study](https://example.org/paper).';
+  const changedFacts={number:['-2.5','-3.5'],unit:['mg','g'],citation:['/paper','/other'],figure:['Figure 1','Figure 2'],
+    'markdown-label':['12 mg','13 g'],'wikilink-label':['Figure 1','Figure 2'],'age-unit':['12 周','12 周龄']};
+  template.editor.languages.en.overview[0].text=evidenceText;
+  if (scenario==='writer-fact') {
+    template.views[0].sections.find(row=>row.id==='findings').paragraphs[0]=evidenceText;
+    template.editor.views_fingerprint=readingFirstViewsFingerprint(template.views);
+  }
+  let session = await createReadingSession(scenario==='retain' ? {...f.options,includeRepairs:false} : scenario==='scientific-short' ? {...f.options,maxCalls:5,maxTotalCalls:11} : f.options);
+  const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
+  const accept = async (action, path, value) => {
+    const observation = observe(action);
+    await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
+    await writeFile(join(runRoot, 'native', path + '.json'), JSON.stringify(value));
+    return recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
+  };
+  for (let i = 0; i < 6; i++) {
+    const action = await nextReadingAction(session);
+    await accept(action, action.role, content(action.role));
+  }
+  await accept(await nextReadingAction(session), 'en', template.views[0]);
+  await accept(await nextReadingAction(session), 'zh-CN', template.views[1]);
+  await accept(await nextReadingAction(session), 'presentation', template.editor);
+  await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
+
+  await accept(await nextReadingAction(session),'review',template.review);
+  const initial=await nextReadingAction(session);
+  assert.equal(initial.status,'reading_complete');
+  const original=await readFile(join(runRoot,'reading/review.json'));
+  assert.equal((await recordReadingEvent(session,{kind:'inspect-candidate'})).status,'passed');
+  const recorded=await recordReadingEvent(session,{kind:'user-revision',request:{
+    revision_id:'user-overview',request:'Clarify the overview wording.',scientific,repair_owner:scenario==='writer-fact' ? 'writer' : scenario==='renderer-fact' ? 'renderer' : 'editor',
+    ...(scenario==='renderer-fact' ? {affected_paths:[template.candidate.notes[0].path]} : {}),
+    target_entries:['findings'],repair_scope:{status:'located',section_ids:['findings'],knowledge_ids:[],visual_ids:[],editor_fields:[]},
+  }});
+  if (scenario==='retain') {
+    assert.equal(recorded.requires_authorization,true);
+    assert.ok((await nextReadingAction(session)).zero_call_alternative);
+    await recordReadingEvent(session,{kind:'retain-reviewed-candidate',revision_id:'user-overview'});
+    const retained=await nextReadingAction(session);
+    const source=await inspectReadingFirstPublicationSource(retained.publication_source);
+    assert.equal(source.recipe.checkpoint.state.userRevisionWithdrawals.length,1);
+    assert.equal(source.recipe.checkpoint.state.executionLedger.length,10);
+    assert.equal(source.candidate.presentation_fingerprint,source.recipe.checkpoint.state.reviewedPresentationFingerprint);
+    assert.equal((await recordReadingEvent(session,{kind:'inspect-candidate'})).status,'passed');
+    const checkpoint=await readFile(retained.summary.state_ref);
+    const cli=fileURLToPath(new URL('../../scripts/v3/reading-session-cli.mjs',import.meta.url));
+    const output=await promisify(execFile)(process.execPath,[cli,'inspect-candidate','--run-root',runRoot,'--revision','1']);
+    assert.equal(JSON.parse(output.stdout).status,'passed');
+    assert.deepEqual(await readFile(retained.summary.state_ref),checkpoint);
+    return;
+  }
+  if (scenario==='scientific') {
+    assert.equal(recorded.requires_authorization,false);
+    assert.equal(recorded.status,'revision_required');
+  }
+  if (scenario==='scientific-short') assert.equal(recorded.requires_authorization,true);
+  if (scenario==='writer-fact') {
+    const revised=structuredClone(template.views[0]);
+    revised.sections.find(row=>row.id==='findings').paragraphs[0]=evidenceText.replace('12%','13%');
+    const awaitable=await nextReadingAction(session);
+    await assert.rejects(()=>accept(awaitable,'en-r2',revised),/USER_REVISION_FACT_CHANGED/);
+    return;
+  }
+  if (scenario==='renderer-fact') {
+    const note=template.candidate.notes[0];
+    const marker=note.language==='en' ? '## Personal Notes' : '## 个人笔记';
+    const existingTargets=[{path:note.path,bytes:Buffer.from(note.content.replace(marker,'Unsupported value 12 mg.\n\n'+marker)),managedHash:note.managedHash}];
+    await recordReadingEvent(session,{kind:'renderer-repair',renderOptions:{targetRegistry:template.candidate.targetRegistry,existingTargets}});
+    await assert.rejects(()=>nextReadingAction(session),/USER_REVISION_FACT_CHANGED/);
+    return;
+  }
+  if (recorded.requires_authorization) {
+    const action=await nextReadingAction(session);
+    assert.equal(action.kind,'authorize-continuation');
+    const plan=action.continuation;
+    assert.equal(plan.includes_local_review,scientific);
+    await recordReadingEvent(session,{kind:'authorize-continuation',authorization:{authorization_id:'user-overview-approved',
+      reason:'Scoped revision',checkpoint_fingerprint:plan.checkpoint_fingerprint,issue_ids:plan.issue_ids,
+      max_additional_calls:plan.recommended_additional_calls,max_additional_review_rounds:plan.max_additional_review_rounds}});
+  } else assert.notEqual(scenario,'scientific-short');
+  const revised=structuredClone(template.editor);
+  if (changedFacts[scenario]) {
+    revised.languages.en.overview[0].text=evidenceText.replace(...changedFacts[scenario]);
+    const result=await accept(await nextReadingAction(session),'presentation-r2',revised);
+    assert.equal(result.rejection?.reason,'READING_FIRST_USER_REVISION_FACT_CHANGED');
+    return;
+  }
+  revised.languages.en.overview[0].text=evidenceText.replace('The change was','The observed change was').replace('). See','); see');
+  await accept(await nextReadingAction(session),'presentation-r2',revised);
+  if (scientific) await accept(await nextReadingAction(session),'review-r2',template.review);
+  const done=await nextReadingAction(session);
+  assert.equal(done.status,'reading_complete');
+  const source=await inspectReadingFirstPublicationSource(done.publication_source);
+  assert.equal(source.recipe.checkpoint.state.reviews,scientific ? 2 : 1);
+  assert.equal(source.recipe.checkpoint.state.user_revisions[0].source,'user');
+  assert.deepEqual(await readFile(join(runRoot,'reading/review.json')),original);
+  await readingRuntime.restoreReadingFirstPublicationSource(source.recipe);
+  if (!scientific) {
+    const bad=structuredClone(source.recipe);
+    delete bad.checkpoint.state.userRevisionChecks;
+    delete bad.checkpoint.checkpoint_fingerprint;
+    bad.checkpoint.checkpoint_fingerprint=readingRuntime.fingerprintReadingFirst(bad.checkpoint);
+    delete bad.recipe_fingerprint;
+    bad.recipe_fingerprint=readingRuntime.fingerprintReadingFirst(bad);
+    await assert.rejects(()=>readingRuntime.restoreReadingFirstPublicationSource(bad),/READING_FIRST_PUBLICATION_REVIEW_CHANGED/);
+  }
+  session=await resumeReadingSession({runRoot});
+  await recordReadingEvent(session,{kind:'runtime-evidence',hostProfile:f.profile,evidence:f.evidence});
+  assert.equal((await nextReadingAction(session)).status,'reading_complete');
+});
+
+test('explicit additional execution budget resumes the first scoped Writer repair', async t => {
+  const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
+  f.profile.capabilities = { task_continuation: continuationCapability() };
   let session = await createReadingSession(f.options);
+  const runRoot = join(f.root, 'runs', 'run'), science = await scienceOutputs(f, template.presentationCatalog);
+  const accept = async (action, key, value) => {
+    assert.equal(action.action, 'dispatch');
+    const observation = observe(action);
+    await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
+    await writeFile(join(runRoot, 'native', key + '.json'), JSON.stringify(value));
+    return recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
+  };
+  const evidence = await nextReadingAction(session), evidenceHandle = 'host-' + evidence.action_id;
+  await recordReadingEvent(session, { kind: 'host_observation', action_id: evidence.action_id, observation: observe(evidence) });
+  const executionId = 'evidence-continue';
+  await recordReadingEvent(session, { kind: 'continuation-intent', action_id: evidence.action_id, execution_id: executionId, message: 'Finish the original Evidence task.' });
+  const continuation = await nextReadingAction(session);
+  await recordReadingEvent(session, { kind: 'continuation-receipt', execution_id: executionId, observation: withEvidence({ execution_id: executionId,
+    action_id: continuation.action_id, agent_id: evidenceHandle, tool_call: { name: continuation.host_action, arguments: continuation.arguments }, raw_result_text: 'continued', status: 'observed' }) });
+  await accept(evidence, evidence.role, science(evidence.role));
+  for (let i = 1; i < 6; i++) {
+    const action = await nextReadingAction(session);
+    await accept(action, action.role, science(action.role));
+  }
+  await accept(await nextReadingAction(session), 'en', template.views[0]);
+  await accept(await nextReadingAction(session), 'zh-CN', template.views[1]);
+  await accept(await nextReadingAction(session), 'presentation', template.editor);
+  await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
+  const issue = { severity: 'material', kind: 'scientific_limitation', detail: 'Explain the bounded finding.', repair_owner: 'writer',
+    affected_languages: ['en', 'zh-CN'], repair_scope: { status: 'located', section_ids: ['findings'], knowledge_ids: [], visual_ids: [], editor_fields: [] } };
+  const first = await nextReadingAction(session);
+  assert.equal((await accept(first, 'review', { ...template.review, issues: [issue] })).status, 'completed_with_limits');
+  const terminal = await nextReadingAction(session);
+  const baselineBytes = await readFile(terminal.summary.state_ref);
+  const baseline = JSON.parse(baselineBytes);
+  const inspection=await recordReadingEvent(session,{kind:'inspect-continuation'});
+  assert.equal(inspection.can_continue,true);
+  assert.equal(inspection.required_additional_calls,1);
+  assert.equal(inspection.translation_allowance,0);
+  assert.deepEqual(terminal.continuation,inspection);
+  assert.equal(inspection.recommended_additional_calls,1+inspection.translation_allowance);
+  const authorization = { authorization_id: 'user-approved-budget', reason: 'Approve the scoped repair and its reserve.',
+    issue_ids:inspection.issue_ids,checkpoint_fingerprint:baseline.checkpoint_fingerprint,max_additional_calls:inspection.recommended_additional_calls,max_additional_review_rounds:0 };
+  const approve = fields => recordReadingEvent(session, { kind: 'authorize-continuation', authorization: { ...authorization, ...fields } });
+  await assert.rejects(() => approve({ issue_ids:['unknown'] }), /AUTHORIZATION_INVALID/);
+  await assert.rejects(() => approve({ max_additional_calls:0 }), /BUDGET_INSUFFICIENT: 1/);
+  await approve();
+  await assert.rejects(() => approve({reason:'different'}), /AUTHORIZATION_CONFLICT/);
+  assert.deepEqual(await readFile(terminal.summary.state_ref), baselineBytes);
+  session = await resumeReadingSession({ runRoot });
+  await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+  await approve();
+  const revised = structuredClone(template.views);
+  revised[0].sections.find(row => row.id === 'findings').paragraphs[0] = 'This is the bounded synthetic finding.';
+  revised[1].sections.find(row => row.id === 'findings').paragraphs[0] = '这个合成发现有明确的适用范围。';
+  await accept(await nextReadingAction(session), 'en-r2', revised[0]);
+  await accept(await nextReadingAction(session), 'zh-CN-r2', revised[1]);
+  await accept(await nextReadingAction(session), 'presentation-r2', { ...template.editor, views_fingerprint: readingFirstViewsFingerprint(revised) });
+  const local = await nextReadingAction(session);
+  assert.match(await readFile(join(runRoot, 'instructions', 'review-r2.txt'), 'utf8'), /Explain the bounded finding/);
+  await accept(local, 'review-r2', template.review);
+  session = await resumeReadingSession({ runRoot });
+  await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+  const done = await nextReadingAction(session);
+  assert.equal(done.status, 'reading_complete');
+  assert.equal(done.summary.budget.total_used, 15);
+  assert.equal(done.summary.budget.original_total_limit, 14);
+  assert.equal(done.summary.budget.additional_used, 1);
+  const prepared = await inspectReadingFirstPublicationSource(done.publication_source);
+  assert.equal(prepared.recipe.checkpoint.state.reviews, 2);
+  assert.deepEqual(prepared.recipe.checkpoint.state.executionLedger.slice(0, 11), baseline.state.executionLedger);
+  assert.equal(prepared.recipe.binding.max_total_calls, 14);
+  await readingRuntime.restoreReadingFirstPublicationSource(prepared.recipe);
+  const legacy=structuredClone(prepared.recipe);
+  const [row]=legacy.checkpoint.state.continuationAuthorizations;
+  delete legacy.checkpoint.state.continuationAuthorizations;
+  legacy.checkpoint.state.repairContinuation={authorization:row.authorization,prior_checkpoint:row.prior_checkpoint,
+    original_total_limit:legacy.binding.max_total_calls,baseline_execution_count:row.baseline_execution_count,
+    baseline_ledger_fingerprint:row.baseline_ledger_fingerprint};
+  delete legacy.checkpoint.checkpoint_fingerprint;
+  legacy.checkpoint.checkpoint_fingerprint=readingRuntime.fingerprintReadingFirst(legacy.checkpoint);
+  delete legacy.recipe_fingerprint;
+  legacy.recipe_fingerprint=readingRuntime.fingerprintReadingFirst(legacy);
+  await readingRuntime.restoreReadingFirstPublicationSource(legacy);
+});
+
+for (const scenario of ['controller','verifier','missing-science','explicit-id']) test('unroutable review retains original bytes: '+scenario,async t=>{
+  const verifier=scenario==='verifier', missingScience=scenario==='missing-science', explicit=scenario==='explicit-id';
+  const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
+  if (verifier) f.profile.capabilities={task_continuation:continuationCapability()};
+  let session = await createReadingSession(missingScience ? {...f.options,includeRepairs:false,enrichmentPolicy:{sources:[],allow_targeted_methods:true}} : f.options);
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, path, value) => {
     const observation = observe(action);
@@ -540,17 +768,48 @@ test('rejected review is checkpointed as completed with limits and stays termina
   await accept(await nextReadingAction(session), 'presentation', template.editor);
   await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
   const action = await nextReadingAction(session);
-  const review = { ...template.review, issues: [{ severity: 'material', kind: 'presentation', detail: 'Unknown location.', repair_owner: 'editor', repair_scope: { status: 'unresolved', section_ids: [], knowledge_ids: [], visual_ids: [], editor_fields: [] } }] };
+  const review = { ...template.review, issues: [{ severity: 'material', kind: 'presentation',
+    detail:explicit ? 'Clarify '+String.fromCharCode(96)+'findings'+String.fromCharCode(96)+'.' : 'The findings need clarification.',
+    ...(verifier ? {} : {repair_owner:missingScience ? 'science' : 'editor'}),
+    ...(missingScience ? {scientific_gap:{id:'late',question:'What allocation was used?',impact:'Changes interpretation',severity:'material',
+      owner_role:'evidence',source_kind:'original_page',source_ids:[],target_sections:['Study']}} : {}),
+    repair_scope: { status: 'unresolved', section_ids: [], knowledge_ids: [], visual_ids: [], editor_fields: [] } }] };
   const { result, observation } = await accept(action, 'review', review);
-  assert.equal(result.status, 'completed_with_limits');
-  assert.equal(result.checkpoint_required, false);
+  assert.equal(result.status, 'review_unroutable');
+  assert.deepEqual(result.routing.gaps[0].missing_fields,verifier ? ['repair_owner','repair_scope'] : ['repair_scope']);
+  assert.equal(!!result.routing.gaps[0].cited_targets,explicit);
+  const bytes=await readFile(join(runRoot,'reading/review.json'));
   session = await resumeReadingSession({ runRoot });
   await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
-  assert.equal((await nextReadingAction(session)).status, 'completed_with_limits');
+  const actionAfter=await nextReadingAction(session);
+  assert.equal(actionAfter.kind,'review-scope');
   assert.deepEqual(await recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation }), result);
+  const annotations=[{issue_id:'issue-1',fields:{
+    ...(verifier ? {repair_owner:'editor'} : {}),
+    repair_scope:{status:'located',section_ids:[actionAfter.routing.scope_options.section_ids[0]],knowledge_ids:[],visual_ids:[],editor_fields:[]},
+  }}];
+  let routed;
+  if (verifier) {
+    const execution_id='complete-verifier-scope';
+    await recordReadingEvent(session,{kind:'continuation-intent',action_id:action.action_id,execution_id,message:'Complete the review routing.'});
+    const continuation=await nextReadingAction(session);
+    assert.equal(continuation.host_handle,'host-'+action.action_id);
+    await recordReadingEvent(session,{kind:'continuation-receipt',execution_id,observation:withEvidence({execution_id,
+      action_id:continuation.action_id,agent_id:continuation.host_handle,tool_call:{name:continuation.host_action,arguments:continuation.arguments},
+      raw_result_text:'Synthetic continuation',status:'observed'})});
+    await writeFile(join(runRoot,'native/review-scope.json'),JSON.stringify(annotations));
+    routed=await recordReadingEvent(session,{kind:'accept-review-scope',execution_id});
+  } else routed=await recordReadingEvent(session,{kind:'annotate-review-scope',...(explicit ? {} : {annotations})});
+  assert.equal(routed.status,missingScience ? 'completed_with_limits' : 'revision_required');
+  if (missingScience) {
+    const stopped=await nextReadingAction(session);
+    assert.equal(stopped.continuation.reason,'READING_FIRST_CONTINUATION_SCIENCE_SCOPE_UNAUTHORIZED');
+    assert.equal(stopped.continuation.can_continue,false);
+  }
+  assert.deepEqual(await readFile(join(runRoot,'reading/review.json')),bytes);
 });
 
-test('renderer-only issue requests repaired inputs and performs one local review', async t => {
+for (const extended of [false,true]) test('renderer repairs compare against their latest reviewed candidate: '+extended, async t => {
   const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
   const session = await createReadingSession(f.options), runRoot = join(f.root, 'runs', 'run');
   const content = await scienceOutputs(f, template.presentationCatalog);
@@ -577,7 +836,26 @@ test('renderer-only issue requests repaired inputs and performs one local review
   await recordReadingEvent(session, { kind: 'renderer-repair', renderOptions: { targetRegistry: template.candidate.targetRegistry, existingTargets } });
   const localReview = await nextReadingAction(session);
   assert.equal(localReview.stage, 'reading');
-  assert.equal((await accept(localReview, 'review-r2', template.review)).status, 'reading_complete');
+  const repeatReview={...review,issues:[...review.issues,{
+    severity:'material',kind:'presentation',detail:'Clarify the reviewed finding.',repair_owner:'editor',
+    repair_scope:{status:'located',section_ids:['findings'],knowledge_ids:[],visual_ids:[],editor_fields:[]},
+  }]};
+  assert.equal((await accept(localReview, 'review-r2', extended ? repeatReview : template.review)).status, extended ? 'completed_with_limits' : 'reading_complete');
+  if (extended) {
+    const inspection=await recordReadingEvent(session,{kind:'inspect-continuation'});
+    await recordReadingEvent(session,{kind:'authorize-continuation',authorization:{authorization_id:'repair-renderer-again',
+      reason:'Fix remaining renderer issue',checkpoint_fingerprint:inspection.checkpoint_fingerprint,issue_ids:inspection.issue_ids,
+      max_additional_calls:inspection.required_additional_calls,max_additional_review_rounds:1}});
+    await recordReadingEvent(session,{kind:'renderer-repair',renderOptions:{targetRegistry:template.candidate.targetRegistry,existingTargets}});
+    const editor=structuredClone(template.editor);
+    editor.languages.en.overview[0].text='This describes the bounded evidence and its limits.';
+    await accept(await nextReadingAction(session),'presentation-r3',editor);
+    await assert.rejects(()=>nextReadingAction(session),/RENDER_REPAIR_UNAVAILABLE/);
+    const updatedTargets=existingTargets.map(row=>({...row,bytes:Buffer.from(row.bytes.toString().replace('Renderer correction.','Renderer second correction.'))}));
+    await recordReadingEvent(session,{kind:'renderer-repair',renderOptions:{targetRegistry:template.candidate.targetRegistry,existingTargets:updatedTargets}});
+    await accept(await nextReadingAction(session),'review-r3',template.review);
+    assert.equal((await nextReadingAction(session)).status,'reading_complete');
+  }
 });
 
 test('registers repair slots only when selected and validates science overrides', () => {
@@ -678,8 +956,8 @@ for (const total of [10, 11]) test(`initial enrichment reserves the full chain a
   else { assert.equal(next.action, 'dispatch'); assert.match(next.arguments.prompt, /enrich-initial-evidence/); }
 });
 
-for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, { sourceLanguage: 'en', noRepairs: true }, { sourceLanguage: 'en', shortBudget: true }, { sourceLanguage: 'en', translationOnly: true }, { sourceLanguage: 'en', visualCorrection: true }, { sourceLanguage: 'en', visualCorrection: true, chartTypeCorrection: true }, { sourceLanguage: 'en', blockedRecovery: true }, { sourceLanguage: 'en', visualCorrection: true, editorRecovery: true }]) test(`late session repair ${JSON.stringify(scenario)}`, async t => {
-  const { sourceLanguage, noRepairs, shortBudget, translationOnly, visualCorrection, editorRecovery, chartTypeCorrection, blockedRecovery } = scenario;
+for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, { sourceLanguage: 'en', noRepairs: true }, { sourceLanguage: 'en', shortBudget: true }, { sourceLanguage: 'en', translationOnly: true }, { sourceLanguage: 'en', translationOnly: true, extraReview: true }, { sourceLanguage: 'en', visualCorrection: true }, { sourceLanguage: 'en', visualCorrection: true, chartTypeCorrection: true }, { sourceLanguage: 'en', blockedRecovery: true }, { sourceLanguage: 'en', visualCorrection: true, editorRecovery: true }]) test(`late session repair ${JSON.stringify(scenario)}`, async t => {
+  const { sourceLanguage, noRepairs, shortBudget, translationOnly, visualCorrection, editorRecovery, chartTypeCorrection, blockedRecovery, extraReview } = scenario;
   const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
   if (visualCorrection) {
     template.presentationCatalog.sources = [{ id: 'paper', path: template.presentationCatalog.source_pdf }];
@@ -712,10 +990,18 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
     assert.equal(first.status, 'completed_with_limits');
     session = await resumeReadingSession({ runRoot });
     await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
-    assert.equal((await nextReadingAction(session)).status, 'completed_with_limits');
-    return;
-  }
-  assert.equal(first.status, 'revision_required');
+    const terminal=await nextReadingAction(session);
+    assert.equal(terminal.status,'completed_with_limits');
+    assert.equal(JSON.parse(await readFile(terminal.summary.state_ref)).state.enrichmentRound,null);
+    if (noRepairs) return;
+    const plan=await recordReadingEvent(session,{kind:'inspect-continuation'});
+    assert.equal(plan.can_continue,true);
+    assert.equal(plan.required_additional_calls,1);
+    assert.equal(plan.remaining_task_keys[0],'enrich-late-evidence');
+    await recordReadingEvent(session,{kind:'authorize-continuation',authorization:{authorization_id:'late-gap-budget',
+      reason:'Approved late gap and downstream repairs',checkpoint_fingerprint:plan.checkpoint_fingerprint,issue_ids:plan.issue_ids,
+      max_additional_calls:plan.recommended_additional_calls,max_additional_review_rounds:0}});
+  } else assert.equal(first.status,'revision_required');
   const answer = { gap_id: gap.id, classification: 'paper_fact', explanation: 'The source reports random allocation.', consequence: 'It supports the design account.', status: 'recovered', target_sections: ['Study'], source_ids: ['paper'] };
   const visualCorrections = [{ visual_id: 'fig-one', source_id: 'paper', page: 1, label: { en: 'Recovered figure', 'zh-CN': '恢复图像' }, caption: { en: 'Recovered original caption.', 'zh-CN': '已恢复的原始图注。' } }];
   if (chartTypeCorrection) visualCorrections[0].chart_types = [{ knowledge_id: 'method', label: { en: 'Intervals', 'zh-CN': '区间图' }, panel: 'd,e' }];
@@ -737,22 +1023,26 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
     await recordReadingEvent(session, { kind: 'host_observation', action_id: editorAction.action_id, observation });
     const intent = { kind: 'continuation-intent', action_id: editorAction.action_id, execution_id: 'editor-scope-recovery', message: 'Complete the original scoped Editor task.' };
     await assert.rejects(() => recordReadingEvent(session, intent), /CALL_BUDGET_EXHAUSTED/);
-    const waiting = await nextReadingAction(session), checkpointBytes = await readFile(waiting.summary.state_ref), checkpoint = JSON.parse(checkpointBytes);
-    const { data } = JSON.parse(await readFile(join(runRoot, 'control/science-state.json'), 'utf8'));
-    const authorization = { authorization_id: 'synthetic-explicit-editor-recovery', reason: 'User approved scoped continuation and chart correction.', checkpoint_fingerprint: checkpoint.checkpoint_fingerprint, action_id: editorAction.action_id, max_additional_calls: 3,
-      chart_type_corrections: [{ visual_id: 'fig-one', chart_types: [{ knowledge_id: 'method', label: { en: 'Intervals', 'zh-CN': '区间图' }, panel: 'd,e' }] }] };
-    await assert.rejects(() => recordReadingEvent(session, { kind: 'authorize-repair-continuation', authorization: { ...authorization, checkpoint_fingerprint: 'wrong' } }), /AUTHORIZATION_INVALID/);
-    await assert.rejects(() => recordReadingEvent(session, { kind: 'authorize-repair-continuation', authorization: { ...authorization, chart_type_corrections: [{ ...authorization.chart_type_corrections[0], visual_id: 'unreviewed' }] } }), /VISUAL_CORRECTION_INVALID/);
-    await recordReadingEvent(session, { kind: 'authorize-repair-continuation', authorization });
-    assert.deepEqual(await readFile(waiting.summary.state_ref), checkpointBytes);
-    session = await resumeReadingSession({ runRoot });
-    await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
-    await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
-    await recordReadingEvent(session, intent);
-    const continuation = await nextReadingAction(session);
-    assert.equal(continuation.host_action, 'ContinueTask');
-    assert.equal(continuation.host_handle, 'host-' + editorAction.action_id);
-    await recordReadingEvent(session, { kind: 'continuation-receipt', execution_id: intent.execution_id, observation: withEvidence({ execution_id: intent.execution_id, action_id: continuation.action_id, agent_id: continuation.host_handle, tool_call: { name: continuation.host_action, arguments: continuation.arguments }, raw_result_text: 'continued', status: 'observed' }) });
+    const inspection = await recordReadingEvent(session,{kind:'inspect-continuation'});
+    assert.equal(inspection.reason,'READING_FIRST_CONTINUATION_RECONCILIATION_REQUIRED');
+    assert.deepEqual(inspection.unreconciled_tasks.map(row=>[row.task_id,row.reconcile_with]),[['presentation-r2','result']]);
+    await assert.rejects(() => recordReadingEvent(session,{kind:'authorize-continuation',authorization:{
+      authorization_id:'early',reason:'Repair',checkpoint_fingerprint:inspection.checkpoint_fingerprint,
+      max_additional_calls:3,max_additional_review_rounds:0,issue_ids:inspection.issue_ids,
+    }}),/RECONCILIATION_REQUIRED/);
+    const invalid=structuredClone(revisedEditor);
+    invalid.outside_scope=true;
+    assert.equal((await accept(editorAction,'presentation-r2',invalid)).status,'completed_with_limits');
+    const plan=await recordReadingEvent(session,{kind:'inspect-continuation'});
+    assert.equal(plan.can_continue,true);
+    assert.deepEqual(plan.remaining_task_keys,['presentation-r3','review-r2']);
+    const authorization={authorization_id:'after-rejected-editor',reason:'Retry scoped Editor and recheck',
+      checkpoint_fingerprint:plan.checkpoint_fingerprint,max_additional_calls:3,max_additional_review_rounds:0,issue_ids:plan.issue_ids,
+      chart_type_corrections:[{visual_id:'fig-one',chart_types:[{knowledge_id:'method',label:{en:'Intervals','zh-CN':'Interval'},panel:'d,e'}]}]};
+    await assert.rejects(()=>recordReadingEvent(session,{kind:'authorize-continuation',authorization:{...authorization,
+      chart_type_corrections:[{...authorization.chart_type_corrections[0],visual_id:'unreviewed'}]}}),/VISUAL_CORRECTION_INVALID/);
+    await recordReadingEvent(session,{kind:'authorize-continuation',authorization});
+    await accept(await nextReadingAction(session),'presentation-r3',revisedEditor);
   }
   if (editorRecovery) {
     for (const language of ['en', 'zh-CN']) revisedEditor.languages[language].visuals = [{ id: 'fig-one', title: 'Recovered title', notes: [] }];
@@ -790,7 +1080,7 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
     await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
     assert.deepEqual(await recordReadingEvent(session, recovery), recovered);
     await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
-  } else await accept(editorAction, 'presentation-r2', revisedEditor);
+  } else if (!blockedRecovery) await accept(editorAction, 'presentation-r2', revisedEditor);
   const local = await nextReadingAction(session);
   if (chartTypeCorrection || blockedRecovery) {
     const input = await readFile(join(runRoot, 'instructions', 'review-r2.txt'), 'utf8');
@@ -799,20 +1089,56 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
     assert.equal(data.prepared.runControl.reading_first_binding.max_total_calls, 15);
   }
   if (visualCorrection) assert.match(await readFile(join(runRoot, 'instructions', 'review-r2.txt'), 'utf8'), /Recovered original caption/);
-  await accept(local, 'review-r2', template.review);
-  const done = await nextReadingAction(session);
-  assert.equal(done.status, 'reading_complete');
-  if (blockedRecovery) {
-    assert.equal(done.summary.budget.total_used, 16);
-    assert.equal(done.summary.budget.original_total_limit, 15);
-    assert.equal(done.summary.budget.additional_limit, 3);
-    assert.equal(done.summary.budget.additional_used, 1);
-    const published = await inspectReadingFirstPublicationSource(done.publication_source);
-    assert.equal(published.recipe.binding.max_total_calls, 15);
-    assert.equal(published.recipe.checkpoint.state.repairContinuation.authorization.max_additional_calls, 3);
-    assert.equal(published.presentation.visuals[0].chart_types[0].panel, 'd,e');
-    await readingRuntime.restoreReadingFirstPublicationSource(published.recipe);
+  const inventoryIssue = { severity: 'material', kind: 'method-inventory', repair_owner: 'editor', detail: 'Clarify the feeding duration in both method applications.',
+    affected_languages: ['en', 'zh-CN'], repair_scope: { status: 'located', section_ids: ['methods'], knowledge_ids: [], visual_ids: [], editor_fields: [] } };
+  await accept(local, 'review-r2', extraReview ? { ...template.review, issues: [inventoryIssue] } : template.review);
+  if (extraReview) {
+    const terminal = await nextReadingAction(session);
+    assert.equal(terminal.status, 'completed_with_limits');
+    const previous = await readFile(terminal.summary.state_ref);
+    const inspection=await recordReadingEvent(session,{kind:'inspect-continuation'});
+    assert.equal(inspection.can_continue,true);
+    assert.deepEqual(inspection.remaining_task_keys,['presentation-r3','review-r3']);
+    const authorization = { authorization_id: 'extra-local-review', reason: 'Explicit authorization for one more local review and its Editor repair.',
+      checkpoint_fingerprint: JSON.parse(previous).checkpoint_fingerprint, max_additional_calls: 2, max_additional_review_rounds:1,issue_ids:inspection.issue_ids };
+    await assert.rejects(() => recordReadingEvent(session, { kind: 'authorize-continuation', authorization: { ...authorization, issue_ids: ['unrelated'] } }), /AUTHORIZATION_INVALID/);
+    await recordReadingEvent(session, { kind: 'authorize-continuation', authorization });
+    assert.deepEqual(await readFile(terminal.summary.state_ref), previous);
+    session = await resumeReadingSession({ runRoot });
+    await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+    const editor = structuredClone(revisedEditor);
+    editor.languages.en.methods[0].application = 'Tested after eight weeks of feeding.';
+    editor.languages['zh-CN'].methods[0].application = '喂养 8 周后测定。';
+    await accept(await nextReadingAction(session), 'presentation-r3', editor);
+    const recheck = await nextReadingAction(session);
+    const instruction = await readFile(join(runRoot, 'instructions/review-r3.txt'), 'utf8');
+    assert.match(instruction, /eight weeks of feeding/);
+    assert.match(instruction, /Clarify the feeding duration/);
+    await accept(recheck, 'review-r3', template.review);
+    session = await resumeReadingSession({ runRoot });
+    await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
   }
+  const done = await nextReadingAction(session);
+  if (extraReview) {
+    assert.equal(done.summary.budget.total_limit, 17);
+    const ready = await inspectReadingFirstPublicationSource(done.publication_source);
+    assert.equal(ready.recipe.checkpoint.state.reviews, 3);
+    assert.equal(ready.review_receipt.path, 'reading/review-r3.json');
+    await readingRuntime.restoreReadingFirstPublicationSource(ready.recipe);
+    const legacy=structuredClone(ready.recipe);
+    const [row]=legacy.checkpoint.state.continuationAuthorizations;
+    delete legacy.checkpoint.state.continuationAuthorizations;
+    legacy.checkpoint.state.reviewExtension={authorization:{...row.authorization,method_id:'method'},prior_checkpoint:row.prior_checkpoint,
+      original_total_limit:legacy.binding.max_total_calls,baseline_execution_count:row.baseline_execution_count,
+      baseline_ledger_fingerprint:row.baseline_ledger_fingerprint};
+    delete legacy.checkpoint.checkpoint_fingerprint;
+    legacy.checkpoint.checkpoint_fingerprint=readingRuntime.fingerprintReadingFirst(legacy.checkpoint);
+    delete legacy.recipe_fingerprint;
+    legacy.recipe_fingerprint=readingRuntime.fingerprintReadingFirst(legacy);
+    await readingRuntime.restoreReadingFirstPublicationSource(legacy);
+  }
+  assert.equal(done.status, 'reading_complete');
+
 });
 
 test('empty enrichment policy preserves exact requests and instructions without gaps', async t => {
@@ -850,4 +1176,13 @@ test('empty enrichment policy preserves exact requests and instructions without 
   await rm(join(f.root, 'candidates'), { recursive: true, force: true });
   const withPolicy = await run(true);
   assert.deepEqual(withPolicy, baseline);
+});
+
+for (const superseded of [false,true]) test('the committed paper rejects continuation, superseded='+superseded,async t=>{
+  const vault=await readingFirstIndexFixture(t);
+  const run=await reviewedReadingFirstFixture(t,{currentRegistryRoot:vault.vaultRoot,runId:superseded ? 'run_'+'b'.repeat(32) : vault.identity.run_id});
+  await vault.save(vault.build());
+  const inspection=await readingRuntime.inspectReadingFirstContinuation({controller:run.controller});
+  assert.equal(inspection.reason,'READING_FIRST_CONTINUATION_PUBLISHED');
+  await assert.rejects(()=>readingRuntime.authorizeReadingFirstContinuation({controller:run.controller,authorization:{authorization_id:'denied'}}),/CONTINUATION_PUBLISHED/);
 });

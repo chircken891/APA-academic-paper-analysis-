@@ -60,3 +60,9 @@
 每篇论文使用独立会话与 `runId`，读完逐篇发布。前一篇提交后，后一篇重新准备发布审阅与批准。共享节点在渲染后变化时，由 Controller 从原 `publication_source` 调用 `deriveRebasedReadingFirstPublicationSource({source, vaultRoot})`，用派生来源重新准备发布，并展示记录和差异。原来源须保留，以便目标再次变化时重新派生。
 
 变基沿用当前正文增补方式，保留人工修改，确定性校验论文笔记与本篇知识内容；不重读、不派发模型、不增加审查轮次或调用额度。失败时按具体诊断处理，不手工拼接候选或编写 recipe。正式注册、应用仍依精确清单授权，恢复使用签名注册中保存的来源与变基段。详见[共享节点变基](../../../../docs/apa-v3/reading-first-publication.md#并行阅读的共享节点变基)。
+
+## Scoped continuation after a limit or candidate change
+
+Read the session's `inspect-continuation` report before asking for an execution increase. Show the original state, unsettled observations, definite shortfall, translation reserve and whether the proposed chain contains a local recheck. Reconcile observed work through the original receipt before authorization. After approval, record `authorize-continuation` with the exact checkpoint and issue IDs. Repeated identical authorization is idempotent. Read legacy recovery records as evidence. Use the current review state and original model settings when recovering.
+
+When the review is `review_unroutable`, preserve its original bytes. The Controller annotates IDs when unambiguous. Otherwise continue the original Verifier only for the missing route fields and charge the call. When the user requests a candidate edit, use `user-revision` and leave preview files intact. Route scientific changes through a local review within the existing allowance, or request explicit approval if the repair requires new calls, tasks, or a review round. For non-scientific changes, preserve quantities, common units, references and figure/table identifiers in corresponding text slots and run the deterministic checks against the reviewed baseline. If more calls are needed for a non-scientific change, show the option of separately approved baseline publication followed by manual Wiki editing. See the [session guide](../../../../docs/apa-v3/reading-session.md) for the events and payloads.

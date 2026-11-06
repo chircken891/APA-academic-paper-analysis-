@@ -112,3 +112,9 @@ node scripts/v3/bilingual.mjs dry-run --vault-root <vault-root> --run <run> --pr
 将此owned review交给既有 `dryRunBilingualPublication`，按具体清单与两个哈希形成批准及维护窗口，然后调用 `applyBilingualPublication`。本路径不重放旧语言运行、不使用旧注册重新签发阅读资格；它使用当前Controller的内存计划，执行前保存 `prepareBilingualPublicationTrustAnchor` 返回的公钥信任锚。中断时沿用 `recoverBilingualPublication` 的磁盘日志、精确批准与该信任锚。尚未开始或回滚后重新准备仍需核对同一明确授权范围。
 
 新提交按批准清单逐文件写入，仅备份实际覆盖的目标；停止自动复制上一代次的完整知识库。旧可见路径仍须按迁移清单单独处理。只有确认新代次、原文及必要恢复文件有效后，才按精确旧路径/哈希清单将已退出当前代次的旧文件移到本次获批恢复目录。遇旧文件变化或目标占用时停止该项，不能覆盖人工修改。最后同步已获批图谱筛选并检查两语导航、知识反链与检索结果。普通查询和候选渲染均不执行迁移。
+
+## 用户修订与候选一致性
+
+通过会话的 `inspect-candidate` 核对已渲染版本的链接及逐文件指纹，任一检查失败都会阻断整体通过。用户修改经 `user-revision` 交给负责角色。涉及科学内容时，使用现有额度内或获批追加的局部复核绑定新候选；非科学修改使用原审查指纹、用户修订请求、角色回执及确定性检查记录，依次验证范围、对应文本的事实标记、链接、双语镜像和候选字节。链条缺失或指纹不连续时返回 `READING_FIRST_PUBLICATION_REVIEW_CHANGED`。准备、注册和正式发布继续使用现有的精确批准流程。
+
+采用他运行的科学产物时，首次派发 Writer 前已校验原 Integrator 所属运行的资源清单。发布时仍核验清单回执与实际图片字节，保留旧的三种资源声明入口。

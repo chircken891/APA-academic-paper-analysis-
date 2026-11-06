@@ -15,7 +15,6 @@ import { captureReadingFirstPublicationSource, createExternalReadingFirstPublica
   restoreReadingFirstPublicationSource } from './reading-first-runtime.mjs';
 import { createPhase22ContractValidator } from './phase22-contract-loader.mjs';
 import { readOwnedArtifact } from './owned-artifact-store.mjs';
-import { validateReadingResources } from './reading-resources.mjs';
 import { renderReadingFirstObsidian } from './reading-first-obsidian.mjs';
 
 export { deriveRebasedReadingFirstPublicationSource } from './reading-first-runtime.mjs';
@@ -154,31 +153,18 @@ async function baseFor(root, currentPolicy = false) {
 }
 async function integratorVisualResources(data, resources) {
   if (data.recipe.schema_version !== 'reading-first-publication-source-1.0') return [];
+  if (data.recipe.binding?.configured_setup?.results_resources) {
+    const manifest = data.results_resource_manifest;
+    if (!manifest || !data.source_bindings.some(row => row.path === manifest.path
+      && row.sha256 === manifest.sha256 && row.byte_length === manifest.byte_length)) fail('RF_PUBLICATION_RESOURCE_MANIFEST_INVALID');
+    return manifest.resources.map(row => ({ id: row.id, locator: row.locator, path: row.path, source_id: row.source_id, source_path: row.parent.path,
+      source_sha256: row.parent.sha256, sha256: row.sha256, byte_length: row.byte_length, image_source_path: row.source_path }));
+  }
   const artifacts = await Promise.all(data.recipe.scientific_input.role_artifacts.map(artifactId =>
     readOwnedArtifact({ artifactRoot: data.recipe.artifact_root, artifactId })));
   const integrated = artifacts.filter(row => row?.receipt.role === 'integration' && row.receipt.run_id === data.identity.run_id);
-  if (integrated.length !== 1) {
-    if (data.recipe.binding?.configured_setup?.results_resources) fail('RF_PUBLICATION_RESOURCE_MANIFEST_INVALID');
-    return [];
-  }
+  if (integrated.length !== 1) return [];
   const value = JSON.parse(integrated[0].bytes);
-  const spec = data.recipe.binding?.configured_setup?.results_resources;
-  if (spec) {
-    const task = spec.manifest_task, ref = value.visual_handoff?.resource_manifest;
-    if (!task || !ref || !data.recipe.artifact_root) fail('RF_PUBLICATION_RESOURCE_MANIFEST_INVALID');
-    const root = resolve(data.recipe.artifact_root), expected = resolve(root, task.artifact_path);
-    const output = resolve(root, spec.output_root);
-    if (ref.path !== expected || ref.resources_root !== output) fail('RF_PUBLICATION_RESOURCE_MANIFEST_INVALID');
-    const owned = await readOwnedArtifact({ artifactRoot: root, artifactId: task.artifact_id });
-    if (!owned || owned.receipt.path !== task.artifact_path || owned.receipt.role !== task.role
-      || owned.receipt.owner_actor_id !== task.owner_actor_id || owned.receipt.revision !== task.revision
-      || owned.receipt.run_id !== data.identity.run_id || owned.receipt.sha256 !== ref.sha256
-      || owned.receipt.byte_length !== ref.byte_length
-      || !data.source_bindings.some(row => row.path === expected && row.sha256 === ref.sha256 && row.byte_length === ref.byte_length)) fail('RF_PUBLICATION_RESOURCE_MANIFEST_INVALID');
-    const rows = validateReadingResources({ manifest: JSON.parse(owned.bytes), resourcesRoot: output, sources: data.sources });
-    return rows.map(row => ({ id: row.id, locator: row.locator, path: row.path, source_id: row.source_id, source_path: row.parent.path,
-      source_sha256: row.parent.sha256, sha256: row.sha256, byte_length: row.byte_length, image_source_path: row.source_path }));
-  }
   if (Array.isArray(value.visual_resources)) return value.visual_resources;
   if (!Array.isArray(value.resource_handoff?.asset_mapping)) {
     if (!Array.isArray(value.visual_handoff?.registered_resources)) return [];
@@ -476,6 +462,7 @@ async function buildReview({ source, data, options, base, preimages }) {
   const scientificReviewHash = hash({ input: data.scientific_input_fingerprint, reading_review: data.reading_review_fingerprint,
     review_receipt: data.review_receipt, view_receipts: data.view_receipts,
     ...(data.reading_editor_receipt ? { reading_editor_receipt: data.reading_editor_receipt } : {}),
+    ...(data.user_revision_checks ? { user_revision_checks: data.user_revision_checks } : {}),
     ...(data.recipe.knowledge_rebase ? { knowledge_rebase: data.recipe.knowledge_rebase.rebase_fingerprint } : {}), presentation: candidate.presentation_fingerprint });
   const assetApprovals = options.presentationAssetRegistrations ?? [];
   const toolBindings = tools(), sourceBindings = [...new Map([...data.source_bindings, ...options.resources.map(row => binding(row.source_path)),

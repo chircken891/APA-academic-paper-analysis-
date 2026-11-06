@@ -300,3 +300,11 @@ The configured factory freezes the selected local choices and resolves follow-ma
 The old C-path junction preserves file access, not seamless runtime recovery: historical Phase22 checkpoints bound physical `artifact_root` to C while the current real path is D, so restore may reject the original binding. Preserve historical source bytes/results and exhausted budget; any future continuation must use the existing explicit recovery/rebinding approval path, never edit history to manufacture a pass.
 
 
+
+## Reading continuation and candidate revision events
+
+Use the maintained session API or its `apa:session` CLI for `inspect-continuation` and `inspect-candidate`. The former is a read-only budget and reconciliation plan. Once the user approves the exact scope, `authorize-continuation` binds the inspection checkpoint fingerprint, issue IDs, additional execution cap and zero or one additional local review. An observed Editor output must first be reconciled through the result or rejected Editor recovery path. Do not open a replacement run or resume a committed run.
+
+`review_unroutable` retains the accepted raw Verifier output. Use `annotate-review-scope` for a deterministic Controller annotation of available IDs or use the original Verifier handle and accept its separate scope result via `accept-review-scope`. Owner and scope annotations never replace the raw review. A new Editor method entry can reference an existing method ID from the candidate catalogue with the same link in both languages.
+
+Register candidate change requests with `user-revision`. Give the chosen owner and exact targets, the user's words and the scientific classification. Obtain approval only when the call budget, review round or publication requires it. The CLI reads candidate inventories without rendering. Candidate consistency and link status are separate checks. For adopted scientific outputs, the resource manifest verifier uses the Integrator's original owner/run and checks image bytes before dispatch, on recovery and at publication.

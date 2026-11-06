@@ -52,3 +52,9 @@ reading_complete 仍是 publishable:false。经 [受控发布桥](reading-first-
 
 
 新 `configured-reading-2.2` 由 Results 读取原图、产出必要裁图及检查结论，Controller 负责派发和交接。DOCX 资源保留原图号和段落定位，来源单独成行，图注仅含原文或忠实翻译。Translation 在同一执行中连续处理分段；校验与进度保存后继续，无法完成时报告已完成进度、剩余 ID 和原因。角色自述与宿主容量证据分别记录。
+
+## 阅读续接与候选修订记录
+
+新续接授权由会话的 `inspect-continuation` 和 `authorize-continuation` 处理，并在 owned 阅读检查点追加 `continuationAuthorizations`。每份授权绑定原检查点、已用账本前缀、任务键、拥有者和新增额度。读取旧检查点时兼容 `repairContinuation` 与 `reviewExtension`。原有的整体审查与默认一次局部复核保留，额外局部复核须单独批准。
+
+未定位的实质审查保留原字节并进入 `review_unroutable`。Controller 或原 Verifier 的补充范围以 `reviewScopeNotes` 单独登记。用户修改请求以 `user_revisions` 登记，与审查问题分开。渲染的逐文件清单以 `candidateInventories` 登记；非科学修改须追加指纹连续的 `userRevisionChecks` 才可进入发布准备。详见[会话操作](reading-session.md)。
