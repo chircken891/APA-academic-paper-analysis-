@@ -19,7 +19,12 @@ import { getRunControlForDispatch, createOwnedArtifactBroker } from './owned-art
 import { assertActiveGeneration, assertIndexGeneration, assertActiveIndexContract, readCommittedGeneration, readRegisteredCommit, PHASE22_COMMIT_PATH } from './phase22-active-version.mjs';
 import { inspectManagedNote } from './phase22-managed-markdown.mjs';
 import { captureReadingFirstPublicationRegistration, rebuildRegisteredReadingFirstReview,
-  assertReadingFirstPublicationReviewLive, usesCurrentReadingFirstPublication } from './reading-first-publication.mjs';
+  applyReadingFirstSourceDerivation, assertReadingFirstPublicationReviewLive, usesCurrentReadingFirstPublication } from './reading-first-publication.mjs';
+import { assertNoteRelocationReviewCurrent, NOTE_RELOCATION_PROFILE, usesCurrentNoteRelocation } from './note-relocation.mjs';
+import { KNOWLEDGE_MERGE_PROFILE, usesCurrentKnowledgeMerge } from './knowledge-merge.mjs';
+
+const usesCurrentPublication = review => usesCurrentReadingFirstPublication(review) || usesCurrentTopicPublication(review)
+  || usesCurrentNoteRelocation(review) || usesCurrentKnowledgeMerge(review);
 
 const CONTROL = '.apa-v3/phase22';
 const LOCK = CONTROL + '/publication.lock';
@@ -216,7 +221,7 @@ export async function dryRunBilingualPublication({ vaultRoot, run, review, plan:
   const previous = await observe(root, PHASE22_COMMIT_PATH);
   let previousGeneration = null;
   if (previous.exists) {
-    const snapshot = (usesCurrentReadingFirstPublication(review) || usesCurrentTopicPublication(review))
+    const snapshot = usesCurrentPublication(review)
       ? await readRegisteredCommit({ vaultRoot: root }) : await readCommittedGeneration({ vaultRoot: root });
     if (!snapshot.ok) fail('P22_PREVIOUS_GENERATION_NOT_CURRENT', { errors: snapshot.errors });
     previousGeneration = snapshot.generation_id;
@@ -224,7 +229,7 @@ export async function dryRunBilingualPublication({ vaultRoot, run, review, plan:
   if (previousGeneration !== review.reviewManifest.previous_generation) fail('P22_PREVIOUS_GENERATION_CHANGED');
   const inventory = [];
   for (const row of review.outputInventory) {
-    if (!['paper', 'support', 'asset', 'active', 'index', 'manifest', 'reader-presentation', 'topic'].includes(row.kind)) fail('P22_PUBLICATION_KIND_INVALID');
+    if (!['paper', 'support', 'asset', 'active', 'index', 'manifest', 'reader-presentation', 'topic', 'knowledge-aliases'].includes(row.kind)) fail('P22_PUBLICATION_KIND_INVALID');
     const entry = await bindOutput(root, row);
     if (row.kind === 'paper' && entry.before_sha256 !== null) {
       const old = await observe(root, row.path);
@@ -259,7 +264,7 @@ export async function dryRunBilingualPublication({ vaultRoot, run, review, plan:
     hashes: { scientific_review_hash: review.hashes.scientific_review_hash, review_hash: review.hashes.review_bundle_hash,
       review_output_inventory_hash: review.hashes.output_inventory_hash, output_inventory_hash: outputHash },
     inventory, read_dependencies: readDependencies });
-  plans.set(plan, { review, stamp: planStamp(plan) });
+  plans.set(plan, { review, stamp: planStamp(plan), currentContentPolicy: usesCurrentPublication(review) });
   await checkPreimages(root, plan);
   return { ok: true, status: 'dry_run', plan, business_writes: 0, external_reader_atomicity: false };
 }
@@ -271,7 +276,7 @@ async function readAuthorityFile(binding, supplied) {
   try { value = JSON.parse(state.bytes); } catch { fail('P22_APPROVAL_RECORD_INVALID'); }
   return value;
 }
-async function authorityFromBinding(binding, plan, args, { recovery = false } = {}) {
+async function authorityFromBinding(binding, plan, args, { recovery = false, allowExpiredWindow = false } = {}) {
   if (!binding || binding.run_id !== plan.run_id || binding.analysis_revision !== plan.analysis_revision
     || resolve(binding.vault_root ?? '') !== plan.vault_root || binding.review_hash !== plan.hashes.review_hash
     || binding.output_inventory_hash !== plan.hashes.output_inventory_hash || binding.evidence_mode !== plan.evidence_mode
@@ -288,11 +293,14 @@ async function authorityFromBinding(binding, plan, args, { recovery = false } = 
   } else if (approval.authority !== 'user' || approval.scope !== 'production') fail('P22_PUBLICATION_APPROVAL_MISMATCH');
   const window = await readAuthorityFile(binding.maintenance_window_record, args.maintenanceWindowRecord);
   const now = Date.now();
+  const startsAt = Date.parse(window.starts_at), endsAt = Date.parse(window.ends_at);
   if (window.schema_version !== 'phase22-maintenance-window-1.0' || window.authorization_id !== approval.authorization_id
     || resolve(window.vault_root ?? '') !== plan.vault_root || window.run_id !== plan.run_id
     || window.analysis_revision !== plan.analysis_revision || window.scope !== approval.scope
-    || window.external_readers_acknowledged !== true || !Number.isFinite(Date.parse(window.starts_at))
-    || !Number.isFinite(Date.parse(window.ends_at)) || now < Date.parse(window.starts_at) || now >= Date.parse(window.ends_at)) fail('P22_MAINTENANCE_WINDOW_REQUIRED');
+    || !recovery && window.recovery !== undefined
+    || window.external_readers_acknowledged !== true || !Number.isFinite(startsAt) || !Number.isFinite(endsAt)
+    || endsAt <= startsAt || endsAt - startsAt > 60 * 60_000 || now < startsAt
+    || !allowExpiredWindow && now >= endsAt) fail('P22_MAINTENANCE_WINDOW_REQUIRED');
   return clone(binding);
 }
 async function assertAuthority(args, plan) {
@@ -474,6 +482,56 @@ function checkJournal(journal) {
   }
   if (previous !== journal.event_head || journal.events.at(-1)?.data_hash !== hash({ state: journal.state, inventory: journal.inventory, blocked_paths: journal.blocked_paths })) fail('P22_JOURNAL_CHAIN_INVALID');
 }
+
+/** Read exact preimages from a committed knowledge merge, including after an unrelated publication. */
+export async function readKnowledgeMergePreimages({ vaultRoot, transactionId, trustAnchor } = {}) {
+  if (!identifier(transactionId)) fail('P22_RECOVERY_ID_REQUIRED');
+  const { root, identity: rootIdentity } = await rootState(vaultRoot);
+  const journalPath = CONTROL + '/transactions/' + transactionId + '/journal.json';
+  const stored = await observe(root, journalPath);
+  if (!stored.exists) fail('P22_TRANSACTION_BINDING_INVALID');
+  const journal = JSON.parse(stored.bytes);
+  checkJournal(journal);
+  const commitRow = journal.inventory.find(row => row.kind === 'commit');
+  const commit = await observe(root, PHASE22_COMMIT_PATH);
+  if (journal.transaction_id !== transactionId || journal.vault_root !== root || !sameIdentity(journal.root_identity, rootIdentity)
+    || hash(journal.authority) !== journal.authority_hash || journal.state !== 'committed'
+    || !journal.events.some(row => ['committed', 'committed_recovery_retained'].includes(row.type))) fail('P22_KNOWLEDGE_MERGE_FORWARD_REQUIRED');
+  if (!matchingBytes(commit, commitRow.byte_sha256, commitRow.byte_length)) {
+    const plan = { kind: 'phase22-publication-plan', vault_root: journal.vault_root, root_identity: journal.root_identity,
+      run_id: journal.run_id, analysis_revision: journal.analysis_revision, evidence_mode: journal.evidence_mode,
+      generation: journal.generation, previous_generation: journal.previous_generation, hashes: journal.hashes,
+      inventory: journal.prepared_inventory.map(row => ({ ...row, observed_sha256: row.byte_sha256 })), read_dependencies: journal.read_dependencies };
+    verifyControllerGrant(journal.controller_grant, root, journal.run_id, trustAnchor);
+    const grant = journal.controller_grant.payload;
+    if (grant.kind !== 'publication' || grant.plan_fingerprint !== hash(plan) || grant.binding_hash !== journal.authority_hash
+      || grant.output_inventory_hash !== journal.hashes.output_inventory_hash) fail('P22_CONTROLLER_GRANT_INVALID');
+  }
+  const manifestRow = journal.inventory.find(row => row.kind === 'manifest');
+  if (!manifestRow) fail('P22_TRANSACTION_BINDING_INVALID');
+  const manifest = await observe(root, manifestRow.path);
+  if (!matchingBytes(manifest, manifestRow.byte_sha256, manifestRow.byte_length)) fail('P22_TRANSACTION_BINDING_INVALID', { path: manifestRow.path });
+  const reviewManifest = JSON.parse(manifest.bytes);
+  if (reviewManifest.profile !== KNOWLEDGE_MERGE_PROFILE || reviewManifest.maintenance?.operation !== 'merge') fail('P22_KNOWLEDGE_MERGE_FORWARD_REQUIRED');
+  const readDependencies = [stored, manifest].map((row, index) => ({ path: [journalPath, manifestRow.path][index],
+    byte_sha256: row.sha256, byte_length: row.byte_length }));
+  const activeRow = journal.inventory.find(row => row.kind === 'active');
+  const active = await observe(root, activeRow.path);
+  if (!matchingBytes(active, activeRow.byte_sha256, activeRow.byte_length)) fail('P22_TRANSACTION_BINDING_INVALID', { path: activeRow.path });
+  readDependencies.push({ path: activeRow.path, byte_sha256: active.sha256, byte_length: active.byte_length });
+  const rows = [];
+  for (const row of journal.inventory.filter(value => ['commit', 'paper', 'support', 'topic', 'knowledge-aliases'].includes(value.kind))) {
+    let bytes = null;
+    if (row.before_sha256 !== null) {
+      const backup = await observe(root, row.backup_path);
+      if (!matchingBytes(backup, row.before_sha256, row.before_byte_length)) fail('P22_BACKUP_INVALID', { path: row.path });
+      bytes = backup.bytes;
+      readDependencies.push({ path: row.backup_path, byte_sha256: backup.sha256, byte_length: backup.byte_length });
+    }
+    rows.push({ path: row.path, kind: row.kind, bytes, byte_sha256: row.byte_sha256, byte_length: row.byte_length });
+  }
+  return { generation: journal.generation, previous_generation: journal.previous_generation, active: active.bytes, rows, reviewManifest, readDependencies };
+}
 async function saveJournal(ctx, journal, lock, type, path = null) {
   await assertLock(ctx, lock);
   event(journal, type, path);
@@ -598,7 +656,8 @@ function resultFor(journal) {
 
 async function withTopicHints(result, plan, record) {
   const paperId = record.review?.reviewManifest.identity.paper_id;
-  if (result.status !== 'committed' || !paperId || ['phase24-topic-1.0', 'writing-project-1.0'].includes(record.review.reviewManifest.profile)) return result;
+  if (result.status !== 'committed' || !paperId
+    || ['phase24-topic-1.0', 'writing-project-1.0', NOTE_RELOCATION_PROFILE, KNOWLEDGE_MERGE_PROFILE].includes(record.review.reviewManifest.profile)) return result;
   try {
     const { getTopicUpdateHints } = await import('./topic-library.mjs');
     const hints = await getTopicUpdateHints({ vaultRoot: plan.vault_root, generationId: result.generation, changedPaperIds: [paperId] });
@@ -708,7 +767,7 @@ export async function applyBilingualPublication(args = {}) {
       await saveJournal(ctx, journal, lock, row.kind === 'commit' ? 'committed' : 'promoted', row.path);
       await args.onPromotionBoundary?.({ timing: 'after', path: row.path, kind: row.kind, transaction_id: transactionId });
     }
-    const observed = (planRecord.currentContentPolicy || usesCurrentReadingFirstPublication(planRecord.review) || usesCurrentTopicPublication(planRecord.review))
+    const observed = (planRecord.currentContentPolicy || usesCurrentPublication(planRecord.review))
       ? await readRegisteredCommit({ vaultRoot: ctx.root }) : await readCommittedGeneration({ vaultRoot: ctx.root });
     if (!observed.ok) fail('P22_COMMITTED_READER_REJECTED', { errors: observed.errors });
     await ctx.operation('post_commit.retained', CONTROL + '/transactions/' + transactionId + '/retained.json',
@@ -735,14 +794,37 @@ export async function applyBilingualPublication(args = {}) {
   }
 }
 
-async function recoverUnstartedRegistration(ctx, run, options) {
+async function readUnstartedRegistration(ctx, run, options) {
   const loaded = await loadBilingualPublication({ vaultRoot: ctx.root, run, requireApproval: true, trustAnchor: options.trustAnchor });
   const record = plans.get(loaded.plan);
   if (record.transactionId !== ctx.transactionId) fail('P22_TRANSACTION_NOT_REGISTERED');
-  await authorityFromBinding(loaded.authority, loaded.plan, {
-    approvalRecord: options.approvalRecord ?? loaded.authority.approval_record.path,
-    maintenanceWindowRecord: options.maintenanceWindowRecord ?? loaded.authority.maintenance_window_record.path,
-  }, { recovery: true });
+  return { loaded, record };
+}
+
+const recoveryAuthorityFiles = (authority, options) => ({
+  approvalRecord: options.approvalRecord ?? authority.approval_record.path,
+  maintenanceWindowRecord: options.maintenanceWindowRecord ?? authority.maintenance_window_record.path,
+});
+
+async function requireRecoveryAuthority({ authority, plan, options, transactionId }) {
+  const files = recoveryAuthorityFiles(authority, options);
+  if (!options.recoveryWindowControl) return authorityFromBinding(authority, plan, files, { recovery: true });
+  await authorityFromBinding(authority, plan, files, { recovery: true, allowExpiredWindow: true });
+  const control = options.recoveryWindowControl;
+  const current = getRunControlForDispatch({ dispatchContext: control.dispatchContext, runId: control.runId });
+  const renewed = current?.phase22_publication_binding;
+  const windowReference = renewed?.maintenance_window_record;
+  if (control.runId !== plan.run_id || !windowReference || same(windowReference, authority.maintenance_window_record)
+    || !same(renewed, { ...authority, maintenance_window_record: windowReference })) fail('P22_RECOVERY_WINDOW_SCOPE_MISMATCH');
+  const window = await readAuthorityFile(windowReference, options.recoveryWindowRecord);
+  if (!same(window.recovery, { action: 'recover', transaction_id: transactionId, original_window: authority.maintenance_window_record })
+    || Date.parse(window.ends_at) - Date.parse(window.starts_at) !== 15 * 60_000) fail('P22_RECOVERY_WINDOW_SCOPE_MISMATCH');
+  return authorityFromBinding(renewed, plan, { ...files, maintenanceWindowRecord: options.recoveryWindowRecord }, { recovery: true });
+}
+
+async function recoverUnstartedRegistration(ctx, run, options) {
+  const { loaded, record } = await readUnstartedRegistration(ctx, run, options);
+  await requireRecoveryAuthority({ authority: loaded.authority, plan: loaded.plan, options, transactionId: ctx.transactionId });
   // With no durable journal, no target replacement was permitted. Verify that
   // invariant from actual disk before writing a recovery decision.
   await checkPreimages(ctx.root, loaded.plan);
@@ -756,13 +838,12 @@ async function recoverUnstartedRegistration(ctx, run, options) {
   } finally { await releaseLock(ctx, lock); }
 }
 
-/** Disk-only recovery; no promoted[] state from the failed process is required. */
-export async function recoverBilingualPublication({ vaultRoot, run, transactionId, ...options } = {}) {
+async function readRecoveryTransaction({ vaultRoot, run, transactionId, options }) {
   if (!identifier(run) || !identifier(transactionId)) fail('P22_RECOVERY_ID_REQUIRED');
   const rootInfo = await rootState(vaultRoot), ctx = runtime(rootInfo.root, transactionId, options);
   const path = CONTROL + '/transactions/' + transactionId + '/journal.json';
   const stored = await observe(ctx.root, path);
-  if (!stored.exists) return recoverUnstartedRegistration(ctx, run, options);
+  if (!stored.exists) return { ctx };
   const journal = JSON.parse(stored.bytes); checkJournal(journal);
   if (journal.transaction_id !== transactionId || journal.run_id !== run || journal.vault_root !== ctx.root
     || !sameIdentity(journal.root_identity, rootInfo.identity) || hash(journal.authority) !== journal.authority_hash) fail('P22_TRANSACTION_BINDING_INVALID');
@@ -775,10 +856,28 @@ export async function recoverBilingualPublication({ vaultRoot, run, transactionI
   const grantPayload = journal.controller_grant.payload;
   if (grantPayload.kind !== 'publication' || grantPayload.plan_fingerprint !== hash(reconstructedPlan)
     || grantPayload.binding_hash !== journal.authority_hash || grantPayload.output_inventory_hash !== journal.hashes.output_inventory_hash) fail('P22_CONTROLLER_GRANT_INVALID');
-  await authorityFromBinding(journal.authority, planShape, {
-    approvalRecord: options.approvalRecord ?? journal.authority.approval_record.path,
-    maintenanceWindowRecord: options.maintenanceWindowRecord ?? journal.authority.maintenance_window_record.path,
-  }, { recovery: true });
+  return { ctx, journal, planShape };
+}
+
+/** Read signed transaction evidence and its original approval without reacquiring the write lock. */
+export async function inspectBilingualPublicationRecovery({ vaultRoot, run, transactionId, requireJournal = false, ...options } = {}) {
+  const { ctx, journal, planShape } = await readRecoveryTransaction({ vaultRoot, run, transactionId, options });
+  if (!journal && requireJournal) fail('P22_TRANSACTION_JOURNAL_REQUIRED');
+  const loaded = journal ? null : (await readUnstartedRegistration(ctx, run, options)).loaded;
+  const authority = journal?.authority ?? loaded.authority, plan = planShape ?? loaded.plan;
+  const files = recoveryAuthorityFiles(authority, options);
+  await authorityFromBinding(authority, plan, files, { recovery: true, allowExpiredWindow: true });
+  const window = await readAuthorityFile(authority.maintenance_window_record, files.maintenanceWindowRecord);
+  return { ok: true, status: journal?.state ?? 'registered_unstarted', transaction_id: transactionId,
+    generation: plan.generation, hashes: clone(plan.hashes), authority: clone(authority),
+    maintenance_window_current: Date.now() < Date.parse(window.ends_at) };
+}
+
+/** Disk-only recovery; no promoted[] state from the failed process is required. */
+export async function recoverBilingualPublication({ vaultRoot, run, transactionId, ...options } = {}) {
+  const { ctx, journal, planShape } = await readRecoveryTransaction({ vaultRoot, run, transactionId, options });
+  if (!journal) return recoverUnstartedRegistration(ctx, run, options);
+  await requireRecoveryAuthority({ authority: journal.authority, plan: planShape, options, transactionId });
   const lock = await acquireLock(ctx, journal.authority_hash, { recover: true });
   try {
     const commit = journal.inventory.find(row => row.kind === 'commit');
@@ -895,6 +994,15 @@ function captureSourceBindings(sourceInputs, review) {
   toolBindings.push(fileBinding(fileURLToPath(new URL('../../prompts/v3/phase22-language-contracts.md', import.meta.url))));
   return { source_bindings: [...files.values()].sort((a, b) => a.path.localeCompare(b.path)), tool_bindings: toolBindings,
     control_snapshot: { source: clone(sourceControl), integrator: clone(contextControl), language: clone(languageControl), runtime: clone(runtimeSnapshot) } };
+}
+function captureMaintenanceBindings(authority, review) {
+  if (!authority || typeof authority.inventory_path !== 'string') fail('P22_MAINTENANCE_APPROVAL_INVENTORY_REQUIRED');
+  const inventory = fileBinding(authority.inventory_path);
+  if (inventory.sha256 !== authority.inventory_sha256) fail('P22_MAINTENANCE_INVENTORY_MISMATCH');
+  const builder = review.reviewManifest.profile === NOTE_RELOCATION_PROFILE ? './note-relocation.mjs' : './knowledge-merge.mjs';
+  return { source_bindings: [inventory],
+    tool_bindings: [builder, './phase22-publication.mjs'].map(path => fileBinding(fileURLToPath(new URL(path, import.meta.url)))),
+    control_snapshot: { maintenance_profile: review.reviewManifest.profile } };
 }
 async function writeRegisteredRecord(ctx, path, bytes, { replace = false } = {}) {
   const before = await observe(ctx.root, path);
@@ -1050,12 +1158,17 @@ export async function registerBilingualPublication(args = {}) {
   const { plan, sourceInputs } = args, record = await currentPlan(plan);
   if (!record.review || args.run !== plan.run_id || resolve(args.vaultRoot ?? '') !== plan.vault_root) fail('P22_REGISTERED_LIVE_REVIEW_REQUIRED');
   await checkPreimages(plan.vault_root, plan);
-  const captured = ['phase24-topic-1.0', 'writing-project-1.0'].includes(record.review.reviewManifest.profile)
+  const maintenance = usesCurrentKnowledgeMerge(record.review) || (record.review.reviewManifest.profile === NOTE_RELOCATION_PROFILE
+    && Boolean(assertNoteRelocationReviewCurrent(record.review)));
+  const maintenanceAuthority = maintenance ? await assertAuthority(args, plan) : null;
+  const captured = maintenance
+    ? captureMaintenanceBindings(maintenanceAuthority, record.review)
+    : ['phase24-topic-1.0', 'writing-project-1.0'].includes(record.review.reviewManifest.profile)
     ? await captureTopicPublicationRegistration({ sourceInputs, review: record.review })
     : record.review.reviewManifest.profile === 'reading-first-obsidian-1.0'
     ? await captureReadingFirstPublicationRegistration({ sourceInputs, review: record.review })
     : captureSourceBindings(sourceInputs, record.review);
-  const authority = args.control ? await assertAuthority(args, plan) : null;
+  const authority = maintenanceAuthority ?? (args.control ? await assertAuthority(args, plan) : null);
   const root = CONTROL + '/runs/' + plan.run_id;
   const versionRoot = root + '/' + plan.hashes.output_inventory_hash.slice(7);
   const ctx = runtime(plan.vault_root, 'registration-' + randomUUID());
@@ -1072,7 +1185,7 @@ export async function registerBilingualPublication(args = {}) {
   const bindings = captured;
   const bundle = { schema_version: 'phase22-registered-publication-2.0', transaction_id: transactionId, run_id: plan.run_id, vault_root: plan.vault_root,
     plan: { ...plan, inventory }, plan_fingerprint: planStamp(plan), reviewManifest: record.review.reviewManifest, ...bindings,
-    current_content_policy: usesCurrentReadingFirstPublication(record.review) || usesCurrentTopicPublication(record.review) };
+    current_content_policy: usesCurrentPublication(record.review) };
   const bundleBytes = jsonBytes(bundle);
   await writeRegisteredRecord(ctx, bundlePath, bundleBytes);
   let authorityRef = null;
@@ -1160,14 +1273,16 @@ export async function loadBilingualPublication({ vaultRoot, run, requireApproval
   } else if (requireApproval) fail('P22_PUBLICATION_CONTROL_REQUIRED');
   let restoredReadingSource = null;
   if (simple && bundle.reading_first_source) {
-    if (bundle.reviewManifest.profile !== 'reading-first-obsidian-1.0' || !bundle.reading_first_source.knowledge_rebase) fail('P221_REGISTERED_REBUILD_MISMATCH');
+    const dependencies = bundle.reviewManifest.dependencies;
+    if (bundle.reviewManifest.profile !== 'reading-first-obsidian-1.0'
+      || !bundle.reading_first_source.knowledge_rebase && !dependencies?.source_derivation) fail('P221_REGISTERED_REBUILD_MISMATCH');
     restoredReadingSource = await restoreReadingFirstPublicationSource(bundle.reading_first_source);
     const data = await inspectReadingFirstPublicationSource(restoredReadingSource);
-    const dependencies = bundle.reviewManifest.dependencies;
-    if (dependencies.knowledge_rebase !== data.recipe.knowledge_rebase.rebase_fingerprint
+    if (dependencies.knowledge_rebase !== data.recipe.knowledge_rebase?.rebase_fingerprint
       || dependencies.presentation !== data.candidate.presentation_fingerprint
       || dependencies.reading_review !== data.reading_review_fingerprint) fail('P221_REGISTERED_REBUILD_MISMATCH');
-    for (const note of [...data.candidate.notes, ...data.candidate.supportNotes]) {
+    const candidate = applyReadingFirstSourceDerivation(data, dependencies.source_derivation);
+    for (const note of [...candidate.notes, ...candidate.supportNotes]) {
       const output = plan.inventory.find(row => row.path === note.path);
       if (!output || !output.bytes.equals(Buffer.from(note.content))) fail('P221_REGISTERED_REBUILD_MISMATCH');
     }

@@ -396,9 +396,10 @@ async function publicationAuthority(f, plan, { mutateApproval, mutateWindow, mut
     evidence_mode: 'synthetic', scope: 'temporary-fixture', allowed_actions: ['apply', 'recover'],
     review_hash: plan.hashes.review_hash, output_inventory_hash: plan.hashes.output_inventory_hash,
     inventory_paths: plan.inventory.map(row => row.path) };
+  const startsAt = Date.now() - 60_000;
   const window = { schema_version: 'phase22-maintenance-window-1.0', authorization_id: approval.authorization_id,
     vault_root: f.vaultRoot, run_id: f.run, analysis_revision: f.basis.identity.analysis_revision,
-    starts_at: new Date(Date.now() - 60_000).toISOString(), ends_at: new Date(Date.now() + 3600_000).toISOString(),
+    starts_at: new Date(startsAt).toISOString(), ends_at: new Date(startsAt + 30 * 60_000).toISOString(),
     external_readers_acknowledged: true, scope: 'temporary-fixture' };
   mutateApproval?.(approval); mutateWindow?.(window);
   const a = Buffer.from(JSON.stringify(approval)), w = Buffer.from(JSON.stringify(window));

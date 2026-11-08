@@ -12,6 +12,7 @@ import { readPhase22SourceAsset } from './phase22-input.mjs';
 import { validatePhase22TargetPath } from './phase22-render-context.mjs';
 import { buildReadingFirstPublicationReview, assertReadingFirstPublicationReviewCurrent } from './reading-first-publication.mjs';
 import { NOTE_RELOCATION_PROFILE, assertNoteRelocationReviewCurrent } from './note-relocation.mjs';
+import { KNOWLEDGE_MERGE_PROFILE, assertKnowledgeMergeReviewCurrent } from './knowledge-merge.mjs';
 
 const records = new WeakMap();
 const digest = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
@@ -288,6 +289,7 @@ export function buildBilingualReview({ basis, context, views, parity, rendered, 
 export function assertBilingualReviewCurrent(review, currentArgs) {
   if (['phase24-topic-1.0', 'writing-project-1.0'].includes(review?.reviewManifest?.profile)) return assertTopicPublicationReviewCurrent(review);
   if (review?.reviewManifest?.profile === NOTE_RELOCATION_PROFILE) return assertNoteRelocationReviewCurrent(review);
+  if (review?.reviewManifest?.profile === KNOWLEDGE_MERGE_PROFILE) return assertKnowledgeMergeReviewCurrent(review);
   if (review?.reviewManifest?.profile === 'reading-first-obsidian-1.0') return assertReadingFirstPublicationReviewCurrent(review);
   const record = records.get(review);
   if (!record) fail('P22_REVIEW_NOT_OWNED');

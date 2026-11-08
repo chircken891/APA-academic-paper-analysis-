@@ -39,9 +39,9 @@ Nature/Humanizer 用于专业、自然的表达，不限制有效的重点加粗
 
 - `modules:[{id,label:{en,"zh-CN"}}]`：按 abstract、design、methods、findings、discussion、limitations、conclusion 排序，对应原始摘要、研究问题与设计、方法概念与测量、主要发现、讨论、局限、结论与实践含义。Writer 在模块内组织子节；渲染器生成模块及子节两级目录，研究导图放在详细设计之前。
 - `bibliography`：题名、首位作者、年份，可选 citation/doi；title 可为两语对象。完整 DOI 编号作为可点击文本显示。新论文文件名保留规范大小写、首字母和缩写；既有登记路径保持稳定，明确获准的候选改名须同步登记与引用。
-- `source_pdf`：`Raw/` 内的相对 PDF 路径；`sources:[{id,path}]` 登记正文和获准方法背景的可链接来源，不扩大原来源许可。
+- `source_pdf`：新运行使用 `Clippings/` 内的相对 PDF 路径；`sources:[{id,path}]` 登记正文、补充材料和获准方法背景的可链接来源。主文及补充材料绑定其 `Clippings/` 原件；只有实际接受的 AI 补缺来源可登记到 `Raw/`。历史冻结记录的 `Raw/` 路径继续按原合同读取，不扩大原来源许可。
 - `sections`：已有资源或研究导图引用的稳定 `id`。Writer 沿用这些标识，并可组织其他必要子节。`indices:{en:0,"zh-CN":0}` 只供历史样例适配，不能替代新 Writer 输出。
-- `visuals`：`id,kind,label,caption,path,page`；kind 为 figure/table/formula，path 位于 `Figures/`，page 是从1起的 PDF 物理页。图型用 `chart_types:[{knowledge_id,label:{en,'zh-CN'},panel?}]` 关联共享方法节点，复合图按子图标注。多页表分别登记并保留表头、续表及脚注；历史字段 section_id/after_paragraph 维持旧合同，新布局由 Writer 返回落点。
+- `visuals`：`id,kind,label,caption,path,page`；kind 为 figure/table/formula，新运行的 path 必须位于冻结的 `Figures/<run_id>/`，且目录下只有一层文件名。未冻结 `figures_dir` 的旧绑定沿用原路径校验。page 是从1起的 PDF 物理页。图型用 `chart_types:[{knowledge_id,label:{en,'zh-CN'},panel?}]` 关联共享方法节点，复合图按子图标注。多页表分别登记并保留表头、续表及脚注；历史字段 section_id/after_paragraph 维持旧合同，新布局由 Writer 返回落点。
 - `knowledge`：`id,kind,canonical_key,title,aliases,paragraphs,source_kind`；kind 为 method/concept，source_kind 为 method-background/paper-fact。标题和段落分语言提供。只有通用 method-background 形成共享候选或既有节点增补；本文应用、实际参数和限制留在论文。新布局由 Writer 返回落点，历史 placements 保持兼容。
 - `map`：steps/findings 各含 `id,label,section_id`，relations 为 `{step_id,finding_id}`。使用有科学依据的实际关系，不按序号强配；正文提供设计与发现的双向链接。Integrator 验收时校验该导图：节点 id 唯一、含标签、`section_id` 在目录中，relations 为连接 step 与 finding 端点的 `{step_id,finding_id}`（旧 `{from,to}` 作别名接受）；不通过为 `SCIENCE_CONTENT_INVALID`，退回 Integrator，而非到最终渲染才失败。采纳模式的 `scientificInput.presentation` 同样校验。
 
@@ -104,7 +104,9 @@ Methods 提供通用知识，Results 识别图型、子图和裁切区域，Inte
 
 新策略的配置化预览从已校验登记表复制实际引用的历史知识正文，递归补齐历史知识依赖及所需已登记资源，并校验本地链接和锚点；旧论文入口使用标明正文未打包及正式库路径的导航页。清单记录历史资源的代次、路径与哈希并标记不可发布；这些内容供预览参考，不作为论文发布资源。未登记或校验失败的依赖明确报错。
 
-`knowledgeRegistry` 每项含已有 `path` 以及可用的 id/canonical_key/title/aliases/language；兼容旧节点时 Controller 将 measure_id 等已有身份映射到 canonical_key。渲染先按 id/canonical_key 匹配已有稳定身份，确认后沿用原路径，只形成增补建议；稳定身份不与名称字段交叉匹配。只有名称/别名命中而身份未确认时返回 `RF_OBSIDIAN_KNOWLEDGE_IDENTITY_UNRESOLVED`，交回 Methods/Integrator 消歧，不自动合并或另建卡片。多个路径命中稳定身份，或名称候选本身涉及多个路径时，保留 `RF_OBSIDIAN_KNOWLEDGE_AMBIGUOUS`。已确认稳定身份优先于无关名称命中；名称检索不构成语义同义识别。自包含样例需提供该目标的候选快照或节选；不能把其中的旧链接留成悬空引用，也不改动正式条目。
+`knowledgeRegistry` 每项含已有 `path` 以及可用的 id/canonical_key/title/aliases/language；兼容旧节点时 Controller 将 measure_id 等已有身份映射到 canonical_key。渲染优先匹配稳定身份，再按精确名称、去空格和统一标点大小写后的名称、英文名及已登记别名分层比对。唯一确定性命中复用已提交路径并增补；发布时匹配目标变化经现有变基入口重新渲染，保存身份映射与对应链接变化证明。当前登记中的别名才参与正式复用，未提交别名草稿与批内计划新建名称只提供提示。
+
+近似或多目标命中与本地 BM25 结果合并为候选对。主会话读取两页定义，记录“合并／保留并互相链接／保留”的建议及理由，不另派模型任务。未确认建议保留为草稿，本篇按可用的新建路径发布；文件路径冲突仍需具体处理，不能覆盖另一节点。存量合并通过精确批准的维护事务更新正文、入链、别名和登记；被合并页的删除另行批准。自包含样例需提供目标的候选快照或节选，保持链接可解析。
 
 新阅读冻结 `note_layout:'source-language-1.0'`，按实际 `sourceLanguage` 将原文同语言稿放 `Wiki/sources/`，另一语言稿放 `Wiki/translations/`。例如英文原文的英文稿留在 sources、中文稿进入 translations；中文原文则相反。文件名、论文身份、互链与知识反链沿用。方法与概念保持 `Wiki/methods/`、`Wiki/concepts/`。profile 为 `reading-first-obsidian-1.0`，管理 source/reading/resources 三个区域以保持完整段落顺序；沿用原 managed merge，保留其他正文、属性和个人笔记。旧12区段 profile 不自动转换。
 

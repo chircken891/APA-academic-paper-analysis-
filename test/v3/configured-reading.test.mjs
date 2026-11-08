@@ -50,6 +50,33 @@ async function configuredRepo(t, enabled = false) {
   return { root, config };
 }
 
+test('new configured reading freezes the Clippings source mapping and retains the submitted input', async t => {
+  const { root } = await configuredRepo(t);
+  const original = join(root, 'paper.pdf');
+  const bytes = Buffer.from('synthetic source');
+  await writeFile(original, bytes);
+  const source = { id: 'paper', path: original, sha256: 'sha256:' + createHash('sha256').update(bytes).digest('hex'), byte_length: bytes.length };
+  const scientificInput = { profile: 'reading-first-1.0', identity: { run_id: 'run', paper_id: 'synthetic' },
+    context: 'Synthetic evidence', sources: [source], presentation: { source_pdf: 'Raw/legacy.pdf' } };
+  const options = { repoRoot: root, runId: 'run', scientificInput, sourceLanguage: 'en',
+    mainSession: { model: 'gpt-6.1-sol', reasoning_effort: 'low' } };
+  const path = join(root, 'Clippings', 'paper.pdf');
+  assert.throws(() => prepareConfiguredReading(options), /READING_FIRST_CONTROL_INVALID/);
+  await assert.rejects(readFile(path), { code: 'ENOENT' });
+  const prepared = prepareConfiguredReading({ ...options, authorizationId: 'synthetic' });
+  const setup = prepared.runControl.reading_first_binding.configured_setup;
+  assert.equal(setup.source_policy, 'clippings-originals-1.0');
+  assert.deepEqual(setup.source_locations, [
+    { source_id: 'paper', original_path: original, path, vault_path: 'Clippings/paper.pdf', sha256: source.sha256, byte_length: bytes.length },
+  ]);
+  assert(Object.isFrozen(setup.source_locations[0]));
+  assert.deepEqual(prepared.scientificInput.sources, [{ ...source, path }]);
+  assert.equal(prepared.scientificInput.presentation.source_pdf, 'Clippings/paper.pdf');
+  assert.equal(scientificInput.presentation.source_pdf, 'Raw/legacy.pdf');
+  assert.equal(scientificInput.sources[0].path, original);
+  assert.deepEqual(await readFile(path), bytes);
+});
+
 test('new configured runs require a Controller decision while legacy bindings keep their dispatch contract', async t => {
   const { root } = await configuredRepo(t);
   let prepared;
@@ -818,7 +845,8 @@ test('one configured reading proceeds through its controlled synthetic publicati
   const { root } = await configuredRepo(t);
   const runId = 'run_' + 'e'.repeat(32);
   let prepared;
-  const fixture = await readingFirstPublicationFixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId, instructionFiles: true, manifestDocx: true,
+  const fixture = await readingFirstPublicationFixture(t, { vaultRoot: root, artifactRoot: join(root, '.tmp/runs', runId), runId, instructionFiles: true, manifestDocx: true,
+    figurePath: 'Figures/' + runId + '/figure.png',
     createRunControl: options => { prepared = prepareConfiguredReading({ ...options, repoRoot: root }); return prepared.runControl; } });
   for (const role of ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration']) {
     const science = createConfiguredScienceRequest({ prepared, role, dispatchContext: fixture.broker.dispatchContext,
@@ -837,6 +865,10 @@ test('one configured reading proceeds through its controlled synthetic publicati
   const snapshot = await readCommittedGeneration({ vaultRoot: fixture.vaultRoot });
   assert.equal(snapshot.ok, true, JSON.stringify(snapshot.errors));
   assert.equal(snapshot.generation.evidence_mode, 'synthetic');
+  for (const source of prepared.runControl.reading_first_binding.configured_setup.source_locations) {
+    assert(snapshot.generation.objects.some(object => object.kind === 'asset' && object.path === source.vault_path && object.sha256 === source.sha256));
+    assert(!fixture.plan.inventory.some(row => row.path === source.vault_path));
+  }
   for (const note of fixture.candidate.notes) {
     assert.equal(await readFile(join(fixture.vaultRoot, note.path), 'utf8'), note.content);
     assert.equal(await readFile(join(prepared.paths.candidateRoot, note.path), 'utf8'), note.content);
@@ -1001,7 +1033,7 @@ test('codex dispatch keeps its structured agent_id path', async t => {
   assert.equal(Object.hasOwn(legacy, 'host_task_handle_status'), false);
 });
 
-test('2.2 binding freezes the selected parser python for Results', async t => {
+test('2.2 binding freezes the selected parser python and run figures directory for Results', async t => {
   const { root } = await configuredRepo(t);
   let options;
   const runId = 'run_' + '5'.repeat(32);
@@ -1010,4 +1042,5 @@ test('2.2 binding freezes the selected parser python for Results', async t => {
   const prepared = prepareConfiguredReadingVersion({ ...options, repoRoot: root, instructionProfile: 'configured-reading-2.2', maxCalls: undefined, maxTotalCalls: 14 });
   assert.equal(prepared.runControl.reading_first_binding.configured_setup.results_resources.python,
     join(root, 'mineru', 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'));
+  assert.equal(prepared.runControl.reading_first_binding.configured_setup.results_resources.figures_dir, 'Figures/' + runId + '/');
 });

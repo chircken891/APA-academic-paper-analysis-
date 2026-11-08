@@ -1,6 +1,6 @@
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import { readFileSync, lstatSync, realpathSync } from 'node:fs';
-import { resolve, dirname, join, isAbsolute } from 'node:path';
+import { resolve, dirname, join, basename, posix, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual as same } from 'node:util';
 import YAML from 'yaml';
@@ -12,10 +12,13 @@ import { buildBilingualIndex } from './phase22-search.mjs';
 import { assertReadingFirstPublicationManifest, verifyReadingFirstPresentation } from './reading-first-index.mjs';
 import { captureReadingFirstPublicationSource, createExternalReadingFirstPublicationSource,
   getReadingFirstRuntimePublicationToolBindings, inspectReadingFirstPublicationSource,
-  restoreReadingFirstPublicationSource } from './reading-first-runtime.mjs';
+  previewReadingFirstPublicationRebase, readingFirstUsedMethodSources, restoreReadingFirstPublicationSource } from './reading-first-runtime.mjs';
+import { readCommittedReadingFirstKnowledgeRegistry, readKnowledgeRegistryRow } from './reading-first-knowledge-registry.mjs';
 import { createPhase22ContractValidator } from './phase22-contract-loader.mjs';
 import { readOwnedArtifact } from './owned-artifact-store.mjs';
 import { renderReadingFirstObsidian } from './reading-first-obsidian.mjs';
+import { relocateNoteLinks } from './note-relocation.mjs';
+import { findRawSourceMatches, inspectClippingsSourceDrift, readRegisteredSourceMatchMetadata } from './reading-source-policy.mjs';
 
 export { deriveRebasedReadingFirstPublicationSource } from './reading-first-runtime.mjs';
 
@@ -28,6 +31,8 @@ const jsonBytes = value => Buffer.from(JSON.stringify(value) + '\n');
 const fail = (code, details = {}) => { throw Object.assign(new Error(code), { code, details }); };
 const clone = value => structuredClone(value);
 const identifier = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/.test(value);
+const paperSourcePath = path => /^(Raw|Clippings)\/.+\.(pdf|docx)$/i.test(path);
+const canonicalSources = data => data.recipe.binding?.configured_setup?.source_policy === 'clippings-originals-1.0';
 function freeze(value) {
   if (value && typeof value === 'object' && !(value instanceof Uint8Array) && !Object.isFrozen(value)) {
     Object.values(value).forEach(freeze); Object.freeze(value);
@@ -74,7 +79,7 @@ function currentBindings(bindings) {
   for (const row of bindings) if (!same(row, binding(row.path))) fail('P22_REGISTERED_DEPENDENCY_CHANGED', { path: row.path });
 }
 function tools() {
-  return ['./reading-first-publication.mjs', './reading-resources.mjs', './phase22-publication.mjs', './phase22-review.mjs',
+  return ['./reading-first-publication.mjs', './reading-source-policy.mjs', './note-relocation.mjs', './reading-resources.mjs', './phase22-publication.mjs', './phase22-review.mjs',
     './phase22-active-version.mjs', './phase22-search.mjs', './reading-first-index.mjs', './phase22-managed-markdown.mjs',
     '../../Schema/phase22/active-index.schema.json', '../../Schema/phase22/reading-first-publication.schema.json',
     '../../Schema/phase22/review-manifest.schema.json'].map(path => binding(fileURLToPath(new URL(path, import.meta.url))));
@@ -133,11 +138,20 @@ function migrateKnowledgeMetadata(bytes, path) {
     .replace(/^graph_scope: v2-canonical\r?$/m, 'graph_scope: v3-candidate');
   return Buffer.from(header + text.slice(front[0].length));
 }
-async function baseFor(root, currentPolicy = false) {
-  if (regularBytes(root, '.apa-v3/phase22/COMMITTED.json', { missing: true }) === null) return { snapshot: null, generation: null, index: null, files: new Map() };
+/** Check registered originals before inspecting a candidate's own frozen inputs. */
+export async function assertReadingFirstRegisteredSourcesCurrent({ vaultRoot } = {}) {
+  const root = rootPath(vaultRoot);
+  if (regularBytes(root, '.apa-v3/phase22/COMMITTED.json', { missing: true }) === null) return null;
+  const registered = await readRegisteredCommit({ vaultRoot: root });
+  if (!registered.ok) fail('RF_PUBLICATION_PREVIOUS_GENERATION_INVALID', { errors: registered.errors });
+  const drifts = inspectClippingsSourceDrift({ vaultRoot: root, objects: registered.generation.objects });
+  if (drifts.length) fail('RF_PUBLICATION_PREVIOUS_OBJECT_CHANGED', { ...drifts[0], drifts });
+  return registered;
+}
+async function baseFor(root, currentPolicy = false, checked) {
+  const registered = checked === undefined ? await assertReadingFirstRegisteredSourcesCurrent({ vaultRoot: root }) : checked;
+  if (!registered) return { snapshot: null, generation: null, index: null, files: new Map() };
   if (currentPolicy) {
-    const registered = await readRegisteredCommit({ vaultRoot: root });
-    if (!registered.ok) fail('RF_PUBLICATION_PREVIOUS_GENERATION_INVALID', { errors: registered.errors });
     // Registered Wiki notes accept later human edits; every other registered object must keep its committed bytes.
     const files = new Map(registered.generation.objects.map(row => {
       const bytes = regularBytes(root, row.path);
@@ -157,7 +171,8 @@ async function integratorVisualResources(data, resources) {
     const manifest = data.results_resource_manifest;
     if (!manifest || !data.source_bindings.some(row => row.path === manifest.path
       && row.sha256 === manifest.sha256 && row.byte_length === manifest.byte_length)) fail('RF_PUBLICATION_RESOURCE_MANIFEST_INVALID');
-    return manifest.resources.map(row => ({ id: row.id, locator: row.locator, path: row.path, source_id: row.source_id, source_path: row.parent.path,
+    const current = manifest.resources.map(row => manifest.resource_repair?.resources.find(item => item.id === row.id) ?? row);
+    return current.map(row => ({ id: row.id, locator: row.locator, path: row.path, source_id: row.source_id, source_path: row.parent.path,
       source_sha256: row.parent.sha256, sha256: row.sha256, byte_length: row.byte_length, image_source_path: row.source_path }));
   }
   const artifacts = await Promise.all(data.recipe.scientific_input.role_artifacts.map(artifactId =>
@@ -179,7 +194,7 @@ async function integratorVisualResources(data, resources) {
         && source.sha256 === parentHash && (row.source_id === undefined || row.source_id === source.id));
       if (parents.length !== 1) return [];
       const parent = parents[0];
-      const targets = resources.filter(resource => /^Raw\//.test(resource.path)
+      const targets = resources.filter(resource => paperSourcePath(resource.path)
         && typeof resource.source_path === 'string' && isAbsolute(resource.source_path)
         && resolve(resource.source_path) === resolve(parent.path)
         && resource.sha256 === parent.sha256 && resource.byte_length === parent.byte_length);
@@ -217,7 +232,7 @@ function presentationAssetRegistrations(data, resources, approvals = []) {
         || !identifier(value.authorization_id) || typeof value.user_reply !== 'string' || !value.user_reply.trim()
         || value.run_id !== data.identity.run_id || value.presentation_fingerprint !== data.candidate.presentation_fingerprint
         || candidate.run_id !== value.run_id || !same(candidate.resource, resource) || !same(candidate.scientific_parent, parent)
-        || !resource || !/^Raw\/.+\.pdf$/i.test(resource.path) || paths.has(resource.path)
+        || !resource || !/^(Raw|Clippings)\/.+\.pdf$/i.test(resource.path) || paths.has(resource.path)
         || typeof resource.source_path !== 'string' || !isAbsolute(resource.source_path)
         || !data.candidate.assetPaths.includes(resource.path) || resource.path === data.presentation.source_pdf
         || !data.presentation.sources?.some(row => row.id === parent?.source_id && row.path === resource.path)
@@ -225,7 +240,7 @@ function presentationAssetRegistrations(data, resources, approvals = []) {
       const parents = data.sources.filter(row => row.id === parent.source_id && row.sha256 === parent.sha256
         && typeof parent.path === 'string' && isAbsolute(parent.path) && resolve(row.path) === resolve(parent.path));
       if (parents.length !== 1) throw new Error('scientific parent mismatch');
-      const targets = resources.filter(row => /^Raw\//.test(row.path) && typeof row.source_path === 'string'
+      const targets = resources.filter(row => paperSourcePath(row.path) && typeof row.source_path === 'string'
         && isAbsolute(row.source_path) && resolve(row.source_path) === resolve(parents[0].path)
         && row.sha256 === parents[0].sha256 && row.byte_length === parents[0].byte_length);
       if (targets.length !== 1) throw new Error('original source resource required');
@@ -245,7 +260,7 @@ async function resourceBindings(data, resources, approvedAssets = []) {
   if (manifestRequired) ownedVisuals = await integratorVisualResources(data, resources);
   for (const resource of resources) {
     safePath(resource.path);
-    if (paths.has(resource.path) || !/^(Raw|Figures)\//.test(resource.path) || typeof resource.source_path !== 'string') fail('RF_PUBLICATION_RESOURCE_INVALID');
+    if (paths.has(resource.path) || (!paperSourcePath(resource.path) && !/^Figures\//.test(resource.path)) || typeof resource.source_path !== 'string') fail('RF_PUBLICATION_RESOURCE_INVALID');
     paths.add(resource.path);
     const found = registered.find(row => resolve(row.path) === resolve(resource.source_path)
       && row.sha256 === resource.sha256 && row.byte_length === resource.byte_length);
@@ -292,7 +307,8 @@ function publicationCitation(data, resources, approvals = []) {
   // Each visual cites its own source: the registered original, or an approved derived display asset of that source.
   const visuals = catalog.visuals ?? [];
   const configured22 = data.recipe.binding?.configured_setup?.instruction_profile === 'configured-reading-2.2';
-  const ids = [...new Set([source.id, ...visuals.map(row => row.source_id ?? source.id)])];
+  const ids = [...new Set([source.id, ...visuals.map(row => row.source_id ?? source.id),
+    ...(canonicalSources(data) ? (catalog.sources ?? []).map(row => row.id) : [])])];
   return { bibliography: clone(catalog.bibliography), sources: ids.map(id => {
     const original = data.sources.find(row => row.id === id);
     const path = id === source.id ? catalog.source_pdf : catalog.sources?.find(row => row.id === id)?.path;
@@ -313,26 +329,168 @@ function publicationCitation(data, resources, approvals = []) {
   }) };
 }
 
+function usedMethodSources(data) {
+  return readingFirstUsedMethodSources(data.recipe.checkpoint?.state).map(source => ({ ...source,
+    path: safePath('Raw/' + data.identity.run_id + '/' + basename(source.source_path)) }));
+}
+
+function sourcePlan(root, data, supplied, base, approvals = [], matchMetadata = {}, before = path => regularBytes(root, path, { missing: true })) {
+  const strict = canonicalSources(data);
+  const extras = strict ? usedMethodSources(data) : [];
+  if (strict) {
+    for (const resource of supplied.filter(row => paperSourcePath(row.path))) {
+      if (resource.path.startsWith('Raw/')) fail('RF_PUBLICATION_RAW_WRITE_FORBIDDEN', { path: resource.path });
+      if (resolve(root, resource.path) !== resolve(resource.source_path)) fail('RF_PUBLICATION_CLIPPINGS_ORIGINAL_REQUIRED', { path: resource.path });
+    }
+    const declared = new Map((data.presentation.sources ?? []).map(row => [row.id, row.path]));
+    for (const source of data.sources) {
+      const location = data.recipe.binding.configured_setup.source_locations?.find(row => row.source_id === source.id);
+      const resource = supplied.find(row => row.path === location?.vault_path);
+      const display = approvals.some(row => row.scientific_parent.source_id === source.id && row.resource.path === declared.get(source.id)
+        && row.parent_resource_path === resource?.path);
+      if (!resource || !resource.path.startsWith('Clippings/') || source.path !== location.path || location.sha256 !== source.sha256
+        || location.byte_length !== source.byte_length || resource.sha256 !== source.sha256 || resource.byte_length !== source.byte_length
+        || resolve(resource.source_path) !== resolve(source.path) || declared.has(source.id) && declared.get(source.id) !== resource.path && !display) {
+        fail('RF_PUBLICATION_CLIPPINGS_ORIGINAL_REQUIRED', { source_id: source.id, path: location?.vault_path });
+      }
+    }
+  }
+  const resources = [...supplied, ...extras];
+  const raw = resources.filter(row => row.path.startsWith('Raw/'));
+  const ids = new Map([...(data.presentation.sources ?? []).map(row => [row.path, row.id]),
+    ...extras.map(row => [row.path, row.source_id])]);
+  for (const row of resources.filter(item => paperSourcePath(item.path))) {
+    const boundSource = data.sources.find(source => resolve(source.path) === resolve(row.source_path) && source.sha256 === row.sha256);
+    if (!ids.has(row.path) && boundSource) ids.set(row.path, boundSource.id);
+  }
+  const main = resources.find(row => row.path === data.presentation.source_pdf);
+  if (main) ids.set(main.path, data.sources.find(row => resolve(row.path) === resolve(main.source_path))?.id);
+  const metadata = row => {
+    const source = data.sources.find(item => item.id === ids.get(row.path));
+    return { path: row.path, sha256: row.sha256, byte_length: row.byte_length,
+      ...(row.path === main?.path ? { doi: data.presentation.bibliography.doi, title: data.presentation.bibliography.title } : {}),
+      ...(source?.doi ? { doi: source.doi } : {}), ...(source?.title ? { title: source.title } : {}),
+      ...(row.doi ? { doi: row.doi } : {}), ...(row.title ? { title: row.title } : {}) };
+  };
+  const duplicates = findRawSourceMatches({ vaultRoot: root,
+    sources: [...(matchMetadata.sources ?? []), ...resources.filter(row => row.path.startsWith('Clippings/')).map(metadata)],
+    rawSources: [...(matchMetadata.rawSources ?? []), ...raw.map(metadata)] });
+  const remaps = raw.flatMap(row => {
+    const match = duplicates.exact_matches.filter(item => item.raw_path === row.path
+      && item.sha256 === row.sha256 && item.byte_length === row.byte_length)
+      .sort((a, b) => a.clippings_path.localeCompare(b.clippings_path, 'en'))[0];
+    if (!match) return [];
+    const source_id = ids.get(row.path);
+    if (!source_id) fail('RF_PUBLICATION_SOURCE_REMAP_IDENTITY', { path: row.path });
+    return [{ old_path: row.path, new_path: match.clippings_path, source_id, sha256: row.sha256, byte_length: row.byte_length }];
+  });
+  const byOld = new Map(remaps.map(row => [row.old_path, row.new_path]));
+  const finalResources = new Map();
+  for (const row of resources) {
+    const path = byOld.get(row.path) ?? row.path;
+    const source_path = byOld.has(row.path) ? resolve(root, path) : row.source_path;
+    const prior = finalResources.get(path);
+    if (prior && (prior.sha256 !== row.sha256 || prior.byte_length !== row.byte_length)) fail('RF_PUBLICATION_RESOURCE_TARGET_CONFLICT', { path });
+    finalResources.set(path, { path, source_path, sha256: row.sha256, byte_length: row.byte_length });
+  }
+  const supplements = extras.map(({ source_path, ...row }) => ({ ...row, path: byOld.get(row.path) ?? row.path,
+    notes: data.candidate.notes.map(note => note.path) }));
+  const bound = new Set(resources.flatMap(row => [row.path, byOld.get(row.path)]).filter(Boolean));
+  const committedAssets = new Set((base.generation?.objects ?? []).filter(row => row.kind === 'asset').map(row => row.path));
+  const relevant = row => bound.has(row.raw_path) || bound.has(row.clippings_path) || committedAssets.has(row.raw_path);
+  const exact = duplicates.exact_matches.filter(relevant)
+    .filter(row => {
+      const bytes = before(row.raw_path);
+      return bytes !== null && bytes.length === row.byte_length && sha(bytes) === row.sha256;
+    });
+  return {
+    resources: [...finalResources.values()], citationResources: supplied, sourceDerivation: { remaps, supplements }, sourceMatchMetadata: matchMetadata,
+    publicationSources: { source_path_remaps: remaps, raw_supplements: supplements.filter(row => row.path.startsWith('Raw/')
+      && before(row.path) === null),
+    raw_cleanup_candidates: exact.filter(row => !committedAssets.has(row.raw_path)),
+    migration_candidates: exact.filter(row => committedAssets.has(row.raw_path)),
+    possible_matches: duplicates.possible_matches.filter(relevant) },
+  };
+}
+
+/** Recompute only approved link-target changes and source navigation from the signed derivation. */
+export function applyReadingFirstSourceDerivation(data, derivation) {
+  if (!derivation) return data.candidate;
+  const { remaps, supplements } = derivation;
+  if (!Array.isArray(remaps) || !Array.isArray(supplements)) fail('RF_PUBLICATION_SOURCE_REMAP_INVALID');
+  const byOld = new Map();
+  for (const row of remaps) {
+    safePath(row.old_path); safePath(row.new_path);
+    if (!row.old_path.startsWith('Raw/') || !row.new_path.startsWith('Clippings/')
+      || !paperSourcePath(row.old_path) || !paperSourcePath(row.new_path) || byOld.has(row.old_path)
+      || typeof row.source_id !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(row.sha256) || !Number.isSafeInteger(row.byte_length)) {
+      fail('RF_PUBLICATION_SOURCE_REMAP_INVALID', { path: row.old_path });
+    }
+    byOld.set(row.old_path, row.new_path);
+  }
+  const originals = usedMethodSources(data);
+  if (supplements.length !== (canonicalSources(data) ? originals.length : 0)) fail('RF_PUBLICATION_SOURCE_REMAP_INVALID');
+  for (const extra of supplements) {
+    const original = originals.find(row => row.source_id === extra.source_id);
+    if (!original) fail('RF_PUBLICATION_SOURCE_REMAP_INVALID');
+    const { source_path, ...fields } = original;
+    if (!same(extra, { ...fields, path: byOld.get(original.path) ?? original.path, notes: data.candidate.notes.map(note => note.path) })) fail('RF_PUBLICATION_SOURCE_REMAP_INVALID');
+  }
+  const notes = data.candidate.notes.map(note => {
+    let bytes = Buffer.from(note.content);
+    const { regions } = inspectManagedNote(bytes);
+    for (const region of [...regions].reverse()) {
+      let content = relocateNoteLinks(region.bytes.toString('utf8'), note.path, note.path, byOld);
+      if (region.id === 'source' && supplements.length) {
+        const end = '<!-- AUTO:END source -->';
+        const lines = supplements.map(row => {
+          const label = row.title.replace(/[\[\]\r\n]/g, ' ');
+          const href = posix.relative(posix.dirname(note.path), row.path).split('/').map(encodeURIComponent).join('/');
+          return '- [' + label + '](' + href + ')';
+        });
+        const heading = note.language === 'en' ? 'Method sources consulted' : '补缺方法文献';
+        content = content.slice(0, -end.length) + '\n' + heading + '\n\n' + lines.join('\n') + '\n' + end;
+      }
+      bytes = Buffer.concat([bytes.subarray(0, region.from), Buffer.from(content), bytes.subarray(region.to)]);
+    }
+    return { ...note, content: bytes.toString('utf8'), managedHash: inspectManagedNote(bytes).managedHash };
+  });
+  const assetPaths = [...new Set([...data.candidate.assetPaths.map(path => byOld.get(path) ?? path), ...supplements.map(row => row.path)])];
+  return { ...data.candidate, notes, assetPaths };
+}
+
 /** Prepare the exact accepted reading output for the existing V3 publication transaction. */
 export async function buildReadingFirstPublicationReview({ source, vaultRoot, generation, evidenceMode = 'actual', resources, knowledgeMetadataMigrations, presentationAssetRegistrations: assetApprovals } = {}) {
+  const root = rootPath(vaultRoot);
+  const checked = await assertReadingFirstRegisteredSourcesCurrent({ vaultRoot: root });
   const data = await inspectReadingFirstPublicationSource(source);
   if (data.origin !== 'live') fail('RF_PUBLICATION_LIVE_SOURCE_REQUIRED');
-  const root = rootPath(vaultRoot);
   const policy = data.recipe.binding?.configured_setup?.knowledge_registry;
   const currentPolicy = policy?.policy === 'current-shared-nodes-1.0' && resolve(policy.vault_root) === root;
-  const base = await baseFor(root, currentPolicy);
+  const base = await baseFor(root, currentPolicy, checked);
   const approvedAssets = presentationAssetRegistrations(data, resources, assetApprovals);
-  const options = { vaultRoot: root, generation, evidenceMode, resources: await resourceBindings(data, resources, approvedAssets),
+  const matchMetadata = await readRegisteredSourceMatchMetadata({ vaultRoot: root, registered: checked ?? undefined });
+  const sourceOptions = sourcePlan(root, data, await resourceBindings(data, resources, approvedAssets), base, approvedAssets, matchMetadata);
+  const options = { vaultRoot: root, generation, evidenceMode, ...sourceOptions,
     ...(approvedAssets.length ? { presentationAssetRegistrations: approvedAssets } : {}),
     ...(knowledgeMetadataMigrations === undefined ? {} : { knowledgeMetadataMigrations: clone(knowledgeMetadataMigrations) }) };
   return buildReview({ source, data, options, base, preimages: null });
 }
 
-async function buildReview({ source, data, options, base, preimages }) {
-  const { candidate } = data, root = options.vaultRoot;
+async function buildReview({ source, data, options, base, preimages, projected }) {
+  if (!preimages && data.recipe.knowledge_rebase
+    && data.recipe.knowledge_rebase.base_generation_id !== (base.generation?.generation_id ?? null)) {
+    fail('RF_PUBLICATION_KNOWLEDGE_CHANGED_SINCE_RENDER', { expected_generation: data.recipe.knowledge_rebase.base_generation_id,
+      observed_generation: base.generation?.generation_id ?? null, action: 'refresh_candidate' });
+  }
+  const derivation = options.sourceDerivation;
+  const changed = derivation?.remaps.length || derivation?.supplements.length;
+  const candidate = changed ? applyReadingFirstSourceDerivation(data, derivation) : data.candidate;
+  const root = options.vaultRoot;
   if (!['actual', 'synthetic'].includes(options.evidenceMode) || !candidate?.notes || candidate.notes.length !== 2) fail('RF_PUBLICATION_INPUT_INVALID');
   const identity = { paper_id: data.identity.paper_id, run_id: data.identity.run_id,
-    analysis_revision: data.identity.analysis_revision ?? 'rev_' + hash({ input: data.scientific_input_fingerprint, presentation: candidate.presentation_fingerprint }).slice(7, 39) };
+    analysis_revision: data.identity.analysis_revision ?? 'rev_' + hash({ input: data.scientific_input_fingerprint,
+      presentation: data.recipe.candidate.presentation_fingerprint }).slice(7, 39) };
   if (!identifier(identity.run_id)) fail('P22_RUN_REQUIRED');
   const generation = options.generation ?? 'rf-' + hash(identity).slice(7, 47);
   phase22GenerationPaths(generation);
@@ -345,7 +503,7 @@ async function buildReview({ source, data, options, base, preimages }) {
     safePath(path);
     if (!beforeFiles.has(path)) {
       if (preimages) fail('RF_PUBLICATION_RECIPE_PREIMAGE_MISSING', { path });
-      beforeFiles.set(path, regularBytes(root, path, { missing: true }));
+      beforeFiles.set(path, projected?.has(path) ? projected.get(path) : regularBytes(root, path, { missing: true }));
     }
     return beforeFiles.get(path);
   };
@@ -413,20 +571,32 @@ async function buildReview({ source, data, options, base, preimages }) {
     const bytes = readFileSync(resource.source_path), original = before(resource.path);
     if (sha(bytes) !== resource.sha256 || bytes.length !== resource.byte_length) fail('RF_PUBLICATION_RESOURCE_CHANGED', { path: resource.path });
     if (original !== null && !original.equals(bytes)) fail('RF_PUBLICATION_RESOURCE_TARGET_CONFLICT', { path: resource.path });
+    if (original === null && resource.path.startsWith('Clippings/')) fail('RF_PUBLICATION_CLIPPINGS_ORIGINAL_REQUIRED', { path: resource.path });
     if (original === null) add(resource.path, 'asset', bytes);
     else { files.set(resource.path, bytes); readDependencies.push({ path: resource.path, byte_sha256: sha(bytes), byte_length: bytes.length }); }
   }
   const dependencies = { scientific_input: data.scientific_input_fingerprint,
-    reading_review: data.reading_review_fingerprint, presentation: candidate.presentation_fingerprint,
+    reading_review: data.reading_review_fingerprint, presentation: data.candidate.presentation_fingerprint,
+    ...(changed ? { source_derivation: clone(derivation) } : {}),
     ...(data.recipe.knowledge_rebase ? { knowledge_rebase: data.recipe.knowledge_rebase.rebase_fingerprint } : {}) };
   if (options.presentationAssetRegistrations?.length) dependencies.presentation_asset_registrations = hash(options.presentationAssetRegistrations);
   const manifestPath = '.apa-v3/reading-first/presentation/' + identity.run_id + '-' + hash(identity).slice(7, 31) + '.json';
+  const outputFingerprint = changed ? hash({ original: data.candidate.presentation_fingerprint,
+    source_derivation: derivation, notes: noteTargets }) : candidate.presentation_fingerprint;
   const presentation = { schema_version: 'reading-first-publication-1.0', profile, identity,
-    presentation_fingerprint: candidate.presentation_fingerprint, scientific_input_fingerprint: data.scientific_input_fingerprint,
+    presentation_fingerprint: outputFingerprint, scientific_input_fingerprint: data.scientific_input_fingerprint,
     evidence_mode: options.evidenceMode, dependencies, qualification: { reading_status: 'reading_complete', native_status: data.native_presentation.status },
     targets: { presentation: manifestPath, notes: noteTargets, support: supportTargets, assets: options.resources.map(row => row.path) }, navigation: [] };
-  const citation = publicationCitation(data, options.resources, options.presentationAssetRegistrations ?? []);
-  if (citation) presentation.citation = citation;
+  const citation = publicationCitation(data, options.citationResources ?? options.resources, options.presentationAssetRegistrations ?? []);
+  if (citation) {
+    if (changed) {
+      const byOld = new Map(derivation.remaps.map(row => [row.old_path, row.new_path]));
+      citation.sources = [...citation.sources.map(row => ({ ...row, path: byOld.get(row.path) ?? row.path })),
+        ...derivation.supplements.map(row => ({ source_id: row.source_id, path: row.path, sha256: row.sha256,
+          byte_length: row.byte_length, source_version: null, locators: [] }))];
+    }
+    presentation.citation = citation;
+  }
   assertReadingFirstPublicationManifest(presentation);
   const manifestBytes = jsonBytes(presentation);
   add(manifestPath, 'reader-presentation', manifestBytes);
@@ -463,9 +633,10 @@ async function buildReview({ source, data, options, base, preimages }) {
     review_receipt: data.review_receipt, view_receipts: data.view_receipts,
     ...(data.reading_editor_receipt ? { reading_editor_receipt: data.reading_editor_receipt } : {}),
     ...(data.user_revision_checks ? { user_revision_checks: data.user_revision_checks } : {}),
-    ...(data.recipe.knowledge_rebase ? { knowledge_rebase: data.recipe.knowledge_rebase.rebase_fingerprint } : {}), presentation: candidate.presentation_fingerprint });
+    ...(data.recipe.knowledge_rebase ? { knowledge_rebase: data.recipe.knowledge_rebase.rebase_fingerprint } : {}), presentation: outputFingerprint });
   const assetApprovals = options.presentationAssetRegistrations ?? [];
   const toolBindings = tools(), sourceBindings = [...new Map([...data.source_bindings, ...options.resources.map(row => binding(row.source_path)),
+    ...(options.citationResources ?? []).map(row => binding(row.source_path)),
     ...assetApprovals.flatMap(row => [row.approval_binding, row.approved_candidate])]
     .map(row => [row.path, row])).values()];
   const status = options.evidenceMode === 'actual' ? 'review_ready' : 'synthetic_prepared';
@@ -490,8 +661,12 @@ async function buildReview({ source, data, options, base, preimages }) {
     review_bundle_hash: hash({ reviewManifest, outputs: inventoryStamp(output), read_dependencies: readDependencies }),
     output_inventory_hash: hash({ generation, previous_generation: reviewManifest.previous_generation, output: inventoryStamp(output), read_dependencies: readDependencies }) };
   const result = freeze({ ok: true, status, reviewManifest, outputInventory: output, hashes, diagnostics: [] });
+  if (projected) return result;
   const recipe = { source: data.recipe };
-  records.set(result, { source, recipe, sourceBindings, toolBindings,
+  records.set(result, { source, recipe, sourceBindings, toolBindings, sourcePlan: options.sourceDerivation,
+    publicationSources: options.publicationSources, sourceOptions: options.citationResources ? {
+      vaultRoot: root, resources: options.citationResources, approvals: options.presentationAssetRegistrations, base, matchMetadata: options.sourceMatchMetadata,
+    } : null,
     stamp: hash({ manifest: reviewManifest, output: inventoryStamp(output), hashes }) });
   return result;
 }
@@ -521,6 +696,16 @@ export async function assertReadingFirstPublicationReviewLive(review) {
   return review;
 }
 
+/** A new same-byte original after the displayed inventory requires a fresh approval. */
+export async function assertReadingFirstPublicationSourceChoicesCurrent(review) {
+  const record = records.get(review);
+  if (!record?.sourceOptions) return;
+  const { vaultRoot, resources, approvals, base, matchMetadata } = record.sourceOptions;
+  const data = await inspectReadingFirstPublicationSource(record.source);
+  const next = sourcePlan(vaultRoot, data, resources, base, approvals, matchMetadata);
+  if (!same(record.sourcePlan, next.sourceDerivation)) fail('RF_PUBLICATION_SOURCE_SELECTION_CHANGED', { proposed: next.publicationSources });
+}
+
 /** Capture an owned live review; no JSON request can substitute for its source capability. */
 export async function captureReadingFirstPublicationRegistration({ review, sourceInputs } = {}) {
   await assertReadingFirstPublicationReviewCurrent(review);
@@ -534,7 +719,7 @@ export async function captureReadingFirstPublicationRegistration({ review, sourc
   const data = await inspectReadingFirstPublicationSource(record.source);
   if (data.origin !== 'live' || sourceInputs?.readingFirst?.source !== record.source) fail('RF_PUBLICATION_LIVE_SOURCE_REQUIRED');
   return { source_bindings: clone(record.sourceBindings),
-    ...(data.recipe.knowledge_rebase ? { reading_first_source: clone(data.recipe) } : {}),
+    ...(data.recipe.knowledge_rebase || review.reviewManifest.dependencies.source_derivation ? { reading_first_source: clone(data.recipe) } : {}),
     tool_bindings: [...new Map([...data.tool_bindings, ...record.toolBindings].map(row => [row.path, row])).values()],
     control_snapshot: { schema_version: 'reading-first-publication-control-1.0', run_id: review.reviewManifest.identity.run_id,
       evidence_mode: review.reviewManifest.evidence_mode, source_fingerprint: hash(record.recipe.source) } };
@@ -575,21 +760,95 @@ export async function prepareReadingFirstPublication(args = {}) {
   const review = await buildReadingFirstPublicationReview({ ...args, source });
   const { dryRunBilingualPublication } = await import('./phase22-publication.mjs');
   const dry = await dryRunBilingualPublication({ vaultRoot: args.vaultRoot, run: review.reviewManifest.identity.run_id, review });
-  return { ...dry, review, sourceInputs: { readingFirst: { source } } };
+  return { ...dry, review, sourceInputs: { readingFirst: { source } }, publication_sources: records.get(review).publicationSources };
+}
+
+/** Plan sequential writes in memory. Projected outputs never acquire a live review or transaction capability. */
+export async function projectReadingFirstPublicationQueue({ vaultRoot, requests, evidenceMode = 'actual' }) {
+  const root = rootPath(vaultRoot);
+  const checked = await assertReadingFirstRegisteredSourcesCurrent({ vaultRoot: root });
+  const registry = new Map((await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: root })).map(row => [row.path, row]));
+  const matchMetadata = await readRegisteredSourceMatchMetadata({ vaultRoot: root, registered: checked ?? undefined });
+  const projected = new Map();
+  const before = path => projected.has(path) ? projected.get(path) : regularBytes(root, path, { missing: true });
+  let base = { ...await baseFor(root, true, checked), carryHistoricalDocuments: true };
+  const outputs = [];
+  for (const { source, generation, resources, presentationAssetRegistrations: assetApprovals } of requests) {
+    const data = await inspectReadingFirstPublicationSource(source);
+    const boundRoot = data.recipe.binding?.configured_setup?.knowledge_registry?.vault_root;
+    if (data.origin !== 'live' || data.recipe.knowledge_rebase || boundRoot && resolve(boundRoot) !== root) {
+      fail('RF_PUBLICATION_LIVE_SOURCE_REQUIRED');
+    }
+    const preview = base.generation && data.recipe.rendering
+      ? await previewReadingFirstPublicationRebase({ source, vaultRoot: root, registry: [...registry.values()], generationId: base.generation.generation_id })
+      : { status: 'not_needed' };
+    const selected = preview.record
+      ? { ...data, recipe: { ...data.recipe, knowledge_rebase: preview.record }, candidate: preview.record.candidate }
+      : data;
+    const approvals = presentationAssetRegistrations(selected, resources, assetApprovals);
+    const sourceOptions = sourcePlan(root, selected, await resourceBindings(selected, resources, approvals), base, approvals, matchMetadata, before);
+    const review = await buildReview({ source, data: selected, options: { vaultRoot: root, generation, evidenceMode, ...sourceOptions,
+      ...(approvals.length ? { presentationAssetRegistrations: approvals } : {}) }, base, preimages: null, projected });
+    const { outputInventory: inventory, reviewManifest: manifest } = review;
+    const active = JSON.parse(inventory.find(row => row.kind === 'active').bytes);
+    const index = JSON.parse(inventory.find(row => row.kind === 'index').bytes);
+    assertActiveGeneration(active);
+    assertIndexGeneration(index, active);
+    for (const row of inventory) {
+      projected.set(row.path, row.bytes);
+      if (row.kind === 'support') {
+        registry.set(row.path, readKnowledgeRegistryRow({ path: row.path, content: row.bytes.toString('utf8'),
+          entityId: row.entity_id, registeredAliases: registry.get(row.path)?.registered_aliases }));
+      }
+    }
+    const selectedObjectPaths = new Set(active.objects.map(row => row.path));
+    const files = new Map([...base.files].filter(([path]) => selectedObjectPaths.has(path)));
+    for (const row of inventory) if (selectedObjectPaths.has(row.path)) files.set(row.path, row.bytes);
+    // Existing input assets (such as a Clippings original) can enter the projected registration without a write.
+    for (const object of active.objects) if (!files.has(object.path)) files.set(object.path, before(object.path));
+    const { citation } = JSON.parse(inventory.find(row => row.kind === 'reader-presentation').bytes);
+    const original = citation?.sources?.[0];
+    if (original) {
+      const list = original.path.startsWith('Clippings/') ? matchMetadata.sources : original.path.startsWith('Raw/') ? matchMetadata.rawSources : null;
+      list?.push({ path: original.path, sha256: original.sha256, byte_length: original.byte_length,
+        doi: citation.bibliography.doi, title: citation.bibliography.title });
+    }
+    base = { snapshot: null, generation: active, index, files, carryHistoricalDocuments: true };
+    outputs.push({ status: 'projected_dry_run', business_writes: 0, model_calls: 0,
+      summary: { run_id: manifest.identity.run_id, generation: manifest.generation, previous_generation: manifest.previous_generation,
+        files: inventory.map(({ bytes, ...row }) => row),
+        projected_review_hash: review.hashes.review_bundle_hash,
+        projected_output_inventory_hash: review.hashes.output_inventory_hash },
+      ...(preview.record ? { rebase_fingerprint: preview.record.rebase_fingerprint,
+        ...(preview.record.review_required ? { requires_reapproval: true } : {}) } : {}) });
+  }
+  return outputs;
 }
 
 // The record must belong to the corrected run, and every catalog in it must agree on which source each visual belongs to.
-function frozenVisualSources(value, mainPath, runId) {
+function frozenVisualSources(value, main, runId, migration) {
+  const mainPath = main?.path;
+  const mapped = (path, sourceId) => {
+    const row = migration.get(path);
+    if (!row) return path;
+    if (!sourceId || row.source_id !== sourceId) {
+      fail('RF_PUBLICATION_CITATION_MIGRATION_INVALID', { path, source_id: sourceId });
+    }
+    return row.new_path;
+  };
   const catalogs = [], runs = new Set(), walk = item => {
     if (Array.isArray(item)) item.forEach(walk);
     else if (item && typeof item === 'object') {
-      if (Array.isArray(item.visuals) && item.source_pdf === mainPath) catalogs.push(item);
+      if (Array.isArray(item.visuals) && (item.source_pdf === mainPath || migration.get(item.source_pdf)?.new_path === mainPath)) {
+        if (mapped(item.source_pdf, main?.source_id) === mainPath) catalogs.push(item);
+      }
       if (typeof item.run_id === 'string') runs.add(item.run_id);
       Object.values(item).forEach(walk);
     }
   };
   walk(value);
   if (!runs.has(runId)) fail('RF_CITATION_CORRECTION_SCOPE', { reason: 'catalog record does not belong to the run' });
+  if (!catalogs.length && mainPath?.startsWith('Clippings/')) fail('RF_PUBLICATION_CITATION_MIGRATION_REQUIRED', { path: mainPath, run_id: runId });
   if (!catalogs.length) fail('RF_CITATION_CORRECTION_SCOPE');
   const visuals = new Map(), sources = new Map();
   for (const catalog of catalogs) {
@@ -598,11 +857,31 @@ function frozenVisualSources(value, mainPath, runId) {
       visuals.set(row.id, row.source_id ?? null);
     }
     for (const row of catalog.sources ?? []) {
-      if (sources.has(row.id) && sources.get(row.id) !== row.path) fail('RF_CITATION_CORRECTION_SCOPE', { source: row.id });
-      sources.set(row.id, row.path);
+      const path = mapped(row.path, row.id);
+      if (sources.has(row.id) && sources.get(row.id) !== path) fail('RF_CITATION_CORRECTION_SCOPE', { source: row.id });
+      sources.set(row.id, path);
     }
   }
   return { visuals, sources };
+}
+
+function citationMigration(manifest, generation, files) {
+  const result = new Map();
+  for (const row of manifest.path_migration?.assets ?? []) {
+    if (!paperSourcePath(row.old_path) && !paperSourcePath(row.new_path)) continue;
+    safePath(row.old_path); safePath(row.new_path);
+    const bytes = files.get(row.new_path), asset = generation.objects.find(item => item.path === row.new_path);
+    const citation = manifest.citation?.sources.find(item => item.path === row.new_path);
+    if (!paperSourcePath(row.old_path) || !paperSourcePath(row.new_path) || row.old_path === row.new_path
+      || !manifest.targets.assets.includes(row.new_path) || asset?.kind !== 'asset' || asset.sha256 !== row.sha256
+      || !bytes || bytes.length !== row.byte_length || sha(bytes) !== row.sha256 || result.has(row.old_path)
+      || (citation && (citation.sha256 !== row.sha256 || citation.byte_length !== row.byte_length
+        || citation.source_id !== row.source_id))) {
+      fail('RF_PUBLICATION_CITATION_MIGRATION_INVALID', { path: row.old_path, target: row.new_path, source_id: row.source_id });
+    }
+    result.set(row.old_path, row);
+  }
+  return result;
 }
 
 // Committed locators keep their exact bytes; only their grouping under sources changes.
@@ -612,10 +891,13 @@ function correctedCitation(manifest, frozen, generation, files) {
   const locators = old.sources.flatMap(row => row.locators);
   if (locators.some(row => !frozen.visuals.has(row.id))) fail('RF_CITATION_CORRECTION_SCOPE');
   const sourceOf = row => frozen.visuals.get(row.id) ?? main.source_id;
-  return { ...clone(old), sources: [...new Set([main.source_id, ...locators.map(sourceOf)])].map(id => {
+  return { ...clone(old), sources: [...new Set([main.source_id, ...locators.map(sourceOf),
+    ...old.sources.filter(row => !row.locators.length).map(row => row.source_id)])].map(id => {
     const prior = old.sources.find(row => row.source_id === id), path = prior?.path ?? frozen.sources.get(id);
     const object = generation.objects.find(row => row.path === path);
-    if (!manifest.targets.assets.includes(path) || object?.kind !== 'asset' || !files.has(path)) fail('RF_PUBLICATION_CITATION_SOURCE_UNREGISTERED', { source_id: id });
+    if (!manifest.targets.assets.includes(path) || object?.kind !== 'asset' || !files.has(path)
+      || (prior && (prior.sha256 !== object.sha256 || prior.byte_length !== files.get(path).length))
+      || (prior && frozen.sources.has(id) && frozen.sources.get(id) !== path)) fail('RF_PUBLICATION_CITATION_SOURCE_UNREGISTERED', { source_id: id, path });
     return { source_id: id, path, sha256: prior?.sha256 ?? object.sha256, byte_length: prior?.byte_length ?? files.get(path).length,
       source_version: prior?.source_version ?? null, locators: locators.filter(row => sourceOf(row) === id).map(clone) };
   }) };
@@ -634,7 +916,8 @@ export async function prepareReadingFirstCitationCorrection({ vaultRoot, runId, 
   const oldPath = paper.reader_presentation.path, oldBytes = base.files.get(oldPath);
   const manifest = verifyReadingFirstPresentation(paper, oldBytes, base.generation);
   const catalogBinding = binding(catalogPath);
-  const frozen = frozenVisualSources(JSON.parse(readFileSync(catalogBinding.path, 'utf8')), manifest.citation?.sources?.[0]?.path, runId);
+  const migration = citationMigration(manifest, base.generation, base.files);
+  const frozen = frozenVisualSources(JSON.parse(readFileSync(catalogBinding.path, 'utf8')), manifest.citation?.sources?.[0], runId, migration);
   const citation = correctedCitation(manifest, frozen, base.generation, base.files);
   if (same(citation, manifest.citation)) fail('RF_CITATION_CORRECTION_NOOP');
   const path = '.apa-v3/reading-first/presentation/' + runId + '-' + hash(manifest.identity).slice(7, 31) + '-citation-' + hash(citation).slice(7, 19) + '.json';
@@ -778,19 +1061,22 @@ export async function prepareExternalReviewedReadingFirstPublication({
   let data = await inspectReadingFirstPublicationSource(source);
   const policy = readingFirstBinding?.configured_setup?.knowledge_registry;
   const base = await baseFor(root, policy?.policy === 'current-shared-nodes-1.0' && resolve(policy.vault_root) === root);
-  const options = { vaultRoot: root, generation, evidenceMode, resources: await resourceBindings(data, resources) };
+  const matchMetadata = await readRegisteredSourceMatchMetadata({ vaultRoot: root });
+  const options = { vaultRoot: root, generation, evidenceMode, ...sourcePlan(root, data, await resourceBindings(data, resources), base, [], matchMetadata) };
   const resultReview = await buildReview({ source, data, options, base, preimages: null });
   source = createExternalReadingFirstPublicationSource(sourceRecipe);
   data = await inspectReadingFirstPublicationSource(source);
   const record = records.get(resultReview);
   record.recipe = { source: sourceRecipe };
   record.source = source;
-  record.sourceBindings = [...new Map([...sourceBindings, ...options.resources.map(row => binding(row.source_path))]
+  record.sourceBindings = [...new Map([...sourceBindings, ...options.resources.map(row => binding(row.source_path)),
+    ...options.citationResources.map(row => binding(row.source_path))]
     .map(row => [row.path, row])).values()];
   record.toolBindings = [...new Map([...tools(), ...getReadingFirstRuntimePublicationToolBindings(readingFirstBinding)]
     .map(row => [row.path, row])).values()];
   record.stamp = hash({ manifest: resultReview.reviewManifest, output: inventoryStamp(resultReview.outputInventory), hashes: resultReview.hashes });
   const { dryRunBilingualPublication } = await import('./phase22-publication.mjs');
   const dry = await dryRunBilingualPublication({ vaultRoot: root, run: resultReview.reviewManifest.identity.run_id, review: resultReview });
-  return { ...dry, review: resultReview, sourceInputs: { readingFirst: { source } }, external_source_recipe: sourceRecipe };
+  return { ...dry, review: resultReview, sourceInputs: { readingFirst: { source } }, external_source_recipe: sourceRecipe,
+    publication_sources: record.publicationSources };
 }

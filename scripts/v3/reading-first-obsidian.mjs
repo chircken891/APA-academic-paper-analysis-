@@ -4,7 +4,7 @@ import { validateReadingFirstEditor } from './reading-first-editor.mjs';
 import { fingerprintV3Json } from './semantic-package-validator.mjs';
 import { registerReaderTargets } from './phase221-targets.mjs';
 import { mergeManagedNote } from './phase22-managed-markdown.mjs';
-import { applyReadingFirstKnowledgeContent, matchReadingFirstKnowledgeIdentity, renderSharedKnowledge } from './reading-first-knowledge.mjs';
+import { applyReadingFirstKnowledgeContent, draftReadingFirstKnowledgeComparisons, matchReadingFirstKnowledgeIdentity, renderSharedKnowledge } from './reading-first-knowledge.mjs';
 
 const languages = ['en', 'zh-CN'];
 export const READING_FIRST_OBSIDIAN_SCHEMA = 'reading-first-obsidian-1.0';
@@ -97,7 +97,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
   }
   localized(p.bibliography?.title);
   vaultPath(p.source_pdf);
-  if (!/^Raw\/.+\.pdf$/i.test(p.source_pdf)) fail('RF_OBSIDIAN_PATH_INVALID');
+  if (!/^(?:Raw|Clippings)\/.+\.pdf$/i.test(p.source_pdf)) fail('RF_OBSIDIAN_PATH_INVALID');
   const registry = registerReaderTargets({ identity, registeredBibliography: { ...p.bibliography, first_author: filenameLabel(p.bibliography.first_author), title: filenameLabel(local(p.bibliography.title, 'en')) }, existingRegistry: targetRegistry ?? [], occupiedPaths: existingTargets.map(note => note.path), namingStyle: writerLayout ? 'bibliographic' : 'lowercase', noteLayout, sourceLanguage });
   const sectionSpecs = writerLayout ? views[0].sections.map(section => ({ id: section.id })) : p.sections;
   const sections = sectionSpecs?.map(section => ({ ...section, indices: Object.fromEntries(languages.map(language => {
@@ -152,7 +152,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
   const sources = new Map();
   if (writerLayout) for (const source of p.sources ?? []) {
     requireId(source.id); vaultPath(source.path);
-    if (sources.has(source.id) || !/^Raw\/.+\.(?:pdf|docx)$/i.test(source.path)) fail('RF_OBSIDIAN_SOURCE_INVALID');
+    if (sources.has(source.id) || !/^(?:Raw|Clippings)\/.+\.(?:pdf|docx)$/i.test(source.path)) fail('RF_OBSIDIAN_SOURCE_INVALID');
     sources.set(source.id, source.path);
   }
   const visualSources = new Map();
@@ -178,7 +178,8 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
   }
   const visualSourceHref = (target, visual) => href(target, visualSources.get(visual.id)) + (visual.locator?.kind === 'docx-figure' ? '' : '#page=' + visualPage(visual));
   const map = normalizeReadingFirstMap(p.map ?? undefined, new Set(byId.keys())), nodes = [...map.steps, ...map.findings];
-  const supportNotes = [], knowledgeProposals = [], destinations = new Map();
+  const supportNotes = [], knowledgeProposals = [], knowledgeMergeCandidates = [], destinations = new Map(), identityMatches = new Map();
+  const definitionIndexes = new Map();
   for (const item of knowledge) {
     requireId(item.id); localized(item.title);
     if (!['method', 'concept'].includes(item.kind) || !['method-background', 'paper-fact'].includes(item.source_kind) || (!writerLayout && !Array.isArray(item.placements))) fail('RF_OBSIDIAN_KNOWLEDGE_INVALID');
@@ -186,9 +187,12 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     if (sharedKnowledge) {
       for (const language of languages) if (!Array.isArray(item.paragraphs?.[language]) || !item.paragraphs[language].length || item.paragraphs[language].some(text => typeof text !== 'string' || !text.trim())) fail('RF_OBSIDIAN_KNOWLEDGE_INVALID');
       if (item.source_kind === 'paper-fact') continue;
-      const result = renderSharedKnowledge({ item, knowledgeRegistry, paperTargets: registry.paper_targets, paperId: identity.paper_id, paperTitle: p.bibliography.title, vaultPath, href });
+      const identityMatch = matchReadingFirstKnowledgeIdentity({ item, knowledgeRegistry, vaultPath });
+      identityMatches.set(item.id, identityMatch);
+      const result = renderSharedKnowledge({ item, knowledgeRegistry, identityMatch, paperTargets: registry.paper_targets, paperId: identity.paper_id, paperTitle: p.bibliography.title, vaultPath, href });
       supportNotes.push(result.note);
       if (result.proposal) knowledgeProposals.push(result.proposal);
+      knowledgeMergeCandidates.push(...draftReadingFirstKnowledgeComparisons({ item, knowledgeRegistry, match: identityMatch, target: result.note.path, indexes: definitionIndexes }));
       for (const language of languages) destinations.set(`${item.id}:${language}`, result.note.path);
       continue;
     }
@@ -196,7 +200,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
       const paragraphs = item.paragraphs?.[language];
       if (!Array.isArray(paragraphs) || !paragraphs.length || paragraphs.some(text => typeof text !== 'string' || !text.trim())) fail('RF_OBSIDIAN_KNOWLEDGE_INVALID');
       if (item.source_kind === 'paper-fact') continue;
-      const { paths: uniquePaths } = matchReadingFirstKnowledgeIdentity({ item, knowledgeRegistry: knowledgeRegistry.filter(row => !row.language || row.language === language), vaultPath });
+      const { paths: uniquePaths } = matchReadingFirstKnowledgeIdentity({ item, knowledgeRegistry: knowledgeRegistry.filter(row => !row.language || row.language === language), vaultPath, legacy: true });
       const target = uniquePaths[0] ?? `Wiki/${item.kind === 'method' ? 'methods' : 'concepts'}/${item.id}--${fingerprintV3Json({ kind: item.kind, key: item.canonical_key ?? item.id }).slice(-12)}.${language}.md`;
       if (!new RegExp(`^Wiki/${item.kind === 'method' ? 'methods' : 'concepts'}/`).test(target)) fail('RF_OBSIDIAN_KNOWLEDGE_INVALID');
       destinations.set(`${item.id}:${language}`, target);
@@ -213,13 +217,14 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     const item = knowledge.find(item => item.id === supportNotes[index].id);
     const resolveReferences = (value, language, target) => value.replace(/\[([^\]\n]+)\]\((apa-[^)]+)\)/g, (_, text, reference) => {
       const concept = /^apa-knowledge:([a-z][a-z0-9-]*)$/.exec(reference);
-      const committed = concept ? knowledgeRegistry.filter(entry => entry.id === concept[1]) : [];
-      if (committed.length > 1) fail('RF_OBSIDIAN_REFERENCE_INVALID');
-      const destination = concept && (destinations.get(`${concept[1]}:${language}`) ?? committed[0]?.path);
+      const selected = concept && destinations.get(`${concept[1]}:${language}`);
+      const committed = concept && !selected ? knowledgeRegistry.filter(entry => entry.id === concept[1]) : [];
+      const paths = [...new Set(committed.map(entry => entry.path))];
+      const destination = selected ?? (paths.length === 1 ? paths[0] : undefined);
       if (!destination) fail('RF_OBSIDIAN_REFERENCE_INVALID');
       return md(text, href(target, destination) + '#' + encodeMarkdownComponent(language === 'en' ? 'English' : '中文'));
     });
-    supportNotes[index] = renderSharedKnowledge({ item, knowledgeRegistry, paperTargets: registry.paper_targets, paperId: identity.paper_id, paperTitle: p.bibliography.title, vaultPath, href, resolveReferences }).note;
+    supportNotes[index] = renderSharedKnowledge({ item, knowledgeRegistry, identityMatch: identityMatches.get(item.id), paperTargets: registry.paper_targets, paperId: identity.paper_id, paperTitle: p.bibliography.title, vaultPath, href, resolveReferences }).note;
   }
   for (const note of sharedKnowledge ? [] : supportNotes) {
     const otherLanguage = languages.find(language => language !== note.language);
@@ -397,5 +402,6 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     const merged = mergeManagedNote({ existingBytes: existing?.bytes, rendered: bytes, expectedManagedHash: existing?.managedHash });
     return { language, path: target, content: merged.bytes.toString('utf8'), bytes: merged.bytes, managedHash: merged.managedHash };
   });
-  return { notes, supportNotes, knowledgeProposals, ...(sharedKnowledge ? { visual_resources: structuredClone(visuals) } : {}), assetPaths: [...new Set([p.source_pdf, ...sources.values(), ...visuals.map(visual => visual.path)])], targetRegistry: registry, review: { status: 'pending', reason: 'Rendered reading experience requires overall review and native Obsidian acceptance.' } };
+  return { notes, supportNotes, knowledgeProposals, ...(knowledgeMergeCandidates.length ? { knowledgeMergeCandidates } : {}),
+    ...(sharedKnowledge ? { visual_resources: structuredClone(visuals) } : {}), assetPaths: [...new Set([p.source_pdf, ...sources.values(), ...visuals.map(visual => visual.path)])], targetRegistry: registry, review: { status: 'pending', reason: 'Rendered reading experience requires overall review and native Obsidian acceptance.' } };
 }

@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { readingFirstViewsFingerprint } from '../../scripts/v3/reading-first-editor.mjs';
 import { validateReadingFirstPreviewFiles } from '../../scripts/v3/reading-first-preview.mjs';
 import { renderReadingFirstObsidian } from '../../scripts/v3/reading-first-obsidian.mjs';
 import { applyReadingFirstKnowledgeContent } from '../../scripts/v3/reading-first-knowledge.mjs';
+import { computeKnowledgeRebase } from '../../scripts/v3/reading-first-rebase.mjs';
 
 function input() {
   return { identity: { paper_id: 'pap_' + 'a'.repeat(32) }, views: ['en', 'zh-CN'].map(language => ({ language, sections: [{ heading: 'Methods', paragraphs: ['Original abstract and methods.'] }, { heading: 'Results', paragraphs: ['The result.'] }] })), presentation: {
@@ -47,6 +49,33 @@ test('shared knowledge cross-references resolve forward and backward to the matc
   for (const note of result.supportNotes) assert.doesNotMatch(note.content, /\]\(apa-knowledge:/);
   other.sections['zh-CN'][0].paragraphs = ['[unknown](apa-knowledge:missing)'];
   assert.throws(() => renderReadingFirstObsidian(data), { code: 'RF_OBSIDIAN_REFERENCE_INVALID' });
+});
+
+test('rebase preserves a separate new support page while remapping its cross-reference', () => {
+  const data = input(); data.presentation.knowledge_layout = 'shared-bilingual-1.0';
+  const rate = data.presentation.knowledge[0], other = structuredClone(rate);
+  Object.assign(other, { id: 'other', canonical_key: 'other', aliases: [], title: { en: 'Other rate', 'zh-CN': '另一种率' } });
+  other.paragraphs.en = ['See [rate](apa-knowledge:rate).'];
+  data.presentation.knowledge.push(other);
+  const render = rendering => {
+    const result = renderReadingFirstObsidian({ ...data, ...rendering });
+    const omitBytes = ({ bytes, ...note }) => note;
+    return { ...result, notes: result.notes.map(omitBytes), supportNotes: result.supportNotes.map(omitBytes) };
+  };
+  const originalRendering = { knowledgeRegistry: [] }, candidate = { ...render(originalRendering), presentation_fingerprint: 'original-presentation' };
+  const registered = structuredClone(data); registered.presentation.knowledge.pop();
+  registered.presentation.knowledge[0].title['zh-CN'] = '已登记年龄标化';
+  registered.identity.paper_id = 'pap_' + 'b'.repeat(32);
+  const existing = renderReadingFirstObsidian(registered).supportNotes[0];
+  const rendering = { knowledgeRegistry: [{ id: rate.id, canonical_key: rate.canonical_key, path: existing.path, content: existing.content,
+    content_sha256: 'sha256:' + createHash('sha256').update(existing.content).digest('hex'), current_content: true }] };
+  const { record } = computeKnowledgeRebase({ recipe: { recipe_fingerprint: 'original-recipe', rendering: originalRendering, candidate }, rendering, render, presentation: data.presentation,
+    identity: data.identity, readingReviewFingerprint: 'review', generationId: 'registered-generation' });
+  const next = record.candidate.supportNotes.find(note => note.id === other.id);
+  const original = candidate.supportNotes.find(note => note.id === other.id);
+  assert.equal(next.path, original.path);
+  assert.equal(next.content, original.content.replace(encodeURIComponent(rate.title['zh-CN']), encodeURIComponent('已登记年龄标化')));
+  assert.ok(record.nodes.some(node => node.path === next.path && node.mode_after === 'created'));
 });
 
 test('shared retained state resolves a non-selected committed node only by unique stable ID', () => {
@@ -140,10 +169,12 @@ test('shared bilingual Writer knowledge overlay stays isolated to its language a
   assert.throws(() => applyReadingFirstKnowledgeContent(data), { code: 'RF_OBSIDIAN_KNOWLEDGE_CONTENT_INVALID' });
 });
 
-test('shared bilingual identity rejects ambiguous language paths and duplicate readable filenames', () => {
+test('shared bilingual identity drafts ambiguous language paths and rejects duplicate candidate filenames', () => {
   const data = input(); data.presentation.knowledge_layout = 'shared-bilingual-1.0';
   data.knowledgeRegistry = ['en', 'zh-CN'].map(language => ({ canonical_key: 'age-standardisation', aliases: ['ASR'], language, path: `Wiki/methods/asr.${language}.md`, content: '# Old\n' }));
-  assert.throws(() => renderReadingFirstObsidian(data), { code: 'RF_OBSIDIAN_KNOWLEDGE_AMBIGUOUS' });
+  const ambiguous = renderReadingFirstObsidian(data);
+  assert.equal(ambiguous.knowledgeProposals.length, 0);
+  assert.deepEqual(ambiguous.knowledgeMergeCandidates.map(row => row.registered_path), data.knowledgeRegistry.map(row => row.path));
   data.knowledgeRegistry = [];
   data.presentation.knowledge.push({ ...structuredClone(data.presentation.knowledge[0]), id: 'other', canonical_key: 'other', aliases: [] });
   assert.throws(() => renderReadingFirstObsidian(data), { code: 'RF_OBSIDIAN_TARGET_COLLISION' });
@@ -413,10 +444,11 @@ test('reading editor preserves uppercase research-map IDs and their relations in
 
   const result = renderReadingFirstObsidian(data);
   for (const note of result.notes) {
-    assert.match(note.content, /D1\["/);
-    assert.match(note.content, /F1\["/);
-    assert.match(note.content, /D1 --> F1/);
-    assert.match(note.content, /class F1 primary/);
+    const map = note.content.match(/```mermaid\n([\s\S]*?)\n```/)[1];
+    assert.match(map, /D1\["/);
+    assert.match(map, /F1\["/);
+    assert.match(map, /D1 --> F1/);
+    assert.match(map, /class F1 primary/);
   }
   assert.equal(data.presentation.map.steps[0].id, 'D1');
   assert.equal(data.presentation.map.findings[0].id, 'F1');
@@ -540,11 +572,15 @@ for (const shared of [false, true]) {
     result.notes.forEach(note => assert.match(note.content, /registered-rate\.md/));
     if (shared) assert.ok(result.supportNotes[0].content.startsWith('# Human explanation\n'));
   });
-  test(`name-only candidates require identity resolution (${shared ? 'shared' : 'legacy'})`, () => {
+  test(`name matching follows the current shared or legacy policy (${shared ? 'shared' : 'legacy'})`, () => {
     for (const row of [{ id: 'different-id', canonical_key: 'other-key', title: 'Age standardisation' }, { aliases: ['ASR'] }, { id: 'ASR' }, { title: 'age-standardisation' }]) {
       const data = setup();
       data.knowledgeRegistry = [{ ...row, path: 'Wiki/methods/unrelated.md', content: '# Human\n' }];
-      if (row.id === 'ASR' || row.title === 'age-standardisation') {
+      if (shared) {
+        const rendered = renderReadingFirstObsidian(data);
+        assert.equal(rendered.knowledgeProposals.length, Number(Boolean(row.title)));
+        assert.equal(rendered.knowledgeMergeCandidates?.length ?? 0, Number(Boolean(row.aliases)));
+      } else if (row.id === 'ASR' || row.title === 'age-standardisation') {
         // A name matching a stable key (or vice versa) is not a candidate.
         assert.equal(renderReadingFirstObsidian(data).knowledgeProposals.length, 0);
       } else assert.throws(() => renderReadingFirstObsidian(data), { code: 'RF_OBSIDIAN_KNOWLEDGE_IDENTITY_UNRESOLVED' });
@@ -558,7 +594,12 @@ for (const shared of [false, true]) {
     ];
     assert.equal(renderReadingFirstObsidian(data).knowledgeProposals[0].path, 'Wiki/methods/confirmed.md');
     data.knowledgeRegistry.push({ canonical_key: 'age-standardisation', path: 'Wiki/methods/conflicting.md', content: '# Conflicting\n' });
-    assert.throws(() => renderReadingFirstObsidian(data), { code: 'RF_OBSIDIAN_KNOWLEDGE_AMBIGUOUS' });
+    if (!shared) assert.throws(() => renderReadingFirstObsidian(data), { code: 'RF_OBSIDIAN_KNOWLEDGE_AMBIGUOUS' });
+    else {
+      const rendered = renderReadingFirstObsidian(data);
+      assert.equal(rendered.knowledgeProposals.length, 0);
+      assert.deepEqual(rendered.knowledgeMergeCandidates.map(row => row.registered_path), ['Wiki/methods/confirmed.md', 'Wiki/methods/conflicting.md']);
+    }
   });
   test(`unmatched concepts produce fresh candidates (${shared ? 'shared' : 'legacy'})`, () => {
     const data = setup();
@@ -616,8 +657,9 @@ test('research map accepts legacy from/to edge keys without changing nodes or ed
   const data = input();
   data.presentation.map.relations = [{ id: 'RM01', from: 'estimate', to: 'burden' }];
   const result = renderReadingFirstObsidian(data);
-  assert.match(result.notes[0].content, /estimate --> burden/);
-  assert.match(result.notes[1].content, /estimate --> burden/);
+  for (const note of result.notes) {
+    assert.match(note.content, /estimate --> burden/);
+  }
   assert.equal(result.notes[0].content.includes('undefined'), false);
 });
 

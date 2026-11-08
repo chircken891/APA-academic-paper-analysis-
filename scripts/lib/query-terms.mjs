@@ -1,3 +1,5 @@
+import MiniSearch from 'minisearch';
+
 /** Small, editable spelling equivalences; no external stemmer or dictionary. */
 export const spellingPairs = [
   ['tumour', 'tumor'], ['haemat', 'hemat'], ['oesophag', 'esophag'], ['oestrogen', 'estrogen'],
@@ -56,6 +58,14 @@ export function tokenizeQueryText(value, { supplemental = false } = {}) {
     if (supplemental && /\p{Script=Han}/u.test(term) && [...term].length > 1) words.push(...term);
   }
   return [...new Set(words)];
+}
+
+/** One local BM25 configuration serves current library queries and definition comparisons. */
+export function createLibraryBm25(documents) {
+  const search = new MiniSearch({ fields: ['content', 'aliases', 'title'], tokenize: text => tokenizeQueryText(text, { supplemental: true }),
+    processTerm: normalizeQueryTerm, searchOptions: { boost: { content: 2, aliases: 2, title: 1 }, tokenize: text => tokenizeQueryText(text), processTerm: normalizeQueryTerm } });
+  search.addAll(documents);
+  return search;
 }
 /** Aliases replace concepts as alternatives, while independent concepts remain separate. */
 export function expandQueryGroups(query, nodes) {

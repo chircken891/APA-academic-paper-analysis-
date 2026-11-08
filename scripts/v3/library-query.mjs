@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import MiniSearch from 'minisearch';
-import { tokenizeQueryText, normalizeQueryTerm, expandQueryGroups, definedAcronymNodes } from '../lib/query-terms.mjs';
+import { createLibraryBm25, expandQueryGroups, definedAcronymNodes } from '../lib/query-terms.mjs';
 import { normalizeIndexPath, verifyReadingFirstPresentation } from './phase22-active-version.mjs';
 import { readCurrentVaultContent, assertCurrentVaultContent, readCurrentRegisteredBytes, getCurrentNote } from './current-vault-content.mjs';
 import { loadApaConfig, resolveApaConfig, resolveQueryPreferences } from '../lib/apa-config.mjs';
@@ -140,9 +139,7 @@ function searchCurrent(snapshot, query, options) {
     }
     return true;
   });
-  const search = new MiniSearch({ fields: ['content', 'aliases', 'title'], tokenize: text => tokenizeQueryText(text, { supplemental: true }), processTerm: normalizeQueryTerm,
-    searchOptions: { boost: { content: 2, aliases: 2, title: 1 }, tokenize: text => tokenizeQueryText(text), processTerm: normalizeQueryTerm } });
-  search.addAll(documents);
+  const search = createLibraryBm25(documents);
   const expression = combineWith => ({ combineWith, queries: queryGroups.map(group => ({ combineWith: 'OR', queries: group.terms.map(terms => ({ combineWith: 'AND', queries: terms })) })) });
   const docs = new Map(documents.map(row => [row.id, row]));
   const groupMatches = matches => {

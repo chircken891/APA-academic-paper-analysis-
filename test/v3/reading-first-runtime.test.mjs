@@ -260,15 +260,20 @@ const maskPaths = (value, ...roots) => {
   return masked.replaceAll('\\\\', '/').replaceAll('\\', '/').replace(/"(input_fingerprint|handoff_fingerprint)":"sha256:[0-9a-f]{64}"/g, '"$1":"<ROOT-DERIVED>"').replace(/\{"writing_guide":\{[^}]*\}\}/, '<WRITING-GUIDE>');
 };
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url)).replace(/[\\/]$/, '');
+const CURRENT_CONTRACT_FINGERPRINT = 'sha256:e37966fc5ee35dfc6e82b5801fdd5025ad6783306896bf1afeecf04ff1c22d1f';
 function maskedRequest(s, request) {
   const message = maskPaths(request.emittedStep.arguments.message, [s.root, '<ROOT>'], [repositoryRoot, '<REPO>']);
   const { input, writing_guide, ...configuration } = JSON.parse(maskPaths(JSON.stringify(request.packet.backend.configuration), [s.root, '<ROOT>'], [repositoryRoot, '<REPO>']));
+  assert.equal(configuration.prompt, CURRENT_CONTRACT_FINGERPRINT);
   return { instruction_fingerprint: sha(Buffer.from(message)), configuration_fingerprint: fingerprintReadingFirst(configuration), message };
 }
 // Fingerprints of the masked en Writer request, captured from the code before science-index-1.0 existed (2026-10-28).
+// Configuration baseline updated 2026-11-08: 0c537329 added title?, doi?, trace_reason? to enrichment sources.
+// Previous contract: sha256:8fda8447e3b229fabb1c199d50da2dc59bb18ae54ebb17b41dd815aa562594e7.
+// Previous configuration fingerprint: sha256:260d65b2be453ff03476f6856289755115a74223cffc463f1c34771fbeb115aa.
 const LEGACY_EN_WRITER = {
   instruction_fingerprint: 'sha256:f54d7e9a82646f82c43d8782f35219ff1bcd2969d60028e520223e096c96107a',
-  configuration_fingerprint: 'sha256:260d65b2be453ff03476f6856289755115a74223cffc463f1c34771fbeb115aa',
+  configuration_fingerprint: 'sha256:39e1acc453212d3b344f8c38e0001c127c600408e3dbbc0aa1534beea378db63',
 };
 const requestPayload = request => JSON.parse(request.emittedStep.arguments.message.split('\n\n').at(-1));
 const INDEXED_ROLES = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading'];
@@ -1134,9 +1139,12 @@ async function renderedWithSupport(t, options = {}) {
 }
 const reviewPayload = request => requestPayload(request);
 // Fingerprints of the masked overall review request, captured from the code before review support notes moved to files (2026-10-28).
+// Configuration baseline updated 2026-11-08: 0c537329 added title?, doi?, trace_reason? to enrichment sources.
+// Previous contract: sha256:8fda8447e3b229fabb1c199d50da2dc59bb18ae54ebb17b41dd815aa562594e7.
+// Previous configuration fingerprint: sha256:3419d4dc4279a0692e7e8d9db034ab061eff40cc89f953688c080a5a390f4941.
 const LEGACY_REVIEW = {
   instruction_fingerprint: 'sha256:f3adae86a57598502f2635df546df78cb09d1024e73c12d22a7b1dee0d6cb2c8',
-  configuration_fingerprint: 'sha256:3419d4dc4279a0692e7e8d9db034ab061eff40cc89f953688c080a5a390f4941',
+  configuration_fingerprint: 'sha256:f80d9fddfff44398cb7bc86a9752587f20ad08e7ec837a57d8d683d9892a18d3',
 };
 test('legacy review requests are unchanged', async t => {
   const { s, rendered } = await renderedWithSupport(t);
@@ -1231,11 +1239,14 @@ test('renderer issues may name a support note path under a new binding, and unkn
 });
 
 // Fingerprints of masked Writer requests for the existing writing modes, captured from the code before source-translation existed (2026-10-29).
+// Configuration baseline updated 2026-11-08: 0c537329 added title?, doi?, trace_reason? to enrichment sources.
+// Previous contract: sha256:8fda8447e3b229fabb1c199d50da2dc59bb18ae54ebb17b41dd815aa562594e7.
+// Previous configuration fingerprints: sha256:260d65b2be453ff03476f6856289755115a74223cffc463f1c34771fbeb115aa, sha256:69065e9a31cef04f3d85dc118a95768afa38bbf068d8e6f7a8c83911a581db1c.
 const EXISTING_MODE_WRITERS = {
-  'independent:en': { instruction_fingerprint: 'sha256:f54d7e9a82646f82c43d8782f35219ff1bcd2969d60028e520223e096c96107a', configuration_fingerprint: 'sha256:260d65b2be453ff03476f6856289755115a74223cffc463f1c34771fbeb115aa' },
-  'independent:zh-CN': { instruction_fingerprint: 'sha256:186ec07065a912ae9fbf331a198319acffa486d851dfde042fe0504d9fa3e1e1', configuration_fingerprint: 'sha256:69065e9a31cef04f3d85dc118a95768afa38bbf068d8e6f7a8c83911a581db1c' },
-  'source-first:en': { instruction_fingerprint: 'sha256:f54d7e9a82646f82c43d8782f35219ff1bcd2969d60028e520223e096c96107a', configuration_fingerprint: 'sha256:260d65b2be453ff03476f6856289755115a74223cffc463f1c34771fbeb115aa' },
-  'source-first:zh-CN': { instruction_fingerprint: 'sha256:4b85ae5514c276dfa64467bed1cbbac5224b8371348df958466e8be348606202', configuration_fingerprint: 'sha256:69065e9a31cef04f3d85dc118a95768afa38bbf068d8e6f7a8c83911a581db1c' },
+  'independent:en': { instruction_fingerprint: 'sha256:f54d7e9a82646f82c43d8782f35219ff1bcd2969d60028e520223e096c96107a', configuration_fingerprint: 'sha256:39e1acc453212d3b344f8c38e0001c127c600408e3dbbc0aa1534beea378db63' },
+  'independent:zh-CN': { instruction_fingerprint: 'sha256:186ec07065a912ae9fbf331a198319acffa486d851dfde042fe0504d9fa3e1e1', configuration_fingerprint: 'sha256:44659b2d498daf4697c72e353594d4d8489a424b67b61f240c30a4b02a7581e3' },
+  'source-first:en': { instruction_fingerprint: 'sha256:f54d7e9a82646f82c43d8782f35219ff1bcd2969d60028e520223e096c96107a', configuration_fingerprint: 'sha256:39e1acc453212d3b344f8c38e0001c127c600408e3dbbc0aa1534beea378db63' },
+  'source-first:zh-CN': { instruction_fingerprint: 'sha256:4b85ae5514c276dfa64467bed1cbbac5224b8371348df958466e8be348606202', configuration_fingerprint: 'sha256:44659b2d498daf4697c72e353594d4d8489a424b67b61f240c30a4b02a7581e3' },
 };
 // Configured translation receives its source view and context as registered files; this rebuilds the logical payload from them.
 const translationPayload = request => {
@@ -1498,9 +1509,12 @@ test('chinese source papers revise the Chinese Writer first, then the English tr
 });
 
 // Fingerprints of masked en-r2 Writer revision requests, captured from the code before translation revisions existed (2026-10-29).
+// Configuration baseline updated 2026-11-08: 0c537329 added title?, doi?, trace_reason? to enrichment sources.
+// Previous contract: sha256:8fda8447e3b229fabb1c199d50da2dc59bb18ae54ebb17b41dd815aa562594e7.
+// Previous configuration fingerprint: sha256:7e3a2ddf3524729b9d45ae8a47b904fc7d126bd790efe69fe1314f472d7ebd1b.
 const EXISTING_MODE_REVISIONS = {
-  'independent:en-r2': { instruction_fingerprint: 'sha256:9eac1029610b2655cacc3f98669f8983dbdeb63b9d9065a12994e9271d4501fc', configuration_fingerprint: 'sha256:7e3a2ddf3524729b9d45ae8a47b904fc7d126bd790efe69fe1314f472d7ebd1b' },
-  'source-first:en-r2': { instruction_fingerprint: 'sha256:9eac1029610b2655cacc3f98669f8983dbdeb63b9d9065a12994e9271d4501fc', configuration_fingerprint: 'sha256:7e3a2ddf3524729b9d45ae8a47b904fc7d126bd790efe69fe1314f472d7ebd1b' },
+  'independent:en-r2': { instruction_fingerprint: 'sha256:9eac1029610b2655cacc3f98669f8983dbdeb63b9d9065a12994e9271d4501fc', configuration_fingerprint: 'sha256:db484280710f2a41161309cb371615240253c870e8b66420a488bb0f81344aac' },
+  'source-first:en-r2': { instruction_fingerprint: 'sha256:9eac1029610b2655cacc3f98669f8983dbdeb63b9d9065a12994e9271d4501fc', configuration_fingerprint: 'sha256:db484280710f2a41161309cb371615240253c870e8b66420a488bb0f81344aac' },
 };
 test('existing writing modes keep byte-identical Writer revision requests', async t => {
   for (const writingMode of ['independent', 'source-first']) {

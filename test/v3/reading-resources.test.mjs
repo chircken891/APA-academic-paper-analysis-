@@ -35,6 +35,27 @@ test('resource registry validates source and image fingerprints and unique targe
   assert.throws(() => module.validateReadingResources(args));
 });
 
+test('resource registry requires one filename in the assigned run directory and preserves legacy layouts', async t => {
+  const { validateReadingResources } = await import('../../scripts/v3/reading-resources.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'apa-run-figures-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const parentPath = join(root, 'source.pdf'), resourcesRoot = join(root, 'output');
+  mkdirSync(resourcesRoot);
+  const imagePath = join(resourcesRoot, 'figure.png');
+  writeFileSync(parentPath, 'source'); writeFileSync(imagePath, 'image');
+  const parent = { path: parentPath, sha256: hash('source'), byte_length: 6 };
+  const row = { id: 'fig-1', source_id: 'paper', source_path: imagePath, sha256: hash('image'), byte_length: 5,
+    parent, locator: { kind: 'pdf-page', page: 1 } };
+  const args = path => ({ manifest: { version: 'reading-resources-1.0', resources: [{ ...row, path }] },
+    resourcesRoot, sources: [{ id: 'paper', ...parent }] });
+  const figuresDir = 'Figures/run-a/';
+  assert.equal(validateReadingResources({ ...args(figuresDir + '图.png'), figuresDir })[0].path, figuresDir + '图.png');
+  for (const path of ['Figures/figure.png', 'Figures/run-ab/figure.png', 'Figures/run-a/nested/figure.png']) {
+    assert.throws(() => validateReadingResources({ ...args(path), figuresDir }), /RF_RESOURCE_INVALID/);
+    assert.equal(validateReadingResources(args(path))[0].path, path);
+  }
+});
+
 test('resource tool crops arbitrary PDF pages and rejects out-of-bounds crop', () => {
   const root = mkdtempSync(join(tmpdir(), 'apa-pdf-'));
   const source = join(root, 'source.pdf'), output = join(root, 'out'); mkdirSync(output);

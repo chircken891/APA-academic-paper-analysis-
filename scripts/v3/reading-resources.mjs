@@ -12,15 +12,17 @@ function checkedFile(path, expected, owned = false) {
   if (sha(bytes) !== expected.sha256 || bytes.length !== expected.byte_length) fail();
 }
 
-export function validateReadingResources({ manifest, resourcesRoot, sources } = {}) {
+export function validateReadingResources({ manifest, resourcesRoot, sources, figuresDir } = {}) {
   if (manifest?.version !== 'reading-resources-1.0' || !Array.isArray(manifest.resources)
     || !Array.isArray(sources) || typeof resourcesRoot !== 'string' || !isAbsolute(resourcesRoot)
     || resolve(resourcesRoot) !== realpathSync(resourcesRoot) || !lstatSync(resourcesRoot).isDirectory()) fail();
+  if (figuresDir !== undefined && (typeof figuresDir !== 'string' || !/^Figures\/[A-Za-z0-9_-]+\/$/.test(figuresDir))) fail();
   const ids = new Set(), paths = new Set();
   for (const row of manifest.resources) {
     if (!row || typeof row.id !== 'string' || !/^[a-z][a-z0-9-]*$/.test(row.id) || ids.has(row.id)
       || typeof row.path !== 'string' || !/^Figures\//.test(row.path)
       || /[\\\x00-\x1f<>:"|?*]/.test(row.path) || row.path.split('/').some(part => !part || part === '.' || part === '..')
+      || figuresDir !== undefined && (!row.path.startsWith(figuresDir) || row.path.slice(figuresDir.length).includes('/'))
       || paths.has(row.path)) fail();
     ids.add(row.id); paths.add(row.path);
     const source = sources.find(item => item.id === row.source_id);

@@ -15,6 +15,9 @@
       "$ref": "#/$defs/noteRelocation"
     },
     {
+      "$ref": "#/$defs/knowledgeMerge"
+    },
+    {
       "$ref": "#/$defs/topic"
     },
     {
@@ -25,6 +28,65 @@
     }
   ],
   "$defs": {
+    "knowledgeMerge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "profile", "identity", "status", "evidence_mode", "review_ready", "publishable", "reading_accepted", "native_presentation", "scientific_review_hash", "generation", "previous_generation", "previews", "support_notes", "assets", "read_dependencies", "dependencies", "tools", "index", "active", "write_set", "diagnostics", "provenance_limits", "maintenance"],
+      "properties": {
+        "schema_version": { "$ref": "#/$defs/noteRelocation/properties/schema_version" },
+        "profile": { "const": "phase22-knowledge-merge-1.0" },
+        "identity": { "$ref": "#/$defs/noteRelocation/properties/identity" },
+        "status": { "$ref": "#/$defs/noteRelocation/properties/status" },
+        "evidence_mode": { "$ref": "#/$defs/noteRelocation/properties/evidence_mode" },
+        "review_ready": { "$ref": "#/$defs/noteRelocation/properties/review_ready" },
+        "publishable": { "$ref": "#/$defs/noteRelocation/properties/publishable" },
+        "reading_accepted": { "$ref": "#/$defs/noteRelocation/properties/reading_accepted" },
+        "native_presentation": { "$ref": "#/$defs/noteRelocation/properties/native_presentation" },
+        "scientific_review_hash": { "$ref": "#/$defs/noteRelocation/properties/scientific_review_hash" },
+        "generation": { "$ref": "#/$defs/noteRelocation/properties/generation" },
+        "previous_generation": { "$ref": "#/$defs/noteRelocation/properties/previous_generation" },
+        "previews": { "$ref": "#/$defs/noteRelocation/properties/previews" },
+        "support_notes": { "$ref": "#/$defs/noteRelocation/properties/support_notes" },
+        "assets": { "$ref": "#/$defs/noteRelocation/properties/assets" },
+        "read_dependencies": { "$ref": "#/$defs/noteRelocation/properties/read_dependencies" },
+        "dependencies": { "$ref": "#/$defs/noteRelocation/properties/dependencies" },
+        "tools": { "$ref": "#/$defs/noteRelocation/properties/tools" },
+        "index": { "$ref": "#/$defs/noteRelocation/properties/index" },
+        "active": { "$ref": "#/$defs/noteRelocation/properties/active" },
+        "write_set": { "$ref": "#/$defs/noteRelocation/properties/write_set" },
+        "diagnostics": { "$ref": "#/$defs/noteRelocation/properties/diagnostics" },
+        "provenance_limits": { "$ref": "#/$defs/noteRelocation/properties/provenance_limits" },
+        "maintenance": {
+          "type": "object", "additionalProperties": false,
+          "required": ["operation", "merges", "retired"],
+          "properties": {
+            "operation": { "enum": ["merge", "compensate"] },
+            "merges": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false,
+              "required": ["keep_path", "remove_paths"], "properties": {
+                "keep_path": { "type": "string" }, "remove_paths": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+              } } },
+            "retired": { "type": "array", "items": { "type": "object", "additionalProperties": false,
+              "required": ["path", "byte_sha256", "byte_length"], "properties": {
+                "path": { "type": "string" }, "byte_sha256": { "$ref": "#/$defs/noteRelocation/properties/scientific_review_hash" },
+                "byte_length": { "type": "integer", "minimum": 1 }
+              } } },
+            "compensates_transaction": { "type": "string", "minLength": 1 }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "evidence_mode": { "const": "actual" } } },
+          "then": { "properties": { "status": { "const": "review_ready" }, "review_ready": { "const": true } } },
+          "else": { "properties": { "status": { "const": "synthetic_prepared" }, "review_ready": { "const": false } } }
+        },
+        {
+          "if": { "properties": { "maintenance": { "type": "object", "properties": { "operation": { "const": "compensate" } } } } },
+          "then": { "properties": { "maintenance": { "type": "object", "required": ["compensates_transaction"], "properties": { "compensates_transaction": {} } } } },
+          "else": { "properties": { "maintenance": { "type": "object", "not": { "required": ["compensates_transaction"], "properties": { "compensates_transaction": {} } } } } }
+        }
+      ]
+    },
     "noteRelocation": {
       "type": "object",
       "additionalProperties": false,
@@ -102,7 +164,6 @@
         },
         "previews": {
           "type": "array",
-          "minItems": 2,
           "items": {
             "type": "object"
           }
@@ -150,7 +211,6 @@
         },
         "relocations": {
           "type": "array",
-          "minItems": 1,
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -198,7 +258,10 @@
               }
             }
           }
-        }
+        },
+        "asset_relocations": { "type": "array", "items": { "type": "object" } },
+        "retired_assets": { "type": "array", "items": { "type": "object" } },
+        "restored_assets": { "type": "array", "items": { "type": "object" } }
       },
       "allOf": [
         {

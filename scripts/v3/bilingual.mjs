@@ -1,17 +1,20 @@
-import { lstat, readdir, realpath } from 'node:fs/promises';
+import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import { resolve, join, relative, sep } from 'node:path';
 import * as publication from './phase22-publication.mjs';
 import { readCommittedGeneration } from './phase22-active-version.mjs';
 import { queryBilingualIndex } from './phase22-search.mjs';
 import { buildGraphProposal } from './phase22-graph.mjs';
 
-const commands = new Set(['review', 'dry-run', 'apply', 'recover', 'query', 'graph-proposal']);
+const commands = new Set(['review', 'dry-run', 'apply', 'recover', 'query', 'graph-proposal', 'publish', 'maintenance-review', 'maintenance-apply']);
 const commonFlags = ['vault-root', 'run'];
 const profiles = new Set(['reading-first-obsidian-1.0', 'phase24-topic-1.0']);
 const commandFlags = {
   review: ['profile'], 'dry-run': ['profile'],
   apply: ['review-sha256', 'output-sha256', 'approval-record', 'maintenance-window-record'],
   recover: ['transaction-id', 'approval-record', 'maintenance-window-record'],
+  publish: ['run-root', 'generation', 'resources', 'authorization-id', 'user-reply'],
+  'maintenance-review': ['mode', 'options'],
+  'maintenance-apply': ['inventory-sha256', 'authorization-id', 'user-reply'],
   query: ['query'], 'graph-proposal': [],
 };
 function fail(code, details, exitCode = 1) {
@@ -29,7 +32,8 @@ function parse(argv) {
     }
     flags[key] = value;
   }
-  const required = [...commonFlags, ...(command === 'apply' ? commandFlags.apply : command === 'recover' ? ['transaction-id'] : command === 'query' ? ['query'] : [])];
+  const requireAllFlags = ['apply', 'publish', 'maintenance-review', 'maintenance-apply'].includes(command);
+  const required = [...commonFlags, ...(requireAllFlags ? commandFlags[command] : command === 'recover' ? ['transaction-id'] : command === 'query' ? ['query'] : [])];
   const missing = required.filter(key => !flags[key]);
   if (missing.length) fail('P22_CLI_ARGUMENT_REQUIRED', { missing }, 2);
   if (flags.profile && !profiles.has(flags.profile)) fail('P221_CLI_PROFILE_UNKNOWN', { profile: flags.profile }, 2);
@@ -69,9 +73,34 @@ async function committed(vaultRoot, run) {
 }
 async function main(argv) {
   const { command, flags, vaultRoot, run } = parse(argv);
-  if (command === 'recover') return publication.recoverBilingualPublication({ vaultRoot, run, transactionId: flags['transaction-id'],
-    ...(flags['approval-record'] ? { approvalRecord: flags['approval-record'] } : {}),
-    ...(flags['maintenance-window-record'] ? { maintenanceWindowRecord: flags['maintenance-window-record'] } : {}) });
+  if (command === 'publish') {
+    const { assertReadingFirstRegisteredSourcesCurrent } = await import('./reading-first-publication.mjs');
+    await assertReadingFirstRegisteredSourcesCurrent({ vaultRoot });
+    const { captureCompletedReadingSessionPublicationSource } = await import('./reading-session.mjs');
+    const { publishReadingFirstCandidate } = await import('./reading-first-publish.mjs');
+    const resources = JSON.parse(await readFile(flags.resources, 'utf8'));
+    const source = await captureCompletedReadingSessionPublicationSource({ runRoot: resolve(flags['run-root']), vaultRoot, run });
+    return publishReadingFirstCandidate({ source, vaultRoot, run, resources, generation: flags.generation,
+      authorization: { authorization_id: flags['authorization-id'], user_reply: flags['user-reply'] },
+      onPrepared: summary => new Promise((done, reject) => process.stderr.write(JSON.stringify({ event: 'publication-inventory', ...summary }) + '\n',
+        error => error ? reject(error) : done())) });
+  }
+  if (command === 'maintenance-review' || command === 'maintenance-apply') {
+    const { prepareMaintenanceReview, applyMaintenanceReview } = await import('./maintenance-publication.mjs');
+    return command === 'maintenance-review'
+      ? prepareMaintenanceReview({ vaultRoot, run, mode: flags.mode, optionsFile: flags.options })
+      : applyMaintenanceReview({ vaultRoot, run, inventorySha256: flags['inventory-sha256'],
+        authorizationId: flags['authorization-id'], userReply: flags['user-reply'],
+        onRegistered: intent => new Promise((done, reject) => process.stderr.write(JSON.stringify({ event: 'maintenance-registered', ...intent }) + '\n',
+          error => error ? reject(error) : done())) });
+  }
+  if (command === 'recover') {
+    const transaction = await publication.recoverBilingualPublication({ vaultRoot, run, transactionId: flags['transaction-id'],
+      ...(flags['approval-record'] ? { approvalRecord: flags['approval-record'] } : {}),
+      ...(flags['maintenance-window-record'] ? { maintenanceWindowRecord: flags['maintenance-window-record'] } : {}) });
+    const { finishMaintenanceRecovery } = await import('./maintenance-publication.mjs');
+    return finishMaintenanceRecovery({ vaultRoot, run, transaction });
+  }
   if (command === 'query' || command === 'graph-proposal') {
     const activeSnapshot = await committed(vaultRoot, run);
     return { ok: true, ...(command === 'query'
@@ -95,7 +124,7 @@ async function main(argv) {
 try {
   const result = await main(process.argv.slice(2));
   if (result?.ok === false) {
-    process.stdout.write(JSON.stringify({ ok: false, error: typeof result.error === 'object' && result.error
+    process.stdout.write(JSON.stringify(result.review_path ? result : { ok: false, error: typeof result.error === 'object' && result.error
       ? result.error : { code: result.code ?? 'P22_CLI_REFUSED', details: metadata(result) } }) + '\n');
     process.exitCode = 1;
   } else process.stdout.write(JSON.stringify(result) + '\n');

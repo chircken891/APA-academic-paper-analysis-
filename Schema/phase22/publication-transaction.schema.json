@@ -147,6 +147,7 @@
             "enum": [
               "paper",
               "support",
+              "knowledge-aliases",
               "asset",
               "reader-presentation",
               "reading-review",
@@ -496,6 +497,7 @@
             "enum": [
               "paper",
               "support",
+              "knowledge-aliases",
               "asset",
               "reader-presentation",
               "reading-review",

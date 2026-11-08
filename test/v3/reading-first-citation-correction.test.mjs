@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { dirname, join, posix } from 'node:path';
 import { createHash } from 'node:crypto';
 import { readingFirstPublicationFixture, applyReadingFirstFixture, readingFirstPublicationAuthority } from './helpers/reading-first-publication-fixtures.mjs';
-import { applyBilingualPublication, registerBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
+import { applyBilingualPublication, dryRunBilingualPublication, registerBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
 import { readRegisteredCommit } from '../../scripts/v3/phase22-active-version.mjs';
 import { prepareReadingFirstCitationCorrection } from '../../scripts/v3/reading-first-publication.mjs';
 import { readQuerySource } from '../../scripts/v3/library-query.mjs';
 import { fingerprintV3Json } from '../../scripts/v3/semantic-package-validator.mjs';
+import { buildNoteRelocationReview } from '../../scripts/v3/note-relocation.mjs';
 
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const jsonBytes = value => Buffer.from(JSON.stringify(value) + '\n');
@@ -116,4 +117,51 @@ test('correction refuses when the committed citation is already correct', async 
   const s = await misattributedVault(t);
   await applyCorrection(s, await correct(s));
   await assert.rejects(correct(s, { generation: 'citation-correction-2' }), /RF_CITATION_CORRECTION_NOOP/);
+});
+
+test('citation correction reads frozen sources after real synthetic migration and old copies are removed', async t => {
+  const s = await misattributedVault(t), { f, before } = s, root = f.vaultRoot;
+  const frozen = await readFile(s.catalogPath);
+  const docx = f.resources.find(row => row.path.endsWith('.docx'));
+  const assetRetirements = [{ path: docx.path, sha256: docx.sha256, byte_length: docx.byte_length }];
+  const assetMappings = f.resources.filter(row => row.path.endsWith('.pdf')).map(row => ({ old_path: row.path,
+    new_path: 'Clippings/' + posix.basename(row.path), sha256: row.sha256, byte_length: row.byte_length,
+    ...(row.path === 'Raw/supplement-display.pdf' ? { source_id: 'supplement' } : {}) }));
+  for (const row of assetMappings) {
+    await mkdir(dirname(join(root, row.new_path)), { recursive: true });
+    await writeFile(join(root, row.new_path), await readFile(join(root, row.old_path)));
+  }
+  const migrate = async options => {
+    const review = await buildNoteRelocationReview({ vaultRoot: root, runId: f.runId, ...options });
+    const { plan } = await dryRunBilingualPublication({ vaultRoot: root, run: f.runId, review });
+    const authority = await readingFirstPublicationAuthority(f, plan);
+    return applyBilingualPublication({ vaultRoot: root, run: f.runId, plan, ...authority });
+  };
+  const notePath = join(root, before.generation.papers[0].paths.en);
+  const original = await readFile(notePath);
+  await writeFile(notePath, Buffer.concat([original, Buffer.from('\n[Old original](../../Raw/supplement.docx)\n')]));
+  await assert.rejects(buildNoteRelocationReview({ vaultRoot: root, runId: f.runId, generation: 'blocked-retirement', assetRetirements }),
+    /P22_RELOCATION_ASSET_STILL_REFERENCED/);
+  await writeFile(notePath, original);
+  assert.equal((await migrate({ generation: 'migrated-before-correction', assetMappings, assetRetirements })).status, 'committed');
+  for (const row of assetMappings) await unlink(join(root, row.old_path));
+  const migrated = await readRegisteredCommit({ vaultRoot: root });
+  assert.ok(!migrated.generation.objects.some(row => row.path === docx.path));
+  const paper = migrated.generation.papers[0];
+  const manifest = JSON.parse(await readFile(join(root, paper.reader_presentation.path)));
+  assert.ok(!manifest.targets.assets.includes(docx.path));
+  assert.equal(manifest.path_migration.retired_assets[0].path, docx.path);
+  assert.equal(sha(await readFile(join(root, docx.path))), docx.sha256);
+  assert.deepEqual(await readFile(join(root, before.sidecarPath)), before.sidecarBytes);
+  assert.equal((await applyCorrection(s, await correct(s))).status, 'committed');
+  const corrected = await readQuerySource({ vaultRoot: root, paperId: paper.paper_id, sourceId: 'supplement' });
+  assert.equal(corrected.path, 'Clippings/supplement-display.pdf');
+  assert.deepEqual(await readFile(s.catalogPath), frozen);
+  const compensation = await migrate({ generation: 'restored-docx-registration', restoreAssetRetirements: [docx.path] });
+  assert.equal(compensation.status, 'committed');
+  const restored = await readRegisteredCommit({ vaultRoot: root });
+  assert.equal(restored.generation.objects.find(row => row.path === docx.path)?.sha256, docx.sha256);
+  const restoredManifest = JSON.parse(await readFile(join(root, restored.generation.papers[0].reader_presentation.path)));
+  assert.equal(restoredManifest.targets.assets.indexOf(docx.path), JSON.parse(before.sidecarBytes).targets.assets.indexOf(docx.path));
+  assert.deepEqual(restoredManifest.citation.sources.map(row => row.path), [manifest.citation.sources[0].path, corrected.path]);
 });

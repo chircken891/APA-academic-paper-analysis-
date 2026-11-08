@@ -46,12 +46,14 @@ test('audit scopes calls to thread and reports damaged coverage', async () => {
  assert.notEqual((await auditControllerLog({logPath:join(dir,'missing'),threadId:'thread-a'})).coverage,'complete');
 });
 
-async function cliFixture() {
- const { mkdir } = await import('node:fs/promises');
+async function cliFixture(t) {
+ const { mkdir, rm, symlink } = await import('node:fs/promises');
  const { execFile } = await import('node:child_process');
  const { promisify } = await import('node:util');
  const { createHash } = await import('node:crypto');
  const run=promisify(execFile), root=await mkdtemp(join(tmpdir(),'apa-cli-recovery-'));
+ t.after(() => rm(root, { recursive: true, force: true }));
+ await symlink(join(process.cwd(), 'node_modules'), join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
  await mkdir(join(root,'config'),{recursive:true});
  const parser=join(root,'mineru'), bin=join(parser,'venv',process.platform==='win32'?'Scripts':'bin');
  await mkdir(bin,{recursive:true});
@@ -73,8 +75,8 @@ async function cliFixture() {
  return { root, run, cli, optionsPath, profile, evidence };
 }
 
-test('CLI export failure leaves the issued intent for cross-process reconciliation', async () => {
- const { root, run, cli, optionsPath, profile, evidence } = await cliFixture();
+test('CLI export failure leaves the issued intent for cross-process reconciliation', async t => {
+ const { root, run, cli, optionsPath, profile, evidence } = await cliFixture(t);
  const blocked=join(root,'blocked'); await writeFile(blocked,'file');
  const runRoot=join(root,'runs','run');
  await assert.rejects(run(process.execPath,[cli,'create','--input',optionsPath,'--export-dir',blocked]));
@@ -87,9 +89,9 @@ test('CLI export failure leaves the issued intent for cross-process reconciliati
  assert.equal(result.role,'evidence');
 });
 
-test('CLI rejects a missing export directory before recording any intent', async () => {
+test('CLI rejects a missing export directory before recording any intent', async t => {
  const { lstat } = await import('node:fs/promises');
- const { root, run, cli, optionsPath } = await cliFixture();
+ const { root, run, cli, optionsPath } = await cliFixture(t);
  await assert.rejects(run(process.execPath,[cli,'create','--input',optionsPath]), error => { assert.match(error.stderr, /READING_CLI_EXPORT_DIRECTORY_REQUIRED/); return true; });
  await assert.rejects(lstat(join(root,'runs','run')), { code: 'ENOENT' });
  const created=JSON.parse((await run(process.execPath,[cli,'create','--input',optionsPath,'--export-dir',join(root,'export')])).stdout);

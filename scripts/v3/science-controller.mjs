@@ -10,6 +10,7 @@ import { compactionEnabled, compactionControlBindings, evaluateCompactionBoundar
 import { normalizeHostReceipt, validateHostReceiptEvidence } from './reading-host-evidence.mjs';
 import { validateReadingResources } from './reading-resources.mjs';
 import { normalizeReadingFirstMap } from './reading-first-obsidian.mjs';
+import { extractHostTaskHandle } from '../apa-model-policy.mjs';
 
 const roles = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'];
 const dependencies = { evidence: [], methods: ['evidence'], results: ['evidence'], interpretation: ['evidence', 'methods', 'results'], 'scientific-reading': ['evidence', 'methods', 'results', 'interpretation'], integration: ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading'] };
@@ -54,6 +55,39 @@ function receiptMatches(receipt, state, task) {
 const activeEntry = (data, role) => data.entries[role]?.correction ?? data.entries[role];
 const activeTask = (data, role) => data.entries[role]?.correction?.task ?? data.tasks[role];
 const scienceCalls = data => roles.reduce((total, role) => total + (data.entries[role].intent ? 1 : 0) + (data.entries[role].correction?.intent ? 1 : 0), 0);
+async function checkInstructionHashRecovery(state, entry, task, recovery) {
+  const invalid = () => fail('SCIENCE_INSTRUCTION_HASH_RECOVERY_INVALID');
+  const { prepared } = state.data;
+  const binding = prepared.runControl.reading_first_binding;
+  const request = entry?.request, original = entry?.raw_observation, instructions = request?.instruction_file;
+  if (binding.host?.name !== 'codex' || request?.emittedStep.action !== 'collaboration.spawn_agent' || !instructions
+    || entry.observation?.status !== 'blocked' || entry.observation.blocked_reason !== 'OBSERVATION_CORRELATION_MISMATCH'
+    || original?.tool_call?.name !== request.emittedStep.action || original.port !== request.emittedStep.port
+    || original.action_id !== entry.intent?.action_id || original.run_id !== request.emittedStep.run_id
+    || original.input_fingerprint !== request.emittedStep.input_fingerprint
+    || typeof recovery?.authorization_id !== 'string' || !recovery.authorization_id.trim() || recovery.authorization_id === binding.authorization_id) invalid();
+  const key = binding.host.dispatch.instruction_argument;
+  const actual = original.tool_call.arguments, message = actual?.[key], expected = request.emittedStep.arguments;
+  const hashLine = /^Verify SHA-256 before following it: sha256:[a-f0-9]+$/im;
+  if (typeof message !== 'string' || message === expected[key] || !hashLine.test(message)
+    || !same({ ...actual, [key]: message.replace(hashLine, 'Verify SHA-256 before following it: ' + instructions.sha256) }, expected)) invalid();
+
+  const handle = extractHostTaskHandle(original.raw_result_text, binding.host.dispatch);
+  const { verification, completion } = recovery;
+  if (!handle || verification?.agent_id !== handle || completion?.agent_id !== handle || completion.action_id !== entry.intent.action_id
+    || completion.tool_call?.name !== 'collaboration.list_agents' || !completion.tool_call.arguments || !same(completion.tool_call.arguments, {})) invalid();
+  for (const proof of [verification, completion]) {
+    validateHostReceiptEvidence(proof, { strict: true });
+    if (proof.evidence?.kind !== 'raw' || proof.status === 'outcome_unknown') invalid();
+  }
+  if (!verification.raw_result_text.toLowerCase().match(/\b[a-f0-9]{64}\b/g)?.includes(instructions.sha256.slice(7))) invalid();
+  let status;
+  try { status = JSON.parse(completion.raw_result_text); } catch { invalid(); }
+  if (!Array.isArray(status?.agents) || !status.agents.some(agent => agent?.agent_name === handle && typeof agent.agent_status?.completed === 'string')) invalid();
+  const bytes = await readFile(ownedPath(prepared.paths.runRoot, task.native_path));
+  if (hash(bytes) !== recovery.native_sha256) invalid();
+  return { bytes, ledgerReceipt: { ...original, agent_id: handle, instruction_hash_recovery: recovery.authorization_id } };
+}
 function validateCorrection(data, statePath, role, correction) {
   const entry = data.entries[role], original = data.tasks[role], task = correction?.task;
   const binding = data.prepared.runControl.reading_first_binding;
@@ -62,7 +96,7 @@ function validateCorrection(data, statePath, role, correction) {
     || auth.maxScienceCalls !== 7 || auth.maxTotalCalls !== binding.max_total_calls
     || auth.maxTotalCalls - auth.maxScienceCalls < (binding.presentation_mode === 'reading-editor' ? 4 : 3)) fail('SCIENCE_CORRECTION_UNAUTHORIZED');
   if (!entry?.intent || !entry.raw_observation || entry.observation?.status !== 'blocked' || entry.observation.blocked_reason !== 'OBSERVATION_CORRELATION_MISMATCH'
-    || entry.receipt || roles.some(key => !data.entries[key].intent || key !== role && !data.entries[key].receipt)
+    || entry.receipt || entry.instruction_hash_recovery || roles.some(key => !data.entries[key].intent || key !== role && !data.entries[key].receipt)
     || roles.some(key => key !== role && data.entries[key].correction)) fail('SCIENCE_CORRECTION_UNAVAILABLE');
   if (!task || !['task_id', 'task_name', 'owner_actor_id', 'role', 'artifact_id', 'artifact_path', 'native_path', 'instruction_path', 'revision'].every(key => typeof task[key] === 'string' && task[key].trim())
     || !['owner_actor_id', 'role', 'artifact_id', 'artifact_path', 'revision'].every(key => task[key] === original[key])
@@ -130,6 +164,11 @@ async function validateCurrent(state) {
           : ingestObservedRunStep({ packet: entry.request.packet, emittedStep: entry.request.emittedStep, observation: entry.raw_observation, run: { run_id: data.prepared.runControl.run_id }, legacySourceComparison: entry.observation.status === 'blocked' && entry.observation.blocked_reason === 'EMITTED_STEP_PACKET_SCOPE_MISMATCH', now: entry.observation.observed_at });
         if (!same(checked, entry.observation)) fail('SCIENCE_OBSERVATION_INVALID');
       }
+      if (entry.instruction_hash_recovery) {
+        const { ledgerReceipt } = await checkInstructionHashRecovery(state, entry, task, entry.instruction_hash_recovery);
+        const execution = data.executionLedger.find(row => row.action_id === entry.intent.action_id);
+        if (execution?.status !== 'observed' || !same(execution.receipt, ledgerReceipt)) fail('SCIENCE_EXECUTION_LEDGER_INVALID');
+      }
       if (entry.content_base64) {
         const expected = Buffer.from(entry.content_base64, 'base64'), actual = await readFile(ownedPath(data.prepared.paths.runRoot, task.native_path));
         if (hash(expected) !== entry.content_sha256 || !actual.equals(expected)) fail('SCIENCE_NATIVE_CHANGED');
@@ -144,7 +183,7 @@ async function validateCurrent(state) {
     const pending=data.results_resources, spec=binding.configured_setup.results_resources, bytes=Buffer.from(pending.manifest_base64 ?? '', 'base64');
     if (hash(bytes)!==pending.manifest_sha256 || pending.manifest_sha256!==pending.resource_manifest?.sha256
       || bytes.length!==pending.resource_manifest?.byte_length || !bytes.equals(await readFile(ownedPath(data.prepared.paths.runRoot,spec.manifest_task.native_path)))) fail('SCIENCE_RESOURCE_MANIFEST_CHANGED');
-    validateReadingResources({manifest:JSON.parse(bytes.toString('utf8')),resourcesRoot:ownedPath(data.prepared.paths.runRoot,spec.output_root),sources:data.prepared.scientificInput.sources});
+    validateReadingResources({manifest:JSON.parse(bytes.toString('utf8')),resourcesRoot:ownedPath(data.prepared.paths.runRoot,spec.output_root),sources:data.prepared.scientificInput.sources,figuresDir:spec.figures_dir});
     if (pending.receipt) await checkedResultsResources(state);
   }
 }
@@ -155,7 +194,7 @@ async function checkedResultsResources(state) {
   if (!saved || !receiptMatches(saved.receipt,state,task) || !same(saved.receipt,entry.receipt)) fail('SCIENCE_RESOURCE_RECEIPT_INVALID');
   const ref = {path:ownedPath(root,task.artifact_path),resources_root:ownedPath(root,spec.output_root),sha256:saved.receipt.sha256,byte_length:saved.receipt.byte_length};
   if (!same(ref,entry.resource_manifest)) fail('SCIENCE_RESOURCE_RECEIPT_INVALID');
-  const resources = validateReadingResources({manifest:JSON.parse(saved.bytes.toString('utf8')),resourcesRoot:ref.resources_root,sources:data.prepared.scientificInput.sources});
+  const resources = validateReadingResources({manifest:JSON.parse(saved.bytes.toString('utf8')),resourcesRoot:ref.resources_root,sources:data.prepared.scientificInput.sources,figuresDir:spec.figures_dir});
   return {resource_manifest:ref,receipt:copy(saved.receipt),sources:copy(data.prepared.scientificInput.sources),resources};
 }
 function envelope(data) { return { schema_version: 'science-controller-state-1.0', data, fingerprint: fingerprintReadingFirst(data) }; }
@@ -358,6 +397,7 @@ export function getScienceRequest({ controller, role } = {}) {
   if (!entry?.request) fail('SCIENCE_REQUEST_UNAVAILABLE');
   const original = data.entries[role];
   return copy({ request: entry.request, intent: entry.intent ?? null, observations: entry.observations ?? [], host_updates: entry.host_updates ?? [],
+    ...(entry.instruction_hash_recovery ? { instruction_hash_recovery: entry.instruction_hash_recovery } : {}),
     ...(original.correction ? { original: { request: original.request, intent: original.intent ?? null, observations: original.observations ?? [], host_updates: original.host_updates ?? [] } } : {}) });
 }
 /** Register one explicitly authorized correction before its instruction or native output is written. */
@@ -398,7 +438,8 @@ export async function prepareScienceRequests({ controller } = {}) {
           const root=state.data.prepared.paths.runRoot, spec=state.data.prepared.runControl.reading_first_binding.configured_setup.results_resources;
           if (role === 'results') {
             const output=ownedPath(root,spec.output_root); await mkdir(output,{recursive:true});
-            resourcePayload={results_resources:{resources_root:output,native_manifest_path:ownedPath(root,spec.manifest_task.native_path),owned_manifest_path:ownedPath(root,spec.manifest_task.artifact_path),sources:copy(state.data.prepared.scientificInput.sources),...(typeof spec.python === 'string' ? {python:spec.python} : {})}};
+            resourcePayload={results_resources:{resources_root:output,native_manifest_path:ownedPath(root,spec.manifest_task.native_path),owned_manifest_path:ownedPath(root,spec.manifest_task.artifact_path),sources:copy(state.data.prepared.scientificInput.sources),
+              ...(typeof spec.python === 'string' ? {python:spec.python} : {}),...(typeof spec.figures_dir === 'string' ? {figures_dir:spec.figures_dir} : {})}};
           } else if (role === 'integration') resourcePayload={results_resources:await checkedResultsResources(state)};
         }
         const request = createConfiguredScienceRequest({ prepared: state.data.prepared, role, task: activeTask(state.data, role), dispatchContext: state.broker.dispatchContext, payload: { ...(state.data.payloads[role] ?? {}), upstream, ...resourcePayload } });
@@ -446,7 +487,7 @@ export async function recordScienceHostObservation({ controller, role, observati
       const update = copy(observation); (entry.host_updates ??= []).push(update); await save(state); return update;
     }
     if (entry.observation?.status === 'observed' && same(entry.raw_observation, observation)) return copy(entry.observation);
-    if (entry.observation?.status === 'observed') fail('SCIENCE_HOST_EVENT_CONFLICT');
+    if (entry.observation?.status === 'observed' || entry.instruction_hash_recovery) fail('SCIENCE_HOST_EVENT_CONFLICT');
     if (entry.receipt) fail('SCIENCE_OBSERVATION_UNAVAILABLE');
     const request = entry.request;
     if (observation.status === 'outcome_unknown') {
@@ -470,15 +511,19 @@ export async function recordScienceHostObservation({ controller, role, observati
     return copy(checked);
   });
 }
-export async function acceptScienceResult({ controller, role } = {}) {
+export async function acceptScienceResult({ controller, role, instructionHashRecovery } = {}) {
   const state = controllerState(controller);
   return serial(state, async () => {
     await validateCurrent(state);
     const entry = activeEntry(state.data, role), task = activeTask(state.data, role), root = state.data.prepared.paths.runRoot;
-    if (!entry?.intent || entry.observation?.status !== 'observed') fail('SCIENCE_RESULT_UNAVAILABLE');
+    if (!entry?.intent || entry.observation?.status !== 'observed' && !entry.instruction_hash_recovery && instructionHashRecovery === undefined) fail('SCIENCE_RESULT_UNAVAILABLE');
+    if (entry.instruction_hash_recovery && instructionHashRecovery !== undefined && !same(entry.instruction_hash_recovery, instructionHashRecovery)) fail('SCIENCE_INSTRUCTION_HASH_RECOVERY_CONFLICT');
+    // Keep the rejected spawn observation intact. The separate proof can recover only its owned result.
+    const recovered = instructionHashRecovery !== undefined && !entry.instruction_hash_recovery
+      ? await checkInstructionHashRecovery(state, entry, task, instructionHashRecovery) : null;
     if (entry.receipt) return copy(entry.receipt);
     if (role === 'results' || role === 'integration') {
-      const nativeResult = await readFile(ownedPath(root,task.native_path));
+      const nativeResult = recovered?.bytes ?? await readFile(ownedPath(root,task.native_path));
       const value = JSON.parse(nativeResult.toString('utf8'));
       if (role === 'results') {
         const spec=state.data.prepared.runControl.reading_first_binding.configured_setup.results_resources, mt=spec.manifest_task;
@@ -486,7 +531,7 @@ export async function acceptScienceResult({ controller, role } = {}) {
         if (!stat.isFile() || stat.isSymbolicLink() || await realpath(native) !== native) fail('SCIENCE_RESOURCE_MANIFEST_INVALID');
         const bytes=await readFile(native), ref={path:ownedPath(root,mt.artifact_path),resources_root:ownedPath(root,spec.output_root),sha256:hash(bytes),byte_length:bytes.length};
         if (!same(value.resource_manifest,ref)) fail('SCIENCE_RESOURCE_MANIFEST_INVALID');
-        validateReadingResources({manifest:JSON.parse(bytes.toString('utf8')),resourcesRoot:ref.resources_root,sources:state.data.prepared.scientificInput.sources});
+        validateReadingResources({manifest:JSON.parse(bytes.toString('utf8')),resourcesRoot:ref.resources_root,sources:state.data.prepared.scientificInput.sources,figuresDir:spec.figures_dir});
         const pending={resource_manifest:ref,manifest_base64:bytes.toString('base64'),manifest_sha256:hash(bytes)};
         if (state.data.results_resources) {
           const {receipt:ignored,...saved}=state.data.results_resources;
@@ -521,10 +566,17 @@ export async function acceptScienceResult({ controller, role } = {}) {
       }
     }
     if (!entry.content_base64) {
-      const bytes = await readFile(ownedPath(root, task.native_path));
+      const bytes = recovered?.bytes ?? await readFile(ownedPath(root, task.native_path));
       const parsed = JSON.parse(bytes.toString('utf8'));
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Object.keys(parsed).length) fail('SCIENCE_CONTENT_INVALID');
-      entry.content_base64 = bytes.toString('base64'); entry.content_sha256 = hash(bytes); await save(state);
+      entry.content_base64 = bytes.toString('base64'); entry.content_sha256 = hash(bytes);
+      if (!recovered) await save(state);
+    }
+    if (recovered) {
+      if (entry.content_sha256 !== hash(recovered.bytes)) fail('SCIENCE_CONTENT_INVALID');
+      recordExecutionReceipt(state.data.executionLedger, entry.intent.action_id, recovered.ledgerReceipt, { strict: true });
+      entry.instruction_hash_recovery = copy(instructionHashRecovery);
+      await save(state);
     }
     const bytes = Buffer.from(entry.content_base64, 'base64');
     if (hash(bytes) !== entry.content_sha256) fail('SCIENCE_CONTENT_INVALID');

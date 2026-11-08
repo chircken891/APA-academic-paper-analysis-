@@ -28,17 +28,17 @@ const registration = await registerBilingualPublication({
 });
 ```
 
-这里的 `resources` 是 `{path, source_path, sha256, byte_length}` 数组：`path` 为笔记使用的 `Raw/` 或 `Figures/` 库内相对路径，`source_path` 指向已登记源文件，哈希带 `sha256:` 前缀。资源路径集合必须包含审阅候选的 `assetPaths`，以及所采用已登记图表必需的原始父资源；除此之外不收录其他文件。PDF、图片均须保留来源与指纹；资源缺失、字节变化或目标处存在不同的原始文件时，先修正具体绑定。不能通过扫描目录自动收录未登记文件。合成测试使用 `evidenceMode:'synthetic'` 及系统临时库，不能写入生产知识库。
+这里的 `resources` 是 `{path, source_path, sha256, byte_length}` 数组：`path` 为笔记使用的库内相对路径，`source_path` 指向已登记源文件，哈希带 `sha256:` 前缀。新运行的主文和补充材料必须位于 `Clippings/`，绝对 `source_path` 对应这份原件；图片位于所指派的 `Figures/<run_id>/`，`Raw/` 只接收已接受补缺记录中实际采用的 AI 追溯文献。资源集合覆盖审阅候选的 `assetPaths`、图表的原始父资源及实际采用的补缺文献。Clippings 原件沿既有 `asset` 对象登记，目标已存在且同字节时不再写入。PDF、图片均须保留来源与指纹；资源缺失、字节变化或目标处存在不同的原始文件时，先修正具体绑定。目录扫描仅用于同文献与来源漂移提示，不授予未登记文件发布资格。合成测试使用 `evidenceMode:'synthetic'` 及系统临时库，不能写入生产知识库。
 
 图表也可来自 Integrator 的真实 owned 输出：若其已审查 `visual_resources` 精确登记了图表路径、SHA-256、字节数以及父 PDF 的 `source_id`、`source_path`、`source_sha256`，发布接口会核对这些冻结字段与当前资源、登记 PDF 的对应关系。仅在临时目录找到图片或调用方另给一个哈希仍不足以入库；原候选和原审查不因此改写。
 
 既有 owned Integrator 使用 `resource_handoff.asset_mapping` 时，发布消费者也可直接读取该登记：`target_path` 对应图表目标，`source_path` 为源图片的绝对路径，`source_id`、`source_pdf_sha256` 对应原登记父 PDF，`sha256`、`byte_length` 对应图片字节。接口继续核对唯一匹配、实际源图片路径、父 PDF、候选图目录及字节；原 owned 产物、候选和审查保持原样。顶层 `visual_resources` 已存在时保留原消费路径。
 
-owned Integrator 使用 `visual_handoff.registered_resources` 时，消费者读取 `path`、图片绝对 `source_path`、图片 `sha256` 和 `byte_length`。父资源可由 `source_pdf` 与 `source_sha256`，或 `source_docx` 与 `source_docx_sha256` 精确指定；父哈希支持带 `sha256:` 前缀或64位十六进制。父路径必须为绝对路径，并与本次科学输入中唯一已登记来源的路径和哈希一致；显式 `source_id` 也须一致，缺省时只从该唯一匹配解析。原始父资源必须在 `resources` 中唯一绑定到 `Raw/` 目标，且当前字节仍与登记一致。DOCX 补图的来源继续绑定原 DOCX，单独的展示 PDF 必须具有自己的有效来源登记；已有原图登记和临时展示文件均不会自动授予该 PDF 发布资格。
+owned Integrator 使用 `visual_handoff.registered_resources` 时，消费者读取 `path`、图片绝对 `source_path`、图片 `sha256` 和 `byte_length`。父资源可由 `source_pdf` 与 `source_sha256`，或 `source_docx` 与 `source_docx_sha256` 精确指定；父哈希支持带 `sha256:` 前缀或64位十六进制。父路径必须为绝对路径，并与本次科学输入中唯一已登记来源的路径和哈希一致；显式 `source_id` 也须一致，缺省时只从该唯一匹配解析。新策略的原始父资源必须在 `resources` 中唯一绑定到 `Clippings/` 原件，且当前字节仍与登记一致；旧冻结来源仍可按原路径读取。DOCX 补图的来源继续绑定原 DOCX，单独的展示 PDF 必须具有自己的有效来源登记；已有原图登记和临时展示文件均不会自动授予该 PDF 发布资格。
 
-用户明确批准既有派生展示 PDF 的精确登记候选后，可向 `prepareReadingFirstPublication` 传入 `presentationAssetRegistrations`。每项为批准记录文件的 `{path, sha256, byte_length}`，路径为绝对路径。记录使用 `schema_version:'reading-first-presentation-asset-approval-1.0'`，包含实际 `authorization_id`、`user_reply`、`run_id`、已审 `presentation_fingerprint`、获批候选文件的 `approved_candidate:{path,sha256,byte_length}`、`resource:{path,source_path,sha256,byte_length}` 和 `scientific_parent:{source_id,path,sha256}`。获批候选须保存相同的 run_id、resource 和 scientific_parent。来源身份仍由原科学输入校验，PDF 必须是已审导航中的 Raw PDF 目标，且原始父文件也在精确清单中。
+用户明确批准既有派生展示 PDF 的精确登记候选后，可向 `prepareReadingFirstPublication` 传入 `presentationAssetRegistrations`。每项为批准记录文件的 `{path, sha256, byte_length}`，路径为绝对路径。记录使用 `schema_version:'reading-first-presentation-asset-approval-1.0'`，包含实际 `authorization_id`、`user_reply`、`run_id`、已审 `presentation_fingerprint`、获批候选文件的 `approved_candidate:{path,sha256,byte_length}`、`resource:{path,source_path,sha256,byte_length}` 和 `scientific_parent:{source_id,path,sha256}`。获批候选须保存相同的 run_id、resource 和 scientific_parent。来源身份仍由原科学输入校验，PDF 必须是已审导航中的已登记目标；新策略使用 Clippings 原件，原始父文件也须在精确清单中。
 
-接口读取并核对批准记录及候选原字节，将登记事实写入对应审阅资源的 `presentation_asset_registration` 和发布依赖哈希；两份记录文件纳入现有来源指纹及文件身份校验，并随 Controller 签名登记保留。记录变化会阻止后续注册或重载。该参数仅消费已有明确来源登记授权，不能代替用户决定；原科学输入、Writer、Editor、科学审查及其指纹保持。正式发布仍使用清单和两个精确哈希的单独批准。未传此参数的旧调用保留原行为。
+接口读取并核对批准记录及候选原字节，将登记事实写入对应审阅资源的 `presentation_asset_registration` 和发布依赖哈希；两份记录文件纳入现有来源指纹及文件身份校验，并随 Controller 签名登记保留。记录变化会阻止后续注册或重载。该参数仅消费已有明确来源登记授权，不能代替用户决定；原科学输入、Writer、Editor、科学审查及其指纹保持。已审候选获发布指令后，正式发布使用本轮清单及两个精确哈希登记批准。未传此参数的旧调用保留原行为。
 
 准备阶段校验原审查、文件与人工区域，列出本次批准的文件及目标，并生成必要登记与索引。新注册保存签名清单和本次输出的独立文件；这些文件用于直接完成或恢复本次复制，不包含上一代全库副本或整包重建配方。注册阶段不执行正式笔记写入。保留返回的 Controller trust anchor，跨进程读取时通过现有 `trustAnchor` 参数或 `APA_V3_PUBLICATION_TRUST_ANCHOR` 传递，不从待验证的注册文件自取信任锚。
 
@@ -50,7 +50,7 @@ owned Integrator 使用 `visual_handoff.registered_resources` 时，消费者读
 
 ## 并行阅读的共享节点变基
 
-每篇论文使用独立会话及 `runId`，完成后逐篇准备和批准发布。前一篇发布后，后一篇需重新准备发布审阅。如果共享节点在原候选渲染后变化，保留 `complete` 返回的原 `publication_source`，由 Controller 调用受控派生入口：
+每篇论文使用独立会话及 `runId`。前一篇发布后，后一篇基于最新代次准备发布清单。如果共享节点在原候选渲染后变化，一次发布入口保留 `complete` 返回的原 `publication_source`，调用既有受控派生入口：
 
 ```js
 import { deriveRebasedReadingFirstPublicationSource } from '../../scripts/v3/reading-first-publication.mjs';
@@ -62,30 +62,105 @@ const prepared = await prepareReadingFirstPublication({
 });
 ```
 
-入口使用当前已登记节点重新渲染，要求论文笔记逐字节不变、未受影响节点不变，并保留受影响节点当前全部可见正文。只允许替换内嵌知识状态及追加本篇已接受的内容；原候选新建与复用节点分别提取本篇段落、章节、公式、来源和别名进行确定性比较。重复段落的省略进入变基记录。该过程不派发模型、不增加审查轮次，也不改变调用账本。
+入口使用当前已登记节点重新渲染，要求论文科学正文、未受影响节点不变，并保留受影响节点当前全部可见正文。确定性身份映射可改变共享页目标及其直接对应的论文链接目标；其他论文文本保持原字节。只允许替换内嵌知识状态及追加本篇已接受的内容；原候选新建与复用节点分别提取本篇段落、章节、公式、来源和别名进行确定性比较。重复段落的省略、身份映射及链接变化进入变基记录。该过程不派发模型、不增加审查轮次，也不改变调用账本。
 
 外部宿主使用 `prepareExternalReviewedReadingFirstPublication` 时，可传入原候选的 `rendering:{targetRegistry,existingTargets,knowledgeRegistry}`；未传时按空登记渲染。接口从 owned 回执读取原 views 与 Editor，核对重算结果与原候选完全一致，再保存渲染输入。已有节点复用时须提供原登记内容，不能使用发布时的新正文代替原渲染底稿。
 
-原来源、原候选、原审查和候选目录保持原样。变基来源在原配方上附加 `knowledge_rebase`，绑定新的渲染底稿、候选和变基指纹。Controller 将记录及差异独占保存到本次运行的 `publication/rebase-<n>.json` 和 `rebase-<n>.diff.md`。用户审阅差异后，按新发布清单重新批准；批准后的目标再变化时停止写入，并从原来源重新派生。变基来源不能再次叠加派生。
+原来源、原候选、原审查和候选目录保持原样。变基来源在原配方上附加 `knowledge_rebase`，绑定新的渲染底稿、候选和变基指纹。一次发布入口将记录及差异保存到 `Eval/apa-v3/runs/<run>/publication/`。与原批准相比，只允许代次标识、保留当前正文的共享节点增补、确定性身份映射直接产生的目标及链接变化，以及必要的展示登记和索引变化，论文科学正文保持不变；规则通过后生成派生批准并直接写入，写入后报告受影响文件、新旧哈希及差异路径。其他变化先生成具体审阅，等待重新批准。后续目标再次变化时仍从同一冻结原来源重新派生，变基来源不叠加派生。
 
-原来复用的目标缺失、论文笔记因链接解析等原因变化、本篇内容不满足保留规则或当前可见正文无法保留时，入口拒绝变基并给出具体错误。不要手改候选或配方绕过校验。
+原来复用的目标缺失且无有效登记映射、论文出现身份映射范围以外的变化、本篇内容不满足保留规则或当前可见正文无法保留时，入口拒绝变基并给出具体错误。不要手改候选或配方绕过校验。
 
 变基注册在现行逐文件签名清单中额外保存本篇原来源及变基段。跨进程加载先验证原来源，再使用记录中的底稿重算变基候选，并与签名输出核对。重算不依赖后来变化的正式节点；正式写入前仍校验实际目标。普通注册继续沿用现行输出加载方式。
 
+**队列与批量批准**
+
+发布队列保存批准顺序、每篇原候选身份和原始精确清单、实际授权原话、事务身份及完成核验。用户对整批已审候选回复“全部发布”后，队列逐篇调用一次发布入口；写入始终串行。排到某篇时重新读取最新代次，执行确定性身份匹配、必要变基和 dry-run，再按上述差异范围判断。允许变化形成关联原批准的派生记录，写入后逐篇报告；其他变化保持待批准状态。
+
+后序候选的提前 dry-run 使用最新代次加前序候选的投影。投影只作提前检查，实际写入仍再次核对当前代次和目标。中断恢复从真实 owned 会话取得已审来源，并核对已保存事务和结果；已提交且核验完成的项目跳过，登记过但尚未完成的事务使用既有恢复入口。
+
+恢复时始终核对真实事务日志、原签名、批准与库根，结果文件本身不构成提交证明。尚未提交事务的维护窗口到期后，只有原批准允许恢复时，才派生绑定原事务 ID 的 15 分钟恢复窗口；该窗口不能用于 apply。恢复回滚后重新读取候选及当前代次，继续沿原队列批准范围准备。已经提交的事务补齐核验及回收记录后记为完成，崩溃留下的活跃运行引用继续按任务 8 的限定范围回收。
+
+队列保存在所选库的 `.runtime/apa-publication-queue/`。接口位于 `scripts/v3/reading-first-publication-queue.mjs`，命令入口为同目录的 `reading-first-publication-queue-cli.mjs`。`entries.json` 是按用户选定顺序排列的数组，每项包含 `run`、`runRoot`、`resources`，可指定 `generation` 和已有的 `presentationAssetRegistrations`。`resources` 沿用单篇发布格式。准备返回原始清单、前序投影检查和完整 proposal 指纹，批准参数绑定该指纹。
+
+```powershell
+node scripts/v3/reading-first-publication-queue-cli.mjs prepare --vault-root <vault-root> --entries <entries.json>
+node scripts/v3/reading-first-publication-queue-cli.mjs approve --vault-root <vault-root> --proposal <prepare-output.json> --proposal-sha256 <proposal-sha256> --authorization-id <authorization-id> --user-reply "全部发布"
+node scripts/v3/reading-first-publication-queue-cli.mjs drain --vault-root <vault-root>
+node scripts/v3/reading-first-publication-queue-cli.mjs status --vault-root <vault-root>
+```
+
+这些命令分担准备、保存批准和执行职责。用户已经明确要求“全部发布”时，助手在同一轮保存 prepare 的实际输出、展示摘要、绑定原话并继续 drain，不为相同范围追加确认。异常项目保留具体诊断；修订候选或超出允许差异后需要新的批准。
+
+**共享页合并维护**
+
+发布前的唯一精确、规范化名称、英文名和已登记别名命中可确定性复用。近似或多目标匹配与本地 BM25 候选合并，发布入口在该运行的 publication 目录保存定义对照草稿。主会话在发布当轮读取两页定义，保存合并、互链或保留建议及理由，并将待决建议告知用户。建议草稿不授权修改已有页，未确认时保留待决项并继续正常发布。
+
+已审候选原先唯一复用的目标后来变成多目标时，准备入口保留科学正文，生成带安全后缀的新建页精确清单、对应链接改写证明和待决定义对照，并标记 `review_required:true`。原批准不能自动覆盖这项变化；重新批准该精确清单后才写入，两个既有目标均保留。若新建路径又被占用，则报告冲突并保留当前文件。
+
+存量共享页合并的精确清单涵盖留存页增补、已登记正文的链接改指、别名登记、受影响展示清单及代次和索引。维护入口读取被合并页当前已登记的可见正文，保留定义、限定、公式、来源和论文应用链接。锚点重名时，入口为复制的锚点追加可区分的名称，并同步改指链接。被合并页退出当前登记后仍保留磁盘原文件，含原有人工区；删除须另行批准精确清理计划。原事务前像可用于准备补偿事务，经精确批准提交为新代次。
+
+**维护事务入口**
+
+为每次路径迁移、共享页合并或合并补偿选择独立的运行 ID，并显式传入目标库根目录。
+
+```powershell
+node scripts/v3/bilingual.mjs maintenance-review --vault-root <vault-root> --run <run-id> --mode <relocate|merge|compensate> --options <options.json>
+node scripts/v3/bilingual.mjs maintenance-apply --vault-root <vault-root> --run <run-id> --inventory-sha256 <inventory-sha256> --authorization-id <authorization-id> --user-reply "批准"
+```
+
+`options.json` 可指定 `generation`，默认使用运行 ID。其余字段随模式变化：
+
+| 模式 | 结构化选项 |
+| --- | --- |
+| `relocate` | `papers` 为 `{paperId, sourceLanguage}` 数组。`assetMappings` 为 `{old_path, new_path, sha256, byte_length, source_id?}` 数组。可用 `assetRetirements` 指定退出登记的 `{path, sha256, byte_length}`，或用 `restoreAssetRetirements` 列出恢复登记的路径。 |
+| `merge` | `merges` 为 `{keep_path, remove_paths, aliases?, anchors?, expected_inputs?}` 数组。`anchors` 按被合并页路径给出旧锚点到留存页锚点的映射。`expected_inputs` 为 `{path, sha256, byte_length}` 数组，可固定所选页面版本。 |
+| `compensate` | `transactionId` 为原合并事务 ID。原合并已被后续代次替代时，`trustAnchor` 使用原控制器提供并单独保存的公钥信任锚。路径迁移的反向操作沿用 `relocate` 及明确的反向映射。 |
+
+审阅命令在 `Eval/apa-v3/runs/<run-id>/publication/candidate/` 保存精确清单、审阅和用于重建的选项。检查 `INVENTORY.md` 中的新建、覆盖、删除数与路径，以及 `review_hash` 和 `output_inventory_hash`。用户对这份清单明确批准后，把 `INVENTORY.json` 的 SHA-256、批准 ID 和实际回复传给执行命令。执行入口在同一进程重建审阅并试算，清单内容或哈希发生变化时停止。核对通过后，入口保存批准和固定 15 分钟维护窗口，登记、执行，并在 `publication/` 下保存 `RESULT.md` 和 `VERIFICATION.json`。
+
+执行入口在写入事务前向 stderr 发出 `maintenance-registered` 事件，包含事务 ID 和公钥信任锚。把这两项与可信调用记录一并保存。中断时用原信任锚设置 `APA_V3_PUBLICATION_TRUST_ANCHOR`，并运行既有 `bilingual.mjs recover --vault-root <vault-root> --run <run-id> --transaction-id <transaction-id>`。恢复按现有事务状态核验已提交结果或回滚前像。需要再次执行时，先核对恢复结果，再用新运行 ID 准备清单及取得新批准。
+
 ## 审阅、批准与事务
 
-新配置化运行冻结 `current-shared-nodes-1.0`。发布准备保留无关正式笔记的当前修改，仅对实际读取依赖及写入目标绑定指纹；共享节点增补保留当前正文。复用节点在候选渲染后发生变化时，发布准备要求刷新候选；批准后写入目标变化时停止覆盖并重新展示差异。新发布取消完整旧代快照，只为实际覆盖的目标保存原文件；原文件的个人区继续保留，人工修改内容不会取得旧科学审查的含义。旧冻结记录及已有历史来源仍可沿原合同读取。
+新配置化运行冻结 `current-shared-nodes-1.0`。发布准备保留无关正式笔记的当前修改，仅对实际读取依赖及写入目标绑定指纹；共享节点增补保留当前正文。复用节点在候选渲染后发生变化时，由受控变基保留当前正文后重新 dry-run；批准后发生的允许差异沿派生批准写入并报告。只为实际覆盖的目标保存原文件；原文件的个人区继续保留，人工修改内容不会取得旧科学审查的含义。旧冻结记录及已有历史来源仍可沿原合同读取。
 
 审阅返回的完整文件清单、`review_hash` 与 `output_inventory_hash`。共享知识的新建和增补、原始资源的新增，以及保留的人工内容都应能在这份清单中核对。已存在的知识节点沿用稳定身份和路径，两语论文共用同一节点。
 
-实际写入沿用 `registerBilingualPublication`、`applyBilingualPublication` 与 `recoverBilingualPublication` 的现有批准记录、维护窗口和两个精确哈希。没有批准时，`review` 和 `dry-run` 可用于检查，`apply` 拒绝执行。当前 CLI 不承担论文模型派遣，也不接受随意的候选 JSON 作为已注册运行。
+用户对已审候选回复“发布”，即批准本轮由该候选生成的精确清单。`publishReadingFirstCandidate` 先准备并 dry-run，通过 `onPrepared` 展示新建、增补、覆盖的文件数、目标路径及两个哈希，然后在同一轮登记批准并执行受控事务。批准记录保留用户原话、`authorization_id`、`review_hash`、`output_inventory_hash` 和清单路径，维护窗口固定为 15 分钟。底层校验同时拒绝超过 60 分钟的窗口。
+
+```js
+import { publishReadingFirstCandidate } from '../../scripts/v3/reading-first-publish.mjs';
+
+const result = await publishReadingFirstCandidate({
+  source, vaultRoot, generation, resources, evidenceMode: 'actual',
+  authorization: { authorization_id: authorizationId, user_reply: userReply },
+  onPrepared: async summary => showPublicationSummary(summary),
+});
+```
+
+允许本篇论文笔记、经当前正文与人工内容保留核验的共享页增补、新增资产，以及必要的展示清单和代次登记文件。本篇笔记被人工修改、出现额外覆盖或删除、变基不能保留当前正文、差异超出允许规则或 dry-run 失败时，入口只保留具体审阅和诊断，正式库零写入。
+
+原批准、维护窗口、清单、派生批准、变基差异、`RESULT.md` 与 `VERIFICATION.json` 均写入 `Eval/apa-v3/runs/<run>/publication/`。已有成功清单后重建时，派生批准绑定原批准文件及原、新两组哈希和变基记录。若首次准备因共享页漂移而失败，尚不存在旧发布审阅哈希；入口先保存原来源、原候选及科学审查指纹，再对首个实际成功生成的清单登记批准。
+
+实际写入继续调用 `registerBilingualPublication`、`applyBilingualPublication` 与 `recoverBilingualPublication`。原有两步 API 和 CLI 保持兼容；没有发布授权时，`review` 和 `dry-run` 可用于检查，`apply` 拒绝执行。发布命令只读取已完成的 owned 会话来取得真实已审来源，不派发论文角色，不接受任意 JSON 冒充已审 source。
 
 ```powershell
 node scripts/v3/bilingual.mjs review --vault-root <vault-root> --run <run> --profile reading-first-obsidian-1.0
 node scripts/v3/bilingual.mjs dry-run --vault-root <vault-root> --run <run> --profile reading-first-obsidian-1.0
+node scripts/v3/bilingual.mjs publish --vault-root <vault-root> --run <run> --run-root <owned-run-root> --generation <generation> --resources <resources.json> --authorization-id <authorization-id> --user-reply "发布"
 ```
 
-具体批准字段及恢复参数以 [发布 API](../../scripts/v3/phase22-publication.mjs) 与 [CLI](../../scripts/v3/bilingual.mjs) 为准。更换来源、改动审阅内容或出现并发文件变化后，原批准不再对应新输出；应重新准备并核对实际差异，不改旧回执或跳过检查。
+具体批准字段及恢复参数以[一次发布入口](../../scripts/v3/reading-first-publish.mjs)、[发布 API](../../scripts/v3/phase22-publication.mjs) 与 [CLI](../../scripts/v3/bilingual.mjs) 为准。`publish` 向 stderr 展示摘要，向 stdout 输出最终 JSON。更换来源或改动论文科学内容须重新批准；共享正文和代次变化按上述规则生成派生批准，原回执保持不变。
+
+**来源位置与副本处理**
+
+新配置冻结 `configured_setup.source_policy:'clippings-originals-1.0'`，科学来源保存 `Clippings/` 原件的绝对路径，笔记与清单使用库内相对路径。目录外输入在准备阶段复制到 `Clippings/`，保留原文件名；同名不同字节时停止并报告冲突。配置保存本身不复制文献。已有冻结记录保持原路径和指纹。
+
+新运行准备和每次发布检查 `Raw/` 与 `Clippings/` 的同文献线索。同字节匹配可用于确定性改指本篇链接，并绑定路径、SHA-256 和字节数；原已审科学正文及回执保持原样。只有 DOI、题名或文件名相近而字节不同的结果保留为待确认提示。其他已提交论文的引用改指先准备独立迁移清单，经批准的事务执行；旧 Raw 副本单列清理候选，发布入口不删除文件。
+
+已登记的 Clippings 来源是长期资产。缺失或字节变化时，发布提前报告登记路径、登记哈希、当前状态、同字节候选位置及迁移入口。恢复位置必须通过库路径迁移更新登记和链接，不能只改某篇笔记绕过资产校验。迁移后的 `path_migration.assets` 保存旧路径、新路径、SHA-256、字节数及来源身份，引用修正据此核对冻结图目录与当前位置；旧图目录、旧展示清单和运行记录保留原字节。
+
+发布结果列出本次新存入 Raw 的已采用 AI 补充文献，包括路径、题名、DOI（未取得时为 null）、追溯原因及引用笔记。未被已接受补缺记录采用的来源不能获得 Raw 写入权限。
 
 ## 发布后的索引与图谱
 

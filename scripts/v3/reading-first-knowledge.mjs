@@ -1,6 +1,8 @@
 import path from 'node:path';
 import MarkdownIt from 'markdown-it';
 import YAML from 'yaml';
+import { createLibraryBm25 } from '../lib/query-terms.mjs';
+import { fingerprintV3Json } from './semantic-package-validator.mjs';
 
 const languages = ['zh-CN', 'en'];
 const normalized = value => typeof value === 'string' ? value.normalize('NFC').trim().toLowerCase() : '';
@@ -73,16 +75,91 @@ function priorVisibleTargets(region, target, applications) {
   });
 }
 
-/** Names discover candidates; only registry identity keys confirm a reusable path. */
-export function matchReadingFirstKnowledgeIdentity({ item, knowledgeRegistry, vaultPath }) {
+function matchLegacyIdentity({ item, knowledgeRegistry, vaultPath }) {
   const stableKeys = new Set([item.id, item.canonical_key].map(normalized).filter(Boolean));
   const nameKeys = new Set([...names(item.title), ...(item.aliases ?? [])].map(normalized).filter(Boolean));
   const stableMatches = knowledgeRegistry.filter(row => [row.id, row.canonical_key].some(value => stableKeys.has(normalized(value))));
   const matches = stableMatches.length ? stableMatches : knowledgeRegistry.filter(row => [...names(row.title), ...(row.aliases ?? [])].some(value => nameKeys.has(normalized(value))));
   const paths = [...new Set(matches.map(row => vaultPath(row.canonical_path ?? row.path)))];
   if (paths.length > 1) fail('RF_OBSIDIAN_KNOWLEDGE_AMBIGUOUS');
-  if (matches.length && !stableMatches.length) fail('RF_OBSIDIAN_KNOWLEDGE_IDENTITY_UNRESOLVED');
+  if (matches.length && !stableMatches.length) {
+    const code = 'RF_OBSIDIAN_KNOWLEDGE_IDENTITY_UNRESOLVED';
+    throw Object.assign(new Error(code), { code, path: paths[0] });
+  }
   return { matches, paths };
+}
+
+export const normalizeKnowledgeName = value => typeof value === 'string'
+  ? value.normalize('NFKC').toLowerCase().replace(/[\p{White_Space}\p{P}]/gu, '') : '';
+const knowledgeDirectory = item => `Wiki/${item.kind === 'method' ? 'methods' : 'concepts'}/`;
+const eligibleRows = (item, registry) => registry.filter(row => (row.canonical_path ?? row.path)?.startsWith(knowledgeDirectory(item)));
+const localNames = row => [row.title_zh, typeof row.title === 'string' ? row.title : row.title?.['zh-CN']];
+const englishNames = row => [row.title_en, typeof row.title === 'string' && !/\p{Script=Han}/u.test(row.title) ? row.title : row.title?.en];
+
+/** Stronger levels take precedence. A tie at the strongest matched level stays a draft. */
+export function matchReadingFirstKnowledgeIdentity({ item, knowledgeRegistry, vaultPath = value => value, legacy = false }) {
+  if (legacy) return matchLegacyIdentity({ item, knowledgeRegistry, vaultPath });
+  const rows = eligibleRows(item, knowledgeRegistry);
+  const exact = value => typeof value === 'string' ? value.normalize('NFC').trim() : '';
+  const overlap = (left, right, normalize) => {
+    const keys = new Set(left.map(normalize).filter(Boolean));
+    return right.some(value => keys.has(normalize(value)));
+  };
+  const itemNames = [...names(item.title), ...(item.aliases ?? [])];
+  const stableKeys = [item.id, item.canonical_key];
+  const tiers = [
+    ['stable', row => item.canonical_key && row.canonical_key
+      ? normalized(item.canonical_key) === normalized(row.canonical_key)
+      : overlap(stableKeys, [row.id, row.canonical_key], normalized)],
+    ['exact', row => overlap(localNames(item), localNames(row), exact)],
+    ['normalized', row => overlap(localNames(item), localNames(row), normalizeKnowledgeName)],
+    ['english', row => overlap(englishNames(item), englishNames(row), normalizeKnowledgeName)],
+    ['alias', row => overlap(itemNames, row.registered_aliases ?? [], normalizeKnowledgeName)
+      || overlap([item.canonical_key ?? item.id], row.registered_aliases ?? [], normalized)],
+  ];
+  for (const [tier, compare] of tiers) {
+    const matches = rows.filter(compare);
+    const paths = [...new Set(matches.map(row => vaultPath(row.canonical_path ?? row.path)))].sort();
+    if (paths.length > 1) return { tier, matches: [], paths: [], ambiguous_paths: paths };
+    if (paths.length === 1) return { tier, matches, paths };
+  }
+  const candidates = rows.filter(row => overlap(itemNames, row.aliases ?? [], normalizeKnowledgeName)
+    || overlap(item.aliases ?? [], names(row.title), normalizeKnowledgeName));
+  return { matches: [], paths: [], candidate_paths: [...new Set(candidates.map(row => vaultPath(row.canonical_path ?? row.path)))].sort() };
+}
+
+const definitionsForItem = item => languages.map(language => item.paragraphs?.[language]?.[0]).filter(Boolean);
+function definitionIndex(registry, item, indexes) {
+  if (!indexes.has(item.kind)) {
+    const rows = eligibleRows(item, registry).filter(row => !row.unavailable && Array.isArray(row.definitions) && row.definitions.length);
+    const search = createLibraryBm25(rows.map(row => ({ id: row.path, content: row.definitions.join(' ') })));
+    indexes.set(item.kind, search);
+  }
+  return indexes.get(item.kind);
+}
+
+/** Local BM25 over the registered definition paragraphs. Results only suggest comparisons. */
+export function draftReadingFirstKnowledgeComparisons({ item, knowledgeRegistry, match, target, indexes = new Map() }) {
+  if (match.paths.length) return [];
+  const definition = definitionsForItem(item);
+  const index = definitionIndex(knowledgeRegistry, item, indexes);
+  const search = index.search(definition.join(' '), { combineWith: 'OR' });
+  const pairs = new Map([
+    ...(match.candidate_paths ?? []).map(path => [path, { reasons: ['display-alias'] }]),
+    ...(match.ambiguous_paths ?? []).map(path => [path, { reasons: ['multiple-' + match.tier] }]),
+  ]);
+  for (const hit of search.filter(row => row.terms.filter(term => [...term].length > 1).length >= 2).slice(0, 3)) {
+    const pair = pairs.get(hit.id) ?? { reasons: [] };
+    pair.reasons.push('definition-bm25');
+    pair.bm25_score = hit.score;
+    pairs.set(hit.id, pair);
+  }
+  return [...pairs].map(([path, pair]) => {
+    const row = knowledgeRegistry.find(row => (row.canonical_path ?? row.path) === path);
+    return { status: 'draft', knowledge_id: item.id, candidate_path: target, registered_path: path,
+      candidate_definition: definition, registered_definition: row?.definitions ?? [],
+      ...(row?.content_sha256 ? { registered_sha256: row.content_sha256 } : {}), ...pair };
+  });
 }
 
 // A confirmed existing node keeps its committed content; each paper contributes one
@@ -115,12 +192,16 @@ function additionSections(addition, language) {
 }
 
 /** One generic identity produces one bilingual candidate; formal registry bytes are never mutated. */
-export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, paperId, paperTitle, vaultPath, href, resolveReferences = value => value }) {
-  const { matches, paths } = matchReadingFirstKnowledgeIdentity({ item, knowledgeRegistry, vaultPath });
-  const directory = `Wiki/${item.kind === 'method' ? 'methods' : 'concepts'}/`;
+export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, paperId, paperTitle, vaultPath, href, resolveReferences = value => value, identityMatch }) {
+  const match = identityMatch ?? matchReadingFirstKnowledgeIdentity({ item, knowledgeRegistry, vaultPath });
+  const { matches, paths } = match;
+  const directory = knowledgeDirectory(item);
   const filename = item.title['zh-CN'].normalize('NFC');
   if (!paths.length && (!text(filename) || /[\x00-\x1f\x7f<>:"/\\|?*#%\[\]^]/.test(filename) || /[. ]$/.test(filename))) fail('RF_OBSIDIAN_KNOWLEDGE_INVALID');
-  const target = paths[0] ?? `${directory}${filename}.md`;
+  const fallback = `${directory}${filename}.md`;
+  const occupies = knowledgeRegistry.some(row => (row.canonical_path ?? row.path)?.normalize('NFC').toLowerCase() === fallback.toLowerCase());
+  const suffix = fingerprintV3Json({ id: item.id, canonical_key: item.canonical_key ?? item.id }).slice(-12);
+  const target = paths[0] ?? (occupies ? `${directory}${filename}--${suffix}.md` : fallback);
   if (!target.startsWith(directory)) fail('RF_OBSIDIAN_KNOWLEDGE_INVALID');
   const originals = [...new Set(matches.filter(row => (row.path === target || row.canonical_path === target) && row.content !== undefined).map(row => row.content))];
   if (originals.some(value => typeof value !== 'string') || originals.length > 1) fail('RF_OBSIDIAN_KNOWLEDGE_AMBIGUOUS');
@@ -219,17 +300,18 @@ export function extractOwnKnowledge({ content, paperId, item, mode }) {
   };
 }
 
-/** A rebase may only drop paragraphs already present in the new base. */
-export function compareOwnKnowledge({ original, rebased, existing, path }) {
+/** A rebase may drop paragraphs already in the new base or restore old-base duplicates on a new page. */
+export function compareOwnKnowledge({ original, rebased, existing, originalExisting, path }) {
   const missing = [];
   const dropped = [];
   const base = existing?.node ?? existing?.item ?? existing ?? {};
   const node = rebased.node;
   for (const language of languages) {
-    const known = new Set([...(base.paragraphs?.[language] ?? []),
-      ...(base.sections?.[language] ?? []).flatMap(section => section.paragraphs),
-      ...(base.paper_additions ?? []).flatMap(addition => [...(addition.paragraphs?.[language] ?? []),
+    const knownParagraphs = value => new Set([...(value.paragraphs?.[language] ?? []),
+      ...(value.sections?.[language] ?? []).flatMap(section => section.paragraphs),
+      ...(value.paper_additions ?? []).flatMap(addition => [...(addition.paragraphs?.[language] ?? []),
         ...(addition.sections?.[language] ?? []).flatMap(section => section.paragraphs)])].map(normalized));
+    const known = knownParagraphs(base), prior = knownParagraphs(originalExisting?.node ?? {});
     const groups = value => [{ heading: null, paragraphs: value.paragraphs?.[language] ?? [] }, ...(value.sections?.[language] ?? [])];
     const before = groups(original), after = groups(rebased);
     for (const group of before) for (const paragraph of group.paragraphs) {
@@ -238,7 +320,7 @@ export function compareOwnKnowledge({ original, rebased, existing, path }) {
       else missing.push({ kind: group.heading === null ? 'paragraph' : 'section', language, section: group.heading, paragraph });
     }
     for (const group of after) for (const paragraph of group.paragraphs) {
-      if (!before.some(other => other.heading === group.heading && other.paragraphs.some(value => normalized(value) === normalized(paragraph)))) missing.push({ kind: 'unexpected_paragraph', language, section: group.heading, paragraph });
+      if (!prior.has(normalized(paragraph)) && !before.some(other => other.heading === group.heading && other.paragraphs.some(value => normalized(value) === normalized(paragraph)))) missing.push({ kind: 'unexpected_paragraph', language, section: group.heading, paragraph });
     }
   }
   for (const formula of original.formulas) {

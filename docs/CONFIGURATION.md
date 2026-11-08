@@ -20,6 +20,8 @@ README 负责安装、使用和更新说明；`academic-paper-analysis` 负责�
 
 新运行冻结配置指纹、模型/强度、路径、解析器选择及写作指导内容/哈希。“跟随主会话”取创建时设置，不在运行中动态切换。旧任务从原检查点恢复，不重读个人配置替换绑定。
 
+新阅读会话同时绑定 `.runtime/apa-code/<哈希>/` 中的内容寻址快照。会话入口明确传入用户选定的库根目录，运行数据、来源和个人配置都留在该库。配置保存与源码更新仅供后续新运行消费；在途运行如需采用代码修复，按运行的旧指纹、新指纹、检查点和测试证据取得重绑批准，再由新进程恢复。详见 [会话接口](apa-v3/reading-session.md)。
+
 Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: {model, effort}`（也接受 `reasoning_effort`），由 `prepareConfiguredReading` 冻结主会话。若同时提供 `mainSession` 且两者不一致，入口拒绝；保留原显式 `mainSession` API 的兼容性。科学角色显式选择 medium 并不表示主会话也是 medium。例如主会话 xhigh、科学角色显式 medium、Writer follow-main 时，Writer 应解析为 xhigh。
 
 派遣前使用 `getConfiguredReadingDispatchArguments({prepared,request})`，将返回参数原样传给 `host_action_scope.action` 指定的工具。配置含 `host` 段时，新运行冻结该段，派发工具和参数名按其生成（例如 Claude Code 的 `Agent` 用 `model`、`effort`、`prompt`、`description`）；没有 `host` 段时保持 Codex 的 `collaboration.spawn_agent`，参数为 model、reasoning_effort、`fork_turns:'none'` 和任务正文。任务未收到正文时，先保留失败并定位传输，不改成全上下文继承，也不通过省略参数使用宿主默认值。
@@ -136,6 +138,8 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 node scripts/v3/bilingual.mjs review --vault-root <vault-root> --run <run> --profile reading-first-obsidian-1.0
 node scripts/v3/bilingual.mjs dry-run --vault-root <vault-root> --run <run> --profile reading-first-obsidian-1.0
 ```
+
+批次审阅后，可对精确提案回复“全部发布”。队列按原批准顺序调用同一发布入口；每篇以最新代次重新核对共享节点和写入清单。允许的变基差异以派生批准记录关联原批准，其余差异等待重新批准。队列恢复先核对实际事务。详见 [发布队列](apa-v3/reading-first-publication.md)。
 
 显式全局修复时，命令启动器备份在原文件旁，后缀为 `.backup-<timestamp>`。本库配置保存不创建这些全局备份。
 

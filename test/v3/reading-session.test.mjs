@@ -1,6 +1,6 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, unlink } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, writeFile, readFile, readdir, rename, rm, symlink, unlink } from 'node:fs/promises';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +15,9 @@ import { readingFirstViewsFingerprint } from '../../scripts/v3/reading-first-edi
 import { buildReadingSessionTasks } from '../../scripts/v3/reading-session-tasks.mjs';
 import { createReadingSession, resumeReadingSession, nextReadingAction as nextAction, recordReadingEvent } from '../../scripts/v3/reading-session.mjs';
 import { reviewedReadingFirstFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
+import { applyReadingFirstFixture, readingFirstPublicationFixture } from './helpers/reading-first-publication-fixtures.mjs';
+import { applyBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
+import { publishReadingFirstCandidate } from '../../scripts/v3/reading-first-publish.mjs';
 import { readingFirstIndexFixture } from './helpers/reading-first-index-fixtures.mjs';
 import { writeTranslationProgress } from '../../scripts/v3/reading-translation-progress.mjs';
 
@@ -33,6 +36,13 @@ const withEvidence = observation => {
 const observe = (action, handle = 'host-' + action.action_id) => withEvidence({ action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port,
   tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: JSON.stringify({ agent_id: handle }) });
 
+const configuredSessionTemplate = async t => {
+  const fixture = await reviewedReadingFirstFixture(t, {
+    figurePath: 'Figures/run/figure.png', controlOptions: { presentationProfile: 'reading-editor-1.3' },
+  });
+  return { ...fixture, presentationCatalog: { ...fixture.presentationCatalog, source_pdf: 'Clippings/paper.pdf' } };
+};
+
 // 2.2 Results register a resource manifest and Integration hands off the matching visuals.
 async function scienceOutputs(f, catalog) {
   const runRoot = join(f.root, 'runs', 'run'), resourceRoot = join(runRoot, 'resources', 'results'), source = f.options.scientificInput.sources[0];
@@ -40,7 +50,7 @@ async function scienceOutputs(f, catalog) {
   const image = Buffer.from('synthetic figure'), imagePath = join(resourceRoot, 'figure.png'); await writeFile(imagePath, image);
   const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
   const presentation = catalog ? structuredClone(catalog) : { visuals: [] };
-  presentation.sources = [{ id: source.id, path: catalog?.source_pdf ?? 'Raw/paper.pdf', kind: 'main' }];
+  presentation.sources = [{ id: source.id, path: 'Clippings/paper.pdf', kind: 'main' }];
   presentation.visuals = presentation.visuals.map(visual => ({ ...visual, source_id: source.id, locator: { kind: 'pdf-page', page: 1 } }));
   const rows = presentation.visuals.map(visual => ({ id: visual.id, path: visual.path, source_id: source.id, source_path: imagePath, sha256: sha(image), byte_length: image.length, parent: source, locator: visual.locator }));
   const manifest = Buffer.from(JSON.stringify({ version: 'reading-resources-1.0', resources: rows }));
@@ -88,7 +98,7 @@ test('unsupported continuation spends no budget and retired bindings are refused
 });
 
 for (const retries of [1,2]) test('translation continuation preserves completed fragments and projects '+retries+' observed calls',async t=>{
-  const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
+  const f = await configuredFixture(t), template = await configuredSessionTemplate(t);
   f.profile.capabilities = { task_continuation: continuationCapability() };
   let session = await createReadingSession({ ...f.options, maxTotalCalls:14 });
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
@@ -189,11 +199,12 @@ test('session requires explicit source and authorization and rejects nonexistent
   await assert.rejects(() => resumeReadingSession({ runRoot: '' }), /READING_SESSION_ROOT_INVALID/);
 });
 
-async function configuredFixture(t) {
-  const base = join(process.cwd(), '.tmp', 'apa-session-enrichment-20261030');
+async function configuredFixture(t, { systemTemp = false } = {}) {
+  const base = systemTemp ? tmpdir() : join(process.cwd(), '.tmp', 'apa-session-enrichment-20261030');
   await mkdir(base, { recursive: true });
   const root = await mkdtemp(join(base, 'session-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));
+  if (systemTemp) await symlink(join(process.cwd(), 'node_modules'), join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
   await mkdir(join(root, 'config'), { recursive: true });
   const parser = join(root, 'mineru'), bin = join(parser, 'venv', process.platform === 'win32' ? 'Scripts' : 'bin');
   await mkdir(bin, { recursive: true });
@@ -204,13 +215,33 @@ async function configuredFixture(t) {
   const choice = { mode: 'explicit', model: 'm', reasoning_effort: 'high' };
   const config = { schema_version: 'apa-local-config-1.0', models: { science: choice, overrides: {}, roles: Object.fromEntries(['english-writer', 'chinese-writer', 'translation', 'reading-editor', 'independent-verifier'].map(role => [role, choice])) }, paths: { runs: 'runs', parse: 'parse', candidates: 'candidates' }, parser: { runtime_home: parser }, reading: { source_language: 'en', presentation_mode: 'reading-editor' }, writing_skills: Object.fromEntries(['nature-writing', 'nature-polishing', 'nature-shared', 'humanizer', 'humanizer-zh', 'stss'].map(key => [key, { enabled: false }])), host: { name: profile.host, dispatch } };
   await writeFile(join(root, 'config', 'apa.local.json'), JSON.stringify(config));
-  const bytes = Buffer.from('synthetic source'), source = join(root, 'paper.pdf'); await writeFile(source, bytes);
+  await mkdir(join(root, 'Clippings'));
+  const bytes = Buffer.from('synthetic source'), source = join(root, 'Clippings', 'paper.pdf'); await writeFile(source, bytes);
   const scientificInput = { profile: 'reading-first-1.0', identity: { run_id: 'run', paper_id: 'pap_' + 'a'.repeat(32) }, sources: [{ id: 'paper', path: source, sha256: 'sha256:' + createHash('sha256').update(bytes).digest('hex'), byte_length: bytes.length }], context: 'synthetic', role_artifacts: ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'] };
   const evidence = { current_host: { name: profile.host, reference: 'test session' }, dispatch: { source: 'tool-schema', tool: 'Agent', reference: 'test schema' }, fresh_context: { source: 'host-docs', reference: 'test host docs', blank_context: true }, file_read: { status: 'pass', reference: 'test read' }, input: { status: 'pass', reference: 'test source and parser' } };
   const observedTool = { status: 'pass', source: 'tool-declaration', reference: 'synthetic', method: 'synthetic declaration', observation: 'declared available' };
   evidence.results_tools = { python: { ...observedTool, path: join(bin, process.platform === 'win32' ? 'python.exe' : 'python') }, libraries: { ...observedTool, names: ['fitz'] }, visual_read: observedTool, file_read: observedTool };
   return { root, profile, evidence, options: { repoRoot: root, runId: 'run', scientificInput, sourceLanguage: 'en', instructionProfile: 'configured-reading-2.2', authorizationId: 'test', deadline: '2099-01-01T00:00:00Z', maxCalls: 8, maxTotalCalls: 14, sessionContext: { model: 'm', effort: 'high' }, hostProfile: profile, evidence, includeRepairs: true } };
 }
+
+test('session summary exposes source matches from preparation and after recovery', async t => {
+  const f = await configuredFixture(t, { systemTemp: true });
+  const raw = join(f.root, 'Raw');
+  await mkdir(join(raw, 'possible'), { recursive: true });
+  await copyFile(f.options.scientificInput.sources[0].path, join(raw, 'same-bytes.pdf'));
+  await writeFile(join(raw, 'possible', 'paper.pdf'), 'different source bytes');
+  const session = await createReadingSession(f.options);
+  const first = (await nextReadingAction(session)).summary;
+  const resumed = await resumeReadingSession({ runRoot: join(f.root, 'runs', 'run') });
+  const recovered = (await nextReadingAction(resumed)).summary;
+  const matches = first.raw_source_matches;
+  assert.equal(matches.exact_count, 1);
+  assert.equal(matches.exact_examples[0].raw_path, 'Raw/same-bytes.pdf');
+  assert.equal(matches.possible_count, 1);
+  assert.equal(matches.possible_examples[0].basis, 'filename');
+  assert.deepEqual(recovered.raw_source_matches, matches);
+  for (const summary of [first, recovered]) assert.ok(Buffer.byteLength(JSON.stringify(summary), 'utf8') <= 8192);
+});
 
 test('science intent survives recovery and is never automatically dispatched twice', async t => {
   const f = await configuredFixture(t);
@@ -257,8 +288,11 @@ test('resumed preflight uses the frozen host and verifies the current main sessi
 });
 
 test('synthetic host runs both drafts, editor, candidate and review through the session', async t => {
-  const f = await configuredFixture(t);
-  const template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
+  const f = await configuredFixture(t, { systemTemp: true });
+  const earlier = await readingFirstPublicationFixture(t, { vaultRoot: f.root, evidenceMode: 'actual', generation: 'prior-one-step-cli',
+    runId: 'run_' + 'c'.repeat(32), paperId: 'pap_' + 'c'.repeat(32) });
+  assert.equal((await applyBilingualPublication(applyReadingFirstFixture(earlier))).status, 'committed');
+  const template = await configuredSessionTemplate(t);
   let session = await createReadingSession(f.options);
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, nativePath, value) => {
@@ -329,6 +363,39 @@ test('synthetic host runs both drafts, editor, candidate and review through the 
   session = await resumeReadingSession({ runRoot });
   await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
   assert.equal((await nextReadingAction(session)).status, 'reading_complete');
+  const sharedPath = join(f.root, earlier.candidate.supportNotes[0].path);
+  const oldShared = await readFile(sharedPath, 'utf8');
+  await writeFile(sharedPath, oldShared.replace('<!-- AUTO:END shared-knowledge -->',
+    'Retain this in-region edit.\n<!-- AUTO:END shared-knowledge -->') + '\nRetain this personal addition.\n');
+  const original = await inspectReadingFirstPublicationSource(done.publication_source);
+  const resourceFile = join(f.root, 'one-step-resources.json');
+  await writeFile(resourceFile, JSON.stringify([
+    { path: original.presentation.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length },
+    ...original.results_resource_manifest.resources.map(({ path, source_path, sha256, byte_length }) => ({ path, source_path, sha256, byte_length })),
+  ]));
+  const staging = join(f.root, '.tmp', 'reading-first-candidates'), before = (await readdir(staging)).sort();
+  assert.ok(before.length > 0);
+  const unrelated = join(staging, 'unowned-fixture');
+  await mkdir(unrelated);
+  await writeFile(join(unrelated, 'keep.txt'), 'unrelated bytes');
+  const controlRoot = join(runRoot, 'control');
+  const snapshots = async () => Promise.all((await readdir(controlRoot)).sort().map(async name => [name, await readFile(join(controlRoot, name))]));
+  const controlBefore = await snapshots();
+  const cli = fileURLToPath(new URL('../../scripts/v3/bilingual.mjs', import.meta.url));
+  const { stdout, stderr } = await promisify(execFile)(process.execPath, [cli, 'publish', '--vault-root', f.root, '--run', 'run',
+    '--run-root', runRoot, '--generation', 'one-step-cli', '--resources', resourceFile,
+    '--authorization-id', 'owned-session-cli', '--user-reply', '发布']);
+  const published = JSON.parse(stdout);
+  assert.equal(published.status, 'committed', stdout);
+  assert.equal(JSON.parse(stderr).event, 'publication-inventory');
+  assert.equal((await readFile(published.rebase_record_path, 'utf8')).includes(original.recipe.recipe_fingerprint), true);
+  assert.deepEqual(await readdir(staging), ['unowned-fixture']);
+  assert.equal(await readFile(join(unrelated, 'keep.txt'), 'utf8'), 'unrelated bytes');
+  assert.ok(before.every(name => published.runtime_cleanup.removed.some(path => path.startsWith(`.tmp/reading-first-candidates/${name}/`))));
+  assert.ok(published.runtime_cleanup.archives.some(item => item.kind === 'reading-host-record'));
+  assert.deepEqual(await snapshots(), controlBefore);
+  assert.match(await readFile(sharedPath, 'utf8'), /Retain this in-region edit/);
+  assert.match(await readFile(sharedPath, 'utf8'), /Retain this personal addition/);
 });
 
 test('synthetic science completes in dependency order and restores the pending writer', async t => {
@@ -356,7 +423,7 @@ test('synthetic science completes in dependency order and restores the pending w
 });
 
 test('accepted result with failed checkpoint remains recoverable without redispatch', async t => {
-  const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
+  const f = await configuredFixture(t), template = await configuredSessionTemplate(t);
   let session = await createReadingSession(f.options);
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   for (let i = 0; i < 6; i++) {
@@ -509,7 +576,7 @@ test('control slot exhaustion blocks dispatch without changing the model-call bu
 });
 
 test('material editor issue receives one bounded repair and a second candidate', async t => {
-  const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
+  const f = await configuredFixture(t), template = await configuredSessionTemplate(t);
   let session = await createReadingSession(f.options);
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, path, value) => {
@@ -545,7 +612,7 @@ test('material editor issue receives one bounded repair and a second candidate',
 
 for (const scenario of ['wording','scientific','scientific-short','retain','number','unit','citation','figure','markdown-label','wikilink-label','age-unit','writer-fact','renderer-fact']) test('user revision separates request provenance and scientific recheck: '+scenario,async t=>{
   const scientific=scenario.startsWith('scientific');
-  const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
+  const f = await configuredFixture(t), template = await configuredSessionTemplate(t);
   const evidenceText=scenario==='markdown-label' ? 'See [12 mg](https://example.org/paper).'
     : scenario==='wikilink-label' ? 'See [['+template.presentationCatalog.source_pdf+'|Figure 1]].'
       : scenario==='age-unit' ? '小鼠高脂喂养 12 周。'
@@ -662,7 +729,7 @@ for (const scenario of ['wording','scientific','scientific-short','retain','numb
 });
 
 test('explicit additional execution budget resumes the first scoped Writer repair', async t => {
-  const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
+  const f = await configuredFixture(t), template = await configuredSessionTemplate(t);
   f.profile.capabilities = { task_continuation: continuationCapability() };
   let session = await createReadingSession(f.options);
   const runRoot = join(f.root, 'runs', 'run'), science = await scienceOutputs(f, template.presentationCatalog);
@@ -749,7 +816,7 @@ test('explicit additional execution budget resumes the first scoped Writer repai
 
 for (const scenario of ['controller','verifier','missing-science','explicit-id']) test('unroutable review retains original bytes: '+scenario,async t=>{
   const verifier=scenario==='verifier', missingScience=scenario==='missing-science', explicit=scenario==='explicit-id';
-  const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
+  const f = await configuredFixture(t), template = await configuredSessionTemplate(t);
   if (verifier) f.profile.capabilities={task_continuation:continuationCapability()};
   let session = await createReadingSession(missingScience ? {...f.options,includeRepairs:false,enrichmentPolicy:{sources:[],allow_targeted_methods:true}} : f.options);
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
@@ -810,7 +877,7 @@ for (const scenario of ['controller','verifier','missing-science','explicit-id']
 });
 
 for (const extended of [false,true]) test('renderer repairs compare against their latest reviewed candidate: '+extended, async t => {
-  const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
+  const f = await configuredFixture(t), template = await configuredSessionTemplate(t);
   const session = await createReadingSession(f.options), runRoot = join(f.root, 'runs', 'run');
   const content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, path, value) => {
@@ -956,9 +1023,9 @@ for (const total of [10, 11]) test(`initial enrichment reserves the full chain a
   else { assert.equal(next.action, 'dispatch'); assert.match(next.arguments.prompt, /enrich-initial-evidence/); }
 });
 
-for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, { sourceLanguage: 'en', noRepairs: true }, { sourceLanguage: 'en', shortBudget: true }, { sourceLanguage: 'en', translationOnly: true }, { sourceLanguage: 'en', translationOnly: true, extraReview: true }, { sourceLanguage: 'en', visualCorrection: true }, { sourceLanguage: 'en', visualCorrection: true, chartTypeCorrection: true }, { sourceLanguage: 'en', blockedRecovery: true }, { sourceLanguage: 'en', visualCorrection: true, editorRecovery: true }]) test(`late session repair ${JSON.stringify(scenario)}`, async t => {
-  const { sourceLanguage, noRepairs, shortBudget, translationOnly, visualCorrection, editorRecovery, chartTypeCorrection, blockedRecovery, extraReview } = scenario;
-  const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
+for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, { sourceLanguage: 'en', noRepairs: true }, { sourceLanguage: 'en', shortBudget: true }, { sourceLanguage: 'en', translationOnly: true }, { sourceLanguage: 'en', translationOnly: true, extraReview: true }, { sourceLanguage: 'en', visualCorrection: true }, { sourceLanguage: 'en', visualCorrection: true, chartTypeCorrection: true }, { sourceLanguage: 'en', blockedRecovery: true }, { sourceLanguage: 'en', visualCorrection: true, editorRecovery: true }, { sourceLanguage: 'en', methodArchive: 'new' }, { sourceLanguage: 'en', methodArchive: 'duplicate' }]) test(`late session repair ${JSON.stringify(scenario)}`, async t => {
+  const { sourceLanguage, noRepairs, shortBudget, translationOnly, visualCorrection, editorRecovery, chartTypeCorrection, blockedRecovery, extraReview, methodArchive } = scenario;
+  const f = await configuredFixture(t, { systemTemp: Boolean(methodArchive) }), template = await configuredSessionTemplate(t);
   if (visualCorrection) {
     template.presentationCatalog.sources = [{ id: 'paper', path: template.presentationCatalog.source_pdf }];
     template.presentationCatalog.visuals[0].source_id = 'paper';
@@ -983,6 +1050,7 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
   await accept(await nextReadingAction(session), 'presentation', template.editor);
   await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
   const gap = { id: 'late', question: 'What allocation was used?', impact: 'Changes interpretation', severity: 'material', owner_role: 'evidence', source_kind: 'original_page', source_ids: [], target_sections: ['Study'] };
+  if (methodArchive) gap.source_kind = 'cited_method';
   const issue = { severity: 'material', kind: 'scientific-gap', detail: 'Allocation unclear', repair_owner: 'science', affected_languages: [targetLanguage], scientific_gap: gap, repair_scope: { status: 'located', section_ids: [template.views[1].sections[0].id], knowledge_ids: [], visual_ids: visualCorrection || blockedRecovery ? ['fig-one'] : [], editor_fields: [] } };
   if (translationOnly) { issue.repair_owner = 'writer'; delete issue.scientific_gap; }
   const first = await accept(await nextReadingAction(session), 'review', { ...template.review, issues: [issue] });
@@ -993,7 +1061,15 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
     const terminal=await nextReadingAction(session);
     assert.equal(terminal.status,'completed_with_limits');
     assert.equal(JSON.parse(await readFile(terminal.summary.state_ref)).state.enrichmentRound,null);
-    if (noRepairs) return;
+    if (noRepairs) {
+      const bytes = await readFile(terminal.summary.state_ref);
+      const closed = await recordReadingEvent(session, { kind: 'close-with-limits', authorization_id: 'synthetic-no-continuation', user_reply: '不再续接' });
+      assert.equal(closed.terminal.status, 'completed_with_limits');
+      assert.equal(closed.cleanup.snapshot_status, 'removed');
+      assert.deepEqual(await readFile(terminal.summary.state_ref), bytes);
+      await assert.rejects(resumeReadingSession({ runRoot }), /READING_SESSION_TERMINATED/);
+      return;
+    }
     const plan=await recordReadingEvent(session,{kind:'inspect-continuation'});
     assert.equal(plan.can_continue,true);
     assert.equal(plan.required_additional_calls,1);
@@ -1003,9 +1079,23 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
       max_additional_calls:plan.recommended_additional_calls,max_additional_review_rounds:0}});
   } else assert.equal(first.status,'revision_required');
   const answer = { gap_id: gap.id, classification: 'paper_fact', explanation: 'The source reports random allocation.', consequence: 'It supports the design account.', status: 'recovered', target_sections: ['Study'], source_ids: ['paper'] };
+  let archivedMethod;
+  if (methodArchive) {
+    const folder = join(runRoot, 'sources', 'enrich-late-evidence');
+    await mkdir(folder, { recursive: true });
+    const path = join(folder, 'method.pdf'), bytes = Buffer.from('Synthetic accepted method document');
+    await writeFile(path, bytes);
+    if (methodArchive === 'duplicate') await writeFile(join(f.root, 'Clippings', 'same-method.pdf'), bytes);
+    archivedMethod = { id: 'used-method', path, sha256: 'sha256:' + createHash('sha256').update(bytes).digest('hex'), byte_length: bytes.length,
+      version: 'v1', kind: 'cited_method', scope: 'Allocation method', reference: 'Method reference', title: 'Verified synthetic method',
+      doi: null, trace_reason: 'Explain the allocation method' };
+    answer.classification = 'background';
+    answer.source_ids = [archivedMethod.id];
+  }
   const visualCorrections = [{ visual_id: 'fig-one', source_id: 'paper', page: 1, label: { en: 'Recovered figure', 'zh-CN': '恢复图像' }, caption: { en: 'Recovered original caption.', 'zh-CN': '已恢复的原始图注。' } }];
   if (chartTypeCorrection) visualCorrections[0].chart_types = [{ knowledge_id: 'method', label: { en: 'Intervals', 'zh-CN': '区间图' }, panel: 'd,e' }];
-  if (!translationOnly) await accept(await nextReadingAction(session), 'enrich-late-evidence', { run_id: 'run', role: 'evidence', resolutions: [answer], ...(visualCorrection ? { visual_corrections: visualCorrections } : {}) });
+  if (!translationOnly) await accept(await nextReadingAction(session), 'enrich-late-evidence', { run_id: 'run', role: 'evidence', resolutions: [answer],
+    ...(archivedMethod ? { sources: [archivedMethod] } : {}), ...(visualCorrection ? { visual_corrections: visualCorrections } : {}) });
   const en = structuredClone(template.views[0]), zh = structuredClone(template.views[1]);
   if (!translationOnly) {
     for (const view of [en, zh]) view.enrichment_consumption = [{ gap_id: 'late', section_heading: view.sections[0].heading }];
@@ -1138,11 +1228,35 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
     await readingRuntime.restoreReadingFirstPublicationSource(legacy);
   }
   assert.equal(done.status, 'reading_complete');
+  if (archivedMethod) {
+    assert.equal(done.used_method_sources[0].raw_status, 'pending_publication');
+    assert.equal(done.used_method_sources[0].doi, null);
+    const inspected = await inspectReadingFirstPublicationSource(done.publication_source);
+    const original = f.options.scientificInput.sources[0];
+    const result = await publishReadingFirstCandidate({ source: done.publication_source, vaultRoot: f.root,
+      generation: 'method-publication', evidenceMode: 'synthetic', authorization: { authorization_id: 'method-test', user_reply: '发布' }, onPrepared() {},
+      resources: [{ path: inspected.presentation.source_pdf, source_path: original.path, sha256: original.sha256, byte_length: original.byte_length },
+        ...inspected.results_resource_manifest.resources.map(({ path, source_path, sha256, byte_length }) => ({ path, source_path, sha256, byte_length }))] });
+    assert.equal(result.status, 'committed', JSON.stringify(result.error));
+    const report = result.publication_sources, target = methodArchive === 'new' ? 'Raw/run/method.pdf' : 'Clippings/same-method.pdf';
+    for (const note of inspected.candidate.notes) assert.ok((await readFile(join(f.root, note.path), 'utf8')).includes('../../' + target));
+    if (methodArchive === 'new') {
+      assert.equal(report.raw_supplements[0].path, target);
+      assert.equal(report.raw_supplements[0].title, archivedMethod.title);
+      assert.equal(report.raw_supplements[0].trace_reason, archivedMethod.trace_reason);
+      assert.equal(report.raw_supplements[0].notes.length, 2);
+      assert.ok((await readFile(result.result_path, 'utf8')).includes(archivedMethod.title));
+    } else {
+      assert.equal(report.raw_supplements.length, 0);
+      assert.equal(report.source_path_remaps[0].new_path, target);
+      await assert.rejects(readFile(join(f.root, 'Raw', 'run', 'method.pdf')), /ENOENT/);
+    }
+  }
 
 });
 
 test('empty enrichment policy preserves exact requests and instructions without gaps', async t => {
-  const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
+  const f = await configuredFixture(t), template = await configuredSessionTemplate(t);
   const runRoot = join(f.root, 'runs', 'run');
   const run = async withPolicy => {
     const session = await createReadingSession({ ...f.options, ...(withPolicy ? { enrichmentPolicy: { sources: [], allow_targeted_methods: true } } : {}) });
@@ -1168,12 +1282,18 @@ test('empty enrichment policy preserves exact requests and instructions without 
       assert.equal(publication.calls_used, 10);
       assert.ok(publication.source_bindings.every(row => !row.path.includes('enrich-')));
       assert.ok(publication.recipe.checkpoint.state.observations.every(row => !JSON.stringify(row).includes('enrich-')));
+    } else {
+      const closed = await recordReadingEvent(session, { kind: 'terminate', authorization_id: 'synthetic-baseline-close', user_reply: '终止' });
+      assert.equal(closed.cleanup.snapshot_status, 'removed');
     }
     return captured;
   };
   const baseline = await run(false);
-  await rm(join(f.root, 'runs'), { recursive: true, force: true });
-  await rm(join(f.root, 'candidates'), { recursive: true, force: true });
+  // Preserve the closed fixture while giving the second independent run the exact same input paths.
+  const prior = join(f.root, 'closed-fixture');
+  await mkdir(prior);
+  await rename(runRoot, join(prior, 'run'));
+  await rename(join(f.root, 'candidates', 'run'), join(prior, 'candidate'));
   const withPolicy = await run(true);
   assert.deepEqual(withPolicy, baseline);
 });

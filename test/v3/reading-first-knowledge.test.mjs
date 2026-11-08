@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { renderSharedKnowledge } from '../../scripts/v3/reading-first-knowledge.mjs';
+import { draftReadingFirstKnowledgeComparisons, matchReadingFirstKnowledgeIdentity, renderSharedKnowledge } from '../../scripts/v3/reading-first-knowledge.mjs';
 
 const item = { id: 'pie', kind: 'method', canonical_key: 'method:pie', title: { 'zh-CN': '饼图', en: 'Pie chart' }, source_kind: 'method-background', paragraphs: { 'zh-CN': ['中文'], en: ['English'] } };
 const prior = { paper_id: 'bray', title: 'Bray 2024', targets: { 'zh-CN': 'Wiki/sources/Bray.zh-CN.md', en: 'Wiki/sources/Bray.en.md' } };
@@ -20,6 +20,42 @@ function render(links, options = {}) {
   return { content, applications };
 }
 const links = '- [Bray 2024 · 中文](../translations/Bray.zh-CN.md)\n- [Bray 2024 · English](../sources/Bray.en.md)';
+
+test('uniquely matches registered exact, normalized, English and alias identities', () => {
+  const target = 'Wiki/methods/另一术语.md';
+  for (const [expected, terms] of [
+    ['exact', { title: '饼图' }],
+    ['normalized', { title: '饼　图' }],
+    ['english', { title: '另一术语', title_en: 'PIE–CHART' }],
+    ['alias', { title: '另一术语', registered_aliases: ['method:pie'] }],
+  ]) {
+    const match = matchReadingFirstKnowledgeIdentity({ item, knowledgeRegistry: [{ id: 'prior', path: target, ...terms }], vaultPath: value => value });
+    assert.equal(match.tier, expected);
+    assert.deepEqual(match.paths, [target]);
+  }
+});
+
+test('leaves ambiguous identities available as draft pairs and does not reuse a cross-kind match', () => {
+  const match = matchReadingFirstKnowledgeIdentity({ item, vaultPath: value => value,
+    knowledgeRegistry: [
+      { title: '饼图', path: 'Wiki/methods/A.md' }, { title: '饼图', path: 'Wiki/methods/B.md' },
+      { id: item.id, path: 'Wiki/concepts/C.md' },
+    ] });
+  assert.deepEqual(match.paths, []);
+  assert.deepEqual(match.ambiguous_paths, ['Wiki/methods/A.md', 'Wiki/methods/B.md']);
+});
+
+test('definition BM25 adds an advisory pair without granting identity reuse', () => {
+  const incoming = { ...item, paragraphs: { en: ['Wedges represent each category proportion in a circular display.'], 'zh-CN': ['扇区面积代表分类占比。'] } };
+  const similar = { id: 'sector', title: '扇区面积比例图', path: 'Wiki/methods/扇区面积比例图.md', definitions: ['A circular display encodes category proportion by wedge area.'] };
+  const unrelated = { id: 'prior', title: '其他统计量', path: 'Wiki/methods/其他统计量.md', definitions: ['Poisson regression estimates a count.'] };
+  const knowledgeRegistry = [unrelated, similar];
+  const match = matchReadingFirstKnowledgeIdentity({ item: incoming, knowledgeRegistry });
+  assert.deepEqual(match.paths, []);
+  const drafts = draftReadingFirstKnowledgeComparisons({ item: incoming, knowledgeRegistry, match, target: 'Wiki/methods/饼图.md' });
+  assert.deepEqual(drafts.map(row => [row.status, row.registered_path, row.reasons]), [['draft', similar.path, ['definition-bm25']]]);
+  assert.deepEqual(drafts[0].registered_definition, similar.definitions);
+});
 
 test('preserves a prior paper relocated visible target in the candidate and hidden state', () => {
   const { content, applications } = render(links);

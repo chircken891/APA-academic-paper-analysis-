@@ -9,10 +9,15 @@ import { exportReadingFirstPreview, inspectReadingFirstCandidate } from './readi
 import { emitApprovedRunStep, createCurrentMineruBaselinePort } from './phase21-runner.mjs';
 import { getRoleReplyContract } from './role-reply-contract.mjs';
 import { readCommittedReadingFirstKnowledgeRegistry, assertCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
+import { matchPlannedReadingFirstKnowledge, readPlannedReadingFirstKnowledge, recordPlannedReadingFirstKnowledge } from './reading-first-knowledge-plans.mjs';
 import { COMPACTION_POLICY, compactionControlBindings, assertCompactionDispatchAllowed } from './reading-compaction.mjs';
-import { captureReadingRuntime } from './reading-runtime-binding.mjs';
+import { inspectReadingRuntime } from './reading-runtime-binding.mjs';
+import { prepareReadingRuntimeSnapshot } from './reading-runtime-snapshot.mjs';
+import { registerReadingRuntimeCleanupFiles } from './reading-runtime-cleanup.mjs';
+import { CLIPPINGS_SOURCE_POLICY, prepareReadingSources } from './reading-source-policy.mjs';
 
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
+const CODE_ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)));
 const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
 const sectionsOf = bytes => Object.fromEntries([...String(bytes).matchAll(/^## (.+)\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/gm)].map(match => [match[1], match[2].trim()]));
 const scienceSections = { evidence: 'Evidence/Coverage Mapper', methods: 'Design/Methods Specialist', results: 'Results/Visuals Specialist', interpretation: 'Interpretation/Appraisal Specialist', 'scientific-reading': 'Scientific Reading Synthesizer', integration: 'Integrator' };
@@ -60,7 +65,7 @@ export function buildConfiguredReadingInstructions(writingSkills = {}, { instruc
 }
 
 /** Required entry for NEW configured readings. Reopening a run uses its owned binding, never this factory. */
-export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext, hostProfile, supportedModelPairs, instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, ...options } = {}) {
+export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext, hostProfile, supportedModelPairs, instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, ...options } = {}, runtimeBinding) {
   if (instructionProfile !== DEFAULT_CONFIGURED_INSTRUCTION_PROFILE) throw Object.assign(new Error('READING_BINDING_RETIRED'), { code: 'READING_BINDING_RETIRED' });
   if (sessionContext !== undefined) {
     if (!sessionContext || typeof sessionContext !== 'object' || Array.isArray(sessionContext)
@@ -78,6 +83,8 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
   if (!['en', 'zh-CN'].includes(options.sourceLanguage)) throw new Error('APA_CONFIGURED_SOURCE_LANGUAGE_REQUIRED');
   // The handoff accepts only text context; reject other shapes before any science call is spent.
   if (typeof options.scientificInput?.context !== 'string' || !options.scientificInput.context.trim()) throw new Error('READING_FIRST_CONTEXT_TEXT_REQUIRED');
+  if (options.scientificInput.identity?.run_id !== options.runId
+    || typeof options.authorizationId !== 'string' || !options.authorizationId.trim()) throw new Error('READING_FIRST_CONTROL_INVALID');
   const paths = { runRoot: join(resolvedConfig.paths.runs, options.runId), parseRoot: join(resolvedConfig.paths.parse, options.runId), candidateRoot: join(resolvedConfig.paths.candidates, options.runId) };
   const parserOptions = { runtimeHome: resolvedConfig.parser.runtime_home,
     python: resolvedConfig.parser.python ?? join(resolvedConfig.parser.runtime_home, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
@@ -93,7 +100,7 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
     manifest_task: { task_id: 'results-resources', artifact_id: 'results-resources', artifact_path: 'science/results-resources.json', native_path: 'native/results-resources.json', revision: '1', owner_actor_id: 'results', role: 'results' },
   });
   configuredSetup.results_resources.python = parserOptions.python;
-  configuredSetup.runtime_binding = captureReadingRuntime();
+  configuredSetup.results_resources.figures_dir = 'Figures/' + options.runId + '/';
   // The language other than the paper's original is translated from the accepted source draft; its tasks run as the translation role.
   const translationKeys = options.sourceLanguage === 'en' ? ['zh-CN', 'zh-CN-r2'] : ['en', 'en-r2'];
   // A caller-supplied role for these keys must already be translation; anything else is a conflict, not something to overwrite.
@@ -106,12 +113,21 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
   const manualCompaction = { host: loaded.config.host?.name ?? null, status: manual?.status ?? 'unknown',
     available: manual?.status === 'detected' && manual.scope === 'current-session' && typeof manual.method === 'string' && !!manual.method.trim() && !!source,
     method: manual?.method ?? null, source: source || null, scope: manual?.scope ?? 'unknown', evidence };
-  const runControl = createReadingFirstRunControl({ ...options, ...(derivedMaxCalls === undefined ? {} : { maxCalls: derivedMaxCalls }), ...(taskBindings ? { taskBindings } : {}), ...(loaded.config.host ? { host: loaded.config.host } : {}), mainSession, configuredSetup, writingMode: 'source-translation',
+  const { scientificInput, source_locations, raw_source_matches } = prepareReadingSources({
+    repoRoot, scientificInput: options.scientificInput, sourceMatchMetadata: options.sourceMatchMetadata,
+  });
+  configuredSetup.source_policy = CLIPPINGS_SOURCE_POLICY;
+  configuredSetup.source_locations = source_locations;
+  if (runtimeBinding && (resolve(runtimeBinding.repo_root) !== CODE_ROOT || inspectReadingRuntime({ manifest: runtimeBinding, repoRoot, runRoot: paths.runRoot }).status !== 'current')) {
+    throw new Error('READING_SESSION_RUNTIME_SNAPSHOT_INVALID');
+  }
+  configuredSetup.runtime_binding = runtimeBinding ?? prepareReadingRuntimeSnapshot({ repoRoot, codeRoot: CODE_ROOT, runRoot: paths.runRoot, runId: options.runId });
+  const runControl = createReadingFirstRunControl({ ...options, scientificInput, ...(derivedMaxCalls === undefined ? {} : { maxCalls: derivedMaxCalls }), ...(taskBindings ? { taskBindings } : {}), ...(loaded.config.host ? { host: loaded.config.host } : {}), mainSession, configuredSetup, writingMode: 'source-translation',
     compactionPolicy: COMPACTION_POLICY, manualCompaction,
     roleReplyContract: options.roleReplyContract === undefined ? getRoleReplyContract() : options.roleReplyContract,
     presentationProfile: 'reading-editor-1.3',
     firstWritingLanguage: options.sourceLanguage, presentationMode: resolvedConfig.reading.presentation_mode, handoffProfile: SCIENCE_INDEX_PROFILE });
-  return freeze({ resolvedConfig, scientificInput: structuredClone(options.scientificInput), configurationFingerprint: loaded.fingerprint, paths, parserOptions, runControl,
+  return freeze({ resolvedConfig, scientificInput, raw_source_matches, configurationFingerprint: loaded.fingerprint, paths, parserOptions, runControl,
     compactionControlBindings: compactionControlBindings(runControl) });
 }
 
@@ -129,8 +145,14 @@ export function createConfiguredScienceRequest({ prepared, role, task, dispatchC
   const reply = configuredRoleReply(binding);
   const sections = binding.configured_setup.science_sections;
   const outputPath = ownedPath(prepared.paths.runRoot, task.native_path);
+  const sourceLocations = binding.configured_setup.source_locations;
+  const requestPayload = sourceLocations ? { ...payload, sources: prepared.scientificInput.sources,
+    source_locations: sourceLocations.map(({ source_id, vault_path }) => ({ source_id, vault_path })) } : payload;
+  const locationInstructions = sourceLocations ? [
+    'Read the frozen absolute source paths in sources. In the presentation, use source_locations.vault_path for source_pdf, sources[].path, and visuals[].source_path when present.',
+  ] : [];
   let message = [sections['Common scientific contract'], sections[scienceSections[role]],
-    ...(reply ? [reply] : []), JSON.stringify(payload), 'Write only the assigned complete JSON to: ' + outputPath].join('\n\n');
+    ...(reply ? [reply] : []), ...locationInstructions, JSON.stringify(requestPayload), 'Write only the assigned complete JSON to: ' + outputPath].join('\n\n');
   let instructionFile;
   if (task.instruction_path) {
     const path = ownedPath(prepared.paths.runRoot, task.instruction_path);
@@ -238,6 +260,24 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
   if (candidateRevision > 1 && recoveringReviewed && !exists) throw new Error('APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH');
   const scratch = join(policy.vault_root, '.tmp', 'reading-first-candidates');
   mkdirSync(scratch, { recursive: true });
+  const runId = prepared.runControl.run_id;
+  const planKnowledge = (candidate, registry) => {
+    try {
+      const catalog = getReadingFirstPresentation({ controller }).knowledge ?? [];
+      const planned = readPlannedReadingFirstKnowledge({ repoRoot: policy.vault_root, excludeRunId: runId });
+      const matches = matchPlannedReadingFirstKnowledge(catalog, planned);
+      const own = recordPlannedReadingFirstKnowledge({ repoRoot: policy.vault_root, runId, catalog, supportNotes: candidate.supportNotes ?? [], registry, matches });
+      return { ...own, matches };
+    } catch (error) {
+      // Advisory names never affect candidate bytes or committed reuse authority.
+      return { status: 'unavailable', diagnostic: error.code ?? 'RF_KNOWLEDGE_PLAN_INVALID' };
+    }
+  };
+  const registerPreview = (root, inventory, kind) => {
+    if (prepared.runControl.reading_first_binding.configured_setup.runtime_binding?.profile !== 'reading-runtime-snapshot-1.0') return;
+    return registerReadingRuntimeCleanupFiles({ repoRoot: policy.vault_root, runId, runRoot: prepared.paths.runRoot,
+      directories: [root], files: inventory.map(row => ({ ...row, path: join(root, row.path), sha256: 'sha256:' + row.sha256, kind })) });
+  };
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const trusted = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, policy: policy.policy });
@@ -254,6 +294,7 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
         ...(checkpoint.state.readingEditor ? { readingEditor: checkpoint.state.readingEditor.value } : {}), ...options,
         targetRegistry: candidate.targetRegistry, noteLayout: prepared.runControl.reading_first_binding.note_layout, sourceLanguage: prepared.runControl.reading_first_binding.source_language,
         historicalKnowledge: { vaultRoot: policy.vault_root } });
+      await registerPreview(stage, exported.inventory, 'temporary');
       if (candidate.notes.some(note => exported.notes.find(other => other.path === note.path)?.content !== note.content)
         || (candidate.supportNotes?.length ?? 0) !== (exported.supportNotes?.length ?? 0)
         || candidate.supportNotes?.some(note => exported.supportNotes.find(other => other.path === note.path)?.content !== note.content)) throw new Error('APA_CONFIGURED_CANDIDATE_RENDER_MISMATCH');
@@ -270,13 +311,14 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
           throw Object.assign(new Error('APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH'), { code: 'APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH', ...(error.report ? {report:error.report} : {}) });
         }
         recordReadingFirstCandidateInventory({controller,presentation:candidate,outputRoot:candidateRoot,inventory:exported.inventory,revision:candidateRevision});
-        return { candidate, exported: { ...exported, outputRoot: candidateRoot }, staging_root: stage, reused: true };
+        return { candidate, exported: { ...exported, outputRoot: candidateRoot }, staging_root: stage, reused: true, planned_knowledge: planKnowledge(candidate, trusted) };
       }
       mkdirSync(dirname(candidateRoot), { recursive: true });
       try { mkdirSync(candidateRoot); }
       catch (error) { if (error.code === 'EEXIST') throw Object.assign(new Error('RF_PREVIEW_OUTPUT_EXISTS'), { code: 'RF_PREVIEW_OUTPUT_EXISTS' }); throw error; }
       try {
         cpSync(stage, candidateRoot, { recursive: true, force: false, errorOnExist: true });
+        await registerPreview(candidateRoot, exported.inventory, 'historical');
         await onDependencyBoundary?.({ attempt, phase: 'after-finalize', stagingRoot: stage, outputRoot: candidateRoot });
         assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: trusted, policy: policy.policy, paths });
       } catch (error) {
@@ -284,7 +326,7 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
         throw error;
       }
       recordReadingFirstCandidateInventory({controller,presentation:candidate,outputRoot:candidateRoot,inventory:exported.inventory,revision:candidateRevision});
-      return { candidate, exported: { ...exported, outputRoot: candidateRoot }, staging_root: stage };
+      return { candidate, exported: { ...exported, outputRoot: candidateRoot }, staging_root: stage, planned_knowledge: planKnowledge(candidate, trusted) };
     } catch (error) {
       if (error.code !== 'P23_CURRENT_CHANGED' || attempt === 2) throw error;
       // Accepted views and their receipts remain untouched; only the candidate is re-rendered.

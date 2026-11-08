@@ -202,7 +202,7 @@ export async function repairOwnedArtifactReceipt({ artifactRoot, dispatchContext
         || ref.path!==resolve(context.artifactRoot,task.artifact_path) || ref.resources_root!==resolve(context.artifactRoot,spec.output_root)
         || fingerprintReadingFirst(result.resource_manifest)!==fingerprintReadingFirst(ref)) fail('RECOVERY_CONTENT_INVALID');
       const {validateReadingResources}=await import('./reading-resources.mjs');
-      validateReadingResources({manifest:JSON.parse(bytes.toString('utf8')),resourcesRoot:ref.resources_root,sources:data.prepared.scientificInput.sources});
+      validateReadingResources({manifest:JSON.parse(bytes.toString('utf8')),resourcesRoot:ref.resources_root,sources:data.prepared.scientificInput.sources,figuresDir:spec.figures_dir});
     } else bytes=resultBytes;
   }
   if (!task || task.artifact_id !== artifact?.artifact_id || task.artifact_path !== state.artifactPath || task.owner_actor_id !== state.actorId

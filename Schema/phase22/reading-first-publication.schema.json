@@ -18,7 +18,23 @@
       "type": "object", "additionalProperties": false,
       "required": ["previous_generation", "previous_presentation_sha256", "path_mapping_fingerprint"],
       "properties": { "previous_generation": { "$ref": "#/$defs/text" },
-        "previous_presentation_sha256": { "$ref": "#/$defs/hash" }, "path_mapping_fingerprint": { "$ref": "#/$defs/hash" } }
+        "previous_presentation_sha256": { "$ref": "#/$defs/hash" }, "path_mapping_fingerprint": { "$ref": "#/$defs/hash" },
+        "assets": { "type": "array", "uniqueItems": true, "items": {
+          "type": "object", "additionalProperties": false, "required": ["old_path", "new_path", "sha256", "byte_length"],
+          "properties": {
+            "old_path": { "$ref": "#/$defs/assetPath" }, "new_path": { "$ref": "#/$defs/assetPath" },
+            "sha256": { "$ref": "#/$defs/hash" }, "byte_length": { "type": "integer", "minimum": 0 },
+            "source_id": { "$ref": "#/$defs/text" }, "resource_id": { "$ref": "#/$defs/text" }
+          }
+        } },
+        "retired_assets": { "type": "array", "uniqueItems": true, "items": {
+          "type": "object", "additionalProperties": false, "required": ["path", "sha256", "byte_length", "asset_index"],
+          "properties": {
+            "path": { "$ref": "#/$defs/assetPath" }, "sha256": { "$ref": "#/$defs/hash" },
+            "byte_length": { "type": "integer", "minimum": 0 }, "asset_index": { "type": "integer", "minimum": 0 }
+          }
+        } }
+      }
     },
     "evidence_mode": { "enum": ["synthetic", "actual"] },
     "dependencies": { "type": "object" },
@@ -40,7 +56,7 @@
             "properties": { "entity_id": { "$ref": "#/$defs/text" }, "path": { "type": "string", "pattern": "^Wiki/(methods|concepts)/[^/]+\\.md$" } }
           }
         },
-        "assets": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^(Raw|Figures)/.+" } }
+        "assets": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/assetPath" } }
       }
     },
     "navigation": { "type": "array", "items": { "type": "object" } },
@@ -55,7 +71,7 @@
             "required": ["source_id", "path", "sha256", "byte_length", "source_version", "locators"],
             "properties": {
               "source_id": { "$ref": "#/$defs/text" },
-              "path": { "type": "string", "pattern": "^Raw/.+\\.([pP][dD][fF]|[dD][oO][cC][xX])$" },
+              "path": { "type": "string", "pattern": "^(Raw|Clippings)/.+\\.([pP][dD][fF]|[dD][oO][cC][xX])$" },
               "sha256": { "$ref": "#/$defs/hash" },
               "byte_length": { "type": "integer", "minimum": 0 },
               "source_version": { "type": ["string", "null"] },
@@ -79,6 +95,7 @@
     }
   },
   "$defs": {
+    "assetPath": { "type": "string", "pattern": "^(Raw|Clippings|Figures)/.+" },
     "hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
     "text": { "type": "string", "minLength": 1, "pattern": "\\S" },
     "note": {

@@ -15,6 +15,7 @@ export { INDEX_READING_FIRST_PROFILE, verifyReadingFirstPresentation, readingFir
 export const INDEX_TOPIC_PROFILE = 'phase24-topic-1.0';
 
 export const PHASE22_COMMIT_PATH = '.apa-v3/phase22/COMMITTED.json';
+export const KNOWLEDGE_ALIASES_PATH = 'Ontology/knowledge-aliases.json';
 const schema = JSON.parse(readFileSync(new URL('../../Schema/phase22/active-index.schema.json', import.meta.url), 'utf8'));
 const validate = new Ajv2020({ allErrors: true, strict: true }).compile(schema);
 const snapshots = new WeakMap();
@@ -153,8 +154,9 @@ export function assertActiveGeneration(generation) {
   }
   for (const item of generation.objects) {
     const allowed = item.kind === 'reader-presentation' ? /^\.apa-v3\/reading-first\/presentation\/[^/]+\.json$/.test(item.path)
+      : item.kind === 'knowledge-aliases' ? item.path === KNOWLEDGE_ALIASES_PATH
       : ['reading-review', 'reader-record', 'reader-style'].includes(item.kind) ? false
-        : item.kind === 'asset' ? /^(Raw|Figures)\//.test(item.path) : /^(Wiki|Figures)\//.test(item.path);
+        : item.kind === 'asset' ? /^(Raw|Clippings|Figures)\//.test(item.path) : /^(Wiki|Figures)\//.test(item.path);
     if (normalizeIndexPath(item.path) !== item.path || !allowed) fail('P22_INDEX_PATH_INVALID', { path: item.path });
     if (item.kind === 'reader-presentation' && !generation.papers.some(p => p.reader_presentation?.path === item.path)) fail('P221_READER_PRESENTATION_BINDING');
     if (item.kind === 'topic' && !(generation.topics ?? []).some(topic => topic.path === item.path)) fail('P24_TOPIC_BINDING_INVALID');
@@ -162,6 +164,18 @@ export function assertActiveGeneration(generation) {
     if (item.kind === 'support' && !generation.shared_nodes.some(n => n.path === item.path)) fail('P22_SHARED_MEMBER_INVALID', { path: item.path });
   }
   return generation;
+}
+
+export function parseRegisteredKnowledgeAliases(bytes, generation) {
+  let value;
+  try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
+  catch { fail('P22_KNOWLEDGE_ALIASES_INVALID'); }
+  const targets = new Set(generation.shared_nodes.map(node => node.path));
+  if (value?.schema_version !== 'apa-knowledge-aliases-1.0' || Object.keys(value).length !== 2 || !Array.isArray(value.aliases)
+    || value.aliases.some(row => !row || Object.keys(row).length !== 2 || typeof row.alias !== 'string'
+      || !/\S/.test(row.alias) || /[\x00-\x1f]/.test(row.alias) || !targets.has(row.target_path))
+    || new Set(value.aliases.map(row => JSON.stringify([row.alias, row.target_path]))).size !== value.aliases.length) fail('P22_KNOWLEDGE_ALIASES_INVALID');
+  return value.aliases;
 }
 
 function checkPaperBytes(paper, language, bytes, generation, presentation) {
@@ -234,6 +248,7 @@ function verifyObjects(root, generation, index) {
     if (readerPaths.has(item.path)) continue;
     const bytes = readRegular(root, item.path), record = papers.get(item.path);
     if (item.kind === 'support') assertV3SupportBytes(bytes, item.path);
+    if (item.kind === 'knowledge-aliases') parseRegisteredKnowledgeAliases(bytes, generation);
     if (record) {
       const binding = checkPaperBytes(record.p, record.language, bytes, generation);
       for (const region of binding.regions) {
@@ -328,6 +343,7 @@ export function readRegisteredObject(snapshot, path) {
   if (!object || path.startsWith('Wiki/')) fail('P22_REGISTERED_OBJECT_MISSING', { path });
   const bytes = readRegular(record.root, path);
   if (sha(bytes) !== object.sha256) fail('P22_OBJECT_HASH_MISMATCH', { path });
+  if (object.kind === 'knowledge-aliases') parseRegisteredKnowledgeAliases(bytes, snapshot.generation);
   assertRegisteredCommit(snapshot);
   return { bytes, sha256: object.sha256 };
 }

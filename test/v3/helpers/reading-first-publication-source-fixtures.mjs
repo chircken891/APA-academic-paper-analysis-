@@ -58,17 +58,18 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
   const displayBytes = Buffer.from('Synthetic supplementary figure display PDF.');
   const supplement = { id: 'supplement', path: join(root, 'supplement.docx'), sha256: sha(supplementBytes), byte_length: supplementBytes.length };
   const display = { path: join(root, 'display.pdf'), sha256: sha(displayBytes), byte_length: displayBytes.length };
+  const displayTarget = options.displayTarget ?? 'Raw/supplement-display.pdf';
   if (registeredDocx) {
     if (!options.manifestDocx) await writeFile(supplement.path, supplementBytes);
     await writeFile(display.path, displayBytes);
   }
-  const presentation = options.presentation ?? adopted?.presentationCatalog ?? {
+  const presentation = options.presentation ?? (adopted ? structuredClone(adopted.presentationCatalog) : undefined) ?? {
     schema_version: 'reading-first-obsidian-1.0', layout: 'writer-modules-1.0',
     knowledge_layout: 'shared-bilingual-1.0',
     bibliography: { title: options.title ?? { en: 'Synthetic publication study', 'zh-CN': '合成发布研究' }, first_author: 'Tester', year: 2026 },
     modules: modules.map((id, index) => ({ id, label: Object.fromEntries(languages.map(language => [language, titles[language][index]])) })),
     source_pdf: 'Raw/' + paperId + '.pdf',
-    visuals: [{ id: 'fig-one', kind: 'figure', label: { en: 'Figure one', 'zh-CN': '图一' }, caption: { en: 'Complete original caption.', 'zh-CN': '完整原始图注。' }, path: 'Figures/' + paperId + '/figure.png', page: 1 }],
+    visuals: [{ id: 'fig-one', kind: 'figure', label: { en: 'Figure one', 'zh-CN': '图一' }, caption: { en: 'Complete original caption.', 'zh-CN': '完整原始图注。' }, path: options.figurePath ?? 'Figures/' + paperId + '/figure.png', page: 1 }],
     knowledge: [{ id: 'method', canonical_key: 'synthetic-method', kind: 'method', source_kind: 'method-background', title: { en: 'Synthetic method', 'zh-CN': '合成方法' }, aliases: ['SyntheticMethodAlias'], paragraphs: { en: ['An independent reusable explanation with supportonlytoken.'], 'zh-CN': ['可独立理解的通用解释，包含仅知识页词。'] } }],
     map: { steps: [{ id: 'design-step', section_id: 'design', label: { en: 'Design', 'zh-CN': '设计' } }], findings: [{ id: 'main-finding', section_id: 'findings', label: { en: 'Finding', 'zh-CN': '发现' } }], relations: [{ step_id: 'design-step', finding_id: 'main-finding' }] },
   };
@@ -92,7 +93,7 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
     presentation.sources = [{ id: source.id, path: presentation.source_pdf, kind: 'main' }];
     presentation.visuals[0].source_id = source.id;
     if (registeredDocx) {
-      presentation.sources.push({ id: supplement.id, path: 'Raw/supplement-display.pdf', kind: 'supplementary' });
+      presentation.sources.push({ id: supplement.id, path: displayTarget, kind: 'supplementary' });
       presentation.visuals[0].source_id = supplement.id;
     }
   } else if (options.visualProvenance) Object.assign(presentation.visuals[0], {
@@ -109,7 +110,7 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
     ...(options.instructionFiles ? { instruction_path: 'instructions/' + key + '.txt' } : {}),
     ...(translationLanguage && key.startsWith(translationLanguage === 'en' ? 'en' : 'zh') ? { source_view_path: 'translation/' + key + '/source.json', translation_context_path: 'translation/' + key + '/context.json', progress_path: 'translation/' + key + '/progress.json' } : {}),
   }]));
-  const input = {
+  let input = {
     identity: { paper_id: paperId, run_id: runId, ...(options.analysisRevision ? { analysis_revision: options.analysisRevision } : {}) },
     sources: adopted?.input.sources ?? [source, ...(registeredDocx ? [supplement] : [])],
     presentation_assets: adopted?.input.presentation_assets ?? [...(options.omitPresentationAssets || options.manifestDocx ? [] : [figure]), ...(registeredDocx && !options.manifestDocx && !options.unregisteredDisplay ? [display] : [])],
@@ -125,6 +126,31 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
     ...(options.currentRegistryRoot ? { maxTotalCalls: 20, configuredSetup: { ...buildConfiguredReadingInstructions({}), paths: { runRoot: root },
       knowledge_registry: { policy: 'current-shared-nodes-1.0', vault_root: options.currentRegistryRoot } } } : {}) });
   const binding = runBinding.reading_first_binding;
+  const sourceLocations = binding.configured_setup?.source_locations;
+  const supplementTarget = sourceLocations?.find(row => row.source_id === supplement.id)?.vault_path ?? 'Raw/supplement.docx';
+  if (sourceLocations) {
+    const byId = new Map(sourceLocations.map(row => [row.source_id, row]));
+    input = { ...input, sources: input.sources.map(row => ({ ...row, path: byId.get(row.id).path })) };
+    source.path = byId.get(source.id).path;
+    if (byId.has(supplement.id)) supplement.path = byId.get(supplement.id).path;
+    const targetPaths = new Map([[presentation.source_pdf, byId.get(source.id).vault_path]]);
+    presentation.source_pdf = byId.get(source.id).vault_path;
+    for (const row of presentation.sources ?? []) {
+      if (options.displayTarget && row.path === displayTarget) continue;
+      targetPaths.set(row.path, byId.get(row.id).vault_path);
+      row.path = byId.get(row.id).vault_path;
+    }
+    for (const visual of presentation.visuals) {
+      if (visual.source_path !== undefined) visual.source_path = targetPaths.get(visual.source_path) ?? visual.source_path;
+    }
+    for (const row of ownedVisualResources ?? []) row.source_path = byId.get(row.source_id).path;
+    if (manifestBytes) {
+      const manifest = JSON.parse(manifestBytes);
+      for (const row of manifest.resources) row.parent.path = byId.get(row.source_id).path;
+      manifestBytes = Buffer.from(JSON.stringify(manifest));
+      Object.assign(manifestRef, { sha256: sha(manifestBytes), byte_length: manifestBytes.length });
+    }
+  }
   const authorizedBindings = [
     ...compactionControlBindings(runBinding),
     ...roles.map(role => ({ run_id: runId, actor_id: role, role, artifact_path: 'science/' + role + '.json', revision: '1' })),
@@ -230,8 +256,8 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
     { path: presentation.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length },
     { path: presentation.visuals[0].path, source_path: figure.path, sha256: figure.sha256, byte_length: figure.byte_length },
     ...(registeredDocx ? [
-      { path: 'Raw/supplement.docx', source_path: supplement.path, sha256: supplement.sha256, byte_length: supplement.byte_length },
-      ...(!options.manifestDocx ? [{ path: 'Raw/supplement-display.pdf', source_path: display.path, sha256: display.sha256, byte_length: display.byte_length }] : []),
+      { path: supplementTarget, source_path: supplement.path, sha256: supplement.sha256, byte_length: supplement.byte_length },
+      ...(!options.manifestDocx ? [{ path: displayTarget, source_path: display.path, sha256: display.sha256, byte_length: display.byte_length }] : []),
     ] : []),
   ];
   return { root, artifactRoot: root, runId, paperId, input: scientificInput, broker, binding, handoff, runControl, controller, created,
