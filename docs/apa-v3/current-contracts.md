@@ -4,7 +4,7 @@
 
 ## 入口与角色
 
-Controller 使用 [reading-session](reading-session.md) 的 `createReadingSession`、`resumeReadingSession`、`nextReadingAction` 和 `recordReadingEvent` 推进新运行及恢复。入口调用 `prepareConfiguredReading` 冻结本库答案、来源、有限调用预算、截止时间、模型/强度及原生/受控输出路径。必填项或所选依赖缺失时先设置，当前宿主及本次运行读写证据须另行通过 `reading_preflight`；发出请求不代表角色完成。
+Controller 使用 [reading-session](reading-session.md) 的 `createReadingSession`、`resumeReadingSession`、`nextReadingAction` 和 `recordReadingEvent` 推进新运行及恢复。入口调用 `prepareConfiguredReading` 冻结本库答案、来源、有限调用预算、模型/强度及原生/受控输出路径。必填项或所选依赖缺失时先设置，当前宿主及本次运行读写证据须另行通过 `reading_preflight`；发出请求不代表角色完成。
 
 新配置化运行冻结 `configured-reading-2.2` 提示。选用 Editor 时冻结 `reading-editor-1.4`。各角色完整提示与实际文件指纹在创建时绑定，只有明确启用的写作指导进入请求。历史绑定保留原提示字节和原恢复路径。
 

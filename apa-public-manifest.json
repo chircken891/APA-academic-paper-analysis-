@@ -127,11 +127,11 @@
     },
     {
       "path": "docs/apa-v3/active-gap-enrichment.md",
-      "sha256": "70e8d72b37a6788939befda087cde493e572e51da5af390f22b4024a88a5344a"
+      "sha256": "c8689e48dd80b531cbcaf565a36817cd068645561e98fa70079052778aed1c9c"
     },
     {
       "path": "docs/apa-v3/current-contracts.md",
-      "sha256": "7c52b74a44ffd4dc3c0a87a297fa67df78ee2a382c671c7f31432f9a6bd2558f"
+      "sha256": "79d0eecd978f5c4609fd4afc0e7cbb1a2341b68dacd89e04276ae01d9a83973a"
     },
     {
       "path": "docs/apa-v3/reading-first-obsidian.md",
@@ -147,7 +147,7 @@
     },
     {
       "path": "docs/apa-v3/scientific-writing-modules.md",
-      "sha256": "49aee30415655291591317618dce597b84a91179eb6317b7b2c0118c65dad1a5"
+      "sha256": "bcb3019b4f788c9dbeda8813663b42350908cf1076f38d29894423a7a02a91b7"
     },
     {
       "path": "docs/CONFIGURATION.md",
@@ -191,11 +191,11 @@
     },
     {
       "path": "prompts/v3/reading-configured-2.2.md",
-      "sha256": "f097e5dfe762ea8f2f2da1ab5aaaf92aab6ed7fc9545c7236b85685aa51073b3"
+      "sha256": "2b5ac5ce745c159b4a98ebe4e5976de59fefa30d32befcd435e8d92e5a5bd0e4"
     },
     {
       "path": "prompts/v3/reading-editor-1.4.md",
-      "sha256": "e041f793e819bbbabd96ae522b89d68a5576dc3d541f7c8f0385be2e76ee042a"
+      "sha256": "74636b709475727dff5df2fc0a5a3e171a7cd2273fe815f8ac44df56801bc595"
     },
     {
       "path": "prompts/v3/reading-first-contracts.md",
@@ -207,7 +207,7 @@
     },
     {
       "path": "prompts/v3/science-configured-2.2.md",
-      "sha256": "2ee53230427825c775160c24a31b5ab3ead20806fca73e1ce6c5b60a75764926"
+      "sha256": "7150c58705497ea034b32b6d4f452da1ceabef1b4f258af37198a50f0585b890"
     },
     {
       "path": "prompts/v3/science-index-1.0.md",
@@ -223,7 +223,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "e2dccb047c07967773756ee6054aa2c7a40a8e8a9962d01d0c9eef5c086e8378"
+      "sha256": "d8f482690ca9103cf7fb2eeb1787f27db3e8f986a20abe8d99c6b0c11185e479"
     },
     {
       "path": "Schema/config/apa-config.schema.json",
