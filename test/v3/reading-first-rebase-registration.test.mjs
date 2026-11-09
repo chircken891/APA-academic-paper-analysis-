@@ -28,7 +28,7 @@ for (const [humanEdit, external] of [[false, false], [true, false], [false, true
   if (external) {
     const data = await inspectReadingFirstPublicationSource(originalSource);
     const candidateRoot = join(second.root, 'external-candidate');
-    for (const note of [...data.candidate.notes, ...data.candidate.supportNotes]) {
+    for (const note of [...data.candidate.notes, ...data.candidate.supportNotes, ...(data.candidate.generated_assets ?? [])]) {
       await mkdir(dirname(join(candidateRoot, note.path)), { recursive: true });
       await writeFile(join(candidateRoot, note.path), note.content);
     }

@@ -6,7 +6,7 @@
 
 `renderReadingFirstNotes({controller,targetRegistry,existingTargets,knowledgeRegistry})`（`scripts/v3/reading-first-runtime.mjs`）从运行状态渲染完整呈现。`knowledgeRegistry` 提供只读知识节点身份/别名匹配，不能授权写正式节点。完成整体审查后，按[最新阅读结果的 V3 发布](reading-first-publication.md)准备完整文件清单，经精确哈希批准后复用既有事务；正式索引与图谱读取已提交代次。
 
-纯渲染入口 `renderReadingFirstObsidian({identity,views,presentation,targetRegistry,existingTargets,knowledgeRegistry})` 不写文件。它返回双语 `notes`、`supportNotes`、已有知识的 `knowledgeProposals`、资源路径及登记表，不产生科学或原生验收结论。
+纯渲染入口 `renderReadingFirstObsidian({identity,views,presentation,targetRegistry,existingTargets,knowledgeRegistry})` 不写文件。它返回双语 `notes`、`supportNotes`、已有知识的 `knowledgeProposals`、资源路径及登记表。采用 Editor 1.4 时，结果另带渲染的 Canvas 文件，供候选写入、预览和发布校验。
 
 ## Writer 与呈现接口
 
@@ -14,24 +14,26 @@
 
 新功能性交付建议在新控制绑定中显式设 `presentationMode:'reading-editor'`。顺序为科学整合 → 原文语言 Writer → Translation → 一次双语 Reading Editor → 渲染 → 原有一次整体审查（旧 source-first 绑定为首先写作语言的 Writer → 另一语言 Writer）。Writer 保留完整讲解和资源落点；Reading Editor 为这些真实 accepted views 添加呈现信息，不改写科学段落，不增加科学核对或润色调用。
 
-原文稿与译稿接收后调用 `createReadingFirstPresentationRequest({controller})`。请求包含 `views`、原 `view_receipts`、登记的 `presentation`、`output_schema`（`reading-editor-1.3`）；局部修订附 `issues`。按既有真实 host/native/owned 流程接收编辑输出后再渲染。编辑角色使用本次冻结的角色模型及推理强度，配置为follow-main时才采用冻结主会话设置。新模式控制器允许后续调用上限4–8次，并不自动授予这些调用：原文Writer、Translation、Editor、整体审查共4次；原文稿与译稿修正、Editor更新和一次局部复核还需4次。若授权包含完整修复链，须在冻结前预留8次，并把先行科学调用计入独立总上限。具体授权可更小，复用已接收原文稿与译稿的窗口无需重跑Writer与Translation。恢复不重置额度。
+原文稿与译稿接收后调用 `createReadingFirstPresentationRequest({controller})`。请求包含 `views`、原 `view_receipts`、登记的 `presentation`、`output_schema`（`reading-editor-1.4`）；局部修订附 `issues`。按既有真实 host/native/owned 流程接收编辑输出后再渲染。编辑角色使用本次冻结的角色模型及推理强度，配置为follow-main时才采用冻结主会话设置。新模式控制器允许后续调用上限4–8次，并不自动授予这些调用：原文Writer、Translation、Editor、整体审查共4次；原文稿与译稿修正、Editor更新和一次局部复核还需4次。若授权包含完整修复链，须在冻结前预留8次，并把先行科学调用计入独立总上限。具体授权可更小，复用已接收原文稿与译稿的窗口无需重跑Writer与Translation。恢复不重置额度。
 
-编辑输出绑定 `readingFirstViewsFingerprint(views)`，格式及校验见 [编辑接口](../../scripts/v3/reading-first-editor.mjs) 和 [Reading Editor 合同](../../prompts/v3/reading-first-contracts.md#reading-editor)：
+编辑输出绑定 `readingFirstViewsFingerprint(views)`。字段和校验见 [编辑接口](../../scripts/v3/reading-first-editor.mjs) 和 [Reading Editor 1.4 提示](../../prompts/v3/reading-editor-1.4.md)。
 
 - `languages[language].overview`：重点及实际 `section_ids`，让读者先看到研究主线和关键限制。
 - `sections`：按稳定 `section_id` 添加可选 `takeaway`、原段落精确引文 `emphasis` 和按 `before_paragraph` 放置的 `subheadings`。强调仅落在未加粗的纯文本，不进入公式、链接或代码，不交叠。渲染器负责编号和锚点。
 - `methods`：独立逐项列出方法、测量与必要概念，包含 `id,title,explanation,application,section_ids` 和登记过的 `knowledge_ids` 数组；兼容旧 `knowledge_id`。没有已确立通用知识身份的条目可省略关联或使用空 `knowledge_ids`；非空关联须属于登记目录，两语每项的知识身份集合（含空集合）一致。原理与本文应用分别充分说明，不只提一嘴。
 
-reading-editor 1.3 在上述字段外还要求：
+Reading Editor 1.4 另提供图表呈现和导图论证。
 
 - `languages[language].visuals:[{id,title?,notes?:[{section_id,paragraph_index}]}]`：图表的简短显示标题（含原编号）以及读图说明段落。说明段落须是该图放置小节中的非首段且没有小标题，渲染时移到图片之后，不改写文字。
-- 顶层 `map.nodes:[{id,stage,primary?}]`：步骤分为 `design`/`measurement`，发现分为 `finding`/`limit`，主要发现标 `primary`。两种语言共用一套选择；未列出的节点不画，只画已登记关系中两端都保留的连线。
+- `argument` 含研究问题、4 到 8 个论点、分支、固定词表中的有向关系和结论。论点包含两语论点句、证据摘要、限制、小节 ID、分支 ID 和发现 ID。每项已登记发现恰好分配给一个论点，论点关系无环且每个论点位于问题到结论的路径上。可用 `primary_finding_ids` 标记重点发现。编辑根据已接受正文填写，沿用一次整体审查。
 
-渲染：模块大标题固定为“摘要 / 研究问题与设计 / 方法、概念与测量 / 主要发现 / 讨论 / 局限 / 结论与实践含义”（英文 Abstract / Research question and design / Methods, concepts and measurement / Findings / Discussion / Limitations / Conclusions and implications），不显示 Integrator 按论文拟定的模块标签，论文特定措辞只出现在小节标题；正文只用模块和小节两级编号标题（含文档标题共三级），编辑小标题渲染为段首加粗短语；目录和原图注放进默认收起的 callout；方法目录每条是一个收起的 callout，读图条目不进目录；图表以“标题 · 原文页”行承载 `^rf-visual-<id>` 锚点，其后依次为图型、图片、读图说明和原图注，已在图型行链接的图型节点不再重复显示“方法背景”行；研究导图改为分阶段的从左到右流程图，主要发现深色粗框显示，嵌在 Writer 写的研究设计概览小节之后，不再单设导图小节和链接列表。
+模块大标题固定为“摘要 / 研究问题与设计 / 方法、概念与测量 / 主要发现 / 讨论 / 局限 / 结论与实践含义”（英文 Abstract / Research question and design / Methods, concepts and measurement / Findings / Discussion / Limitations / Conclusions and implications）。论文特定措辞放在小节标题。正文采用模块和小节两级编号，含文档标题共三级。编辑小标题为段首加粗短语。目录、方法条目和原图注直接展开。图表的“标题 · 原文页”行承载 `^rf-visual-<id>` 锚点，后接图型、图片、读图说明和原图注。
 
-导图要求 `map.steps` 全部进入导图，发现可精选，未画入的发现由渲染器在图后逐项链接到对应小节。漏选步骤返回 `READING_FIRST_EDITOR_MAP_INVALID` 并列出缺失 ID；图中应画与实际绘制的集合不一致返回 `RF_RESEARCH_MAP_INCOMPLETE`。关系仍使用已登记的步骤到发现。
+每种语言生成一份 JSON Canvas，路径为 `Figures/<run_id>/research-map.zh-CN.canvas` 或 `Figures/<run_id>/research-map.en.canvas`。研究问题和读图说明在顶部，步骤、发现和论点分三列，结论在底部。全部登记步骤、发现和步骤到发现的关系进入导图，重点发现有独立标记。画布中的卡片链接到同语言笔记的实际小节。
 
-当前编辑器版本为 `reading-editor-1.3`，完整合同见 [1.3 提示](../../prompts/v3/reading-editor-1.3.md)。它保留全部步骤及省略发现导航，同时直接展开目录、方法条目和原图注。Editor 请求从两语视图移除已单独提供的知识正文，每份已提供知识正文只传一次。首次整体审查的 Editor 输出及收据作为修订基线；新 Verifier 的 `repair_scope` 指定章节、知识、图表或导图字段，后续修订保留范围外内容与身份。无法定位或越界的修订保存真实拒绝结果并结束为 `completed_with_limits`，不自动重派或启动局部复核。
+笔记在“2.1 研究导图”或“2.1 Research map”小节给出读图说明、只读嵌入和完整 Canvas 链接。Better Embedded Canvas 为嵌入提供只读平移与缩放，完整画布链接可单独使用。预览检查两份 Canvas 和内部小节链接。发布时按展示资产登记路径、字节数与 SHA-256，默认图谱继续读取已登记笔记。
+
+新运行的指令版本仍为 `configured-reading-2.2`，展示版本为 `reading-editor-1.4`。Editor 请求从两语视图移除已单独提供的知识正文，每份只传一次。首次整体审查的 Editor 输出及收据作为修订基线；Verifier 的 `repair_scope` 指定章节、知识、图表或导图字段。无法定位或越界的修订保存真实拒绝结果并结束为 `completed_with_limits`。
 
 Nature/Humanizer 用于专业、自然的表达，不限制有效的重点加粗、编号、分层目录、简表、列表或 callout。读者可先浏览重点再读连续解释，不能只把原文按顺序复述。重要条件、结果与局限保持直接可见。
 

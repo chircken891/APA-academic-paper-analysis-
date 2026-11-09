@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
-export const READING_EDITOR_PROFILE = 'reading-editor-1.3';
+export const READING_EDITOR_PROFILE = 'reading-editor-1.4';
 
 export function loadReadingEditorContract(profile = READING_EDITOR_PROFILE) {
   if (profile !== READING_EDITOR_PROFILE) throw Object.assign(new Error('READING_BINDING_RETIRED'), { code: 'READING_BINDING_RETIRED' });

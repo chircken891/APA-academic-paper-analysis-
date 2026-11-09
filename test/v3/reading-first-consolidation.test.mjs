@@ -15,9 +15,9 @@ import { dirname } from 'node:path';
 const options = { runId:'run', scientificInput:{identity:{run_id:'run'}}, mainSession:{model:'gpt-6-astra',reasoning_effort:'high'}, authorizationId:'synthetic', deadline:'2099-01-01T00:00:00Z', taskBindings:{}, presentationMode:'reading-editor' };
 
 test('new controls freeze the current editor profile and refuse retired ones', () => {
-  assert.equal(createReadingFirstRunControl(options).reading_first_binding.presentation_profile, 'reading-editor-1.3');
-  assert.equal(createReadingFirstRunControl({...options,presentationProfile:'reading-editor-1.3'}).reading_first_binding.presentation_profile, 'reading-editor-1.3');
-  for (const profile of ['reading-editor-1.0','reading-editor-1.1','reading-editor-1.2']) {
+  assert.equal(createReadingFirstRunControl(options).reading_first_binding.presentation_profile, 'reading-editor-1.4');
+  assert.equal(createReadingFirstRunControl({...options,presentationProfile:'reading-editor-1.4'}).reading_first_binding.presentation_profile, 'reading-editor-1.4');
+  for (const profile of ['reading-editor-1.0','reading-editor-1.1','reading-editor-1.2','reading-editor-1.3']) {
     assert.throws(() => createReadingFirstRunControl({...options,presentationProfile:profile}), { code: 'READING_BINDING_RETIRED' });
   }
   assert.throws(() => createReadingFirstRunControl({...options,presentationProfile:'invalid'}), /READING_FIRST_EDITOR_PROFILE_INVALID/);
@@ -36,7 +36,7 @@ test('the editor presentation removes only knowledge content already supplied by
 test('rejected editor revision survives an owned checkpoint without a new dispatch', async t => {
   const issue={severity:'material',kind:'presentation',detail:'Fix the finding overview.',repair_owner:'editor',repair_scope:{status:'located',section_ids:['findings'],knowledge_ids:[],visual_ids:[],editor_fields:[]}};
   const review={overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[{kind:'main_conclusion',location:'findings',finding:'finding'},{kind:'key_design',location:'design',finding:'design'}],issues:[issue],scope:'overall'};
-  const s=await reviewedReadingFirstFixture(t,{controlOptions:{presentationProfile:'reading-editor-1.3'},review});
+  const s=await reviewedReadingFirstFixture(t,{controlOptions:{presentationProfile:'reading-editor-1.4'},review});
   const request=createReadingFirstPresentationRequest({controller:s.controller});
   recordReadingFirstRequestEvent({controller:s.controller,request,eventKey:'dispatch',payload:{handle:'synthetic'}});
   const before=snapshotReadingFirstRuntime(s.controller);
@@ -59,7 +59,7 @@ test('rejected editor revision survives an owned checkpoint without a new dispat
 test('an unresolved verifier scope records the real output while repair waits for routing', async t => {
   const issue={severity:'material',kind:'presentation',detail:'Scope is unknown.',repair_owner:'editor',repair_scope:{status:'unresolved',section_ids:[],knowledge_ids:[],visual_ids:[],editor_fields:[]}};
   const review={overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[issue],scope:'overall'};
-  const s=await reviewedReadingFirstFixture(t,{controlOptions:{presentationProfile:'reading-editor-1.3'},review});
+  const s=await reviewedReadingFirstFixture(t,{controlOptions:{presentationProfile:'reading-editor-1.4'},review});
   const state=getReadingFirstState(s.controller);
   assert.equal(state.status,'review_unroutable');
   assert.deepEqual(state.routing.gaps,[{issue_id:'issue-1',missing_fields:['repair_scope']}]);
@@ -72,7 +72,7 @@ test('configured material review without repair owner retains its receipt and wa
   const configured=buildConfiguredReadingInstructions({});
   const issue={severity:'material',kind:'layout',detail:'An ownership decision is missing.',repair_scope:{status:'located',section_ids:['findings'],knowledge_ids:[],visual_ids:[],editor_fields:[]}};
   const review={overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[issue],scope:'overall'};
-  const s=await reviewedReadingFirstFixture(t,{translationLanguage:null,controlOptions:{presentationProfile:'reading-editor-1.3'},review,createRunControl:args=>createReadingFirstRunControl({...args,maxTotalCalls:20,configuredSetup:{...configured,paths:{runRoot:dirname(args.scientificInput.sources[0].path)}}})});
+  const s=await reviewedReadingFirstFixture(t,{translationLanguage:null,controlOptions:{presentationProfile:'reading-editor-1.4'},review,createRunControl:args=>createReadingFirstRunControl({...args,maxTotalCalls:20,configuredSetup:{...configured,paths:{runRoot:dirname(args.scientificInput.sources[0].path)}}})});
   const state=getReadingFirstState(s.controller);
   assert.equal(state.status,'review_unroutable');
   assert.deepEqual(state.routing.gaps,[{issue_id:'issue-1',missing_fields:['repair_owner']}]);
@@ -115,8 +115,8 @@ test('scope validates actual identifiers and confines editor changes', () => {
   assert.throws(()=>assertEditorRepairScope(base,expanded,review),/SCOPE_EXCEEDED/);
 });
 
-test('unconfigured editor guidance is the complete 1.3 contract', () => {
-  assert.equal(readingEditorInstructions(),readFileSync(new URL('../../prompts/v3/reading-editor-1.3.md',import.meta.url),'utf8').trim());
+test('unconfigured editor guidance is the complete 1.4 contract', () => {
+  assert.equal(readingEditorInstructions(),readFileSync(new URL('../../prompts/v3/reading-editor-1.4.md',import.meta.url),'utf8').trim());
 });
 
 test('request events and original request bytes survive restoration', async t => {
@@ -147,7 +147,7 @@ test('an already committed result can be reconciled after a checkpoint failure',
 });
 
 test('unresolved review uses the normal owned checkpoint path', async t => {
-  const s=await reviewedReadingFirstFixture(t,{completeReview:false,controlOptions:{presentationProfile:'reading-editor-1.3'}});
+  const s=await reviewedReadingFirstFixture(t,{completeReview:false,controlOptions:{presentationProfile:'reading-editor-1.4'}});
   const review={...s.review,issues:[{severity:'material',kind:'presentation',detail:'Unknown location',repair_owner:'editor',repair_scope:{status:'unresolved',section_ids:[],knowledge_ids:[],visual_ids:[],editor_fields:[]}}]};
   const request=s.reviewRequest, step=request.emittedStep;
   await writeFile(join(s.root,request.task.native_path),JSON.stringify(review));
@@ -167,7 +167,7 @@ test('unresolved review uses the normal owned checkpoint path', async t => {
 
 test('configured runs use their already assembled editor section once', async t => {
   const configured=buildConfiguredReadingInstructions({});
-  const s=await reviewedReadingFirstFixture(t,{translationLanguage:null,controlOptions:{presentationProfile:'reading-editor-1.3'},createRunControl:args=>createReadingFirstRunControl({...args,maxTotalCalls:20,configuredSetup:{...configured,paths:{runRoot:dirname(args.scientificInput.sources[0].path)}}})});
+  const s=await reviewedReadingFirstFixture(t,{translationLanguage:null,controlOptions:{presentationProfile:'reading-editor-1.4'},createRunControl:args=>createReadingFirstRunControl({...args,maxTotalCalls:20,configuredSetup:{...configured,paths:{runRoot:dirname(args.scientificInput.sources[0].path)}}})});
   const entry=snapshotReadingFirstRuntime(s.controller).state.request_entries.find(row=>row.key==='presentation');
   const message=entry.request.emittedStep.arguments.message, section=configured.sections['Reading Editor'];
   assert.equal(message.split(section).length-1,1);

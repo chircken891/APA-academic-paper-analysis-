@@ -1,7 +1,9 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { copyFile, mkdtemp, mkdir, writeFile, readFile, readdir, rename, rm, symlink, unlink } from 'node:fs/promises';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -38,7 +40,7 @@ const observe = (action, handle = 'host-' + action.action_id) => withEvidence({ 
 
 const configuredSessionTemplate = async t => {
   const fixture = await reviewedReadingFirstFixture(t, {
-    figurePath: 'Figures/run/figure.png', controlOptions: { presentationProfile: 'reading-editor-1.3' },
+    figurePath: 'Figures/run/figure.png', controlOptions: { presentationProfile: 'reading-editor-1.4' },
   });
   return { ...fixture, presentationCatalog: { ...fixture.presentationCatalog, source_pdf: 'Clippings/paper.pdf' } };
 };
@@ -166,6 +168,144 @@ for (const retries of [1,2]) test('translation continuation preserves completed 
   assert.equal(plan.required_additional_calls,retries);
   assert.equal(plan.translation_allowance,retries);
   assert.equal(plan.recommended_additional_calls,2*retries);
+});
+
+async function startSyntheticDrafting(t) {
+  const f = await configuredFixture(t, { systemTemp: true }), template = await configuredSessionTemplate(t);
+  f.profile.capabilities = { task_continuation: continuationCapability() };
+  const session = await createReadingSession(f.options);
+  const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
+  const resultEvent = (action, observation = observe(action)) => ({ kind: 'result', action_id: action.action_id, observation });
+  const accept = async (currentSession, action, path, value) => {
+    const event = resultEvent(action);
+    await recordReadingEvent(currentSession, { ...event, kind: 'host_observation' });
+    await writeFile(join(runRoot, 'native', path + '.json'), JSON.stringify(value));
+    return recordReadingEvent(currentSession, event);
+  };
+  for (let i = 0; i < 6; i++) {
+    const action = await nextReadingAction(session);
+    await accept(session, action, action.role, content(action.role));
+  }
+  await accept(session, await nextReadingAction(session), 'en', template.views[0]);
+  return { f, template, session, runRoot, accept, resultEvent };
+}
+
+test('finalize-only continuation dispatches the reserved execution after interrupted stop cleanup', async t => {
+  const { f, template, session, runRoot, accept, resultEvent } = await startSyntheticDrafting(t);
+  const translation = await nextReadingAction(session), event = resultEvent(translation);
+  await recordReadingEvent(session, { ...event, kind: 'host_observation' });
+  const control = join(runRoot, 'control');
+  const science = JSON.parse(await readFile(join(control, 'science-state.json'), 'utf8'));
+  const task = science.data.prepared.runControl.reading_first_binding.task_bindings['zh-CN'];
+  const native = join(runRoot, task.native_path);
+  const rejected = { ...template.views[1], language: 'en' };
+  await writeFile(native, JSON.stringify(rejected));
+  const progress = writeTranslationProgress({ artifactRoot: runRoot, task, runId: 'run', sourceView: template.views[0], nativeOutput: rejected });
+  assert.deepEqual([progress.remaining_sections, progress.remaining_knowledge], [[], []]);
+  const intent = { kind: 'continuation-intent', action_id: translation.action_id, execution_id: 'inspect-complete', message: 'Finalize the original translation.' };
+  assert.equal((await recordReadingEvent(session, intent)).kind, 'accept-translation');
+  await assert.rejects(() => recordReadingEvent(session, event), { code: 'READING_FIRST_VIEW_INVALID' });
+  const before = await nextReadingAction(session);
+  assert.equal(before.kind, 'accept-translation');
+  const metadataFiles = async () => (await readdir(control)).filter(name => /^session-state-\d+\.json$/.test(name));
+  assert.deepEqual((await metadataFiles()).sort(), ['session-state-1.json', 'session-state-2.json']);
+
+  const finalizeIntent = { ...intent, execution_id: 'finalize-original' };
+  const originalLink = fs.promises.link;
+  const fault = t.mock.method(fs.promises, 'link', async (from, to) => {
+    if (to === join(control, 'session-state-3.json')) throw Object.assign(new Error('Injected session metadata write failure'), { code: 'EIO' });
+    return originalLink(from, to);
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(() => recordReadingEvent(session, finalizeIntent), { code: 'EIO' });
+    assert.equal(fault.mock.calls.filter(call => call.arguments[1] === join(control, 'session-state-3.json')).length, 1);
+  } finally {
+    fault.mock.restore();
+    syncBuiltinESMExports();
+  }
+  assert.equal((await nextAction(session)).code, 'READING_SESSION_RESTORE_REQUIRED');
+  assert.deepEqual((await metadataFiles()).sort(), ['session-state-1.json', 'session-state-2.json']);
+
+  const recovered = await resumeReadingSession({ runRoot });
+  await recordReadingEvent(recovered, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+  assert.deepEqual(await recordReadingEvent(recovered, finalizeIntent), {
+    recorded: true, execution_id: finalizeIntent.execution_id, status: 'prepared',
+  });
+  const finalize = await nextReadingAction(recovered);
+  assert.equal(finalize.action, 'dispatch');
+  assert.equal(finalize.kind, 'continuation');
+  assert.equal(finalize.original_action_id, translation.action_id);
+  assert.equal(finalize.execution_id, finalizeIntent.execution_id);
+  assert.equal(finalize.summary.budget.total_limit, before.summary.budget.total_limit);
+  assert.equal(finalize.summary.budget.occupied, before.summary.budget.occupied + 1);
+  assert.equal(finalize.summary.budget.total_used, before.summary.budget.total_used + 1);
+  assert.equal(finalize.summary.budget.continuations, 1);
+  assert.equal(finalize.summary.budget.reserved, 0);
+  assert.equal((await nextAction(recovered)).code, 'HOST_CONTINUATION_OUTCOME_UNKNOWN');
+
+  await writeFile(native, JSON.stringify(template.views[1]));
+  await recordReadingEvent(recovered, {
+    kind: 'continuation-receipt', execution_id: finalize.execution_id,
+    observation: withEvidence({ execution_id: finalize.execution_id, action_id: finalize.action_id, agent_id: finalize.host_handle,
+      tool_call: { name: finalize.host_action, arguments: finalize.arguments }, raw_result_text: 'Final translation corrected', status: 'observed' }),
+  });
+  assert.equal((await recordReadingEvent(recovered, event)).status, 'pending_presentation');
+  await accept(recovered, await nextReadingAction(recovered), 'presentation', template.editor);
+  await recordReadingEvent(recovered, { kind: 'render-assets', renderOptions: {} });
+  await accept(recovered, await nextReadingAction(recovered), 'review', template.review);
+  const done = await nextReadingAction(recovered);
+  assert.equal(done.status, 'reading_complete');
+  assert.equal(done.summary.budget.continuations, 1);
+});
+
+test('Editor structural rejection provides a CLI and API continuation on the original action', async t => {
+  const { f, template, session, runRoot, accept, resultEvent } = await startSyntheticDrafting(t);
+  await accept(session, await nextReadingAction(session), 'zh-CN', template.views[1]);
+  const editor = await nextReadingAction(session), event = resultEvent(editor);
+  await recordReadingEvent(session, { ...event, kind: 'host_observation' });
+  const native = join(runRoot, 'native', 'presentation.json'), invalid = structuredClone(template.editor);
+  invalid.languages.en.overview = [];
+  await writeFile(native, JSON.stringify(invalid));
+
+  const cli = fileURLToPath(new URL('../../scripts/v3/reading-session-cli.mjs', import.meta.url));
+  const input = join(f.root, 'editor-result.json'), runtime = join(f.root, 'runtime-evidence.json');
+  await writeFile(runtime, JSON.stringify({ kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence }));
+  const cliEvent = async value => {
+    await writeFile(input, JSON.stringify(value));
+    return promisify(execFile)(process.execPath, [cli, 'event', '--run-root', runRoot, '--input', input, '--runtime-input', runtime]);
+  };
+  const code = 'READING_FIRST_EDITOR_CONTENT_INVALID';
+  const recovery = { action: 'continuation-intent', action_id: editor.action_id, code };
+  await assert.rejects(() => recordReadingEvent(session, event), { code, recovery });
+  assert.equal((await nextAction(session)).action, 'wait');
+  assert.equal(await readOwnedArtifact({ artifactRoot: runRoot, artifactId: 'reading-presentation' }), null);
+  await assert.rejects(() => cliEvent(event), error => {
+    assert.equal(error.code, 1);
+    assert.equal(error.stdout, '');
+    assert.deepEqual(JSON.parse(error.stderr), { code, message: code, recovery });
+    return true;
+  });
+  await assert.rejects(() => cliEvent({ ...event, action_id: 'unknown-action' }), error => {
+    assert.equal(error.code, 1);
+    assert.equal(error.stderr, 'READING_SESSION_EVENT_ACTION_INVALID\n');
+    return true;
+  });
+
+  const recovered = await resumeReadingSession({ runRoot });
+  await recordReadingEvent(recovered, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+  const executionId = 'complete-original-editor';
+  await recordReadingEvent(recovered, { kind: recovery.action, action_id: recovery.action_id, execution_id: executionId, message: 'Correct the original presentation.' });
+  const continuation = await nextReadingAction(recovered);
+  assert.equal(continuation.original_action_id, editor.action_id);
+  assert.equal(continuation.host_handle, 'host-' + editor.action_id);
+  await writeFile(native, JSON.stringify(template.editor));
+  await recordReadingEvent(recovered, {
+    kind: 'continuation-receipt', execution_id: executionId,
+    observation: withEvidence({ execution_id: executionId, action_id: continuation.action_id, agent_id: continuation.host_handle,
+      tool_call: { name: continuation.host_action, arguments: continuation.arguments }, raw_result_text: 'Editor output corrected', status: 'observed' }),
+  });
+  assert.equal((await recordReadingEvent(recovered, event)).status, 'pending_review');
 });
 
 // Synthetic scenarios explicitly choose to continue at each reminder.
@@ -342,7 +482,7 @@ test('synthetic host runs both drafts, editor, candidate and review through the 
   assert.ok(action.compaction_prompt.includes('before-review'));
   assert.ok(action.compaction_prompt.includes(JSON.stringify(source.path)));
   const reviewCapsule = JSON.parse(action.compaction_prompt.split('\n\n').find(part => part.startsWith('{')));
-  assert.equal(reviewCapsule.presentation_profile, 'reading-editor-1.3');
+  assert.equal(reviewCapsule.presentation_profile, 'reading-editor-1.4');
   assert.equal(reviewCapsule.candidate_paths.length, 2);
   assert.equal((await nextAction(session)).action, 'await-user');
   const reviewPrompt = action.compaction_prompt;
@@ -610,16 +750,18 @@ test('material editor issue receives one bounded repair and a second candidate',
   assert.equal((await nextReadingAction(session)).status, 'reading_complete');
 });
 
-for (const scenario of ['wording','scientific','scientific-short','retain','number','unit','citation','figure','markdown-label','wikilink-label','age-unit','writer-fact','renderer-fact']) test('user revision separates request provenance and scientific recheck: '+scenario,async t=>{
+for (const scenario of ['wording','scientific','scientific-short','retain','number','unit','citation','figure','markdown-label','wikilink-label','age-unit','map-number','writer-fact','renderer-fact']) test('user revision separates request provenance and scientific recheck: '+scenario,async t=>{
   const scientific=scenario.startsWith('scientific');
   const f = await configuredFixture(t), template = await configuredSessionTemplate(t);
   const evidenceText=scenario==='markdown-label' ? 'See [12 mg](https://example.org/paper).'
     : scenario==='wikilink-label' ? 'See [['+template.presentationCatalog.source_pdf+'|Figure 1]].'
       : scenario==='age-unit' ? '小鼠高脂喂养 12 周。'
+        : scenario==='map-number' ? 'The measured change was -2.5 mg.'
         : 'The change was -2.5 mg (12%). See Figure 1 and [the study](https://example.org/paper).';
   const changedFacts={number:['-2.5','-3.5'],unit:['mg','g'],citation:['/paper','/other'],figure:['Figure 1','Figure 2'],
-    'markdown-label':['12 mg','13 g'],'wikilink-label':['Figure 1','Figure 2'],'age-unit':['12 周','12 周龄']};
+    'markdown-label':['12 mg','13 g'],'wikilink-label':['Figure 1','Figure 2'],'age-unit':['12 周','12 周龄'],'map-number':['-2.5','-3.5']};
   template.editor.languages.en.overview[0].text=evidenceText;
+  if (scenario==='map-number') template.editor.argument.claims[0].evidence.en=evidenceText;
   if (scenario==='writer-fact') {
     template.views[0].sections.find(row=>row.id==='findings').paragraphs[0]=evidenceText;
     template.editor.views_fingerprint=readingFirstViewsFingerprint(template.views);
@@ -649,7 +791,8 @@ for (const scenario of ['wording','scientific','scientific-short','retain','numb
   const recorded=await recordReadingEvent(session,{kind:'user-revision',request:{
     revision_id:'user-overview',request:'Clarify the overview wording.',scientific,repair_owner:scenario==='writer-fact' ? 'writer' : scenario==='renderer-fact' ? 'renderer' : 'editor',
     ...(scenario==='renderer-fact' ? {affected_paths:[template.candidate.notes[0].path]} : {}),
-    target_entries:['findings'],repair_scope:{status:'located',section_ids:['findings'],knowledge_ids:[],visual_ids:[],editor_fields:[]},
+    target_entries:scenario==='map-number' ? ['map'] : ['findings'],
+    repair_scope:{status:'located',section_ids:['findings'],knowledge_ids:[],visual_ids:[],editor_fields:scenario==='map-number' ? ['map'] : []},
   }});
   if (scenario==='retain') {
     assert.equal(recorded.requires_authorization,true);
@@ -699,7 +842,9 @@ for (const scenario of ['wording','scientific','scientific-short','retain','numb
   } else assert.notEqual(scenario,'scientific-short');
   const revised=structuredClone(template.editor);
   if (changedFacts[scenario]) {
-    revised.languages.en.overview[0].text=evidenceText.replace(...changedFacts[scenario]);
+    const changed = evidenceText.replace(...changedFacts[scenario]);
+    if (scenario==='map-number') revised.argument.claims[0].evidence.en=changed;
+    else revised.languages.en.overview[0].text=changed;
     const result=await accept(await nextReadingAction(session),'presentation-r2',revised);
     assert.equal(result.rejection?.reason,'READING_FIRST_USER_REVISION_FACT_CHANGED');
     return;
@@ -1140,6 +1285,7 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
     await recordReadingEvent(session, { kind: 'host_observation', action_id: editorAction.action_id, observation });
     await writeFile(join(runRoot, 'native/presentation-r2.json'), JSON.stringify(revisedEditor));
     const { data } = JSON.parse(await readFile(join(runRoot, 'control/science-state.json'), 'utf8'));
+    assert.equal(data.prepared.runControl.reading_first_binding.presentation_profile, 'reading-editor-1.4');
     const broker = createOwnedArtifactBroker(data.brokerConfig);
     const controls = data.brokerConfig.authorized_bindings.filter(row => /^control\/reading-checkpoint-\d+\.json$/.test(row.artifact_path)).sort((a, b) => Number(a.revision) - Number(b.revision));
     let last, next;

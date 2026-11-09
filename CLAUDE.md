@@ -9,3 +9,7 @@ Use `academic-paper-analysis` for reading papers. Use `apa-query` for writing-or
 The `.claude/skills/` entries for these three skills only let Claude Code load them; their single source is `.agents/skills/`. Read the source `SKILL.md` after invoking an entry, and change skill behavior only in `.agents/skills/`.
 
 For a new configured reading, follow that skill's science Controller and recovery instructions. Preserve the original requests, host observations, task handles, accepted receipts and budget; conversation compaction alone is not a process restart. Historical runs are committed read-only evidence; retired bindings are rejected with `READING_BINDING_RETIRED`.
+
+New runs keep `configured-reading-2.2`. When the user selects Reading Editor, use `reading-editor-1.4` to generate a research-map Canvas for each language. Refresh committed maps through the approved `map-refresh` maintenance entry.
+
+The user may clear the default installation selections for MinerU, its global launcher, Better Embedded Canvas and companion writing skills. Report the available and missing items, targets and effects before installing the final selection. See `AGENTS.md` for the shared setup rules.

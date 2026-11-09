@@ -1,11 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { exportPublicApa, checkPublicApa } from '../../scripts/setup/export-public-apa.mjs';
+
+function requireGit(t) {
+  try {
+    execFileSync('git', ['--version'], { stdio: 'pipe' });
+    return true;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    t.skip('Git executable is unavailable');
+    return false;
+  }
+}
 
 async function fixture(t, files = { 'entry.mjs': 'export const ready = true;\n' }) {
   const root = await mkdtemp(join(tmpdir(), 'apa-public-export-'));
@@ -153,6 +164,7 @@ test('current public export includes query and topic entries with their regressi
 });
 
 test('public Git checkout preserves manifest-bound LF and CRLF bytes with autocrlf enabled', async t => {
+  if (!requireGit(t)) return;
   const f = await fixture(t, { 'README.md': 'Synthetic public guide.\n', 'config/environment.json': '{"version":1}\r\n' });
   const template = await readFile(new URL('../../Templates/apa-public/.gitattributes', import.meta.url));
   await writeFile(join(f.sourceRoot, 'attributes.template'), template);
@@ -168,4 +180,48 @@ test('public Git checkout preserves manifest-bound LF and CRLF bytes with autocr
     assert.deepEqual(await readFile(join(checkoutRoot, name)), await readFile(join(f.outputRoot, name)), name);
   }
   assert.equal((await checkPublicApa({ root: checkoutRoot })).ok, true);
+});
+
+test('public allowlist runs every exported test suite', async () => {
+  const spec = JSON.parse(await readFile(new URL('../../config/apa-public-files.json', import.meta.url), 'utf8'));
+  const tests = new Set(spec.tests);
+  assert.deepEqual(spec.files.filter(path => path.endsWith('.test.mjs') && !tests.has(path)), []);
+});
+
+test('public export ships the active Editor prompt and omits the retired prompt', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'apa-public-prompts-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const outputRoot = join(root, 'public');
+  await exportPublicApa({ outputRoot });
+  const prompts = await readdir(join(outputRoot, 'prompts', 'v3'));
+  assert.ok(prompts.includes('reading-editor-1.4.md'));
+  assert.ok(!prompts.includes('reading-editor-1.3.md'));
+});
+
+test('public Git clone preserves source placeholders without tracking local papers and process files', async t => {
+  if (!requireGit(t)) return;
+  const root = await mkdtemp(join(tmpdir(), 'apa-public-git-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const outputRoot = join(root, 'public');
+  await exportPublicApa({ outputRoot });
+  for (const path of ['Clippings/a.pdf', 'Raw/a.pdf', 'Eval/x.json', '.planning/x.md',
+    '.apa-v3/phase22/history/x.json', '.apa-v3/phase22/runs/x.json', '.apa-v3/phase22/transactions/x.json']) {
+    await mkdir(join(outputRoot, path, '..'), { recursive: true });
+    await writeFile(join(outputRoot, path), 'Synthetic local file');
+  }
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' });
+  git(outputRoot, 'init', '--quiet');
+  git(outputRoot, 'add', '-A');
+  const staged = git(outputRoot, 'ls-files', '-z').split('\0');
+  assert.deepEqual(staged.filter(path => /^(?:Clippings|Raw|Eval|\.planning|\.apa-v3)\//.test(path)), ['Clippings/.gitkeep', 'Raw/.gitkeep']);
+  git(outputRoot, '-c', 'user.name=APA export test', '-c', 'user.email=apa-test@example.invalid',
+    '-c', 'commit.gpgSign=false', '-c', 'core.hooksPath=' + join(root, 'hooks'), 'commit', '--quiet', '-m', 'Synthetic public export');
+  const cloneRoot = join(root, 'clone.git');
+  const checkoutRoot = join(root, 'checkout');
+  // Keep Git metadata beside the checkout so the exporter can check just the distributable tree.
+  git(root, 'clone', '--quiet', '--bare', outputRoot, cloneRoot);
+  await mkdir(checkoutRoot);
+  git(checkoutRoot, '--git-dir=' + cloneRoot, '--work-tree=' + checkoutRoot, 'checkout', '--force', 'HEAD');
+  const checked = await checkPublicApa({ root: checkoutRoot });
+  assert.equal(checked.ok, true, checked.errors.join('\n'));
 });

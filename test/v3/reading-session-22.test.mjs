@@ -17,11 +17,12 @@ import { inspectV3Graph } from '../../scripts/v3/obsidian-graph.mjs';
 import { checkCommittedIndex } from '../../scripts/check-bm25-index.mjs';
 import { prepareReadingRuntimeSnapshot, readReadingRuntimeSnapshotReference, registerReadingRuntimeSnapshotReference } from '../../scripts/v3/reading-runtime-snapshot.mjs';
 import { writeTranslationProgress } from '../../scripts/v3/reading-translation-progress.mjs';
+import { executionBudgetSummary } from '../../scripts/v3/reading-execution-budget.mjs';
 import { createReadingSession, resumeReadingSession, nextReadingAction, recordReadingEvent } from '../../scripts/v3/reading-session.mjs';
 
-async function configuredFixture(t, { systemTemp = false } = {}) {
+async function configuredFixture(t, { systemTemp = false, tempBase } = {}) {
   // The copied runtime resolves the checkout's installed packages through its parent tree.
-  const base = systemTemp ? tmpdir() : join(process.cwd(), '.tmp', 'apa-controller-handoff-20261031');
+  const base = tempBase ?? (systemTemp ? tmpdir() : join(process.cwd(), '.tmp', 'apa-controller-handoff-20261031'));
   await mkdir(base, { recursive: true });
   const root = await mkdtemp(join(base, 'session-22-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -45,6 +46,55 @@ async function configuredFixture(t, { systemTemp = false } = {}) {
   return { root, profile, evidence, options: { repoRoot: root, runId: 'run', scientificInput, sourceLanguage: 'en', authorizationId: 'test', deadline: '2099-01-01T00:00:00Z', maxCalls: 8, maxTotalCalls: 14, sessionContext: { model: 'm', effort: 'high' }, hostProfile: profile, evidence, includeRepairs: true } };
 }
 
+test('the 1.4 presentation binding preserves 2.2 session preparation, budget and compaction decisions', async t => {
+  const f = await configuredFixture(t, { tempBase: join(process.cwd(), '.tmp', 'apa-research-map-canvas-20261108', 'task2') });
+  const session = await createReadingSession({ ...f.options, instructionProfile: 'configured-reading-2.2' });
+  const root = join(f.root, 'runs', 'run');
+  const readState = async () => JSON.parse(await readFile(join(root, 'control', 'science-state.json'), 'utf8')).data;
+  const initial = await readState();
+  const binding = initial.prepared.runControl.reading_first_binding;
+  assert.equal(binding.configured_setup.instruction_profile, 'configured-reading-2.2');
+  assert.deepEqual([binding.prior_calls, binding.max_calls, binding.max_total_calls], [6, 8, 14]);
+  assert.deepEqual(Object.values(binding.task_bindings).map(task => [task.task_id, task.role, task.artifact_path]), [
+    ['en', 'english-writer', 'reading/en.json'], ['en-r2', 'english-writer', 'reading/en-r2.json'],
+    ['zh-CN', 'translation', 'reading/zh-CN.json'], ['zh-CN-r2', 'translation', 'reading/zh-CN-r2.json'],
+    ['review', 'independent-verifier', 'reading/review.json'], ['review-r2', 'independent-verifier', 'reading/review-r2.json'],
+    ['presentation', 'reading-editor', 'reading/presentation.json'], ['presentation-r2', 'reading-editor', 'reading/presentation-r2.json'],
+  ]);
+  assert.deepEqual(initial.executionLedger, []);
+  const dispatch = await nextReadingAction(session);
+  assert.equal(dispatch.action, 'dispatch');
+  assert.equal(dispatch.role, 'evidence');
+  const raw = JSON.stringify({ agent_id: 'synthetic-evidence' });
+  const rawPath = join(root, 'evidence-return.txt');
+  await writeFile(rawPath, raw);
+  const observation = {
+    action_id: dispatch.action_id, run_id: dispatch.run_id, input_fingerprint: dispatch.input_fingerprint, port: dispatch.port,
+    tool_call: { name: dispatch.host_action, arguments: dispatch.arguments }, raw_result_text: raw,
+    evidence: { kind: 'raw', capture: 'direct', sha256: createHash('sha256').update(raw).digest('hex'), source_reference: rawPath },
+  };
+  await recordReadingEvent(session, { kind: 'host_observation', action_id: dispatch.action_id, observation });
+  await mkdir(join(root, 'native'), { recursive: true });
+  await writeFile(join(root, 'native', 'evidence.json'), JSON.stringify({ role: 'evidence' }));
+  await recordReadingEvent(session, { kind: 'result', action_id: dispatch.action_id, observation });
+  const budget = { total_used: 1, initial_dispatches: 1, continuations: 0, reserved: 0, occupied: 1, total_limit: 14, remaining_total: 13 };
+  assert.deepEqual(executionBudgetSummary((await readState()).executionLedger, binding.max_total_calls), budget);
+  const boundary = await nextReadingAction(session);
+  assert.equal(boundary.kind, 'compaction-observation');
+  assert.equal(boundary.boundary_id, 'evidence-accepted');
+  await recordReadingEvent(session, { kind: 'compaction', input: { observation: {} } });
+  const reminder = await nextReadingAction(session);
+  assert.equal(reminder.action, 'await-user');
+  assert.equal(reminder.record.reason, 'boundary-reminder-required');
+  await recordReadingEvent(session, { kind: 'compaction', input: { userDecision: 'skip' } });
+  const next = await nextReadingAction(session);
+  assert.equal(next.action, 'dispatch');
+  assert.equal(next.role, 'methods');
+  const resumed = await readState();
+  assert.equal(resumed.compaction_reminders['evidence-accepted'].reason, 'user-skipped');
+  assert.equal(resumed.executionLedger.filter(row => row.task_id === 'evidence').length, 1);
+  assert.equal(binding.presentation_profile, 'reading-editor-1.4');
+});
 
 test('2.2 rejects receipt without verified host evidence and blocks untrusted assets', async t => {
   const f = await configuredFixture(t), session = await createReadingSession({ ...f.options, instructionProfile: 'configured-reading-2.2' });
@@ -272,7 +322,7 @@ test('interrupted rebind preserves only the registered unreceipted metadata byte
 });
 
 for (const repairResources of [false, true]) test(`2.2 retains Results resources${repairResources ? ' with a scoped renderer repair' : ''} across recovery`, async t => {
-  const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.3' } });
+  const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.4' } });
   f.profile.capabilities = { task_continuation: { status: 'detected', method: 'ContinueTask target prompt', scope: 'current-session', evidence: [{ source: 'tool-schema', reference: 'synthetic schema' }], limitations: [], continuation: { tool: 'ContinueTask', handle_argument: 'target', instruction_argument: 'prompt', same_context: true, original_host_accessible: true } } };
   let session = await createReadingSession({ ...f.options, instructionProfile: 'configured-reading-2.2', maxTotalCalls: 22 });
   const root = join(f.root, 'runs', 'run'), resourceRoot = join(root, 'resources', 'results');

@@ -83,6 +83,13 @@ function parseNote(bytes, path, generation, index) {
     parsedHeadings.push({ index: lineOffsets[token.map[0]], level: Number(token.tag.slice(1)), name });
   }
   const personal = parsedHeadings.find(heading => heading.level === 2 && /^(?:Personal Notes|个人备注|个人笔记)$/.test(heading.name));
+  const personalHeadingEnds = paper ? parsedHeadings.flatMap(heading => {
+    if (heading.level !== 2 || !/^(?:Personal Notes|个人笔记)$/.test(heading.name)) return [];
+    const end = fullBody.indexOf('\n', heading.index) + 1;
+    return end && /^## (?:Personal Notes|个人笔记)\r?\n$/.test(fullBody.slice(heading.index, end)) ? [end] : [];
+  }) : [];
+  const personalPrefixBytes = personalHeadingEnds.length === 1
+    ? bytes.length - Buffer.byteLength(fullBody.slice(personalHeadingEnds[0]), 'utf8') : null;
   const rawBody = fullBody.slice(0, personal?.index ?? fullBody.length);
   const clean = value => value.replace(/<!--[\s\S]*?-->/g, '').trim();
   const headings = parsedHeadings.filter(heading => heading.index < rawBody.length);
@@ -103,7 +110,7 @@ function parseNote(bytes, path, generation, index) {
     sections.push({ anchor: name, content: clean(rawBody.slice(heading.index, headings[i + 1]?.index ?? rawBody.length)),
       section_id: region, language: node ? activeLanguage : null });
   }
-  return { fm, body: clean(rawBody), sections, managedHash, paper };
+  return { fm, body: clean(rawBody), sections, managedHash, paper, personalPrefixBytes };
 }
 
 /** Observe the registered inventory and a stable set of editable Markdown bytes. */
@@ -134,7 +141,12 @@ export async function readCurrentVaultContent({ vaultRoot, maxAttempts = 2, onRe
               if (sidecar && sha(presentation) === sidecar.sha256) {
                 const language = Object.entries(parsed.paper.paths).find(([, value]) => value === path)[0];
                 const published = JSON.parse(presentation).targets?.notes?.[language]?.byte_sha256;
-                if (published) { baseline = currentSha; expected = published; completeBaseline = true; }
+                if (published) {
+                  baseline = currentSha;
+                  expected = published;
+                  completeBaseline = true;
+                  if (baseline !== expected && parsed.personalPrefixBytes !== null) baseline = sha(bytes.subarray(0, parsed.personalPrefixBytes));
+                }
               }
             } catch { /* Managed binding remains the available baseline. */ }
           }

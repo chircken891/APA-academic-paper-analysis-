@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { readingFirstIndexFixture } from './helpers/reading-first-index-fixtures.mjs';
+import { readingFirstIndexFixture, digest } from './helpers/reading-first-index-fixtures.mjs';
 import { queryLibrary } from '../../scripts/v3/library-query.mjs';
 import { readCommittedGeneration } from '../../scripts/v3/phase22-active-version.mjs';
 
@@ -50,6 +50,41 @@ test('current search includes text before headings and excludes personal notes',
   assert.equal(found.status, 'matches');
   assert.equal(found.results[0].hits[0].anchor, null);
   assert.equal((await queryLibrary({ vaultRoot: f.vaultRoot, query: 'privatenoteneedle' })).status, 'no_matches');
+});
+
+test('only changes after the published empty personal heading preserve historical review coverage', async t => {
+  const f = await readingFirstIndexFixture(t);
+  // Use the historical approval state in a synthetic vault to exercise the query flag.
+  f.generation.evidence_mode = f.manifest.evidence_mode = 'actual';
+  const zh = f.paper.paths['zh-CN'];
+  const en = f.paper.paths.en;
+  f.notes['zh-CN'] = Buffer.concat([f.notes['zh-CN'], Buffer.from('\nPublished personal content\n')]);
+  f.manifest.targets.notes['zh-CN'].byte_sha256 = digest(f.notes['zh-CN']);
+  const manifest = f.files.find(row => row.kind === 'reader-presentation');
+  manifest.bytes = Buffer.from(JSON.stringify(f.manifest));
+  f.paper.reader_presentation.sha256 = digest(manifest.bytes);
+  f.generation.objects.find(row => row.path === manifest.path).sha256 = digest(manifest.bytes);
+  await f.save(await f.build());
+
+  const query = { vaultRoot: f.vaultRoot, query: 'finalresultneedle' };
+  const before = await queryLibrary(query);
+  assert.equal(before.scientific_approval, true);
+  const personalEdit = Buffer.concat([f.notes.en, Buffer.from('\nOnly personal content changed.\n')]);
+  await writeFile(join(f.vaultRoot, en), personalEdit);
+  const found = await queryLibrary(query);
+  const hit = found.results[0].hits.find(row => row.path === en);
+  assert.equal(hit.changed, false);
+  assert.equal(hit.sha256, digest(personalEdit));
+  assert.equal(found.scientific_approval, true);
+
+  const { readCurrentVaultContent, getCurrentNote } = await import('../../scripts/v3/current-vault-content.mjs');
+  assert.equal(getCurrentNote(await readCurrentVaultContent({ vaultRoot: f.vaultRoot }), zh).changed, false);
+  await writeFile(join(f.vaultRoot, zh), f.notes['zh-CN'].toString().replace('Published personal content', 'Updated personal content'));
+  assert.equal(getCurrentNote(await readCurrentVaultContent({ vaultRoot: f.vaultRoot }), zh).changed, true);
+  await writeFile(join(f.vaultRoot, en), personalEdit.toString().replace('holds only', 'applies only'));
+  const changed = await queryLibrary(query);
+  assert.equal(changed.results[0].hits.find(row => row.path === en).changed, true);
+  assert.equal(changed.scientific_approval, false);
 });
 
 test('a modified shared knowledge identity is isolated from other searchable content', async t => {

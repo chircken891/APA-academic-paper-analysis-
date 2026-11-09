@@ -39,6 +39,32 @@ const clone = value => structuredClone(value);
 const validRenderOptions = value => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => ['targetRegistry', 'existingTargets', 'knowledgeRegistry'].includes(key));
 const same = (a, b) => fingerprintReadingFirst(a) === fingerprintReadingFirst(b);
 const stateOf = session => { const state = sessions.get(session); if (!state) fail('READING_SESSION_REQUIRED'); return state; };
+// These output checks run before acceptReadingFirstResult commits or consumes the task.
+const resumableResultCodes = new Set([
+  'READING_FIRST_EDITOR_SCHEMA_INVALID',
+  'READING_FIRST_EDITOR_FINGERPRINT_INVALID',
+  'READING_FIRST_EDITOR_CONTENT_INVALID',
+  'READING_FIRST_EDITOR_SECTION_INVALID',
+  'READING_FIRST_EDITOR_EMPHASIS_INVALID',
+  'READING_FIRST_EDITOR_SUBHEADING_INVALID',
+  'READING_FIRST_EDITOR_VISUAL_INVALID',
+  'READING_FIRST_EDITOR_METHOD_INVALID',
+  'READING_FIRST_EDITOR_BILINGUAL_METHODS_INVALID',
+  'READING_FIRST_EDITOR_ARGUMENT_INVALID',
+  'READING_FIRST_EDITOR_ARGUMENT_SECTION_INVALID',
+  'READING_FIRST_EDITOR_ARGUMENT_TEXT_INVALID',
+  'READING_FIRST_EDITOR_ARGUMENT_CLAIMS_INVALID',
+  'READING_FIRST_EDITOR_ARGUMENT_BRANCHES_INVALID',
+  'READING_FIRST_EDITOR_ARGUMENT_FINDINGS_INVALID',
+  'READING_FIRST_EDITOR_ARGUMENT_RELATIONS_INVALID',
+  'READING_FIRST_EDITOR_ARGUMENT_CYCLE',
+  'READING_FIRST_EDITOR_ARGUMENT_PATH_INVALID',
+  'READING_FIRST_VIEW_INVALID',
+  'READING_FIRST_VIEW_LAYOUT_INVALID',
+  'READING_FIRST_ENRICHMENT_CONSUMPTION_REQUIRED',
+  'RF_OBSIDIAN_KNOWLEDGE_CONTENT_INVALID',
+  'READING_FIRST_REVIEW_INVALID',
+]);
 const capability = (state, task) => state.broker.issueCapability({ runId: state.prepared.runControl.run_id, actorId: task.owner_actor_id, role: task.role, artifactPath: task.artifact_path, revision: task.revision });
 const controlPath = root => join(root, 'control', 'science-state.json');
 const runtimeLocation = state => ({ repoRoot: state.prepared.runControl.reading_first_binding.configured_setup.knowledge_registry.vault_root,
@@ -542,12 +568,15 @@ async function nextSessionAction(session) {
   if (!state.science) return { action: 'reconcile', code: 'READING_SESSION_RESTORE_REQUIRED' };
   if (state.preflight.status !== 'pass') return { action: 'provide-input', kind: 'runtime-evidence', preflight: clone(state.preflight) };
   if (state.translationStop) {
-    const decision = state.translationStop.decision;
-    if (state.translationStop.final_rejection) {
-      const entry = snapshotReadingFirstRuntime(state.reading).state.request_entries.find(row => row.request.emittedStep.action_id === state.translationStop.action_id);
-      if (entry && finalizeContinuations(state, entry.request.task.task_id).length) return { action: 'reconcile', code: 'READING_TRANSLATION_FINAL_INVALID', action_id: state.translationStop.action_id };
-    }
-    return decision.action === 'complete' ? { ...clone(decision), action: 'provide-input', kind: 'accept-translation' } : clone(decision);
+    const { action_id, decision, final_rejection } = state.translationStop;
+    const entry = final_rejection && snapshotReadingFirstRuntime(state.reading).state.request_entries.find(row => row.request.emittedStep.action_id === action_id);
+    const finalizations = entry ? finalizeContinuations(state, entry.request.task.task_id) : [];
+    if (!finalizations.length) return decision.action === 'complete' ? { ...clone(decision), action: 'provide-input', kind: 'accept-translation' } : clone(decision);
+    if (finalizations.length !== 1 || finalizations[0].status !== 'prepared') return { action: 'reconcile', code: 'READING_TRANSLATION_FINAL_INVALID', action_id };
+    if (state.nextSessionCheckpoint >= state.sessionCheckpoints.length) return { action: 'reconcile', code: 'CONTROL_CHECKPOINT_CAPACITY' };
+    // The reading checkpoint reserved this execution before the stop could be cleared.
+    state.translationStop = null;
+    await saveSessionMetadata(state);
   }
   const continuation = pendingContinuations(state)[0];
   if (continuation) {
@@ -1060,12 +1089,14 @@ async function recordSessionEvent(session, event = {}) {
     const finalized = finalizeContinuations(state, request.task.task_id).at(-1);
     // Only a rejected final translation body spends the single finalize-only continuation.
     const code = error.code ?? error.message, content = /^READING_FIRST_(?:VIEW|TRANSLATION)_/.test(code);
+    const translationFinal = request.task.role === 'translation' && (stopped || finalized);
     const repeated = stopped && state.translationStop.final_rejection !== undefined && same(state.translationStop.final_rejection, { code });
-    if (request.task.role === 'translation' && content && (stopped || finalized) && !repeated) {
+    if (translationFinal && content && !repeated) {
       state.translationStop = { ...(stopped ? state.translationStop : { action_id: event.action_id, execution_id: finalized.execution_id, decision: clone(finalized.context.translation_decision), stop_reason: { kind: 'unknown' } }), final_rejection: { code } };
       try { await saveSessionMetadata(state); }
       catch (saveError) { error.cause = saveError; }
     }
+    if (!translationFinal && resumableResultCodes.has(code)) error.recovery = { action: 'continuation-intent', action_id: event.action_id, code };
     throw error;
   }
   if (result.checkpoint_required === false && result.status === 'completed_with_limits') return result;

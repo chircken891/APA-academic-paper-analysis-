@@ -25,7 +25,7 @@ function validateContract(contract) {
     && Number.isInteger(contract?.disk?.recommended_free_gib)
     && contract.disk.recommended_free_gib > 0
     && Array.isArray(pluginIds)
-    && pluginIds.length === 4
+    && pluginIds.length === 5
     && new Set(pluginIds).size === pluginIds.length;
   if (!valid) throw new Error('config/environment.json does not satisfy the current environment contract.');
   return contract;

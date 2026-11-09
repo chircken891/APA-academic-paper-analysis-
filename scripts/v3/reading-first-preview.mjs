@@ -19,13 +19,21 @@ function anchors(content) {
   const blocks = new Set([...content.matchAll(/(?:^|\s)\^([\w-]+)[ \t]*$/gm)].map(match => match[1]));
   const headings = new Set();
   for (const match of content.matchAll(/^#{1,6}\s+(.+?)\s*#*\s*$/gm)) {
+    headings.add(match[1].trim().toLowerCase());
     const heading = match[1].replace(/[*_`]/g, '').trim().toLowerCase();
     headings.add(heading); headings.add(heading.replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, '-'));
   }
   return { blocks, headings };
 }
 function referencesFor(file) {
-  const content = file.bytes.toString('utf8').replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, '');
+  let content = file.bytes.toString('utf8');
+  if (/\.canvas$/i.test(file.path)) {
+    let canvas;
+    try { canvas = JSON.parse(content); } catch { fail('RF_PREVIEW_CANVAS_INVALID', { path: file.path }); }
+    if (!Array.isArray(canvas.nodes) || !Array.isArray(canvas.edges)) fail('RF_PREVIEW_CANVAS_INVALID', { path: file.path });
+    content = canvas.nodes.filter(node => node.type === 'text').map(node => node.text).join('\n');
+  }
+  content = content.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, '');
   const references = [...content.matchAll(/!?\[[^\]\n]*\]\((<[^>\n]+>|[^)\n]+)\)/g)].map(match => ({ target: match[1].startsWith('<') ? match[1].slice(1, -1) : match[1].replace(/\s+["'][\s\S]*$/, ''), wiki: false }));
   references.push(...[...content.matchAll(/!?\[\[([^\]\n]+)\]\]/g)].map(match => ({ target: match[1].split('|')[0], wiki: true })));
   return references;
@@ -33,7 +41,7 @@ function referencesFor(file) {
 export function validateReadingFirstPreviewFiles(files) {
   const byPath = new Map(files.map(file => [file.path, file]));
   let links = 0;
-  for (const file of files.filter(row => /\.md$/i.test(row.path))) {
+  for (const file of files.filter(row => /\.(?:md|canvas)$/i.test(row.path))) {
     for (const reference of referencesFor(file)) {
       if (/^(?:https?:|mailto:|doi:)/i.test(reference.target)) continue;
       const target = decoded(reference.target.trim());
@@ -118,6 +126,7 @@ export async function exportReadingFirstPreview({ outputRoot, identity, views, p
   }
   for (const note of rendered.notes) add(note.path, note.bytes, 'paper');
   for (const note of rendered.supportNotes) add(note.path, note.bytes, 'knowledge-candidate');
+  for (const asset of rendered.generated_assets ?? []) add(asset.path, Buffer.from(asset.content), asset.kind);
   for (const resource of resources) {
     if (history && (knowledgeRegistry.some(row => row.path === resource.path) || history.paper_paths.includes(resource.path))) fail('RF_PREVIEW_HISTORICAL_RESOURCE_CONFLICT', { path: resource.path });
     let bytes;

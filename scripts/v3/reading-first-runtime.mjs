@@ -70,7 +70,7 @@ export function createReadingFirstRunControl({runId, scientificInput, mainSessio
   if (!text(runId) || scientificInput?.identity?.run_id !== runId || !text(authorizationId)
     || !Number.isInteger(maxCalls) || maxCalls < (presentationMode === 'reading-editor' ? 4 : 3) || maxCalls > (presentationMode === 'reading-editor' ? 8 : 6)) fail('READING_FIRST_CONTROL_INVALID');
   if (!['writer','reading-editor'].includes(presentationMode)) fail('READING_FIRST_PRESENTATION_MODE_INVALID');
-  if (['reading-editor-1.0','reading-editor-1.1','reading-editor-1.2'].includes(presentationProfile)) fail('READING_BINDING_RETIRED');
+  if (['reading-editor-1.0','reading-editor-1.1','reading-editor-1.2','reading-editor-1.3'].includes(presentationProfile)) fail('READING_BINDING_RETIRED');
   if (presentationProfile !== READING_EDITOR_PROFILE) fail('READING_FIRST_EDITOR_PROFILE_INVALID');
   if (configuredSetup) assertReadingBindingCurrent({repair_routing:OWNER_REPAIR_ROUTING, configured_setup:configuredSetup});
   if (!['source-language-1.0','legacy-flat-1.0'].includes(noteLayout)) fail('READING_FIRST_NOTE_LAYOUT_INVALID');
@@ -705,8 +705,15 @@ export function readingFirstEditorPresentation({presentation:source, views} = {}
   }
   return presentation;
 }
-function presentationNotes(presentation) {
-  return new Map([...(presentation?.notes ?? []),...(presentation?.supportNotes ?? [])].filter(note=>text(note.path)&&typeof note.content==='string').map(note=>[note.path,note.content]));
+function presentationNotes(presentation, includeGeneratedAssets = false) {
+  const notes = new Map([...(presentation?.notes ?? []),...(presentation?.supportNotes ?? [])]
+    .filter(note=>text(note.path)&&typeof note.content==='string').map(note=>[note.path,note.content]));
+  if (includeGeneratedAssets) for (const note of presentation?.notes ?? []) {
+    if (!notes.has(note.path)) continue;
+    const assets = (presentation.generated_assets ?? []).filter(asset => asset.language === note.language);
+    if (assets.length) notes.set(note.path, JSON.stringify([note.content, assets.map(({ path, content }) => [path, content])]));
+  }
+  return notes;
 }
 
 /** A host receipt establishes dispatch correlation, not independent first reading. */
@@ -741,7 +748,10 @@ export async function acceptReadingFirstResult({controller, request, observation
       else if (scoped && state.reviews && state.renderRepairBaseEditor) {
         const user=pendingUserRevision(state);
         const aligned=user?.scientific===false ? alignScopedEditorOrder(state.renderRepairBaseEditor,value,user.issue.repair_scope) : value;
-        if (user?.scientific===false) assertUserFactsUnchanged({languages:state.renderRepairBaseEditor.languages,map:state.renderRepairBaseEditor.map},{languages:aligned.languages,map:aligned.map});
+        if (user?.scientific===false) {
+          const editorFacts = ({ languages, map, argument, primary_finding_ids }) => ({ languages, map, argument, primary_finding_ids });
+          assertUserFactsUnchanged(editorFacts(state.renderRepairBaseEditor), editorFacts(aligned));
+        }
         assertEditorRepairScope(state.renderRepairBaseEditor,aligned,activeReview(state),effectivePresentation(state));
       }
     } catch (error) { rejection=error.code; }
@@ -1444,14 +1454,14 @@ function validateReviewRequest(state, presentation, renderRepair) {
   const materialRender=!!plan?.renderer.length;
   if (materialRender && !renderRepair) fail('READING_FIRST_RENDER_REPAIR_REQUIRED');
   if (renderRepair && materialRender) {
-    const original=presentationsOfReview(state), updated=presentationNotes(presentation);
+    const original=presentationsOfReview(state, true), updated=presentationNotes(presentation, true);
     if (!state.renderRepairBaseViews || !state.handoff.presentation) fail('READING_FIRST_RENDER_REPAIR_UNAVAILABLE');
     // Re-render the first-review views with the changed renderer inputs. This prevents
     // a Writer edit to the same note from counting as a renderer correction.
     const baseline=renderReadingFirstObsidian({identity:state.handoff.identity,views:state.renderRepairBaseViews,presentation:resolvedPresentation(state,state.handoff.presentation),
       ...(state.renderRepairBaseEditor ? {readingEditor:state.renderRepairBaseEditor} : {}),...rendered.rendering,
       noteLayout:state.binding.note_layout,sourceLanguage:state.binding.source_language});
-    const rendererChanges=presentationNotes(baseline);
+    const rendererChanges=presentationNotes(baseline, true);
     if (!local || ['completed_with_limits','reading_complete'].includes(state.status) || presentation.presentation_fingerprint===state.reviewedPresentationFingerprint
       || plan.renderer.some(issue=>issue.affected_paths.some(path=>!original.has(path) || !updated.has(path) || !rendererChanges.has(path) || original.get(path)===rendererChanges.get(path)))) fail('READING_FIRST_RENDER_REPAIR_UNAVAILABLE');
   } else if (renderRepair && (state.binding.presentation_mode!=='reading-editor' || !local || state.status!=='reading_complete' || !minorRenderIssues.length || !state.readingEditor || presentation.presentation_fingerprint===state.reviewedPresentationFingerprint)) fail('READING_FIRST_RENDER_REPAIR_UNAVAILABLE');
@@ -1477,8 +1487,8 @@ export function createReadingFirstReviewRequest({controller, presentation, rende
   state.reviews+=1; state.status='reviewing'; return result;
 }
 /** Notes put before the Verifier: inline ones plus support notes registered as files, which must still match their recorded bytes. */
-function reviewedNotes(payload) {
-  const notes = presentationNotes(payload?.presentation);
+function reviewedNotes(payload, includeGeneratedAssets = false) {
+  const notes = presentationNotes(payload?.presentation, includeGeneratedAssets);
   for (const file of payload?.support_note_files ?? []) {
     const bytes = readFileSync(file.path);
     if (sha(bytes) !== file.sha256 || bytes.length !== file.byte_length) fail('READING_FIRST_SUPPORT_NOTE_CHANGED');
@@ -1486,9 +1496,9 @@ function reviewedNotes(payload) {
   }
   return notes;
 }
-function presentationsOfReview(state) {
+function presentationsOfReview(state, includeGeneratedAssets = false) {
   const latest=[...state.requestEntries.values()].findLast(request=>request.task.role==='independent-verifier' && requests.get(request)?.consumed);
-  return reviewedNotes(requests.get(latest)?.payload);
+  return reviewedNotes(requests.get(latest)?.payload, includeGeneratedAssets);
 }
 export function createReadingFirstRevisionRequests({controller} = {}) {
   const state=stateFor(controller); current(state);
@@ -1677,7 +1687,7 @@ function readingFirstSnapshot(state) {
 }
 
 const publicationTools = [
-  './reading-first-runtime.mjs', './reading-first-obsidian.mjs', './reading-first-editor.mjs',
+  './reading-first-runtime.mjs', './reading-first-obsidian.mjs', './reading-first-editor.mjs', './research-map-canvas.mjs',
   './reading-first-editor-contract.mjs',
   './reading-first-knowledge.mjs', './reading-first-knowledge-registry.mjs', './reading-first-rebase.mjs', './phase22-managed-markdown.mjs', './phase221-targets.mjs',
   './owned-artifact-store.mjs', './phase21-runner.mjs', '../apa-model-policy.mjs', '../lib/query-terms.mjs',
@@ -1709,7 +1719,7 @@ function publicationToolBindings(binding) {
   const paths=publicationTools.filter(path=>!(configured && path==='../../prompts/v3/reading-first-contracts.md'));
   if (configured || editor) paths.push('./reading-first-repair-scope.mjs');
   if (usesExecutionLedger(binding)) paths.push('./reading-execution-budget.mjs', './reading-translation-progress.mjs');
-  if (editor && !configured) paths.push('../../prompts/v3/reading-editor-1.3.md');
+  if (editor && !configured) paths.push(`../../prompts/v3/${binding.presentation_profile}.md`);
   const records=paths.map(path=>publicationFileBinding(fileURLToPath(new URL(path,import.meta.url))));
   if (configured) for (const file of binding.configured_setup.prompt_files) if (!records.some(row=>row.path===file.path)) records.push(publicationFileBinding(file.path));
   return records;

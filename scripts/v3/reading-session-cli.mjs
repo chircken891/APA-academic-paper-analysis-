@@ -236,4 +236,9 @@ async function executeCommand({ command, options, input, execution, inspection }
   }
   return result;
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) run().catch(error=>{process.stderr.write(`${error.message ?? error.code}\n`);process.exitCode=1;});
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) run().catch(error => {
+  const message = error.message ?? error.code;
+  const output = error.recovery ? JSON.stringify({ code: error.code ?? error.recovery.code, message, recovery: error.recovery }) : message;
+  process.stderr.write(output + '\n');
+  process.exitCode = 1;
+});

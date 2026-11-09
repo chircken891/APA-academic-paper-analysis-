@@ -42,7 +42,17 @@ config/apa.local.json
 config/backups/
 
 # PDF sources (large, user-managed locally)
-Clippings/
+/Clippings/*
+!/Clippings/.gitkeep
+/Raw/*
+!/Raw/.gitkeep
+
+# Local process records
+/Eval/
+/.planning/
+/.apa-v3/phase22/history/
+/.apa-v3/phase22/runs/
+/.apa-v3/phase22/transactions/
 
 # Extracted figures — committed with papers (part of vault)
 # Temp extraction directories only (not for git)

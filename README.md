@@ -2,7 +2,7 @@
 
 APA 是一套可配置的论文阅读与 Obsidian 知识库工作流，输出可直接使用的中英文笔记、图表、方法与概念链接。通过 apa-setup 选择角色模型和推理强度，或让角色跟随当前会话；模型名称不限定 GPT。当前安装脚本的环境基线是 Windows x64、Node.js 24、npm 11，以及 MinerU 本地解析路线。
 
-新论文由六个科学角色整合研究问题、设计、方法、结果与局限，再由论文原文语言对应的 Writer 成稿，另一种语言由 Translation 依据该稿翻译，设计部分以一段研究设计概览开头。可选 Reading Editor 补充重点概览、段首加粗小标题、方法/概念目录和分阶段研究导图。导图覆盖全部研究步骤，发现可精选，图后链接每项省略的发现。模块大标题固定，正文最多三级标题，目录、方法条目和原图注直接展开，读图说明紧随对应图表。完整候选经过一次整体审查，至多一次实质问题局部复核。正式入库需要对已审候选批准，只有已提交的 V3 代次进入默认图谱和检索。
+新论文由六个科学角色整合研究问题、设计、方法、结果与局限，再由原文语言对应的 Writer 成稿，由 Translation 译成另一种语言。可选 Reading Editor 整理重点、段落层级、方法与概念目录，并依据两语正文组织研究导图的论点。导图按研究步骤、发现、论点三列呈现，覆盖所有已登记步骤、发现及其关系。两份笔记各自嵌入同语言的 Canvas，并链接到完整画布。目录、方法条目和原图注直接展开。完整候选经过一次整体审查，至多一次实质问题局部复核。正式入库需要对已审候选批准，默认图谱和检索以已提交 V3 代次登记的内容为准。
 
 > **配置必须由用户在 HTML 页面中选择。** 使用 apa-setup 时，“完善配置”“为我配置”“为某某 agent 配置”等配置请求都必须生成并打开配置页，禁止 AI 自行采用默认值完成配置。导出配置、挖空或去除配置不强制打开页面。首次获取项目还须由用户指定或明确确认项目文件夹；当前会话目录及其子目录不能默认采用。
 
@@ -32,7 +32,7 @@ Set-Location -LiteralPath $apaProjectRoot
 
 若用户不打算将项目设为工作目录，或不愿将技能迁入项目作用域，助手须明确提醒：技能发现和项目规则的作用范围可能发生变化，保留全局加载方式可能让 APA 规则介入日常其他任务。仍须固定使用用户选定的项目绝对路径。已有全局副本的迁移或移除须单独确认，不随项目获取自动处理。
 
-### 2. 先检测，再安装基础依赖
+### 2. 先检测，再按选择安装
 
 即使还没有 Node.js，也可以先运行以下只读检测；它不会安装、下载或写入配置：
 
@@ -52,21 +52,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup\bootstrap-wind
 
 **检测命令正常退出不等于全部就绪。** 基础安装需要 Windows x64、Git、Node.js **24.x**、npm **11.x**。缺少这些软件时，根据报告从 [Git for Windows](https://git-scm.com/downloads/win) 和 [Node.js 官方下载页](https://nodejs.org/en/download) 获取对应版本，安装后重新打开 PowerShell 并回到工程目录，再检测一次。不要直接把“最新版”当作受支持版本。脚本不会替你安装 Git 或 Node.js。
 
-确认报告中的目标并决定安装后，再运行：
+默认选中 MinerU、全局 MinerU 启动器、Better Embedded Canvas 和五项写作指导。取消组件时在检测命令加入对应的 `-SkipMineru`、`-SkipGlobalIntegration`、`-SkipBetterEmbeddedCanvas` 或 `-SkipCompanionSkills`。只选部分写作指导时使用 `-CompanionSkills "名称,名称"`。先查看已有项、缺项、目标和影响，再执行报告中与最终选择对应的命令。保留全部默认选择的示例如下：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1
 npm.cmd run setup:check
 ```
 
-默认只恢复本工程的 npm 依赖，不安装 MinerU、全局集成或写作技能。`setup:check` 的基础通过标准是 `core_ready: true`；`parser`、`integration` 和 `obsidian` 的失败项须分别阅读，不能当作基础依赖失败，也不能当作已经完成论文运行。顶层 `ready` 还包含 Obsidian 检查，可能仍为 `false`。本说明使用 `npm.cmd`，避免 PowerShell 将 `npm` 解析为被执行策略阻止的 `npm.ps1`。
+`setup:check` 的基础通过标准是 `core_ready: true`。解析器、启动器和 Obsidian 插件各有独立检查结果。Obsidian 中的 Better Embedded Canvas 为嵌入画布提供只读平移与缩放，完整画布链接也可单独打开。BRAT、Claudian、Dataview 和 Templater 只检测。本说明使用 `npm.cmd`，避免 PowerShell 将 `npm` 解析为被执行策略阻止的 `npm.ps1`。
 
 ### 3. 准备 PDF 解析环境
 
-新论文目前需要可用的 MinerU 环境。**已有环境**可以直接在下一步配置其目录；**需要新安装**时，先检测所选安装的完整前置：
+新论文目前需要可用的 MinerU 环境。已通过上一步准备的环境或其他已有环境，可在下一步填写其目录。若这次只准备 MinerU，先检测对应选择：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1 -CheckOnly -InstallMineru
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1 -CheckOnly -SkipGlobalIntegration -SkipBetterEmbeddedCanvas -SkipCompanionSkills
 ```
 
 本工程安装器采用 Python **3.12.x** 作为验证基线，可从 [Python 官方 Windows 下载页](https://www.python.org/downloads/windows/) 获取。[MinerU 官方安装说明](https://opendatalab.github.io/MinerU/quick_start/) 当前给出的包范围为 `>=3.10,<3.15`，具体引擎另有约束；这不等于其他 Python 版本已通过本工程验证。
@@ -76,12 +76,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-wind
 按报告处理必要缺项、审阅空间提示并确认所选安装后，再执行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1 -InstallMineru
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap-windows.ps1 -SkipGlobalIntegration -SkipBetterEmbeddedCanvas -SkipCompanionSkills
 ```
 
 默认生成 `.runtime/mineru/`，包括 `venv/Scripts/python.exe` 和 `config.yaml`，并下载所需包和模型。多套 Python 并存或自动检测失败时，可在检测与安装两条命令中都加 `-BasePython "实际 Python 3.12 的 python.exe 完整路径"`。遇网络或下载错误，按报错处理后续接，保留已完成内容；安装成功仍不等于真实 PDF 解析验收。
 
-写作技能和全局集成均为可选。首次使用时，用户可以将六项额外写作技能逐项明确选为“不使用”，以后再按 [SETUP](SETUP.md#apa-配套写作技能) 逐项检测和安装；助手不能替用户停用，无需为了生成配置页先装齐它们。
+用户可在首次配置页取消任何默认组件或写作指导，之后按需重新检测并安装。安装器的选择和配置页的提交各自核对。 [配套写作技能](SETUP.md#apa-配套写作技能)
 
 ### 4. 打开 HTML，由用户自主选择配置
 
@@ -124,7 +124,7 @@ npm.cmd run apa:setup -- page --repo-root "$apaProjectRoot" --host-profile "$apa
 - **三个输出目录**：分别存执行记录、解析资料和阅读候选，必须在本库内。例如 `Eval/apa-v3/runs`、`Eval/apa-v3/parse`、`Eval/apa-v3/reading`；每次运行自动追加独立编号，不必提前创建每篇论文的子目录。
 - **MinerU 位置**：使用上一步安装结果时，运行目录填 `.runtime/mineru`；Python 和配置文件可留作未配置，由运行目录派生。已有环境则填写其实际位置。
 - **阅读设置**：选择是否使用阅读编辑；两种语言都会生成。每篇论文的实际原文语言由助手按文献确定，决定原文笔记与译文目录，也决定由哪种语言的 Writer 成稿、Translation 译成另一种语言。
-- **六项写作指导**：每项都明确选“启用”或“不使用”。启用时填写实际 `SKILL.md` 文件路径；启用 Nature Writing/Polishing 还须启用 Nature Shared。
+- **五项写作指导**：首次配置时默认勾选，可逐项取消或改填 `SKILL.md` 路径。选中任一 Nature 技能会自动附带 `nature-shared`，最终预览会注明。
 
 以上仅说明选项。用户在页面点击“预览全部已选修改”，确认目标目录和具体修改后，再进入下一步。
 
@@ -175,8 +175,8 @@ node scripts/apa-setup.mjs inspect --repo-root "$apaProjectRoot"
 | Writer、Translation、Editor、Verifier 模型 | 分别指定参数，或在新运行创建时跟随主会话并冻结 |
 | 运行、解析、候选目录 | 当前库内的三个输出根目录，每次使用独立 run ID 子目录 |
 | MinerU | 选择已有运行环境、Python 和配置文件 |
-| 呈现方式 | 选择 Writer 与 Translation 直接呈现或增加 Reading Editor（新配置化运行采用 reading-editor-1.3，目录、方法条目和图注直接展开） |
-| Nature、Humanizer、stss | 分别启用已有技能，填写其 SKILL.md 路径；仅在既有 Writer 内使用 |
+| 呈现方式 | 选择 Writer 与 Translation 直接呈现或增加 Reading Editor。新配置化运行沿用 `configured-reading-2.2`，选用编辑时采用 `reading-editor-1.4` 生成双语 Canvas。 |
+| Nature、Humanizer、stss | 五项指导可取消或填写实际 `SKILL.md` 路径。选中任一 Nature 技能自动附带 `nature-shared`。 |
 
 阅读和查询共用本库忽略提交的 `config/apa.local.json`，无需分别配置两套文件，无跨库全局层。公开包不含个人答案；已有运行继续使用原冻结绑定。详见 [配置说明](docs/CONFIGURATION.md)。
 
@@ -267,7 +267,7 @@ APA 配置页设有独立的“知识库查询”页，可设置模型、默认�
 
 ## 更新与检查
 
-更新前保留本地配置、论文、笔记和运行资料，检查工程文件的本地修改。按维护者提供的更新取得代码，依赖锁文件变化后运行 `npm ci`，再运行 `npm run setup:check` 和 `npm run apa:setup -- inspect`。工程更新不会自动安装可选依赖、同步全局技能或迁移旧运行。
+更新前保留本地配置、论文、笔记和运行资料，检查工程文件的本地修改。取得代码后，依赖锁文件有变化时运行 `npm ci`，再运行 `npm run setup:check` 和 `npm run apa:setup -- inspect`。需要补装组件时，重新按当前选择做只读检测并审阅报告。已入库论文的导图更新需通过精确批准的维护事务。 [维护入口](docs/apa-v3/reading-first-publication.md)
 
 `npm test` 运行工程附带测试；`npm run index:check` 检查提交记录与历史登记索引的配对，当前正文检索索引由查询入口在内存刷新；`npm run obsidian:graph:check` 检查图谱政策。空库没有已发表论文是正常状态。合成测试不能替代真实 PDF 解析、实际模型执行或 Obsidian 原生观察。
 

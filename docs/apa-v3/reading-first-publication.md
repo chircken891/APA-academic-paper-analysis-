@@ -32,6 +32,8 @@ const registration = await registerBilingualPublication({
 
 图表也可来自 Integrator 的真实 owned 输出：若其已审查 `visual_resources` 精确登记了图表路径、SHA-256、字节数以及父 PDF 的 `source_id`、`source_path`、`source_sha256`，发布接口会核对这些冻结字段与当前资源、登记 PDF 的对应关系。仅在临时目录找到图片或调用方另给一个哈希仍不足以入库；原候选和原审查不因此改写。
 
+`reading-editor-1.4` 生成的两语研究导图是 `research-map-canvas` 展示资产，分别位于 `Figures/<run_id>/research-map.zh-CN.canvas` 和 `Figures/<run_id>/research-map.en.canvas`。发布入口使用已审视图、登记导图和编辑论证重算画布，要求与候选字节一致。两份文件按路径、字节数与 SHA-256 纳入精确清单、展示清单、对象登记和写后核验，沿渲染产物路径校验。默认图谱的筛选范围继续由已登记笔记决定。
+
 既有 owned Integrator 使用 `resource_handoff.asset_mapping` 时，发布消费者也可直接读取该登记：`target_path` 对应图表目标，`source_path` 为源图片的绝对路径，`source_id`、`source_pdf_sha256` 对应原登记父 PDF，`sha256`、`byte_length` 对应图片字节。接口继续核对唯一匹配、实际源图片路径、父 PDF、候选图目录及字节；原 owned 产物、候选和审查保持原样。顶层 `visual_resources` 已存在时保留原消费路径。
 
 owned Integrator 使用 `visual_handoff.registered_resources` 时，消费者读取 `path`、图片绝对 `source_path`、图片 `sha256` 和 `byte_length`。父资源可由 `source_pdf` 与 `source_sha256`，或 `source_docx` 与 `source_docx_sha256` 精确指定；父哈希支持带 `sha256:` 前缀或64位十六进制。父路径必须为绝对路径，并与本次科学输入中唯一已登记来源的路径和哈希一致；显式 `source_id` 也须一致，缺省时只从该唯一匹配解析。新策略的原始父资源必须在 `resources` 中唯一绑定到 `Clippings/` 原件，且当前字节仍与登记一致；旧冻结来源仍可按原路径读取。DOCX 补图的来源继续绑定原 DOCX，单独的展示 PDF 必须具有自己的有效来源登记；已有原图登记和临时展示文件均不会自动授予该 PDF 发布资格。
@@ -46,7 +48,7 @@ owned Integrator 使用 `visual_handoff.registered_resources` 时，消费者读
 
 已完成阅读运行可以在模型调用窗口关闭后只读准备发布；这不续期模型预算。新注册重载校验 Controller 签名、批准清单、逐文件内容及实际依赖，直接使用已批准输出，不重新构建整套审查或渲染结果。旧格式登记继续沿原读取合同处理；任意手写 JSON 或修改后的 Markdown 不能自行取得发布资格。
 
-会话入口的 `complete` 动作返回已审候选的 `publication_source`，可直接交给上述准备接口。恢复完成态时，先通过原资源重新渲染并核对已有候选与已审指纹。若使用外部已审候选接口 `prepareExternalReviewedReadingFirstPublication`，Editor 1.3 产物还须传入实际冻结的 `readingFirstBinding`；接口及恢复路径会校验输入、Editor 版本和提示文件，历史 1.2 调用保持原合同。
+会话入口的 `complete` 动作返回已审候选的 `publication_source`，可直接交给上述准备接口。恢复完成态时，先通过原资源重新渲染并核对已有候选与已审指纹。使用外部已审候选接口 `prepareExternalReviewedReadingFirstPublication` 时，Editor 1.4 产物须传入实际冻结的 `readingFirstBinding`。接口及恢复路径核对输入、Editor 版本和提示文件；历史版本按原合同读取。
 
 ## 并行阅读的共享节点变基
 
@@ -101,10 +103,10 @@ node scripts/v3/reading-first-publication-queue-cli.mjs status --vault-root <vau
 
 **维护事务入口**
 
-为每次路径迁移、共享页合并或合并补偿选择独立的运行 ID，并显式传入目标库根目录。
+为每次路径迁移、共享页合并、合并补偿或研究导图更新选择独立的运行 ID，并显式传入目标库根目录。
 
 ```powershell
-node scripts/v3/bilingual.mjs maintenance-review --vault-root <vault-root> --run <run-id> --mode <relocate|merge|compensate> --options <options.json>
+node scripts/v3/bilingual.mjs maintenance-review --vault-root <vault-root> --run <run-id> --mode <relocate|merge|compensate|map-refresh> --options <options.json>
 node scripts/v3/bilingual.mjs maintenance-apply --vault-root <vault-root> --run <run-id> --inventory-sha256 <inventory-sha256> --authorization-id <authorization-id> --user-reply "批准"
 ```
 
@@ -115,6 +117,13 @@ node scripts/v3/bilingual.mjs maintenance-apply --vault-root <vault-root> --run 
 | `relocate` | `papers` 为 `{paperId, sourceLanguage}` 数组。`assetMappings` 为 `{old_path, new_path, sha256, byte_length, source_id?}` 数组。可用 `assetRetirements` 指定退出登记的 `{path, sha256, byte_length}`，或用 `restoreAssetRetirements` 列出恢复登记的路径。 |
 | `merge` | `merges` 为 `{keep_path, remove_paths, aliases?, anchors?, expected_inputs?}` 数组。`anchors` 按被合并页路径给出旧锚点到留存页锚点的映射。`expected_inputs` 为 `{path, sha256, byte_length}` 数组，可固定所选页面版本。 |
 | `compensate` | `transactionId` 为原合并事务 ID。原合并已被后续代次替代时，`trustAnchor` 使用原控制器提供并单独保存的公钥信任锚。路径迁移的反向操作沿用 `relocate` 及明确的反向映射。 |
+| `map-refresh` | `papers` 为 `{paperId, map, argument, primaryFindingIds, sectionTitles, noteWordingEdits?}` 数组。`map` 来自已登记步骤、发现与关系；`argument` 按 1.4 合同依据已有双语正文整理；`sectionTitles` 按 `en`、`zh-CN` 提供小节 ID 到笔记实际标题的映射。可选的 `noteWordingEdits` 按语言给出 `{before, after}` 完整段落，只用于明确获批的导图展示措辞调整，逐段前后文本随清单核对。 |
+
+导图维护在获批双语笔记的模块 2 开头放置“2.1 研究导图”或“2.1 Research map”，并在论文原 `run_id` 的 Figures 目录新增两份画布。旧稿的导图附在研究设计概览后时，设计小节顺延编号，同步本篇目录、局部链接和 Canvas 标题目标；已有独立导图小节的旧稿保留原编号。事务同时更新展示清单、托管区哈希、对象登记和索引，保留科学正文及人工区。写后核对当前代次和两份画布指纹，再检查索引与图谱。历史论文沿现有材料制作导图，无需续接阅读。
+
+已有两语 Canvas 时，同一维护入口按登记路径和前像哈希更新画布，替换展示资产条目，保留其余资源及正文。展示措辞修改限定于导图及紧接的设计首节，必须匹配唯一完整段落；逐段对照确认研究步骤顺序、科学内容、数值和引用保持原样。无法剥离的措辞保留并报告。
+
+Canvas 卡片以完整库内路径 `[[Wiki/translations/笔记名#小节标题|文字]]` 链接正文，目标包含实际语言目录，避免候选副本或旧页同名造成歧义。当前 `relocate` 入口按语言调整目录并保留文件名，同一事务同步重写已登记 Canvas 的链接和文件卡片，更新画布前像、展示资产的哈希与字节数、对象登记和索引；旧页继续保留。已有相对链接按画布所在目录重算，短名引用只在已登记目标可唯一确定时迁移。需要分轨的论点关系使用有文字的关系标签卡，每张连接一个起点与一个终点。
 
 审阅命令在 `Eval/apa-v3/runs/<run-id>/publication/candidate/` 保存精确清单、审阅和用于重建的选项。检查 `INVENTORY.md` 中的新建、覆盖、删除数与路径，以及 `review_hash` 和 `output_inventory_hash`。用户对这份清单明确批准后，把 `INVENTORY.json` 的 SHA-256、批准 ID 和实际回复传给执行命令。执行入口在同一进程重建审阅并试算，清单内容或哈希发生变化时停止。核对通过后，入口保存批准和固定 15 分钟维护窗口，登记、执行，并在 `publication/` 下保存 `RESULT.md` 和 `VERIFICATION.json`。
 

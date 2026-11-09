@@ -17,6 +17,10 @@ export function assertReadingFirstPublicationManifest(manifest) {
   const support = manifest.targets.support;
   if (new Set(support.map(row => row.entity_id)).size !== support.length || new Set(support.map(row => row.path)).size !== support.length
     || manifest.targets.notes.en.path === manifest.targets.notes['zh-CN'].path) fail('RF_PUBLICATION_TARGET_COLLISION');
+  const assets = manifest.presentation_assets;
+  if (assets && (assets.length !== 2 || new Set(assets.map(row => row.language)).size !== 2
+    || assets.some(row => row.path !== `Figures/${manifest.identity.run_id}/research-map.${row.language}.canvas`
+      || !manifest.targets.assets.includes(row.path)))) fail('RF_PUBLICATION_PRESENTATION_ASSET_INVALID');
   return manifest;
 }
 
@@ -40,6 +44,9 @@ export function verifyReadingFirstPresentation(paper, bytes, generation) {
       || objects.get(node.path)?.kind !== 'support') fail('RF_PUBLICATION_RESOURCE_MISSING', { path: node.path });
   }
   if (manifest.targets.assets.some(path => objects.get(path)?.kind !== 'asset')) fail('RF_PUBLICATION_RESOURCE_MISSING');
+  for (const asset of manifest.presentation_assets ?? []) {
+    if (objects.get(asset.path)?.sha256 !== asset.sha256) fail('RF_PUBLICATION_PRESENTATION_ASSET_INVALID', { path: asset.path });
+  }
   return manifest;
 }
 

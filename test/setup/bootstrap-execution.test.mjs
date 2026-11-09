@@ -7,6 +7,7 @@ import test from 'node:test';
 
 const sourceBootstrap = join(process.cwd(), 'scripts', 'setup', 'bootstrap-windows.ps1');
 const powershell = join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+const skipOptional = ['-SkipMineru', '-SkipGlobalIntegration', '-SkipBetterEmbeddedCanvas', '-SkipCompanionSkills'];
 
 async function createHarness(t, { recommendedFreeGib = 0 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'apa-bootstrap-execution-'));
@@ -33,9 +34,12 @@ async function createHarness(t, { recommendedFreeGib = 0 } = {}) {
 
   await writeFile(join(shimRoot, 'node.cmd'), [
     '@echo off',
-    'if "%1"=="-p" echo x64& exit /b 0',
-    'if "%1"=="--version" echo %FAKE_NODE_VERSION%& exit /b 0',
-    'exit /b 1',
+    'if "%~1"=="-p" echo x64& exit /b 0',
+    'if "%~1"=="--version" echo %FAKE_NODE_VERSION%& exit /b 0',
+    'if not "%~nx1"=="install-better-embedded-canvas.mjs" exit /b 1',
+    'if "%~2"=="--check" echo {"status":"missing"}& exit /b 0',
+    'echo installed>.runtime\\test\\canvas-plugin.txt',
+    'exit /b 0',
     '',
   ].join('\r\n'), 'ascii');
   await writeFile(join(shimRoot, 'npm.cmd'), [
@@ -86,6 +90,7 @@ async function createHarness(t, { recommendedFreeGib = 0 } = {}) {
   await writeFile(join(repoRoot, 'scripts', 'setup', 'install-apa-companion-skills.ps1'), [
     'param([string]$BasePython, [string]$CompanionSkillRoot, [string[]]$Skills)',
     "[System.IO.File]::WriteAllText((Join-Path $CompanionSkillRoot 'bootstrap-python.txt'), $BasePython)",
+    "[System.IO.File]::WriteAllText((Join-Path $CompanionSkillRoot 'bootstrap-skills.txt'), ($Skills -join ','))",
     '',
   ].join('\r\n'), 'utf8');
   return { root, repoRoot, shimRoot, npmPrefix, python };
@@ -138,18 +143,29 @@ test('bootstrap resumes an interrupted Unicode-path install and the third run is
   assert.equal((await readFile(join(harness.repoRoot, '.runtime', 'mineru', 'model-attempt.log'), 'utf8')).trim().split(/\r?\n/).length, 2);
 });
 
-test('bootstrap default installs only base dependencies without invoking optional installers', async t => {
+test('bootstrap defaults to the parser, launcher, Canvas plugin and five companion selections', async t => {
   const harness = await createHarness(t);
   const result = await runBootstrap(harness, {}, []);
   assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
+  const report = JSON.parse(result.stdout.trim().split(/\r?\n/)[0]);
+  assert.deepEqual(report.targets.filter(item => item.selected).map(item => item.id), ['base', 'mineru', 'global_integration', 'companion_skills', 'better_embedded_canvas']);
+  assert.equal(report.targets.find(item => item.id === 'companion_skills').skills.find(item => item.name === 'nature-shared').automatic, true);
+  assert.equal((await readFile(join(harness.repoRoot, '.runtime/test/canvas-plugin.txt'), 'utf8')).trim(), 'installed');
+  assert.equal(await readFile(join(harness.root, 'bootstrap-skills.txt'), 'utf8'), 'nature-writing,nature-polishing,humanizer,humanizer-zh,stss');
+});
+
+test('deselected bootstrap components are skipped without invoking installers', async t => {
+  const harness = await createHarness(t);
+  const result = await runBootstrap(harness, {}, skipOptional);
+  assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
   assert.equal((await readFile(join(harness.repoRoot, '.runtime', 'test', 'npm-ci.log'), 'utf8')).trim(), 'ci');
-  for (const target of [join(harness.repoRoot, '.runtime', 'mineru', 'model-attempt.log'), join(harness.repoRoot, '.runtime', 'test', 'global-bin.txt'), join(harness.root, 'bootstrap-python.txt')]) await assert.rejects(readFile(target), { code: 'ENOENT' });
+  for (const target of [join(harness.repoRoot, '.runtime/mineru/model-attempt.log'), join(harness.repoRoot, '.runtime/test/global-bin.txt'), join(harness.repoRoot, '.runtime/test/canvas-plugin.txt'), join(harness.root, 'bootstrap-python.txt')]) await assert.rejects(readFile(target), { code: 'ENOENT' });
 });
 
 test('base-only setup reports optional Python and MinerU disk gaps without blocking Node dependency install', async t => {
   const harness = await createHarness(t, { recommendedFreeGib: 9_000_000 });
   harness.python = join(harness.root, 'missing-python.exe');
-  const result = await runBootstrap(harness, {}, []);
+  const result = await runBootstrap(harness, {}, skipOptional);
   assert.equal(result.code, 0, result.stderr);
   const report = JSON.parse(result.stdout.trim().split(/\r?\n/)[0]);
   assert.equal(report.prerequisites_ready, true);

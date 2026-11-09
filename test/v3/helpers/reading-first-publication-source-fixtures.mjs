@@ -26,6 +26,31 @@ const titles = {
   'zh-CN': ['摘要', '研究设计', '方法', '主要发现', '讨论', '局限', '结论'],
 };
 
+export function syntheticReadingMapArgument({ sectionId, findingIds = [] }) {
+  const claims = [
+    ['design', 'The design addresses the study question.', '设计针对研究问题。'],
+    ['measurements', 'Measurements support the comparison.', '测量支持比较。'],
+    ['results', 'The comparison supports a qualified finding.', '比较支持带有限定的发现。'],
+    ['limits', 'The finding applies within the study scope.', '发现适用于研究范围。'],
+  ].map(([id, en, zh], index) => ({
+    id, title: { en, 'zh-CN': zh },
+    evidence: { en: 'See the accepted explanation.', 'zh-CN': '见已接受的正文。' },
+    limit: { en: '', 'zh-CN': '' },
+    section_id: sectionId, branch_id: 'main', finding_ids: findingIds.filter((_, i) => i % 4 === index),
+  }));
+  const ids = ['question', ...claims.map(claim => claim.id), 'conclusion'];
+  return {
+    argument: {
+      question: { text: { en: 'What does the design establish?', 'zh-CN': '研究设计说明了什么？' }, section_id: sectionId },
+      claims,
+      branches: [{ id: 'main', name: { en: 'Main evidence', 'zh-CN': '主要证据' } }],
+      relations: ids.slice(1).map((to, i) => ({ from: ids[i], to, label: '证据补充' })),
+      conclusion: { text: { en: 'The evidence supports a qualified result.', 'zh-CN': '证据支持带有限定的结果。' }, section_id: sectionId },
+    },
+    primary_finding_ids: findingIds,
+  };
+}
+
 /** Synthetic owned artifacts and host observations; never dispatches a real model. */
 export async function reviewedReadingFirstFixture(t, options = {}) {
   const adopted = options.adoptedFrom;
@@ -103,7 +128,10 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
   // A configured run (createRunControl) translates the non-source language; its tasks declare the translation role. options.translationLanguage overrides this (null for none).
   const sourceLanguage = options.sourceLanguage ?? options.controlOptions?.sourceLanguage ?? 'en';
   const translationLanguage = options.translationLanguage !== undefined ? options.translationLanguage : options.createRunControl ? (sourceLanguage === 'en' ? 'zh-CN' : 'en') : null;
-  const tasks = Object.fromEntries(['en', 'zh-CN', 'presentation', 'review', 'en-r2', 'zh-CN-r2', 'presentation-r2', 'review-r2'].map(key => [key, {
+  const presentationMode = options.controlOptions?.presentationMode ?? 'reading-editor';
+  const editorTask = presentationMode === 'reading-editor';
+  const keys = ['en', 'zh-CN', ...(editorTask ? ['presentation'] : []), 'review', 'en-r2', 'zh-CN-r2', ...(editorTask ? ['presentation-r2'] : []), 'review-r2'];
+  const tasks = Object.fromEntries(keys.map(key => [key, {
     task_id: key, task_name: 'publication_' + key.replaceAll('-', '_').toLowerCase(), owner_actor_id: key,
     role: key.startsWith('presentation') ? 'reading-editor' : translationLanguage && key.startsWith(translationLanguage === 'en' ? 'en' : 'zh') ? 'translation' : key.startsWith('en') ? 'english-writer' : key.startsWith('zh') ? 'chinese-writer' : 'independent-verifier',
     artifact_id: key, artifact_path: 'accepted/' + key + '.json', native_path: 'native/' + key + '.json', revision: '1',
@@ -121,8 +149,8 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
   };
   const runBinding = (options.createRunControl ?? createReadingFirstRunControl)({ runId, scientificInput: input, mainSession: { model: 'gpt-6-astra', reasoning_effort: 'high' },
     authorizationId: 'synthetic-publication-source-only', deadline: options.deadline ?? '2099-01-01T00:00:00Z', maxCalls: 7,
-    writingMode: 'source-first', sourceLanguage: 'en', presentationMode: 'reading-editor', taskBindings: tasks, ...options.controlOptions,
-    ...(options.manifestDocx || adopted ? {maxTotalCalls:20,presentationProfile:'reading-editor-1.3',configuredSetup:{...buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-2.2'}),paths:{runRoot:root},results_resources:{output_root:'resources/results',manifest_task:manifestTask}}} : {}),
+    writingMode: 'source-first', sourceLanguage: 'en', presentationMode, taskBindings: tasks, ...options.controlOptions,
+    ...(options.manifestDocx || adopted ? {maxTotalCalls:20,configuredSetup:{...buildConfiguredReadingInstructions({}, {instructionProfile:'configured-reading-2.2'}),paths:{runRoot:root},results_resources:{output_root:'resources/results',manifest_task:manifestTask}}} : {}),
     ...(options.currentRegistryRoot ? { maxTotalCalls: 20, configuredSetup: { ...buildConfiguredReadingInstructions({}), paths: { runRoot: root },
       knowledge_registry: { policy: 'current-shared-nodes-1.0', vault_root: options.currentRegistryRoot } } } : {}) });
   const binding = runBinding.reading_first_binding;
@@ -229,7 +257,9 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
   }));
   for (const request of created.requests) await complete(request, views.find(view => view.language === request.language));
   for (const request of createReadingFirstDraftRequests({ controller })) await complete(request, views.find(view => view.language === request.language));
-  const editor = { schema_version: binding.presentation_profile ?? 'reading-editor-1.0', views_fingerprint: fingerprintReadingFirst(views), map: { nodes: [...(presentation.map?.steps ?? []).map(node => ({ id: node.id, stage: 'design' })), ...(presentation.map?.findings ?? []).map(node => ({ id: node.id, stage: 'finding', primary: true }))] }, languages: Object.fromEntries(languages.map(language => [language, {
+  const editor = { schema_version: binding.presentation_profile, views_fingerprint: fingerprintReadingFirst(views),
+    ...syntheticReadingMapArgument({ sectionId: 'findings', findingIds: (presentation.map?.findings ?? []).map(node => node.id) }),
+    languages: Object.fromEntries(languages.map(language => [language, {
     overview: [{ text: language === 'en' ? 'Supported finding and its limits.' : '有依据的发现及其限制。', section_ids: ['findings'] }], sections: [],
     methods: [{ id: 'method', knowledge_id: 'method', title: language === 'en' ? 'Method' : '方法', explanation: language === 'en' ? 'A known method.' : '已知方法。', application: language === 'en' ? 'Used in the study.' : '用于本研究。', section_ids: ['methods'] }],
     visuals: [],

@@ -13,7 +13,7 @@ W2、W3 接口已接入确定性准备与合成验证。真实模型验收单独
 | dossier，按节点 ID 或 alias | 节点当前正文与引用它的各篇论文段落；附路径、锚点、哈希和年份，按年份排列 |
 | clues，从论文、节点或问题出发 | 相邻节点、一跳论文、桥接路径及相关论文模块 5、6、7 的锚点 |
 
-编号模块作为定位依据，小节标题只作提示。研究设计取模块 2 中标题含 design 或“设计”的小节；没有时去掉导图和导航列表后取模块 2 正文。局限取整个模块 6；讨论和启示取整个模块 5、7，由同一综合任务解释竞争性解释与下一步。缺段返回 not_found，含义为笔记未单列该内容。
+编号模块作为定位依据，小节标题只作提示。研究设计取模块 2 中标题含 design 或“设计”的小节；没有时跳过“2.1 研究导图”或“2.1 Research map”中的 Canvas 嵌入与导航，取模块 2 的研究设计正文。局限取整个模块 6；讨论和启示取整个模块 5、7，由同一综合任务解释竞争性解释与下一步。缺段返回 not_found，表示笔记未单列该内容。
 
 landscape 和 clues 的可选 JSON Canvas 写入任务临时目录或写作项目目录，默认不纳入正式图谱。参考文献引用桥接须先核实登记数据；缺少参考文献列表时登记后续阅读增补需求，本轮使用已有共享节点连接。
 
@@ -60,6 +60,8 @@ node scripts/apa-query.mjs search --query "tumour" --limit 10 --hits-per-paper 3
 ```
 
 search 支持 --full、--entity-type（paper、topic、concept、method、writing-project）、--module（1–7，逗号分隔）、--year-from、--year-to、--paper-id（逗号分隔）。默认完整 JSON 预算为 32768 字节，truncated、total_results 和 total_hits 表示省略；用返回路径和锚点读取完整上下文。--full 不应用预算和数量限制。Canvas 作为 JSON 结果的 canvas 字段返回，用户要求保存时提取该字段写入任务临时目录或项目目录。
+
+`citation.locators_omitted` 为 `true` 时，引文保留来源身份及 `locator_count`，具体定位元组已按预算省略。声明 `adopted_sources` 前，用 `readQuerySource` 或 `node scripts/apa-query.mjs source --paper-id <paperId> --source-id <sourceId> --generation-id <generationId>` 取回完整登记元组，再选用实际采用的定位。回答任务的 `total_results`、`returned_results` 和 `truncated` 用于区分检索范围与返回范围。
 
 request 的 JSON 在原有 question、宿主与偏好字段外接收 mode、node、from、paperIds、projectId 和 searchOptions。dossier 必须给 node；clues 可给 from，省略时使用原问题。searchOptions 与 queryLibrary 的预算／过滤参数同形。固定章节见上表。
 

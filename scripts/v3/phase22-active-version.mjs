@@ -228,6 +228,7 @@ export function topicIndexDocuments({ topic, bytes, generation }) {
 
 function verifyObjects(root, generation, index) {
   const readerPaths = new Set();
+  const presentationAssets = new Map();
   for (const topic of generation.topics ?? []) {
     const expected = topicIndexDocuments({ topic, bytes: readRegular(root, topic.path), generation }).sort((a, b) => a.id.localeCompare(b.id));
     const actual = index.documents.filter(row => ['topic', 'writing-project'].includes(row.entity_type) && (row.project_id ?? row.topic_id) === (topic.project_id ?? topic.topic_id)).sort((a, b) => a.id.localeCompare(b.id));
@@ -236,6 +237,7 @@ function verifyObjects(root, generation, index) {
   }
   for (const paper of generation.papers.filter(row => row.profile === INDEX_READING_FIRST_PROFILE)) {
     const presentation = verifyReadingFirstPresentation(paper, readRegular(root, paper.reader_presentation.path), generation);
+    for (const asset of presentation.presentation_assets ?? []) presentationAssets.set(asset.path, asset);
     const notes = Object.fromEntries(Object.entries(paper.paths).map(([language, path]) => [language, readRegular(root, path)]));
     const files = presentation.targets.support.map(row => ({ path: row.path, bytes: readRegular(root, row.path) }));
     const expected = readingFirstIndexDocuments({ paper, presentation, notes, generation, files }).sort((a, b) => a.id.localeCompare(b.id));
@@ -247,6 +249,7 @@ function verifyObjects(root, generation, index) {
   for (const item of generation.objects) {
     if (readerPaths.has(item.path)) continue;
     const bytes = readRegular(root, item.path), record = papers.get(item.path);
+    if (presentationAssets.has(item.path) && bytes.length !== presentationAssets.get(item.path).byte_length) fail('RF_PUBLICATION_PRESENTATION_ASSET_INVALID', { path: item.path });
     if (item.kind === 'support') assertV3SupportBytes(bytes, item.path);
     if (item.kind === 'knowledge-aliases') parseRegisteredKnowledgeAliases(bytes, generation);
     if (record) {

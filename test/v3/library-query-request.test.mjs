@@ -69,6 +69,15 @@ test('follow-main prepares one current task with real committed hits and no read
   assert.equal(prepared.answer, undefined);
 });
 
+test('answer evidence reports recall counts and explains omitted results', async t => {
+  const f = await fixture(t);
+  const { prepareLibraryQuery } = await library();
+  const prepared = await prepareLibraryQuery({ ...inputs(f.vaultRoot), searchOptions: { snippetChars: 1 } });
+  const { total_results, returned_results, truncated } = prepared.task.evidence;
+  assert.deepEqual({ total_results, returned_results, truncated }, { total_results: 1, returned_results: 1, truncated: true });
+  assert.match(prepared.task.prompt, /Unreturned results do not establish absence of library evidence/);
+});
+
 test('explicit alternate is actually consumed by one injected native host without writing config', async t => {
   const f = await fixture(t, { models: { query: { mode: 'explicit', ...alternate } } });
   const { executeLibraryQuery } = await library();
@@ -263,6 +272,43 @@ test('a dispatched task can consume its generation-bound registered source witho
   assert.equal(result.status, 'answered');
   assert.equal(result.results[0].citation.claim_verification, 'not_performed');
   assert.equal(result.results[0].citation.sources[0].locator_status, 'unknown');
+});
+
+test('compressed search citations require exact locator tuples from the registered source before adoption', async t => {
+  const f = await readingFirstIndexFixture(t);
+  const original = f.files.find(row => row.path.startsWith('Raw/'));
+  const locators = Array.from({ length: 150 }, (_, page) => ({ kind: 'table', id: `table-${page + 1}`, page: page + 1,
+    label: { en: 'Registered table locator', 'zh-CN': '完整的双语表格定位' } }));
+  f.manifest.citation = { bibliography: { title: { en: 'Synthetic locator study' } }, sources: [{
+    source_id: 'paper', path: original.path, sha256: digest(original.bytes), byte_length: original.bytes.length,
+    source_version: 'registered-version', locators,
+  }] };
+  const manifestFile = f.files.find(row => row.kind === 'reader-presentation');
+  manifestFile.bytes = Buffer.from(JSON.stringify(f.manifest));
+  f.paper.reader_presentation.sha256 = digest(manifestFile.bytes);
+  f.generation.objects.find(row => row.path === manifestFile.path).sha256 = digest(manifestFile.bytes);
+  await f.save(await f.build());
+  const { executeLibraryQuery, readQuerySource } = await library();
+  const run = badLocator => executeLibraryQuery({ ...inputs(f.vaultRoot), executeHost: async task => {
+    const [result] = task.evidence.results;
+    assert.equal(result.citation.locators_omitted, true);
+    assert.match(task.prompt, /locators_omitted[\s\S]*readQuerySource[\s\S]*registered locator tuples/);
+    const [source] = result.citation.sources;
+    assert.equal(source.locators, undefined);
+    const registered = await readQuerySource({ vaultRoot: f.vaultRoot, paperId: result.paper_id,
+      sourceId: source.source_id, generationId: task.evidence.generation_id });
+    assert.deepEqual(registered.locators, locators);
+    const [locator] = registered.locators;
+    return { answer: 'A synthetic answer based on the registered table.', adopted_sources: [{
+      paper_id: result.paper_id, analysis_revision: result.analysis_revision, adopted_generation_id: task.evidence.generation_id,
+      source_id: source.source_id, source_sha256: source.sha256, source_version: source.source_version,
+      locators: [badLocator ? { kind: locator.kind, id: locator.id } : locator], adopted_for: ['answer'],
+    }] };
+  } });
+  const answered = await run(false);
+  assert.equal(answered.status, 'answered');
+  assert.deepEqual(answered.adopted_sources[0].locators, [locators[0]]);
+  await assert.rejects(run(true), { code: 'P24_ADOPTED_SOURCE_MISMATCH' });
 });
 
 test('a delegated query carries the exact host call: saved host names, or the Codex shape without a host', async t => {

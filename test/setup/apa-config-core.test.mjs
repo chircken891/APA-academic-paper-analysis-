@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import * as api from '../../scripts/lib/apa-config.mjs';
+import { buildConfiguredReadingInstructions } from '../../scripts/v3/configured-reading.mjs';
 import { spawnSync } from 'node:child_process';
 
 const temporary = t => {
@@ -12,6 +13,75 @@ const temporary = t => {
   return root;
 };
 const operation = (snapshot, fields) => ({ schema_version: 'apa-config-operation-1.0', base_fingerprint: snapshot.fingerprint, ...fields });
+
+function completeReadingConfig() {
+  return {
+    schema_version: 'apa-local-config-1.0',
+    models: { science: { mode: 'follow-main' }, roles: Object.fromEntries(api.APA_CONFIG_ROLES.map(role => [role, { mode: 'follow-main' }])) },
+    paths: { runs: 'runs', parse: 'parse', candidates: 'candidates' },
+    parser: { runtime_home: 'runtime', python: 'runtime/python', config_path: 'runtime/config.yaml' },
+    reading: { presentation_mode: 'writer' },
+    writing_skills: Object.fromEntries(api.APA_WRITING_SKILLS.map(key => [key, { enabled: false }])),
+  };
+}
+
+test('enabled ideation guidance is excluded from both reading languages and frozen guide metadata', t => {
+  const repoRoot = temporary(t);
+  const config = completeReadingConfig();
+  const ideation = 'brainstorming-research-ideas';
+  const guideText = 'Unique query ideation instruction for this test';
+  fs.writeFileSync(path.join(repoRoot, 'ideas.md'), guideText);
+  fs.writeFileSync(path.join(repoRoot, 'nature-shared.md'), 'Shared reading guidance');
+  config.writing_skills[ideation] = { enabled: true, path: 'ideas.md' };
+  config.writing_skills['nature-shared'] = { enabled: true, path: 'nature-shared.md' };
+
+  const { writingSkills } = api.resolveApaConfig({ config, repoRoot, mainSession: { model: 'main-model' } });
+  const frozen = buildConfiguredReadingInstructions(writingSkills);
+  assert.deepEqual({
+    resolved: Object.keys(writingSkills),
+    frozen: Object.keys(frozen.writing_guides),
+    en: frozen.writing_instructions.en.includes(guideText),
+    zh: frozen.writing_instructions['zh-CN'].includes(guideText),
+  }, { resolved: ['nature-shared'], frozen: ['nature-shared'], en: false, zh: false });
+  for (const instruction of Object.values(frozen.writing_instructions)) {
+    assert.match(instruction, /Shared reading guidance/);
+    assert.doesNotMatch(instruction, /brainstorming-research-ideas/);
+  }
+});
+
+test('missing enabled ideation files leave reading ready with only reading dependencies', t => {
+  const repoRoot = temporary(t);
+  const config = completeReadingConfig();
+  config.writing_skills['brainstorming-research-ideas'] = { enabled: true, path: 'missing-ideas.md' };
+  config.writing_skills['creative-thinking-for-research'] = { enabled: true, path: 'missing-creative.md' };
+  fs.mkdirSync(path.join(repoRoot, 'runtime'));
+  fs.writeFileSync(path.join(repoRoot, config.parser.python), 'synthetic');
+  fs.writeFileSync(path.join(repoRoot, config.parser.config_path), 'synthetic');
+  api.applyApaConfigOperation({ repoRoot, operation: operation(api.loadApaConfig({ repoRoot }), { action: 'import', answers: config }) });
+
+  const inspection = api.inspectApaConfig({ repoRoot });
+  assert.deepEqual({ ready: inspection.ready, dependencies: inspection.dependencies.map(item => [item.key, item.status]) }, {
+    ready: true,
+    dependencies: [['parser.runtime_home', 'available'], ['parser.python', 'available'], ['parser.config_path', 'available']],
+  });
+});
+
+test('an explicit query model conflicts only with query checks on a host that inherits the main model', t => {
+  const repoRoot = temporary(t);
+  const config = completeReadingConfig();
+  config.host = { name: 'inherit-host', dispatch: { tool: 'Agent', model_argument: null, effort_argument: null, instruction_argument: 'prompt', task_name_argument: 'description', fresh_context: null } };
+  config.models.query = { mode: 'explicit', model: 'query-model' };
+  const mainSession = { model: 'main-model' };
+
+  const reading = api.validateApaConfig(config, { repoRoot, capability: 'reading', complete: true });
+  assert.deepEqual(reading.conflicts, []);
+  assert.equal(reading.complete, true);
+  assert.deepEqual(api.resolveApaConfig({ config, repoRoot, mainSession }).roles.evidence, mainSession);
+  const query = api.validateApaConfig(config, { repoRoot, capability: 'query' });
+  assert.equal(query.valid, true);
+  assert.equal(query.complete, false);
+  assert.deepEqual(query.conflicts, ['models.query requires follow-main: host inherit-host cannot select the model']);
+});
 
 test('query preferences patch export import and removal preserve unrelated answers', t => {
   const repoRoot = temporary(t);

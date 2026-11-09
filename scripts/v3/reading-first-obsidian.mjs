@@ -1,6 +1,8 @@
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import YAML from 'yaml';
 import { validateReadingFirstEditor } from './reading-first-editor.mjs';
+import { buildResearchMapCanvas, serializeResearchMapCanvas, researchMapCanvasSection } from './research-map-canvas.mjs';
 import { fingerprintV3Json } from './semantic-package-validator.mjs';
 import { registerReaderTargets } from './phase221-targets.mjs';
 import { mergeManagedNote } from './phase22-managed-markdown.mjs';
@@ -77,8 +79,9 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
   if (p.knowledge_layout && !sharedKnowledge) fail('RF_OBSIDIAN_KNOWLEDGE_LAYOUT_INVALID');
   const editor = readingEditor === undefined ? undefined : validateReadingFirstEditor({ editor: readingEditor, views, presentation });
   // Editor 1.1: three heading levels, folded catalogues/captions, figure notes beside figures and a staged map.
-  const compact = ['reading-editor-1.1', 'reading-editor-1.2', 'reading-editor-1.3'].includes(editor?.schema_version);
-  const fold = editor?.schema_version !== 'reading-editor-1.3';
+  const canvasMap = editor?.schema_version === 'reading-editor-1.4';
+  const compact = ['reading-editor-1.1', 'reading-editor-1.2', 'reading-editor-1.3', 'reading-editor-1.4'].includes(editor?.schema_version);
+  const fold = !['reading-editor-1.3', 'reading-editor-1.4'].includes(editor?.schema_version);
   const writerLayout = p.layout === 'writer-modules-1.0';
   if (editor && !writerLayout) fail('RF_OBSIDIAN_EDITOR_LAYOUT_INVALID');
   if (p.layout && !writerLayout) fail('RF_OBSIDIAN_LAYOUT_INVALID');
@@ -233,6 +236,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
   }
   const allPaths = [...Object.values(registry.paper_targets), ...supportNotes.map(note => note.path)].map(key);
   if (new Set(allPaths).size !== allPaths.length) fail('RF_OBSIDIAN_TARGET_COLLISION');
+  const generatedAssets = [];
   const notes = languages.map(language => {
     const en = language === 'en', target = registry.paper_targets[language], view = views.find(value => value.language === language), alternate = registry.paper_targets[languages.find(value => value !== language)];
     const edits = editor?.languages[language];
@@ -244,7 +248,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     const overviewHeading = en ? 'Reading overview' : '阅读提要';
     const sectionHeadings = new Map();
     for (const module of modules) {
-      const offset = (module.id === 'design' && nodes.length && !compact || module.id === 'methods') ? 1 : 0;
+      const offset = (module.id === 'design' && (nodes.length || canvasMap) && (!compact || canvasMap) || module.id === 'methods') ? 1 : 0;
       view.sections.filter(section => section.module_id === module.id).forEach((section, index) => sectionHeadings.set(section.id, `${modules.indexOf(module) + 1}.${index + 1 + offset} ${section.heading}`));
     }
     const methodHeading = (method, index) => `3.1.${index + 1} ${method.title}`;
@@ -285,7 +289,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
       source += `## ${overviewHeading}\n\n` + callout('abstract', en ? 'Key findings and interpretation' : '核心发现与解读', edits.overview.map(item => `- ${resolveReferences(item.text)} ${sectionLinks(item.section_ids)}`).join('\n'));
       contents = [`- **${md(overviewHeading, headingHref(overviewHeading))}**`, ...modules.flatMap(module => [
         `- **${md(moduleHeadings.get(module.id), headingHref(moduleHeadings.get(module.id)))}**`,
-        ...(module.id === 'design' && nodes.length && !compact ? [`  - ${md(mapHeading, headingHref(mapHeading))}`] : []),
+        ...(module.id === 'design' && (nodes.length || canvasMap) && (!compact || canvasMap) ? [`  - ${md(mapHeading, headingHref(mapHeading))}`] : []),
         ...(module.id === 'methods' ? [`  - ${md(inventoryHeading, headingHref(inventoryHeading))}`] : []),
         ...view.sections.filter(section => section.module_id === module.id).map(section => `  - ${sectionLink(section.id, sectionHeadings.get(section.id))}`),
       ])];
@@ -293,7 +297,15 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     if (writerLayout) for (const heading of [en ? 'Figures and tables' : '图表导航', en ? 'Personal Notes' : '个人笔记']) contents.push(`- ${md(heading, '#' + encodeURIComponent(heading))}`);
     source += compact ? callout('note', en ? 'Contents' : '目录', contents.join('\n'), true).trimEnd() + '\n' : `## ${en ? 'Contents' : '目录'}\n\n` + contents.join('\n') + '\n';
     let reading = '', researchMap = '';
-    if (compact && nodes.length) {
+    if (canvasMap) {
+      if (typeof identity.run_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/.test(identity.run_id)) fail('RF_OBSIDIAN_CANVAS_RUN_REQUIRED');
+      const canvasPath = `Figures/${identity.run_id}/research-map.${language}.canvas`;
+      const content = serializeResearchMapCanvas(buildResearchMapCanvas({ paperId: identity.paper_id, map,
+        argument: editor.argument, primaryFindingIds: editor.primary_finding_ids, language, notePath: target, sectionTitles: sectionHeadings }));
+      generatedAssets.push({ kind: 'research-map-canvas', language, path: canvasPath, content,
+        sha256: 'sha256:' + createHash('sha256').update(content).digest('hex'), byte_length: Buffer.byteLength(content) });
+      researchMap = `### ${mapHeading}\n\n` + researchMapCanvasSection({ canvasPath, language }) + '\n\n';
+    } else if (compact && nodes.length) {
       // Left-to-right stages keep wide maps readable; only editor-selected nodes and their own edges are drawn.
       const selected = editor.map.nodes, ids = new Set(selected.map(node => node.id)), drawn = new Set(), mermaidId = id => id.replaceAll('-', '_');
       const stages = [['design', en ? 'Study design' : '研究设计'], ['measurement', en ? 'Measurement and analysis' : '测量与分析'], ['finding', en ? 'Findings' : '主要发现'], ['limit', en ? 'Limits' : '限制']];
@@ -331,7 +343,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
         const module = modules.find(item => item.id === section.module_id);
         reading += `## ${editor ? moduleHeadings.get(module.id) : local(module.label, language)}\n\n`;
         if (editor && module.id === 'methods') reading += methodInventory();
-        if (module.id === 'design' && !compact) reading += researchMap;
+        if (module.id === 'design' && (!compact || canvasMap)) reading += researchMap;
       }
       if (!writerLayout && spec.id === (map.steps[0]?.section_id ?? nodes[0]?.section_id)) reading += researchMap;
       reading += `${writerLayout ? '###' : '##'} ${editor ? sectionHeadings.get(section.id) : section.heading}\n\n`;
@@ -388,7 +400,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
           reading += `${provenance}: ${md(local(item.title, language), knowledgeHref(item.id))}\n\n`;
         }
       });
-      if (compact && section.id === view.sections.find(row => row.module_id === 'design')?.id) reading += researchMap;
+      if (compact && !canvasMap && section.id === view.sections.find(row => row.module_id === 'design')?.id) reading += researchMap;
       const related = map.relations.flatMap(relation => {
         const step = map.steps.find(node => node.id === relation.step_id), finding = map.findings.find(node => node.id === relation.finding_id);
         return step.section_id === spec.id ? [finding] : finding.section_id === spec.id ? [step] : [];
@@ -403,5 +415,6 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     return { language, path: target, content: merged.bytes.toString('utf8'), bytes: merged.bytes, managedHash: merged.managedHash };
   });
   return { notes, supportNotes, knowledgeProposals, ...(knowledgeMergeCandidates.length ? { knowledgeMergeCandidates } : {}),
-    ...(sharedKnowledge ? { visual_resources: structuredClone(visuals) } : {}), assetPaths: [...new Set([p.source_pdf, ...sources.values(), ...visuals.map(visual => visual.path)])], targetRegistry: registry, review: { status: 'pending', reason: 'Rendered reading experience requires overall review and native Obsidian acceptance.' } };
+    ...(sharedKnowledge ? { visual_resources: structuredClone(visuals) } : {}), ...(generatedAssets.length ? { generated_assets: generatedAssets } : {}),
+    assetPaths: [...new Set([p.source_pdf, ...sources.values(), ...visuals.map(visual => visual.path), ...generatedAssets.map(asset => asset.path)])], targetRegistry: registry, review: { status: 'pending', reason: 'Rendered reading experience requires overall review and native Obsidian acceptance.' } };
 }

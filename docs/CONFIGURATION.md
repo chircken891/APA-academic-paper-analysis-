@@ -10,6 +10,8 @@ README 负责安装、使用和更新说明；`academic-paper-analysis` 负责�
 
 检测报告、推荐值、历史默认、示例和唯一可用选项均不属于用户答案；即使宿主只能跟随主会话，也须解释限制，等待用户选择采用或暂缓。未回答项保持未配置或原值，不为达到 `ready` 自动补齐。已保存且无需改变的配置不重新选择；拟修改或不兼容的字段须取得新的选择。普通只读查询沿用既有运行时默认，不自动把默认值保存成个人配置。
 
+配置页和安装器默认选中 MinerU、全局 MinerU 启动器、Better Embedded Canvas 和五项写作指导。用户可在预览前取消。安装前按最终选择检测并报告已有项、缺项、目标和影响，取得安装授权后执行。页面生成的安装选择随配置操作回传，保存配置时不安装组件。
+
 助手核对用户所选字段、项目绝对路径与前后差异，取得明确应用确认后才使用既有 CLI 保存并回读。用户自行提交完整操作并明确要求应用时，不重复询问已确定的目标及字段；未选择的字段仍不补入。禁止直接编辑个人答案绕过流程，或代操作页面制造用户选择。详细交互见 [apa-setup 技能](../.agents/skills/apa-setup/SKILL.md)。
 
 配置格式、CLI 接口及指纹合同保持不变；格式和指纹校验不能证明用户授权，不增设可由助手自行填写的“用户已同意”标记。分别报告工程已获取、依赖已安装、用户配置已保存与运行条件已就绪；实际模型调用、PDF 解析和论文验收继续单独报告。
@@ -43,11 +45,11 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 | parser.python/config_path | 可选显式路径；否则从运行目录派生 |
 | reading.source_language | 旧字段，新阅读运行忽略；可缺省，已有的 en 或 zh-CN 值保留且合法。写作顺序由每篇论文的实际原文语言决定 |
 | reading.presentation_mode | reading-editor 或 writer |
-| writing_skills | 六项写作指导各自明确 enabled；两项构思指导可选；启用时提供 SKILL.md 路径 |
+| writing_skills | 五项写作指导按最终选择保存 enabled；选任一 Nature 时自动启用内部依赖 `nature-shared`；启用项提供 SKILL.md 路径；两项构思指导在查询页选填 |
 
 新配置阅读调用必须按实际主论文向 `prepareConfiguredReading` 显式传入 `sourceLanguage`（`en` 或 `zh-CN`）；原文语言属于每篇文献的事实，不从个人偏好推定。运行将其冻结为 `binding.source_language`，决定 `Wiki/sources/` 与 `Wiki/translations/` 的归属；新运行以同一 `sourceLanguage` 冻结 `first_writing_language`：只有原文语言对应的 Writer 接收科学材料，另一语言由 Translation 角色（`models.roles.translation`）依据已接受的原文稿翻译。
 
-新配置化阅读冻结 `current-shared-nodes-1.0` 知识登记策略；候选物化核对提交配对与登记身份，共享节点使用当前正文并记录实际复用的路径与内容指纹，无关笔记编辑不阻断候选。查询与图谱读取已登记笔记的当前内容；发布核验实际依赖、写入目标及非 `Wiki/` 已登记对象的哈希。新配置化运行冻结 `configured-reading-2.2` 提示与实际文件指纹；使用 Reading Editor 时冻结 `reading-editor-1.3`：全部步骤绘入研究导图，发现可精选，图后链接省略发现，目录、方法条目与图注直接展开。配置化预览包含所引用历史知识的当前正文，旧论文只提供标明路径的导航页；历史参考资源不授发布权。
+新配置化阅读冻结 `current-shared-nodes-1.0` 知识登记策略；候选物化核对提交配对与登记身份，共享节点使用当前正文并记录实际复用的路径与内容指纹，无关笔记编辑不阻断候选。查询与图谱读取已登记笔记的当前内容；发布核验实际依赖、写入目标及非 `Wiki/` 已登记对象的哈希。新配置化运行冻结 `configured-reading-2.2` 提示与实际文件指纹。使用 Reading Editor 时冻结 `reading-editor-1.4`，在两语 Canvas 中呈现全部已登记的步骤、发现及其关系，并依据正文组织论点。目录、方法条目与图注直接展开。配置化预览包含所引用历史知识的当前正文，旧论文只提供标明路径的导航页；历史参考资源不授发布权。
 
 宿主档案 `apa-host-profile-1.0`（结构见 `Schema/config/apa-config.schema.json` 的 `hostProfile`）由助手检测自身环境后写入本次独立的 `.tmp/apa-setup/<owner>/<detection-id>/host-profile.json`，`owner` 和 `detection-id` 使用 kebab-case，目录须未被占用；旧档案仍可读取，不迁移或覆盖。档案记录宿主名、当前会话、派发工具及参数名、派发工具可接受的模型与各自的推理强度档位，以及每项的来源；派发工具可选记录 `dispatch.result_handle`（`{source:'text', pattern}`，从派发结果文本提取任务句柄的正则，捕获组 1 为句柄），缺省时 APA 不提取句柄。`inspect`/`page` 加 `--host-profile <file>` 时，检查结果增加 `host_check`（派发方式是否一致、模型或强度是否与本宿主不符），页面的模型与强度选项也来自档案。档案是助手的自我报告，不证明派发或模型实际可用。
 
@@ -65,6 +67,8 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 
 查询配置检查与 CLI 任务准备解析 `models.query` 和可选 `query` 回答偏好，不要求阅读角色、工作目录、MinerU 或写作指导，也不读取写作文件。`apa-query` 技能可按需要在同一回答任务中引用本库已启用且可读的写作指导，不增加模型调用；具体规则见[查询写作指导](../.agents/skills/apa-query/references/writing.md)。空答案仍可检索；未保存查询选择时按 follow-main 解析，不把默认值写入个人文件。显式查询组合必须由当前宿主提供 `supportedModelPairs` 确认；未知能力报 `APA_MODEL_AVAILABILITY_UNKNOWN`，不支持报 `APA_MODEL_UNSUPPORTED`，均不自动更换模型。follow-main 要求有效的当前会话组合；提供宿主能力列表时同样检查支持情况。配置结构错误仍会拒绝。新论文阅读继续要求原有完整配置和依赖，旧冻结绑定不变。
 
+已保存的派发方式无法选择子代理模型时，显式设置 `models.query` 产生的配置冲突只影响查询配置检查，配置页会提示将查询模型改为跟随主会话。
+
 回答偏好的优先级为当次明确要求、已保存默认、内置默认。代理可在 `request` 的输入中传可选 `preferences:{answer_language,detail,audience}`，只覆盖本次任务；解析结果进入任务证据数据和输入指纹，不写回个人配置。`question` 的明确语言、详略和讲解对象要求仍优先。`adaptive` 表示依据问题需要判断，`beginner` 增加背景和缩写解释，`researcher` 保留必要专业细节；简明模式不删除会改变结论的条件或限制。专题更新只使用详略和讲解对象偏好，保持原专题语言；单纯保存已接受答案不自动翻译或改写。详见[查询配置](../.agents/skills/apa-query/references/configuration.md)。
 
 明确保存专题时才读取并检查现有 `paths.candidates`，在该根目录的 `topics/<topic_id>/<operationId>/` 中准备候选。无需新增一套路径配置，也不要求 MinerU、科学角色模型或完整阅读依赖。路径缺失或不可用只阻断保存，普通只读查询仍沿原能力检查。保存已有答案不强制模型调用，不写回个人配置。
@@ -73,9 +77,9 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 
 专题增量更新复用 `models.query`、详略与讲解对象偏好和当前宿主能力，保持专题原有语言，不新增模型、路径或后台任务配置。相关提示不调用模型；用户选定来源后才准备一次更新任务。任务准备、宿主实际执行、差异候选与正式提交是不同状态；请求模型与可观察身份分别保存，身份不符时不重试或切换模型。
 
-技能键为 nature-writing、nature-polishing、nature-shared、humanizer、humanizer-zh、stss。Nature Writing/Polishing 还要求 Shared。仅选中的指导注入对应语言的 Writer 或 Translation（新运行为原文语言 Writer 与译文语言 Translation）；停用项不暗中保留。科学事实、证据和发布边界属于固定合同，不随文风技能关闭。
+页面默认勾选 `nature-writing`、`nature-polishing`、`humanizer`、`humanizer-zh` 和 `stss`，可取消或填写实际路径，已有答案沿用。两项 Nature 技能共用 `nature-shared`。任一启用时，预览注明自动附带并将路径与启用状态写入操作；两项都取消时保存该支持包为不启用。原文语言 Writer 和译文语言 Translation 各自使用配置中启用的相应语言指导。科学事实、证据和发布边界沿用现行合同。
 
-构思模式还可选 `brainstorming-research-ideas`、`creative-thinking-for-research`，均沿用 `{enabled,path}`。这两项不默认启用，未配置时保持缺省，不影响既有阅读配置完整性。通过配置页选择并确认应用后，同一次构思任务按需读取启用指导；保存配置不安装技能，也不增加模型调用。
+构思模式还可选 `brainstorming-research-ideas`、`creative-thinking-for-research`，均沿用 `{enabled,path}`。这两项默认停用，启用后由查询配置检查提示缺填的路径。新阅读只检查和冻结阅读写作指导。通过配置页选择并确认应用后，同一次构思任务按需读取启用指导；保存配置不安装技能，也不增加模型调用。
 
 ## 页面与操作
 
@@ -100,7 +104,7 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 
 ## 安装与固定规则
 
-保存或去除配置不安装依赖、不改全局环境。缺少项目按 [SETUP](../SETUP.md) 单独安装。来源、每次运行预算、补充材料范围及正式发布仍需逐次授权。
+保存或去除配置只作用于个人配置。完善配置操作可携带 `installation`，其中三个布尔值记录解析器、全局启动器和画布插件的选择，`companion_skills` 记录勾选的写作指导。应用结果原样返回 `pending_installation`，安装前仍要按所选项单独检查、报告并取得授权。来源、每次运行预算、补充材料范围及正式发布仍需逐次授权。 [安装说明](../SETUP.md)
 
 新阅读遵循 [当前合同](apa-v3/current-contracts.md)、[呈现接口](apa-v3/reading-first-obsidian.md) 与 [发布桥](apa-v3/reading-first-publication.md)。非现行绑定以 `READING_BINDING_RETIRED` 拒绝，不提供 V2 论文入口，不自动升级笔记。新方法在 Wiki/methods/，保护原始资料和人工内容。
 
@@ -126,7 +130,7 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 | `mineru.package` | 解析器包名 |
 | `mineru.model_source` | 模型下载来源 |
 | `disk.recommended_free_gib` | 新装 MinerU 的建议预留空间，低于时提示，不作为安装阻断条件 |
-| `obsidian.plugins` | 可选 Obsidian 集成检查项 |
+| `obsidian.plugins` | Better Embedded Canvas 可安装、启用和检测；BRAT、Claudian、Dataview、Templater 只检测 |
 
 不得只修改文档声称支持新环境；真实适配与安装需另行实施和验证。
 

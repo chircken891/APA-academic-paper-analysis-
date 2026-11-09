@@ -7,6 +7,86 @@ import { renderReadingFirstObsidian } from '../../scripts/v3/reading-first-obsid
 import { applyReadingFirstKnowledgeContent } from '../../scripts/v3/reading-first-knowledge.mjs';
 import { computeKnowledgeRebase } from '../../scripts/v3/reading-first-rebase.mjs';
 
+function canvasInput() {
+  const data = compactInput();
+  data.identity.run_id = 'canvas-test';
+  const bilingual = value => ({ en: value, 'zh-CN': value });
+  data.readingEditor.schema_version = 'reading-editor-1.4';
+  delete data.readingEditor.map;
+  data.readingEditor.primary_finding_ids = ['burden'];
+  data.readingEditor.argument = {
+    question: { text: bilingual('How was burden measured?'), section_id: 'methods' },
+    branches: [{ id: 'analysis', name: bilingual('Burden analysis') }],
+    claims: ['design', 'measurement', 'result', 'scope'].map((id, index) => ({ id,
+      title: bilingual(['The design defines the comparison.', 'Rates account for age.', 'Counts and rates differ.', 'The measures have different uses.'][index]),
+      evidence: bilingual('Accepted study account.'), limit: bilingual(''),
+      finding_ids: index === 2 ? ['burden'] : [], branch_id: 'analysis', section_id: 'findings' })),
+    relations: ['question', 'design', 'measurement', 'result', 'scope'].map((from, index) => ({ from,
+      to: ['design', 'measurement', 'result', 'scope', 'conclusion'][index], label: '结果整合' })),
+    conclusion: { text: bilingual('Interpret each measure within its scope.'), section_id: 'findings' },
+  };
+  return data;
+}
+
+test('editor 1.4 renders bilingual Canvas assets and a numbered embedded research-map section', () => {
+  const result = renderReadingFirstObsidian(canvasInput());
+  assert.equal(result.generated_assets.length, 2);
+  for (const asset of result.generated_assets) {
+    assert.equal(asset.path, `Figures/canvas-test/research-map.${asset.language}.canvas`);
+    assert.equal(asset.sha256, 'sha256:' + createHash('sha256').update(asset.content).digest('hex'));
+    assert.equal(asset.byte_length, Buffer.byteLength(asset.content));
+    assert.ok(result.assetPaths.includes(asset.path));
+    const note = result.notes.find(row => row.language === asset.language);
+    assert.ok(note.content.includes(`![[${asset.path}|${asset.language === 'en' ? 'Research map' : '研究导图'}|640]]`));
+    assert.match(note.content, /### 2\.1 (Research map|研究导图)/);
+    assert.doesNotMatch(note.content, /```mermaid|未画入导图的发现|Findings not shown in the map/);
+    const noteTarget = note.path.replace(/\.md$/, '');
+    assert.ok(JSON.parse(asset.content).nodes.some(node => node.text?.includes(`[[${noteTarget}#`)));
+  }
+  const files = [...result.notes, ...result.supportNotes,
+    ...result.generated_assets.map(row => ({ path: row.path, bytes: Buffer.from(row.content) })),
+    ...result.assetPaths.filter(path => !path.endsWith('.canvas')).map(path => ({ path, bytes: Buffer.from('resource') }))];
+  assert.equal(validateReadingFirstPreviewFiles(files).status, 'passed');
+  const asset = files.find(row => row.path.endsWith('.canvas'));
+  const canvas = JSON.parse(asset.bytes);
+  canvas.nodes.find(node => node.type === 'text' && node.text?.includes('[[')).text = '[[Missing note#Missing|Broken link]]';
+  asset.bytes = Buffer.from(JSON.stringify(canvas));
+  assert.throws(() => validateReadingFirstPreviewFiles(files), { code: 'RF_PREVIEW_LINK_UNRESOLVED' });
+});
+
+test('Canvas preview checks links with percent, brackets and inline heading formatting', () => {
+  const data = canvasInput();
+  for (const view of data.views) view.sections.find(section => section.id === 'findings').heading = 'Effect at 95% in [Arm A] and *Gene_A*';
+  data.readingEditor.views_fingerprint = readingFirstViewsFingerprint(data.views);
+  const result = renderReadingFirstObsidian(data);
+  const files = [...result.notes, ...result.supportNotes,
+    ...result.generated_assets.map(row => ({ path: row.path, bytes: Buffer.from(row.content) })),
+    ...result.assetPaths.filter(path => !path.endsWith('.canvas')).map(path => ({ path, bytes: Buffer.from('resource') }))];
+  const validation = validateReadingFirstPreviewFiles(files);
+  assert.equal(validation.status, 'passed');
+  assert.ok(validation.local_links > 10);
+  const asset = files.find(row => row.path.endsWith('.canvas'));
+  const canvas = JSON.parse(asset.bytes);
+  const node = canvas.nodes.find(row => row.text?.includes('%25'));
+  assert.ok(node);
+  node.text = node.text.replace('%25', '%25missing');
+  asset.bytes = Buffer.from(JSON.stringify(canvas));
+  assert.throws(() => validateReadingFirstPreviewFiles(files), { code: 'RF_PREVIEW_ANCHOR_UNRESOLVED' });
+});
+
+test('editor 1.4 still renders both argument canvases when the registered map has no nodes', () => {
+  const data = canvasInput();
+  data.presentation.map = { steps: [], findings: [], relations: [] };
+  data.readingEditor.primary_finding_ids = [];
+  data.readingEditor.argument.claims.forEach(claim => { claim.finding_ids = []; });
+  const result = renderReadingFirstObsidian(data);
+  assert.equal(result.generated_assets.length, 2);
+  for (const note of result.notes) {
+    assert.match(note.content, /### 2\.1 (Research map|研究导图)/);
+    assert.match(note.content, /### 2\.2 /);
+  }
+});
+
 function input() {
   return { identity: { paper_id: 'pap_' + 'a'.repeat(32) }, views: ['en', 'zh-CN'].map(language => ({ language, sections: [{ heading: 'Methods', paragraphs: ['Original abstract and methods.'] }, { heading: 'Results', paragraphs: ['The result.'] }] })), presentation: {
     schema_version: 'reading-first-obsidian-1.0', bibliography: { title: 'A study', first_author: 'Smith', year: 2024 }, source_pdf: 'Raw/paper.pdf', sections: [{ id: 'methods', indices: { en: 0, 'zh-CN': 0 } }, { id: 'results', indices: { en: 1, 'zh-CN': 1 } }],

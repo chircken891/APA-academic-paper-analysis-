@@ -15,6 +15,7 @@ import { inspectReadingRuntime } from './reading-runtime-binding.mjs';
 import { prepareReadingRuntimeSnapshot } from './reading-runtime-snapshot.mjs';
 import { registerReadingRuntimeCleanupFiles } from './reading-runtime-cleanup.mjs';
 import { CLIPPINGS_SOURCE_POLICY, prepareReadingSources } from './reading-source-policy.mjs';
+import { READING_EDITOR_PROFILE } from './reading-first-editor-contract.mjs';
 
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const CODE_ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)));
@@ -51,10 +52,10 @@ export function deriveConfiguredMaxCalls({ maxTotalCalls, presentationMode } = {
 /** Freeze selected guidance into the binding. Disabled skills contribute no optional instructions. */
 export function buildConfiguredReadingInstructions(writingSkills = {}, { instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE } = {}) {
   if (instructionProfile !== DEFAULT_CONFIGURED_INSTRUCTION_PROFILE) throw Object.assign(new Error('READING_BINDING_RETIRED'), { code: 'READING_BINDING_RETIRED' });
-  const urls = ['science-configured-2.2.md', 'reading-configured-2.2.md', 'reading-editor-1.3.md'].map(name => new URL('../../prompts/v3/' + name, import.meta.url));
+  const urls = ['science-configured-2.2.md', 'reading-configured-2.2.md', READING_EDITOR_PROFILE + '.md'].map(name => new URL('../../prompts/v3/' + name, import.meta.url));
   const buffers = urls.map(url => readFileSync(url));
   const sections = sectionsOf(buffers[1]);
-  sections['Reading Editor'] = buffers[2].toString('utf8').trim().replace("map: {nodes: [{id: 'registered-map-node-id', stage: 'design'|'measurement'|'finding'|'limit', primary: true}]}", "map: {nodes: [{id: 'registered-step-id', stage: 'design'}, {id: 'registered-finding-id', stage: 'finding', primary: true}]}") + '\n\nUse design or measurement for step nodes and finding or limit for finding nodes. Only a finding may have primary, which must be boolean. Include every registered step. Run the existing deterministic editor validation through Controller; repair invalid fields before handoff.';
+  sections['Reading Editor'] = buffers[2].toString('utf8').trim();
   const writingInstructions = Object.fromEntries(['en', 'zh-CN'].map(language => [language, Object.entries(writingSkills)
     .filter(([key]) => key !== (language === 'en' ? 'humanizer-zh' : 'humanizer'))
     .map(([key, guide]) => 'Selected optional writing guidance: ' + key + '\n' + JSON.stringify({ path: guide.path, sha256: sha(Buffer.from(guide.content)) })
@@ -125,7 +126,7 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
   const runControl = createReadingFirstRunControl({ ...options, scientificInput, ...(derivedMaxCalls === undefined ? {} : { maxCalls: derivedMaxCalls }), ...(taskBindings ? { taskBindings } : {}), ...(loaded.config.host ? { host: loaded.config.host } : {}), mainSession, configuredSetup, writingMode: 'source-translation',
     compactionPolicy: COMPACTION_POLICY, manualCompaction,
     roleReplyContract: options.roleReplyContract === undefined ? getRoleReplyContract() : options.roleReplyContract,
-    presentationProfile: 'reading-editor-1.3',
+    presentationProfile: READING_EDITOR_PROFILE,
     firstWritingLanguage: options.sourceLanguage, presentationMode: resolvedConfig.reading.presentation_mode, handoffProfile: SCIENCE_INDEX_PROFILE });
   return freeze({ resolvedConfig, scientificInput, raw_source_matches, configurationFingerprint: loaded.fingerprint, paths, parserOptions, runControl,
     compactionControlBindings: compactionControlBindings(runControl) });

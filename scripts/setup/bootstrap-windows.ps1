@@ -3,22 +3,32 @@ param(
   [string]$BasePython,
   [string]$GlobalBinRoot,
   [string]$CompanionSkillRoot,
-  [switch]$InstallMineru,
-  [switch]$InstallGlobalIntegration,
+  [switch]$InstallMineru = $true,
+  [switch]$InstallGlobalIntegration = $true,
   [string[]]$CompanionSkills,
   [switch]$CheckOnly,
-  [switch]$RepairGlobalIntegration
+  [switch]$RepairGlobalIntegration,
+  [switch]$SkipMineru,
+  [switch]$SkipGlobalIntegration,
+  [switch]$SkipBetterEmbeddedCanvas,
+  [switch]$SkipCompanionSkills
 )
 
 $ErrorActionPreference = 'Stop'
+$InstallMineru = $InstallMineru -and -not $SkipMineru
+$InstallGlobalIntegration = $InstallGlobalIntegration -and -not $SkipGlobalIntegration
 if ($RepairGlobalIntegration -and -not $InstallGlobalIntegration) {
-  throw '-RepairGlobalIntegration requires explicit -InstallGlobalIntegration.'
+  throw '-RepairGlobalIntegration requires a selected global integration.'
 }
+$defaultCompanionSkills = @('nature-writing', 'nature-polishing', 'humanizer', 'humanizer-zh', 'stss')
+if ($SkipCompanionSkills) { $CompanionSkills = @() }
+elseif (-not $PSBoundParameters.ContainsKey('CompanionSkills')) { $CompanionSkills = $defaultCompanionSkills }
 $CompanionSkills = @($CompanionSkills | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
-$knownCompanionSkills = @('nature-writing', 'nature-polishing', 'nature-shared', 'humanizer', 'humanizer-zh', 'stss')
+$knownCompanionSkills = $defaultCompanionSkills + 'nature-shared'
 foreach ($name in $CompanionSkills) {
   if ($name -notin $knownCompanionSkills) { throw "Unknown companion skill: $name. No installation was started." }
 }
+$CompanionSkills = @($CompanionSkills | Where-Object { $_ -ne 'nature-shared' })
 $repoRoot = if ($RepoRoot) {
   [System.IO.Path]::GetFullPath($RepoRoot)
 } else {
@@ -164,24 +174,36 @@ function Assert-Prerequisites {
   if ('nature-writing' -in $selectedSkillNames -or 'nature-polishing' -in $selectedSkillNames) { $selectedSkillNames = @($selectedSkillNames + 'nature-shared' | Select-Object -Unique) }
   $skillChecks = @($selectedSkillNames | ForEach-Object {
     $target = Join-Path $companionTarget $_
-    @{ name = $_; path = $target; status = if (Test-Path -LiteralPath (Join-Path $target 'SKILL.md') -PathType Leaf) { 'satisfied' } elseif (Test-Path -LiteralPath $target) { 'incomplete' } else { 'missing' } }
+    @{ name = $_; path = $target; automatic = $_ -eq 'nature-shared'; status = if (Test-Path -LiteralPath (Join-Path $target 'SKILL.md') -PathType Leaf) { 'satisfied' } elseif (Test-Path -LiteralPath $target) { 'incomplete' } else { 'missing' } }
   })
   if ($InstallGlobalIntegration -and -not $GlobalBinRoot -and $script:NpmCommand) {
     $prefixProbe = Invoke-ReadOnlyProbe $script:NpmCommand.Source @('config', 'get', 'prefix')
     $prefix = $prefixProbe.stdout | Select-Object -Last 1
     if ($prefixProbe.exit_code -eq 0 -and $prefix) { $script:GlobalBinRoot = [System.IO.Path]::GetFullPath(([string]$prefix).Trim()) }
   }
+  $canvasStatus = @{ status = if ($SkipBetterEmbeddedCanvas) { 'not-selected' } else { 'unknown' } }
+  if (-not $SkipBetterEmbeddedCanvas -and $script:NodeCommand -and $nodeMajor -eq [int]$environment.node.major) {
+    $probe = Invoke-ReadOnlyProbe $script:NodeCommand.Source @((Join-Path $repoRoot 'scripts\setup\install-better-embedded-canvas.mjs'), '--check', $repoRoot)
+    if ($probe.exit_code -eq 0) {
+      $canvasStatus = ($probe.stdout -join "`n") | ConvertFrom-Json
+    } else {
+      $blockingFailures += 'better_embedded_canvas: unable to inspect the Obsidian target; see diagnostics'
+    }
+  }
   $targets = @(
     @{ id = 'base'; selected = $true; path = (Join-Path $repoRoot 'node_modules'); status = if ($dependenciesReady) { 'satisfied' } else { 'missing' }; impact = 'npm ci restores package-lock dependencies and writes .runtime/setup stamp' },
     @{ id = 'mineru'; selected = [bool]$InstallMineru; path = (Join-Path $repoRoot '.runtime\mineru'); status = if (Test-Path -LiteralPath (Join-Path $repoRoot '.runtime\mineru\venv\Scripts\python.exe') -PathType Leaf) { 'present-unverified' } else { 'missing' }; impact = 'Creates local Python environment and downloads MinerU and models' },
     @{ id = 'global_integration'; selected = [bool]$InstallGlobalIntegration; path = $GlobalBinRoot; status = if ($GlobalBinRoot -and (Test-Path -LiteralPath (Join-Path $GlobalBinRoot 'mineru.cmd') -PathType Leaf)) { 'present-unverified' } else { 'missing' }; impact = 'Installs MinerU command launcher; explicit repair backs up conflicts' },
-    @{ id = 'companion_skills'; selected = $CompanionSkills.Count -gt 0; path = $companionTarget; skills = $skillChecks; impact = 'Downloads only selected skill directories; Nature includes nature-shared' }
+    @{ id = 'companion_skills'; selected = $CompanionSkills.Count -gt 0; path = $companionTarget; skills = $skillChecks; impact = 'Downloads selected skill directories; either Nature skill automatically includes nature-shared' },
+    @{ id = 'better_embedded_canvas'; selected = -not $SkipBetterEmbeddedCanvas; path = (Join-Path $repoRoot '.obsidian\plugins\better-embedded-canvas'); enable_path = (Join-Path $repoRoot '.obsidian\community-plugins.json'); status = $canvasStatus.status; version = $canvasStatus.version; impact = 'Downloads digest-verified release assets and enables Better Embedded Canvas in this vault' }
   )
   $nextCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -RepoRoot "' + $repoRoot + '"'
   if ($BasePython) { $nextCommand += ' -BasePython "' + $BasePython + '"' }
-  if ($InstallMineru) { $nextCommand += ' -InstallMineru' }
-  if ($InstallGlobalIntegration) { $nextCommand += ' -InstallGlobalIntegration' }
+  if (-not $InstallMineru) { $nextCommand += ' -SkipMineru' }
+  if (-not $InstallGlobalIntegration) { $nextCommand += ' -SkipGlobalIntegration' }
+  if ($SkipBetterEmbeddedCanvas) { $nextCommand += ' -SkipBetterEmbeddedCanvas' }
   if ($CompanionSkills.Count) { $nextCommand += ' -CompanionSkills "' + ($CompanionSkills -join ',') + '"' }
+  else { $nextCommand += ' -SkipCompanionSkills' }
   if ($InstallGlobalIntegration -and $RepairGlobalIntegration) { $nextCommand += ' -RepairGlobalIntegration' }
   foreach ($option in @(@{ Name = 'GlobalBinRoot'; Value = $GlobalBinRoot }, @{ Name = 'CompanionSkillRoot'; Value = $CompanionSkillRoot })) {
     if ($option.Value) { $nextCommand += ' -' + $option.Name + ' "' + $option.Value + '"' }
@@ -235,7 +257,7 @@ try {
       -ModelSource ([string]$environment.mineru.model_source)
     if ($LASTEXITCODE -ne 0) { throw 'MinerU setup failed; the retained .runtime can be reused by the next run.' }
     Write-Output '3/6 local MinerU runtime ready.'
-  } else { Write-Output 'MinerU installation skipped; use -InstallMineru to select it.' }
+  } else { Write-Output 'MinerU installation skipped.' }
 
   if ($InstallGlobalIntegration) {
     & (Join-Path $repoRoot 'scripts\setup\install-global-integrations.ps1') `
@@ -244,7 +266,7 @@ try {
       -RepairGlobalIntegration:$RepairGlobalIntegration
     if ($LASTEXITCODE -ne 0) { throw 'Global integration failed.' }
     Write-Output '4-5/6 MinerU command integration ready.'
-  } else { Write-Output 'Global integration skipped; use -InstallGlobalIntegration to select it.' }
+  } else { Write-Output 'Global integration skipped.' }
 
   if ($CompanionSkills.Count -gt 0) {
     & (Join-Path $repoRoot 'scripts\setup\install-apa-companion-skills.ps1') `
@@ -253,7 +275,12 @@ try {
       -Skills $CompanionSkills
     if ($LASTEXITCODE -ne 0) { throw 'APA companion skill installation failed; rerun after resolving the reported error.' }
     Write-Output 'Selected APA writing companion skills ready.'
-  } else { Write-Output 'Companion skill installation skipped; use -CompanionSkills to select named skills.' }
+  } else { Write-Output 'Companion skill installation skipped.' }
+
+  if (-not $SkipBetterEmbeddedCanvas) {
+    & $script:NodeCommand.Source (Join-Path $repoRoot 'scripts\setup\install-better-embedded-canvas.mjs') --install $repoRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Better Embedded Canvas installation failed; see the GitHub API or vault diagnostic above.' }
+  }
 
   $previousBasePython = $env:APA_BASE_PYTHON
   $previousGlobalBin = $env:APA_GLOBAL_BIN

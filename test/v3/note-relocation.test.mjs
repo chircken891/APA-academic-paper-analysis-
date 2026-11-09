@@ -4,13 +4,35 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile, mkdir, rename, unlink } from 'node:fs/promises';
 import { dirname, join, posix } from 'node:path';
 import { readingFirstPublicationFixture, applyReadingFirstFixture, readingFirstPublicationAuthority } from './helpers/reading-first-publication-fixtures.mjs';
-import { buildNoteRelocationReview, relocateNoteLinks } from '../../scripts/v3/note-relocation.mjs';
+import { buildNoteRelocationReview, relocateNoteLinks, relocateCanvasLinks } from '../../scripts/v3/note-relocation.mjs';
 import { dryRunBilingualPublication, applyBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
 import { readCommittedGeneration, readRegisteredCommit } from '../../scripts/v3/phase22-active-version.mjs';
 import { buildRegisteredGraphProposal } from '../../scripts/v3/phase22-graph.mjs';
 import { createTopicFixture, publishTopicFixture } from './helpers/topic-fixtures.mjs';
+import { validateReadingFirstPreviewFiles } from '../../scripts/v3/reading-first-preview.mjs';
 
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
+
+test('Canvas relocation preserves fragments, aliases and card layout across explicit path mappings', () => {
+  const note = 'Wiki/sources/Study.en.md', renamed = 'Wiki/translations/Renamed study.en.md';
+  const canvas = 'Figures/run/nested/research-map.en.canvas', target = 'Figures/run/research-map.en.canvas';
+  const nodes = [
+    { type: 'text', id: 'wiki', x: 30, text: '[[Wiki/sources/Study.en#2.1 Design|Design]] [[Study.en#2.1 Design]]' },
+    { type: 'text', id: 'legacy', text: '[Design](../../../Wiki/sources/Study.en.md#2.1%20Design) ![Figure](../figure.png)' },
+    { type: 'file', id: 'file', file: note, subpath: '#2.1 Design' },
+    { type: 'text', id: 'outside', text: '[[Eval/old/Study.en#2.1 Design|Copy]] [External](https://example.org/#design)' },
+  ];
+  const edges = [{ id: 'edge', fromNode: 'wiki', toNode: 'file' }];
+  const input = Buffer.from(JSON.stringify({ nodes, edges }));
+  const updated = JSON.parse(relocateCanvasLinks(input, canvas, target, new Map([[note, renamed]]), [note]));
+  assert.deepEqual(updated, { edges, nodes: [
+    { ...nodes[0], text: '[[Wiki/translations/Renamed study.en#2.1 Design|Design]] [[Wiki/translations/Renamed study.en#2.1 Design]]' },
+    { ...nodes[1], text: '[Design](../../Wiki/translations/Renamed%20study.en.md#2.1%20Design) ![Figure](figure.png)' },
+    { ...nodes[2], file: renamed },
+    nodes[3],
+  ] });
+  assert.deepEqual(relocateCanvasLinks(input, canvas, canvas, new Map(), [note]), input);
+});
 
 async function published(t) {
   const f = await readingFirstPublicationFixture(t, { controlOptions: { noteLayout: 'legacy-flat-1.0' } });
@@ -28,8 +50,17 @@ async function relocation(f) {
 test('path-only relocation uses the existing transaction and preserves scientific identity, links and index', async t => {
   const f = await published(t), previous = f.before.generation.papers[0];
   const original = await readFile(join(f.vaultRoot, previous.paths['zh-CN']), 'utf8');
+  const oldPresentation = JSON.parse(await readFile(join(f.vaultRoot, previous.reader_presentation.path)));
+  const oldCanvas = oldPresentation.presentation_assets.find(row => row.language === 'zh-CN');
+  const candidateCopy = 'Eval/old-candidate/' + posix.basename(previous.paths['zh-CN']);
+  await mkdir(dirname(join(f.vaultRoot, candidateCopy)), { recursive: true });
+  await writeFile(join(f.vaultRoot, candidateCopy), '## Archived copy\n');
   const review = await relocation(f);
   const { plan } = await dryRunBilingualPublication({ vaultRoot: f.vaultRoot, run: f.runId, review });
+  const plannedCanvas = plan.inventory.find(row => row.path === oldCanvas.path);
+  assert.equal(plannedCanvas?.kind, 'asset', 'The translated Canvas must be an approved transaction output');
+  assert.equal(plannedCanvas.before_sha256, oldCanvas.sha256);
+  assert.equal(plannedCanvas.before_byte_length, oldCanvas.byte_length);
   const authority = await readingFirstPublicationAuthority(f, plan);
   const result = await applyBilingualPublication({ vaultRoot: f.vaultRoot, run: f.runId, plan, ...authority });
   assert.equal(result.status, 'committed');
@@ -52,6 +83,31 @@ test('path-only relocation uses the existing transaction and preserves scientifi
   assert.ok(!current.index.documents.some(row => row.path === previous.paths['zh-CN']));
   const supports = current.generation.shared_nodes.map(row => row.path);
   assert.ok((await Promise.all(supports.map(path => readFile(join(f.vaultRoot, path), 'utf8')))).some(text => text.includes('../translations/')));
+  const canvases = current.generation.objects.filter(row => row.path.endsWith('.canvas'));
+  assert.equal(canvases.length, 2);
+  const nextPresentation = JSON.parse(await readFile(join(f.vaultRoot, paper.reader_presentation.path)));
+  const canvasFiles = await Promise.all(canvases.map(async row => {
+    const bytes = await readFile(join(f.vaultRoot, row.path));
+    const prior = oldPresentation.presentation_assets.find(old => old.path === row.path);
+    assert.deepEqual(nextPresentation.presentation_assets.find(asset => asset.path === row.path),
+      { ...prior, sha256: sha(bytes), byte_length: bytes.length });
+    assert.equal(row.sha256, sha(bytes));
+    if (prior.language === 'zh-CN') {
+      const localTargets = JSON.parse(bytes).nodes.flatMap(node => [...(node.text ?? '').matchAll(/\[\[([^#|]+)#/g)].map(match => match[1]));
+      assert.ok(localTargets.length > 0);
+      assert.deepEqual([...new Set(localTargets)], [paper.paths['zh-CN'].slice(0, -3)]);
+      assert.equal(row.sha256, plannedCanvas.byte_sha256);
+    } else assert.equal(sha(bytes), prior.sha256);
+    return { path: row.path, bytes };
+  }));
+  const destinations = Object.values(paper.paths).map(path => ({ path,
+    bytes: Buffer.from((path === paper.paths.en ? en : zh).split('\n').filter(line => /^#{1,6} /.test(line)).join('\n')) }));
+  const retainedNote = { path: previous.paths['zh-CN'],
+    bytes: Buffer.from('## Retained old copy\n') };
+  const navigation = validateReadingFirstPreviewFiles([...canvasFiles, ...destinations, retainedNote,
+    { path: candidateCopy, bytes: await readFile(join(f.vaultRoot, candidateCopy)) }]);
+  assert.equal(navigation.status, 'passed');
+  assert.ok(navigation.local_links > 0);
 });
 test('relocation refuses occupied target and stale committed source instead of overwriting', async t => {
   const f = await published(t), old = f.before.generation.papers[0].paths['zh-CN'];
@@ -65,12 +121,14 @@ test('relocation refuses occupied target and stale committed source instead of o
 });
 test('relocation does not bypass the existing exact approval or rollback', async t => {
   const f = await published(t), original = new Map();
-  for (const paper of f.before.generation.papers) for (const path of Object.values(paper.paths)) original.set(path, await readFile(join(f.vaultRoot, path)));
+  for (const { path } of f.before.generation.objects.filter(row => row.kind === 'v3-note' || row.path.endsWith('.canvas'))) {
+    original.set(path, await readFile(join(f.vaultRoot, path)));
+  }
   const review = await relocation(f), { plan } = await dryRunBilingualPublication({ vaultRoot: f.vaultRoot, run: f.runId, review });
   await assert.rejects(applyBilingualPublication({ vaultRoot: f.vaultRoot, run: f.runId, plan }), /P22_PUBLICATION_CONTROL_REQUIRED/);
   const authority = await readingFirstPublicationAuthority(f, plan);
   await assert.rejects(applyBilingualPublication({ vaultRoot: f.vaultRoot, run: f.runId, plan, ...authority,
-    onPromotionBoundary({ timing, kind }) { if (timing === 'after' && kind === 'paper') throw new Error('TEST_STOP'); } }), /TEST_STOP/);
+    onPromotionBoundary({ timing, path }) { if (timing === 'after' && path.endsWith('.zh-CN.canvas')) throw new Error('TEST_STOP'); } }), /TEST_STOP/);
   const current = await readCommittedGeneration({ vaultRoot: f.vaultRoot });
   assert.equal(current.ok, true, JSON.stringify(current.errors));
   assert.equal(current.generation_id, f.before.generation_id);

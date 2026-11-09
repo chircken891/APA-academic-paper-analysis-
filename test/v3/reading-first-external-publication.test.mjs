@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdir, writeFile, lstat, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { reviewedReadingFirstFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
@@ -11,16 +12,17 @@ import { createReadingFirstRunControl } from '../../scripts/v3/reading-first-run
 import { buildConfiguredReadingInstructions } from '../../scripts/v3/configured-reading.mjs';
 import { registerBilingualPublication, loadBilingualPublication, applyBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
 import { readCommittedGeneration } from '../../scripts/v3/phase22-active-version.mjs';
+import { verifyReadingFirstPresentation } from '../../scripts/v3/reading-first-index.mjs';
 
 async function externalFixture(t, modern = false) {
   const configured=modern === true ? buildConfiguredReadingInstructions({}) : null;
   const f = await reviewedReadingFirstFixture(t, { omitPresentationAssets: true, visualProvenance: true,
-    ...(modern ? {translationLanguage:null,controlOptions:{presentationProfile:'reading-editor-1.3'}} : {}),
+    ...(modern ? {translationLanguage:null,controlOptions:{presentationProfile:'reading-editor-1.4'}} : {}),
     ...(configured ? {createRunControl:args=>createReadingFirstRunControl({...args,maxTotalCalls:20,configuredSetup:{...configured,paths:{runRoot:dirname(args.scientificInput.sources[0].path)}}})} : {}) });
   const data = await inspectReadingFirstPublicationSource(await captureReadingFirstPublicationSource({ controller: f.controller, presentation: f.candidate }));
   const vaultRoot = join(f.root, 'external-vault'), candidateRoot = join(f.root, 'external-candidate');
   await mkdir(vaultRoot, { recursive: true });
-  for (const note of [...data.candidate.notes, ...data.candidate.supportNotes]) {
+  for (const note of [...data.candidate.notes, ...data.candidate.supportNotes, ...(data.candidate.generated_assets ?? [])]) {
     const path = join(candidateRoot, note.path);
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, note.content);
@@ -49,17 +51,17 @@ test('modern external preparation retains its frozen prompt dependencies through
   await assert.rejects(restoreReadingFirstPublicationSource(missing),/READING_BINDING_RETIRED/);
 });
 
-test('1.3 editor output rejects a mismatched external binding', async t => {
+test('1.4 editor output rejects a mismatched external binding', async t => {
   const f=await externalFixture(t,true);
   const wrong=structuredClone(f.binding); wrong.presentation_profile='reading-editor-1.2';
   await assert.rejects(prepareExternalReviewedReadingFirstPublication({...f.args,readingFirstBinding:wrong}),/RF_PUBLICATION_EXTERNAL_BINDING_INVALID/);
 });
 
-test('unconfigured library run binds the 1.3 editor contract', async t => {
+test('unconfigured library run binds the 1.4 editor contract', async t => {
   const f=await externalFixture(t,'legacy13');
   const prepared=await prepareExternalReviewedReadingFirstPublication({...f.args,readingFirstBinding:f.binding});
   const paths=prepared.external_source_recipe.tool_bindings.map(row=>row.path);
-  assert.ok(paths.some(path=>path.endsWith('reading-editor-1.3.md')));
+  assert.ok(paths.some(path=>path.endsWith('reading-editor-1.4.md')));
   assert.ok(paths.some(path=>path.endsWith('reading-first-contracts.md')));
   assert.ok(!paths.some(path=>path.endsWith('reading-editor-1.2.md')));
   await restoreReadingFirstPublicationSource(prepared.external_source_recipe);
@@ -117,8 +119,42 @@ test('external preparation registers, reloads and publishes only to a synthetic 
   assert.deepEqual(loaded.plan.hashes, prepared.plan.hashes);
   const result = await applyBilingualPublication({ vaultRoot: f.vaultRoot, run: f.runId, plan: prepared.plan, ...authority });
   assert.equal(result.status, 'committed');
-  assert.equal((await readCommittedGeneration({ vaultRoot: f.vaultRoot })).ok, true);
+  const snapshot = await readCommittedGeneration({ vaultRoot: f.vaultRoot });
+  assert.equal(snapshot.ok, true);
   for (const note of f.args.candidate.notes) assert.equal(await readFile(join(f.vaultRoot, note.path), 'utf8'), note.content);
+  const paper = snapshot.generation.papers[0];
+  const presentation = verifyReadingFirstPresentation(paper, await readFile(join(f.vaultRoot, paper.reader_presentation.path)), snapshot.generation);
+  assert.equal(presentation.presentation_assets.length, 2);
+  for (const asset of f.args.candidate.generated_assets) {
+    assert.equal(await readFile(join(f.vaultRoot, asset.path), 'utf8'), asset.content);
+    assert.ok(presentation.targets.assets.includes(asset.path));
+    assert.ok(snapshot.generation.objects.some(row => row.path === asset.path && row.kind === 'asset' && row.sha256 === asset.sha256));
+  }
+  const asset = f.args.candidate.generated_assets[0];
+  await writeFile(join(f.vaultRoot, asset.path), asset.content.replace('nodes', 'nOdes'));
+  const corrupted = await readCommittedGeneration({ vaultRoot: f.vaultRoot });
+  assert.equal(corrupted.ok, false);
+  assert.equal(corrupted.errors[0].code, 'P22_OBJECT_HASH_MISMATCH');
+});
+
+test('external preparation rejects changed generated Canvas bytes before registration', async t => {
+  const f = await externalFixture(t, true);
+  const asset = f.args.candidate.generated_assets[0];
+  await writeFile(join(f.candidateRoot, asset.path), asset.content + ' ');
+  await assert.rejects(prepareExternalReviewedReadingFirstPublication(f.args), /RF_PUBLICATION_EXTERNAL_CANDIDATE_CHANGED/);
+});
+
+test('external preparation recomputes Canvas content from accepted Editor inputs', async t => {
+  const f = await externalFixture(t, true);
+  const candidate = structuredClone(f.args.candidate);
+  const asset = candidate.generated_assets[0];
+  asset.content = asset.content.replace('Research question', 'A substituted question');
+  asset.sha256 = 'sha256:' + createHash('sha256').update(asset.content).digest('hex');
+  asset.byte_length = Buffer.byteLength(asset.content);
+  await writeFile(join(f.candidateRoot, asset.path), asset.content);
+  const { profile, identity, review_status, publishable, presentation_fingerprint, ...content } = candidate;
+  candidate.presentation_fingerprint = fingerprintV3Json(content);
+  await assert.rejects(prepareExternalReviewedReadingFirstPublication({ ...f.args, candidate }), /READING_FIRST_PUBLICATION_CANDIDATE_CHANGED/);
 });
 
 test('external preparation and registration reject changed candidate bytes', async t => {
@@ -155,3 +191,4 @@ test('external preparation binds reproducible rendering inputs to accepted owned
   assert.deepEqual(recipe.rendering.knowledgeRegistry, f.renderOptions.knowledgeRegistry);
   await restoreReadingFirstPublicationSource(recipe);
 });
+

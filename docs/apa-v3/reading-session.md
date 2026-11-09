@@ -145,7 +145,7 @@ Codex 科学角色的首次派发若仅填错指令文件 SHA-256，可以在核
 
 **明确批准的 Editor 拒收后恢复**
 
-默认拒收仍以 `completed_with_limits` 结束。若用户另行批准恢复，且拒收原因为 `READING_FIRST_REPAIR_SCOPE_EXCEEDED`，可提交 `recover-rejected-editor` 事件，重新验证已有 `presentation-r2` 的原始 native／owned 字节、宿主观察、首次审查范围和完整 Editor 合同。该接口只支持 `reading-editor-1.3`、一次整体审查后且尚未派发局部复核的状态。
+默认拒收仍以 `completed_with_limits` 结束。若用户另行批准恢复，且拒收原因为 `READING_FIRST_REPAIR_SCOPE_EXCEEDED`，可提交 `recover-rejected-editor` 事件，重新验证已有 `presentation-r2` 的原始 native／owned 字节、宿主观察、首次审查范围和完整 Editor 合同。该接口支持当前绑定的 Editor 版本，适用于一次整体审查后、尚未派发局部复核的状态。
 
 ```js
 await recordReadingEvent(session, {

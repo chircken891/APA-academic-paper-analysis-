@@ -267,12 +267,14 @@ export async function getTopicUpdateHints({ vaultRoot, generationId, changedPape
   for (const topic of snapshot.generation.topics ?? []) {
     const terms = [...new Set([...topic.query_terms, topic.title].flatMap(t => t.match(/[\p{L}\p{N}_-]+/gu) ?? []))];
     const matches = new Map();
-    for (const term of terms) for (const hit of (await queryLibrary({ vaultRoot: root, query: term })).results) {
+    for (const term of terms) for (const hit of (await queryLibrary({ vaultRoot: root, query: term, full: true })).results) {
       if (hit.entity_type === 'topic' || !changed.has(hit.paper_id)) continue;
       const paper = snapshot.generation.papers.find(p => p.paper_id === hit.paper_id);
       // Shared-node bibliographic backlinks may name other papers. They cannot make
       // this changed paper relevant; shared registered source identity is tested below.
-      if (!hit.hits.some(h => Object.values(paper.paths).includes(h.path))) continue;
+      // Search may split a term into pieces; only the whole term in the paper's own note counts.
+      const whole = term.normalize('NFC').toLowerCase();
+      if (!hit.hits.some(h => Object.values(paper.paths).includes(h.path) && h.text.normalize('NFC').toLowerCase().includes(whole))) continue;
       if (!matches.has(hit.paper_id)) matches.set(hit.paper_id, []);
       matches.get(hit.paper_id).push(term);
     }

@@ -13,6 +13,18 @@
       "properties": { "paper_id": { "$ref": "#/$defs/text" }, "run_id": { "$ref": "#/$defs/text" }, "analysis_revision": { "$ref": "#/$defs/text" } }
     },
     "presentation_fingerprint": { "$ref": "#/$defs/hash" },
+    "presentation_assets": {
+      "type": "array", "uniqueItems": true,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["kind", "language", "path", "sha256", "byte_length"],
+        "properties": {
+          "kind": { "const": "research-map-canvas" }, "language": { "enum": ["en", "zh-CN"] },
+          "path": { "type": "string", "pattern": "^Figures/[^/]+/research-map\\.(en|zh-CN)\\.canvas$" },
+          "sha256": { "$ref": "#/$defs/hash" }, "byte_length": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
     "scientific_input_fingerprint": { "$ref": "#/$defs/hash" },
     "path_migration": {
       "type": "object", "additionalProperties": false,

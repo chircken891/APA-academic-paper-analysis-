@@ -28,7 +28,8 @@
       { "id": "obsidian42-brat", "name": "BRAT" },
       { "id": "realclaudian", "name": "Claudian" },
       { "id": "dataview", "name": "Dataview" },
-      { "id": "templater-obsidian", "name": "Templater" }
+      { "id": "templater-obsidian", "name": "Templater" },
+      { "id": "better-embedded-canvas", "name": "Better Embedded Canvas" }
     ]
   }
 }

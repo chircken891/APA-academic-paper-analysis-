@@ -1,23 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import YAML from 'yaml';
-import { readingFirstIndexFixture, digest } from './helpers/reading-first-index-fixtures.mjs';
+import { readingFirstIndexFixture, saveReadingFirstPair, digest } from './helpers/reading-first-index-fixtures.mjs';
+import { createTopicFixture, publishTopicFixture } from './helpers/topic-fixtures.mjs';
 import { queryLibrary } from '../../scripts/v3/library-query.mjs';
+import { getTopicUpdateHints } from '../../scripts/v3/topic-library.mjs';
+import { fingerprintV3Json as hash } from '../../scripts/v3/semantic-package-validator.mjs';
+import { researchMapCanvasSection } from '../../scripts/v3/research-map-canvas.mjs';
 import { normalizeQueryTerm, tokenizeQueryText, expandQueryGroups, definedAcronymNodes } from '../../scripts/lib/query-terms.mjs';
 import { paperSourcePath } from '../../scripts/lib/paper-note-path.mjs';
 
-async function fixture(t) {
-  const f = await readingFirstIndexFixture(t);
+async function fixture(t, { suffix, vaultRoot, locators = [] } = {}) {
+  const f = await readingFirstIndexFixture(t, { suffix, vaultRoot });
   const original = f.files.find(row => row.path.startsWith('Raw/'));
-  f.manifest.citation = { bibliography: { title: { en: 'Synthetic tumor study' }, first_author: 'Synthetic', year: 2026 }, sources: [{ source_id: 'paper', path: original.path, sha256: digest(original.bytes), byte_length: original.bytes.length, source_version: null, locators: [] }] };
+  f.manifest.citation = { bibliography: { title: { en: 'Synthetic tumor study' }, first_author: 'Synthetic', year: 2026 }, sources: [{ source_id: 'paper', path: original.path, sha256: digest(original.bytes), byte_length: original.bytes.length, source_version: null, locators }] };
   const sidecar = f.files.find(row => row.kind === 'reader-presentation');
   sidecar.bytes = Buffer.from(JSON.stringify(f.manifest));
   f.paper.reader_presentation.sha256 = digest(sidecar.bytes);
   f.generation.objects.find(row => row.path === sidecar.path).sha256 = digest(sidecar.bytes);
   await f.save(await f.build());
   return f;
+}
+async function mergeFixtures(root, parts) {
+  const generation = { ...parts[0].generation };
+  const combine = (key, id) => [...new Map(parts.flatMap(part => part.generation[key].map(row => [row[id], row]))).values()];
+  generation.papers = combine('papers', 'paper_id');
+  generation.shared_nodes = combine('shared_nodes', 'entity_id');
+  generation.objects = combine('objects', 'path');
+  generation.index_manifest = combine('index_manifest', 'id');
+  const index = { ...parts[0].index, active_fingerprint: hash(generation), documents: parts.flatMap(part => part.index.documents) };
+  await saveReadingFirstPair(root, generation, index);
 }
 async function edit(f, path, fn) {
   const raw = await readFile(join(f.vaultRoot, path), 'utf8');
@@ -112,6 +128,112 @@ test('snippet, per-paper and complete JSON budget are bounded while full retains
   assert.ok(full.results[0].hits[0].text.length > 400);
   const oversized = await queryLibrary({ ...base, limit: 100, hitsPerPaper: 100, snippetChars: 10000 });
   assert.ok(Buffer.byteLength(JSON.stringify(oversized, null, 2)) <= 32768);
+});
+
+test('default result budget compacts bilingual citation locators before shortening snippets or losing papers', async t => {
+  const locators = Array.from({ length: 25 }, (_, page) => ({ kind: 'figure', id: `figure-${page + 1}`, page: page + 1,
+    label: { en: 'Registered evidence figure', 'zh-CN': '已登记证据图' } }));
+  const first = await fixture(t, { locators });
+  const papers = [first];
+  for (const suffix of 'bcdef0123') papers.push(await fixture(t, { suffix, vaultRoot: first.vaultRoot, locators }));
+  await mergeFixtures(first.vaultRoot, await Promise.all(papers.map(paper => paper.build())));
+  const found = await queryLibrary({ vaultRoot: first.vaultRoot, query: 'finalresultneedle' });
+  assert.equal(found.total_results, 10);
+  assert.equal(found.results.length, 10);
+  assert.equal(found.truncated, true);
+  assert.ok(Buffer.byteLength(JSON.stringify(found, null, 2)) <= 32768);
+  for (const result of found.results) {
+    const registered = papers.find(paper => paper.identity.paper_id === result.paper_id).manifest.citation.sources[0];
+    const { locators, ...identity } = registered;
+    assert.equal(result.citation.locators_omitted, true);
+    assert.deepEqual(result.citation.sources[0], { ...identity, locator_count: locators.length, status: 'identity_verified', locator_status: 'available' });
+    assert.equal(result.hits[0].text_truncated, false);
+  }
+});
+
+test('topic hints include a changed paper whose own note falls below the default result limit', async t => {
+  const topic = await createTopicFixture(t, { topicTitle: 'rankneedle', queryTerms: ['rankneedle'] });
+  const original = await publishTopicFixture(topic);
+  const parts = [original];
+  for (const suffix of 'cdef012345') {
+    const paper = await fixture(t, { suffix, vaultRoot: topic.vaultRoot });
+    parts.push(await paper.build());
+    await edit(paper, paper.paper.paths.en, raw => raw + '\n## rankneedle\n' + 'rankneedle '.repeat(15) + '\n');
+  }
+  const changed = topic.papers[1].paperId;
+  await edit(topic, original.generation.papers.find(paper => paper.paper_id === changed).paths.en,
+    raw => raw + '\n## Additional observations\n' + 'Context for the study. '.repeat(50) + 'rankneedle\n');
+  await mergeFixtures(topic.vaultRoot, parts);
+  const query = { vaultRoot: topic.vaultRoot, query: 'rankneedle' };
+  const bounded = await queryLibrary(query);
+  assert.ok(bounded.total_results > 10);
+  assert.ok(!bounded.results.some(group => group.paper_id === changed));
+  assert.ok((await queryLibrary({ ...query, full: true })).results.some(group => group.paper_id === changed));
+  const hints = await getTopicUpdateHints({ vaultRoot: topic.vaultRoot, generationId: original.generation_id, changedPaperIds: [changed] });
+  assert.ok(hints.hints.some(hint => hint.source?.paper_id === changed && hint.matched_terms.includes('rankneedle')));
+});
+
+test('topic hints require the whole term in the changed paper note, not its split query pieces', async t => {
+  const topic = await createTopicFixture(t, { topicTitle: '年龄标化', queryTerms: ['年龄标化'] });
+  const original = await publishTopicFixture(topic);
+  const changed = topic.papers[1].paperId;
+  const path = original.generation.papers.find(paper => paper.paper_id === changed).paths.en;
+  const termHints = async () => (await getTopicUpdateHints({ vaultRoot: topic.vaultRoot, generationId: original.generation_id, changedPaperIds: [changed] }))
+    .hints.filter(hint => hint.source?.paper_id === changed && hint.matched_terms.includes('年龄标化'));
+  await edit(topic, path, raw => raw + '\n## Cohort description\n按年龄分组，再标记样本，比较变化。\n');
+  assert.deepEqual(await termHints(), []);
+  await edit(topic, path, raw => raw + '\n## Rates\n报告了年龄标化发病率。\n');
+  assert.ok((await termHints()).length > 0);
+});
+
+test('year filters verify each applicable presentation once per query including failures', async t => {
+  const valid = await fixture(t);
+  const invalid = await fixture(t, { suffix: 'b', vaultRoot: valid.vaultRoot });
+  await mergeFixtures(valid.vaultRoot, await Promise.all([valid.build(), invalid.build()]));
+  await writeFile(join(valid.vaultRoot, invalid.paper.reader_presentation.path), 'invalid presentation bytes');
+  const paths = [valid, invalid].map(paper => join(valid.vaultRoot, paper.paper.reader_presentation.path));
+  const counts = new Map(paths.map(path => [path, 0]));
+  const read = fs.readFileSync;
+  let countVerification = false;
+  t.mock.method(fs, 'readFileSync', (path, ...options) => {
+    if (countVerification && counts.has(path)) counts.set(path, counts.get(path) + 1);
+    return read(path, ...options);
+  });
+  syncBuiltinESMExports();
+  try {
+    const filtered = await queryLibrary({ vaultRoot: valid.vaultRoot, query: 'finalresultneedle', filters: { yearFrom: 2026, yearTo: 2026 },
+      onReadBoundary: phase => { countVerification = phase === 'after-objects'; } });
+    assert.deepEqual(filtered.results.map(result => result.paper_id), [valid.identity.paper_id]);
+    assert.deepEqual([...counts.values()], [1, 1]);
+    countVerification = false;
+    const earlier = await queryLibrary({ vaultRoot: valid.vaultRoot, query: 'finalresultneedle', filters: { yearTo: 2025 },
+      onReadBoundary: phase => { countVerification = phase === 'after-objects'; } });
+    assert.equal(earlier.results.length, 0);
+    assert.deepEqual([...counts.values()], [2, 2]);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+});
+
+test('generated research map directions leave search while manual text in the same section stays searchable', async t => {
+  const f = await fixture(t);
+  const path = f.paper.paths.en;
+  const canvasPath = `Figures/${f.identity.run_id}/research-map.en.canvas`;
+  const generated = researchMapCanvasSection({ canvasPath, language: 'en' });
+  await edit(f, path, raw => `${raw}\n### 2.1 Research map\n\n${generated}\n`);
+  const query = { vaultRoot: f.vaultRoot, full: true };
+  assert.equal((await queryLibrary({ ...query, query: 'research map canvas' })).status, 'no_matches');
+  const file = join(f.vaultRoot, path);
+  const raw = await readFile(file, 'utf8');
+  await writeFile(file, raw.replace(generated, `${generated}\n\nManualmapneedle records why the selection matters.`));
+  const hit = (await queryLibrary({ ...query, query: 'manualmapneedle' })).results[0].hits[0];
+  assert.equal(hit.anchor, '2.1 Research map');
+  assert.match(hit.text, /Manualmapneedle/);
+  assert.ok(!hit.text.includes(generated));
+  await writeFile(file, raw.replace(generated, generated.replace('640', '641')));
+  const changed = await queryLibrary({ ...query, query: 'research map canvas' });
+  assert.ok(changed.results[0].hits.some(row => row.text.includes('|641]]')));
 });
 
 test('invalid options and filter ranges fail explicitly', async () => {

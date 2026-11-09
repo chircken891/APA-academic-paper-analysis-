@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { checkMineruRuntime } from '../lib/mineru-runtime.mjs';
 import { inspectV3Graph } from '../v3/obsidian-graph.mjs';
 import { evaluatePrerequisites, loadEnvironmentContract, validatePackageContract } from './environment.mjs';
+import { inspectBetterEmbeddedCanvas } from './install-better-embedded-canvas.mjs';
 
 const execFileAsync = promisify(execFile);
 const scriptPath = fileURLToPath(import.meta.url);
@@ -204,6 +205,14 @@ async function collectObsidianChecks(repoRoot, contract) {
   } catch { /* Each plugin reports not ready. */ }
   for (const plugin of contract.obsidian.plugins) {
     const pluginRoot = join(repoRoot, '.obsidian', 'plugins', plugin.id);
+    if (plugin.id === 'better-embedded-canvas') {
+      const expected = `${plugin.name} installed and enabled`;
+      const state = await inspectBetterEmbeddedCanvas({ repoRoot }).catch(cause => ({ status: 'unavailable', path: pluginRoot, error: cause.message }));
+      checks.push(state.status === 'installed-and-enabled'
+        ? ok(`obsidian_plugin:${plugin.id}`, 'obsidian', expected, state)
+        : failed(`obsidian_plugin:${plugin.id}`, 'obsidian', expected, state, 'Review the Better Embedded Canvas target in bootstrap -CheckOnly.'));
+      continue;
+    }
     let installed = false;
     try {
       await Promise.all([

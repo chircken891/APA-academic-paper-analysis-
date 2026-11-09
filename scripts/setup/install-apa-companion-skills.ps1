@@ -3,7 +3,8 @@ param(
   [string[]]$Skills,
   [string]$CompanionSkillRoot,
   [string]$InstallerPath,
-  [switch]$CheckOnly
+  [switch]$CheckOnly,
+  [switch]$SkipAll
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,14 +24,15 @@ $skillCatalog = @(
   @{ Name = 'humanizer-zh'; Repo = 'op7418/Humanizer-zh'; Path = '.' },
   @{ Name = 'stss'; Repo = 'lennney/stop-that-shit'; Path = 'skills/stss' }
 )
+if ($SkipAll) { $Skills = @() }
+elseif (-not $PSBoundParameters.ContainsKey('Skills')) { $Skills = @($skillCatalog.Name | Where-Object { $_ -ne 'nature-shared' }) }
 $selectedNames = @($Skills | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
-if ($selectedNames.Count -eq 0) { throw 'Select companion skills explicitly with -Skills name1,name2. No skills were installed.' }
 foreach ($name in $selectedNames) {
   if ($name -notin $skillCatalog.Name) { throw "Unknown companion skill: $name. No skills were installed." }
 }
 if ('nature-writing' -in $selectedNames -or 'nature-polishing' -in $selectedNames) {
   $selectedNames = @($selectedNames + 'nature-shared' | Select-Object -Unique)
-}
+} else { $selectedNames = @($selectedNames | Where-Object { $_ -ne 'nature-shared' }) }
 $selectedSkills = @($skillCatalog | Where-Object { $_.Name -in $selectedNames })
 $missing = @()
 $blocked = @()
@@ -41,13 +43,13 @@ foreach ($skill in $selectedSkills) {
     if (-not (Test-Path -LiteralPath $target -PathType Container) -or
         -not (Test-Path -LiteralPath (Join-Path $target 'SKILL.md') -PathType Leaf)) {
       $blocked += "Existing companion skill is incomplete: $target. Inspect or repair it before retrying; it was not overwritten."
-      $targets += @{ name = $skill.Name; path = $target; status = 'incomplete'; impact = 'Preserve existing entry; manual repair required' }
+      $targets += @{ name = $skill.Name; path = $target; automatic = $skill.Name -eq 'nature-shared'; status = 'incomplete'; impact = 'Preserve existing entry; manual repair required' }
       continue
     }
-    $targets += @{ name = $skill.Name; path = $target; status = 'satisfied'; impact = 'Preserve installed skill and local edits' }
+    $targets += @{ name = $skill.Name; path = $target; automatic = $skill.Name -eq 'nature-shared'; status = 'satisfied'; impact = 'Preserve installed skill and local edits' }
   } else {
     $missing += $skill
-    $targets += @{ name = $skill.Name; path = $target; status = 'missing'; impact = 'Download this complete skill directory' }
+    $targets += @{ name = $skill.Name; path = $target; automatic = $skill.Name -eq 'nature-shared'; status = 'missing'; impact = 'Download this complete skill directory' }
   }
 }
 $pythonReady = $BasePython -and (Test-Path -LiteralPath $BasePython -PathType Leaf)
@@ -56,7 +58,8 @@ $checks = @(
   @{ id = 'python'; path = $BasePython; status = if ($pythonReady) { 'satisfied' } else { 'missing' } },
   @{ id = 'installer'; path = $InstallerPath; status = if ($installerReady) { 'satisfied' } else { 'missing' } }
 )
-$nextCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -BasePython "' + $BasePython + '" -Skills "' + ($selectedNames -join ',') + '" -CompanionSkillRoot "' + $CompanionSkillRoot + '" -InstallerPath "' + $InstallerPath + '"'
+$choice = if ($selectedNames.Count) { ' -Skills "' + (($selectedNames | Where-Object { $_ -ne 'nature-shared' }) -join ',') + '"' } else { ' -SkipAll' }
+$nextCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -BasePython "' + $BasePython + '"' + $choice + ' -CompanionSkillRoot "' + $CompanionSkillRoot + '" -InstallerPath "' + $InstallerPath + '"'
 Write-Output (@{ check_only = [bool]$CheckOnly; checks = $checks; targets = $targets; blocked = @($blocked); next_commands = @($nextCommand) } | ConvertTo-Json -Depth 6 -Compress)
 if ($CheckOnly) { return }
 if ($blocked.Count -gt 0) { throw ($blocked -join "`n") }

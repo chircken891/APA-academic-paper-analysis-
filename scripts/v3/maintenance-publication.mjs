@@ -4,11 +4,12 @@ import { tmpdir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual as same } from 'node:util';
 import { createOwnedArtifactBroker } from './owned-artifact-store.mjs';
-import { readRegisteredCommit } from './phase22-active-version.mjs';
+import { readCommittedGeneration, readRegisteredCommit } from './phase22-active-version.mjs';
 import { applyBilingualPublication, dryRunBilingualPublication, inspectBilingualPublicationRecovery,
   prepareBilingualPublicationTrustAnchor, registerBilingualPublication } from './phase22-publication.mjs';
 import { buildNoteRelocationReview } from './note-relocation.mjs';
 import { buildKnowledgeMergeReview, buildKnowledgeMergeCompensationReview } from './knowledge-merge.mjs';
+import { buildMapRefreshReview } from './research-map-refresh.mjs';
 
 const profile = 'phase22-maintenance-publication-1.0';
 const optionsSchema = 'phase22-maintenance-options-1.0';
@@ -44,6 +45,18 @@ function checkOptions(mode, options) {
       return isText(row.path) && fingerprint(row.sha256) && bytesLength(row.byte_length);
     }, 'assetRetirements');
     list(options.restoreAssetRetirements ?? [], isText, 'restoreAssetRetirements');
+  } else if (mode === 'map-refresh') {
+    keys(options, ['generation', 'papers'], mode);
+    list(options.papers, row => {
+      keys(row, ['paperId', 'map', 'argument', 'primaryFindingIds', 'sectionTitles', 'noteWordingEdits'], 'papers');
+      keys(row.sectionTitles, ['en', 'zh-CN'], 'sectionTitles');
+      return identifier(row.paperId) && isObject(row.argument) && isObject(row.map)
+        && ['steps', 'findings', 'relations'].every(key => Array.isArray(row.map[key]) && row.map[key].every(isObject))
+        && Array.isArray(row.primaryFindingIds) && row.primaryFindingIds.every(isText)
+        && ['en', 'zh-CN'].every(language => isObject(row.sectionTitles[language])
+          && Object.values(row.sectionTitles[language]).every(isText));
+    }, 'papers');
+    if (!options.papers.length) fail('P22_MAINTENANCE_OPTIONS_INVALID', { field: 'papers' });
   } else if (mode === 'merge') {
     keys(options, ['generation', 'merges'], mode);
     list(options.merges, row => {
@@ -116,9 +129,11 @@ async function saveResult(path, bytes) {
 
 async function build({ root, run, mode, options }) {
   const { generation = run, ...input } = checkOptions(mode, options);
-  const review = mode === 'relocate' ? await buildNoteRelocationReview({ ...input, vaultRoot: root, runId: run, generation })
-    : await (mode === 'merge' ? buildKnowledgeMergeReview({ ...input, copyRegisteredContent: true, repoRoot: root, runId: run, generationId: generation })
-      : buildKnowledgeMergeCompensationReview({ ...input, repoRoot: root, runId: run, generationId: generation }));
+  let review;
+  if (mode === 'relocate') review = await buildNoteRelocationReview({ ...input, vaultRoot: root, runId: run, generation });
+  else if (mode === 'map-refresh') review = await buildMapRefreshReview({ ...input, vaultRoot: root, runId: run, generation });
+  else if (mode === 'merge') review = await buildKnowledgeMergeReview({ ...input, copyRegisteredContent: true, repoRoot: root, runId: run, generationId: generation });
+  else review = await buildKnowledgeMergeCompensationReview({ ...input, repoRoot: root, runId: run, generationId: generation });
   const { plan } = await dryRunBilingualPublication({ vaultRoot: root, run, review });
   return { review, plan };
 }
@@ -193,9 +208,11 @@ async function bindApproval(folder, summary, inventoryPath, inventorySha256, aut
 async function verifyResult(folder, summary, transaction) {
   const committed = transaction.status === 'committed';
   if (!committed && transaction.status !== 'rolled_back') return transaction;
-  const verified = [], current = await readRegisteredCommit({ vaultRoot: summary.vault_root });
+  const readCurrent = summary.mode === 'map-refresh' ? readCommittedGeneration : readRegisteredCommit;
+  const verified = [], current = await readCurrent({ vaultRoot: summary.vault_root });
   if (!current.ok || current.generation_id !== (committed ? summary.generation : summary.previous_generation)) {
-    fail('P22_MAINTENANCE_COMMIT_VERIFICATION', { transaction_id: transaction.transaction_id, generation: current.generation_id });
+    fail('P22_MAINTENANCE_COMMIT_VERIFICATION', { transaction_id: transaction.transaction_id, generation: current.generation_id,
+      ...(current.errors ? { errors: current.errors } : {}) });
   }
   for (const row of summary.files) {
     const sha256 = committed ? row.byte_sha256 : row.before_sha256, byte_length = committed ? row.byte_length : row.before_byte_length;

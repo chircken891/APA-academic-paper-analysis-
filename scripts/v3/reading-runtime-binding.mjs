@@ -8,7 +8,7 @@ const DEFAULT_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const PROFILE = 'reading-runtime-binding-1.0';
 const DEFAULT_ENTRIES = ['scripts/v3/reading-session.mjs', 'scripts/v3/configured-reading.mjs', 'scripts/v3/reading-runtime-binding.mjs', 'scripts/v3/reading-session-cli.mjs', 'scripts/lib/reading-resource-tool.py', 'scripts/lib/mineru-parse.py', 'scripts/v3/office-source-evidence-reader.py'];
 const DEFAULT_SCHEMAS = ['Schema/config', 'Schema/contracts', 'Schema/phase21', 'Schema/phase22'];
-const DEFAULT_PROMPTS = ['prompts/v3/science-configured-2.2.md', 'prompts/v3/reading-configured-2.2.md', 'prompts/v3/reading-editor-1.3.md', 'prompts/v3/phase21-scientific-contracts.md', 'prompts/v3/science-index-1.0.md', 'prompts/v3/translation-1.0.md', 'prompts/v3/role-reply-1.0.md'];
+const DEFAULT_PROMPTS = ['prompts/v3/science-configured-2.2.md', 'prompts/v3/reading-configured-2.2.md', 'prompts/v3/reading-editor-1.4.md', 'prompts/v3/phase21-scientific-contracts.md', 'prompts/v3/science-index-1.0.md', 'prompts/v3/translation-1.0.md', 'prompts/v3/role-reply-1.0.md'];
 const hash = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const canonical = value => JSON.stringify(value);
 const sort = list => [...new Set(list)].sort();

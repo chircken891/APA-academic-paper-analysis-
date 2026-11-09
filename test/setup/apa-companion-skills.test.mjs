@@ -32,7 +32,8 @@ async function harness(t) {
   ].join('\n'));
   const run = (env = {}, options = {}) => new Promise((resolve, reject) => {
     const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-BasePython', python];
-    if (options.skills !== null) args.push('-Skills', (options.skills ?? names).join(','));
+    if (options.skills) args.push('-Skills', options.skills.join(','));
+    if (options.skipAll) args.push('-SkipAll');
     if (options.checkOnly) args.push('-CheckOnly');
     if (!options.defaultRoot) args.push('-CompanionSkillRoot', destination);
     args.push('-InstallerPath', options.missingInstaller ? join(root, 'missing.py') : installer);
@@ -110,14 +111,22 @@ test('success without SKILL.md fails and default destination follows CODEX_HOME'
   assert.equal((await h.calls())[0].dest, join(h.root, 'skills'));
 });
 
-test('selection is required and only selected Nature skill plus shared is installed', async t => {
+test('only the selected Nature skill plus its shared dependency is installed', async t => {
   const h = await harness(t);
-  const missing = await h.run({}, { skills: null });
-  assert.notEqual(missing.code, 0);
-  await assert.rejects(h.calls(), { code: 'ENOENT' });
   const selected = await h.run({}, { skills: ['nature-polishing'] });
   assert.equal(selected.code, 0, selected.output);
   assert.deepEqual((await h.calls()).map(call => call.name), ['nature-polishing', 'nature-shared']);
+});
+
+test('cancelling both Nature skills omits shared, and cancelling all skills is a no-op', async t => {
+  const h = await harness(t);
+  const cancelled = await h.run({}, { skipAll: true, missingInstaller: true });
+  assert.equal(cancelled.code, 0, cancelled.output);
+  assert.match(JSON.parse(cancelled.output).next_commands[0], /-SkipAll/);
+  await assert.rejects(h.calls(), { code: 'ENOENT' });
+  const partial = await h.run({}, { skills: ['humanizer', 'humanizer-zh', 'stss'] });
+  assert.equal(partial.code, 0, partial.output);
+  assert.deepEqual((await h.calls()).map(call => call.name), ['humanizer', 'humanizer-zh', 'stss']);
 });
 
 test('companion CheckOnly reports selected targets and missing helper without downloads', async t => {
@@ -126,6 +135,7 @@ test('companion CheckOnly reports selected targets and missing helper without do
   const report = JSON.parse(result.output.trim());
   assert.equal(report.check_only, true);
   assert.deepEqual(report.targets.map(item => item.name), ['nature-writing', 'nature-shared']);
+  assert.equal(report.targets.find(item => item.name === 'nature-shared').automatic, true);
   assert.equal(report.checks.find(item => item.id === 'installer').status, 'missing');
   await assert.rejects(h.calls(), { code: 'ENOENT' });
 });

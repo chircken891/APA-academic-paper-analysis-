@@ -223,9 +223,9 @@ test('new configured candidates tolerate old paper body edits while complete com
   assert.equal((await readCommittedGeneration({ vaultRoot: root })).ok, false);
   const saved = await materializeConfiguredReadingCandidate({ prepared, controller: fixture.controller, handoff: fixture.handoff, resources: fixture.resources });
   assert.equal(saved.exported.validation.status, 'passed');
-  assert.equal(prepared.runControl.reading_first_binding.presentation_profile, 'reading-editor-1.3');
+  assert.equal(prepared.runControl.reading_first_binding.presentation_profile, 'reading-editor-1.4');
   const instructions = prepared.runControl.reading_first_binding.configured_setup.sections['Reading Editor'];
-  assert.match(instructions, /reading-editor-1\.3/);
+  assert.match(instructions, /reading-editor-1\.4/);
   assert.doesNotMatch(instructions, /roughly twelve nodes/);
   assert.ok(saved.exported.manifest.files.some(row => row.kind === 'historical-navigation'));
   assert.equal(await readFile(path, 'utf8'), before.replace('Only sharedknowledgeneedle', 'Edited sharedknowledgeneedle').replace('## ', '## Edited '));

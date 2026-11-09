@@ -196,7 +196,7 @@ test('query defaults are described without replacing reading language labels or 
   assert.equal(describeValue('zh-CN', 'query.answer_language'), '中文');
   assert.equal(describeValue('en', 'reading.source_language'), '先写英文，再写中文');
   assert.deepEqual(createOperation(snapshot).set, {});
-  assert.deepEqual(fields.filter(field => field.group === 'query').map(field => field.key), ['models.query', 'query.answer_language', 'query.detail', 'query.audience']);
+  assert.deepEqual(fields.filter(field => field.group === 'query' && field.type !== 'skill').map(field => field.key), ['models.query', 'query.answer_language', 'query.detail', 'query.audience']);
 });
 
 test('the project folder and locations come before the three functions, and returning home preserves form nodes', () => {
@@ -392,6 +392,39 @@ test('a host that cannot select the model accepts only follow-main and reports e
   assert.deepEqual(checkHostProfile(fixed.config, profile).issues, []);
 });
 
+test('setup readiness separates reading role conflicts from an explicit query model conflict', t => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-page-query-conflict-'));
+  t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+  const dispatch = { tool: 'Agent', model_argument: null, effort_argument: null, instruction_argument: 'prompt', task_name_argument: 'description', fresh_context: null };
+  applyApaConfigOperation({ repoRoot, operation: createOperation(loadApaConfig({ repoRoot }), { set: {
+    host: { name: 'inherit-host', dispatch },
+    'models.science': { mode: 'explicit', model: 'science-model' },
+    'models.query': { mode: 'explicit', model: 'query-model' },
+  } }) });
+
+  const reading = inspectApaConfig({ repoRoot });
+  const query = inspectApaConfig({ repoRoot, capability: 'query' });
+  const messages = readinessMessages(reading, query);
+  assert.deepEqual({
+    readingRole: messages.reading.includes('六个科学角色的共同模型'),
+    readingIncludesQueryModel: messages.reading.includes('知识库查询模型'),
+    queryAction: messages.query.includes('知识库查询模型需改为跟随主会话'),
+    queryGenericError: messages.query.includes('查询配置尚未检查或存在结构错误'),
+  }, { readingRole: true, readingIncludesQueryModel: false, queryAction: true, queryGenericError: false });
+});
+
+test('setup query readiness identifies an enabled ideation guide without a path', t => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-page-ideation-path-'));
+  t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+  applyApaConfigOperation({ repoRoot, operation: createOperation(loadApaConfig({ repoRoot }), { set: {
+    'writing_skills.brainstorming-research-ideas': { enabled: true },
+  } }) });
+
+  const messages = readinessMessages(inspectApaConfig({ repoRoot }), inspectApaConfig({ repoRoot, capability: 'query' }));
+  assert.match(messages.query, /brainstorming-research-ideas.*路径/);
+  assert.doesNotMatch(messages.reading, /brainstorming-research-ideas/);
+});
+
 test('remove, export and import treat the saved host dispatch as one answer', t => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-page-host-ops-'));
   t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
@@ -479,9 +512,9 @@ function createFakeDocument() {
   };
 }
 
-function mountFake(config, profile = hostProfile) {
+function mountFake(config, profile = hostProfile, setupDefaults = null, repoRoot = 'D:\\vault', currentSnapshot = null) {
   const document = createFakeDocument();
-  mountApaSetup(document, { config: { schema_version: 'apa-local-config-1.0', ...config }, fingerprint: 'fp', exists: true, path: 'config/apa.local.json' }, null, null, profile, 'D:\\vault');
+  mountApaSetup(document, currentSnapshot ?? { config: { schema_version: 'apa-local-config-1.0', ...config }, fingerprint: 'fp', exists: true, path: 'config/apa.local.json' }, null, null, profile, repoRoot, setupDefaults);
   const named = name => document.registry.find(node => node.name === name);
   const text = () => document.registry.map(node => node.textContent);
   const fieldset = title => document.registry.find(node => node.tag === 'fieldset' && node.children[0]?.textContent.includes(title));
@@ -490,7 +523,7 @@ function mountFake(config, profile = hostProfile) {
     document.querySelector('[data-preview="patch"]').click();
     await new Promise(resolve => setImmediate(resolve));
     const payload = document.getElementById('edit-payload').value;
-    return { message: document.getElementById('edit-message').textContent, set: payload ? JSON.parse(payload).set : null };
+    return { message: document.getElementById('edit-message').textContent, set: payload ? JSON.parse(payload).set : null, payload: payload ? JSON.parse(payload) : null };
   };
   const choose = (prefix, { model, effort, mode = 'explicit' }) => {
     const select = named(`${prefix}-mode`);
@@ -502,6 +535,58 @@ function mountFake(config, profile = hostProfile) {
   };
   return { document, named, text, fieldset, preview, choose };
 }
+
+test('setup defaults show five skills and save the internal Nature dependency for each final selection', async t => {
+  const names = ['nature-writing', 'nature-polishing', 'humanizer', 'humanizer-zh', 'stss'];
+  for (const cancelled of [[], ['nature-polishing'], ['nature-writing', 'nature-polishing']]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-setup-defaults-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const skillPaths = Object.fromEntries([...names, 'nature-shared'].map(name => [name, path.join(root, 'skills', name, 'SKILL.md')]));
+    const parserRoot = path.join(root, 'parser');
+    const parserPython = path.join(parserRoot, 'python.exe');
+    fs.mkdirSync(parserRoot);
+    fs.writeFileSync(parserPython, '');
+    fs.writeFileSync(path.join(parserRoot, 'config.yaml'), '{}');
+    const installed = names.filter(name => !cancelled.includes(name));
+    const hasNature = installed.includes('nature-writing') || installed.includes('nature-polishing');
+    for (const name of [...installed, ...(hasNature ? ['nature-shared'] : [])]) {
+      fs.mkdirSync(path.dirname(skillPaths[name]), { recursive: true });
+      fs.writeFileSync(skillPaths[name], name);
+    }
+    const initial = applyApaConfigOperation({ repoRoot: root, operation: createOperation(loadApaConfig({ repoRoot: root }), { set: {
+      'models.science': { mode: 'follow-main' },
+      ...Object.fromEntries(['english-writer', 'chinese-writer', 'translation', 'reading-editor', 'independent-verifier'].map(role => [`models.roles.${role}`, { mode: 'follow-main' }])),
+      'paths.runs': 'runs', 'paths.parse': 'parse', 'paths.candidates': 'candidates',
+      'parser.runtime_home': parserRoot, 'parser.python': parserPython, 'reading.presentation_mode': 'reading-editor',
+    } }) });
+    const page = mountFake({}, hostProfile, { skillPaths }, root, initial);
+    const skillFields = fields.filter(field => field.group === 'skills');
+    assert.deepEqual(skillFields.map(field => field.label), names);
+    for (const name of names) {
+      const toggle = page.named(`writing_skills.${name}-enabled`);
+      assert.equal(toggle.type, 'checkbox');
+      assert.equal(toggle.checked, true);
+      if (cancelled.includes(name)) {
+        toggle.checked = false;
+        toggle.dispatchEvent(new Event('change'));
+      }
+    }
+    assert.equal(page.named('writing_skills.nature-shared-enabled'), undefined);
+    for (const id of ['mineru', 'global_integration', 'better_embedded_canvas']) assert.equal(page.named(`install-${id}`).checked, true);
+    page.named('install-better_embedded_canvas').checked = false;
+    const result = await page.preview();
+    assert.deepEqual(result.payload.installation, {
+      mineru: true, global_integration: true, better_embedded_canvas: false, companion_skills: installed,
+    });
+    assert.equal(describeChanges(initial, result.payload).some(row => row.includes('自动附带 nature-shared')), hasNature);
+    const saved = applyApaConfigOperation({ repoRoot: root, operation: result.payload });
+    assert.deepEqual(saved.pending_installation, result.payload.installation);
+    assert.equal(saved.config.installation, undefined);
+    assert.deepEqual(saved.config.writing_skills['nature-shared'], hasNature ? { enabled: true, path: skillPaths['nature-shared'] } : { enabled: false });
+    for (const name of names) assert.equal(saved.config.writing_skills[name].enabled, !cancelled.includes(name));
+    assert.equal(inspectApaConfig({ repoRoot: root }).ready, true);
+  }
+});
 
 test('location suggestions require a click and preview only durable project paths', async () => {
   const config = { paths: { runs: 'existing/runs' }, models: { science: { mode: 'follow-main' } } };

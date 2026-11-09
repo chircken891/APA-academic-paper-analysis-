@@ -79,7 +79,7 @@ function currentBindings(bindings) {
   for (const row of bindings) if (!same(row, binding(row.path))) fail('P22_REGISTERED_DEPENDENCY_CHANGED', { path: row.path });
 }
 function tools() {
-  return ['./reading-first-publication.mjs', './reading-source-policy.mjs', './note-relocation.mjs', './reading-resources.mjs', './phase22-publication.mjs', './phase22-review.mjs',
+  return ['./reading-first-publication.mjs', './research-map-canvas.mjs', './reading-source-policy.mjs', './note-relocation.mjs', './reading-resources.mjs', './phase22-publication.mjs', './phase22-review.mjs',
     './phase22-active-version.mjs', './phase22-search.mjs', './reading-first-index.mjs', './phase22-managed-markdown.mjs',
     '../../Schema/phase22/active-index.schema.json', '../../Schema/phase22/reading-first-publication.schema.json',
     '../../Schema/phase22/review-manifest.schema.json'].map(path => binding(fileURLToPath(new URL(path, import.meta.url))));
@@ -293,7 +293,8 @@ async function resourceBindings(data, resources, approvedAssets = []) {
     if (current.sha256 !== resource.sha256 || current.byte_length !== resource.byte_length) fail('RF_PUBLICATION_RESOURCE_CHANGED', { path: resource.path });
     result.push({ ...clone(resource), source_path: current.path });
   }
-  const expected = [...new Set([...(data.candidate.assetPaths ?? []), ...parentPaths])].sort();
+  const generatedPaths = new Set((data.candidate.generated_assets ?? []).map(row => row.path));
+  const expected = [...new Set([...(data.candidate.assetPaths ?? []).filter(path => !generatedPaths.has(path)), ...parentPaths])].sort();
   if (!same([...paths].sort(), expected)) fail('RF_PUBLICATION_RESOURCE_INVENTORY_INCOMPLETE');
   return result;
 }
@@ -575,6 +576,19 @@ async function buildReview({ source, data, options, base, preimages, projected }
     if (original === null) add(resource.path, 'asset', bytes);
     else { files.set(resource.path, bytes); readDependencies.push({ path: resource.path, byte_sha256: sha(bytes), byte_length: bytes.length }); }
   }
+  const presentationAssets = [];
+  for (const asset of candidate.generated_assets ?? []) {
+    const { content, ...metadata } = asset;
+    const bytes = Buffer.from(content), original = before(asset.path);
+    if (asset.kind !== 'research-map-canvas' || !languages.includes(asset.language)
+      || asset.path !== `Figures/${identity.run_id}/research-map.${asset.language}.canvas`
+      || sha(bytes) !== asset.sha256 || bytes.length !== asset.byte_length
+      || !candidate.assetPaths.includes(asset.path)) fail('RF_PUBLICATION_PRESENTATION_ASSET_INVALID', { path: asset.path });
+    if (original !== null && !original.equals(bytes)) fail('RF_PUBLICATION_RESOURCE_TARGET_CONFLICT', { path: asset.path });
+    if (original === null) add(asset.path, 'asset', bytes);
+    else { files.set(asset.path, bytes); readDependencies.push({ path: asset.path, byte_sha256: sha(bytes), byte_length: bytes.length }); }
+    presentationAssets.push(metadata);
+  }
   const dependencies = { scientific_input: data.scientific_input_fingerprint,
     reading_review: data.reading_review_fingerprint, presentation: data.candidate.presentation_fingerprint,
     ...(changed ? { source_derivation: clone(derivation) } : {}),
@@ -586,7 +600,9 @@ async function buildReview({ source, data, options, base, preimages, projected }
   const presentation = { schema_version: 'reading-first-publication-1.0', profile, identity,
     presentation_fingerprint: outputFingerprint, scientific_input_fingerprint: data.scientific_input_fingerprint,
     evidence_mode: options.evidenceMode, dependencies, qualification: { reading_status: 'reading_complete', native_status: data.native_presentation.status },
-    targets: { presentation: manifestPath, notes: noteTargets, support: supportTargets, assets: options.resources.map(row => row.path) }, navigation: [] };
+    targets: { presentation: manifestPath, notes: noteTargets, support: supportTargets,
+      assets: [...options.resources.map(row => row.path), ...presentationAssets.map(row => row.path)] },
+    ...(presentationAssets.length ? { presentation_assets: presentationAssets } : {}), navigation: [] };
   const citation = publicationCitation(data, options.citationResources ?? options.resources, options.presentationAssetRegistrations ?? []);
   if (citation) {
     if (changed) {
@@ -607,6 +623,7 @@ async function buildReview({ source, data, options, base, preimages, projected }
   for (const row of output) objects.set(row.path, { path: row.path, kind: row.kind === 'paper' ? 'v3-note' : row.kind,
     sha256: row.kind === 'paper' ? row.managed_hash : row.byte_sha256 });
   for (const resource of options.resources) if (!objects.has(resource.path)) objects.set(resource.path, { path: resource.path, kind: 'asset', sha256: resource.sha256 });
+  for (const asset of presentationAssets) if (!objects.has(asset.path)) objects.set(asset.path, { path: asset.path, kind: 'asset', sha256: asset.sha256 });
   const active = { schema_version: 'phase22/active-index-1.0', kind: 'active', generation_id: generation, evidence_mode: options.evidenceMode,
     papers: [...(base.generation?.papers ?? []).filter(row => row.paper_id !== identity.paper_id), paper],
     ...(base.generation?.topics ? { topics: clone(base.generation.topics) } : {}),
@@ -645,7 +662,7 @@ async function buildReview({ source, data, options, base, preimages, projected }
     reading_accepted: true, native_presentation: clone(data.native_presentation), scientific_review_hash: scientificReviewHash,
     generation, previous_generation: base.generation?.generation_id ?? null, previews,
     support_notes: supportTargets.map(row => ({ ...row, ...(migrations.has(row.path) ? { metadata_migration: migrations.get(row.path) } : {}) })),
-    assets: options.resources.map(({ path, sha256, byte_length }) => {
+    assets: [...options.resources, ...presentationAssets].map(({ path, sha256, byte_length }) => {
       const approval = assetApprovals.find(row => row.resource.path === path);
       return { path, byte_sha256: sha256, byte_length, ...(approval ? { presentation_asset_registration: clone(approval) } : {}) };
     }),
@@ -999,21 +1016,21 @@ export async function prepareExternalReviewedReadingFirstPublication({
   }
   const root = rootPath(vaultRoot);
   const candidateRootAbs = resolve(candidateRoot);
-  for (const note of [...candidate.notes, ...candidate.supportNotes]) {
+  for (const note of [...candidate.notes, ...candidate.supportNotes, ...(candidate.generated_assets ?? [])]) {
     const bytes = regularBytes(candidateRootAbs, note.path);
     if (!bytes.equals(Buffer.from(note.content))) fail('RF_PUBLICATION_EXTERNAL_CANDIDATE_CHANGED', { path: note.path });
   }
   const sourceBindings = [...new Map([
     ...scientificInput.sources.map(row => binding(row.path)),
     ...resources.map(row => binding(row.source_path)),
-    ...[...candidate.notes, ...candidate.supportNotes].map(row => binding(join(candidateRootAbs, row.path))),
+    ...[...candidate.notes, ...candidate.supportNotes, ...(candidate.generated_assets ?? [])].map(row => binding(join(candidateRootAbs, row.path))),
     ...[viewReceipts.en, viewReceipts['zh-CN'], readingEditorReceipt, reviewReceipt].flatMap(receipt => [
       binding(join(runRoot, receipt.path)),
       binding(join(runRoot, '.phase21-receipts', encodeURIComponent(receipt.artifact_id) + '.json')),
     ]),
   ].map(row => [row.path, row])).values()];
   const editorValue = JSON.parse(readFileSync(join(runRoot, readingEditorReceipt.path), 'utf8'));
-  if (editorValue.schema_version === 'reading-editor-1.3' && !readingFirstBinding) fail('RF_PUBLICATION_EXTERNAL_BINDING_REQUIRED');
+  if (['reading-editor-1.3', 'reading-editor-1.4'].includes(editorValue.schema_version) && !readingFirstBinding) fail('RF_PUBLICATION_EXTERNAL_BINDING_REQUIRED');
   if (readingFirstBinding && ((readingFirstBinding.presentation_profile ?? 'reading-editor-1.3') !== editorValue.schema_version
     || readingFirstBinding.input_fingerprint !== hash(scientificInput))) fail('RF_PUBLICATION_EXTERNAL_BINDING_INVALID');
   const renderOptions = rendering ?? { existingTargets: [], knowledgeRegistry: [] };

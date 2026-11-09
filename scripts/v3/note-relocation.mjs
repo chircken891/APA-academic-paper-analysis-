@@ -49,6 +49,13 @@ function stamp(review) { return hash({ manifest: review.reviewManifest, output: 
 // Labels, paragraphs, scientific values, anchors and personal prose stay byte-for-byte.
 export function relocateNoteLinks(text, from, to, paths) {
   const mapping = new Map(paths);
+  return relocateLinks(text, from, to, mapping, base => {
+    const destination = mapping.get(base) ?? mapping.get(base + '.md');
+    return base.endsWith('.md') ? destination : destination?.replace(/\.md$/, '');
+  });
+}
+
+function relocateLinks(text, from, to, mapping, wikiDestination) {
   const href = raw => {
     const angle = raw.startsWith('<') && raw.endsWith('>');
     const value = angle ? raw.slice(1, -1) : raw;
@@ -66,8 +73,8 @@ export function relocateNoteLinks(text, from, to, paths) {
   let result = text.replace(/(\]\()(<[^>\r\n]+>|[^\s)]+)(?=[\s)])/g, (_, prefix, target) => prefix + href(target));
   result = result.replace(/\[\[([^\]|\r\n]+)(\|[^\]\r\n]*)?\]\]/g, (whole, target, label = '') => {
     const offset = target.indexOf('#'), base = offset < 0 ? target : target.slice(0, offset), suffix = offset < 0 ? '' : target.slice(offset);
-    const destination = mapping.get(base) ?? mapping.get(base + '.md');
-    return destination ? '[[' + (base.endsWith('.md') ? destination : destination.replace(/\.md$/, '')) + suffix + label + ']]' : whole;
+    const destination = wikiDestination(base);
+    return destination ? '[[' + destination + suffix + label + ']]' : whole;
   });
   result = result.replace(/^(alternate_language_path: *)([^\r\n]+)$/m, (whole, prefix, value) => {
     const quote = /^(['"])(.*)\1$/.exec(value), path = quote ? quote[2] : value;
@@ -75,6 +82,39 @@ export function relocateNoteLinks(text, from, to, paths) {
     return target ? prefix + (quote ? quote[1] + target + quote[1] : target) : whole;
   });
   return result;
+}
+
+export function relocateCanvasLinks(bytes, from, to, mapping, registeredPaths) {
+  const canvas = JSON.parse(bytes);
+  const wikiDestination = base => {
+    let path;
+    try { path = decodeURIComponent(base); } catch { return undefined; }
+    if (!path) return undefined;
+    const relative = /^\.\.?\//.test(path);
+    const absolute = relative ? posix.normalize(posix.join(posix.dirname(from), path)) : path;
+    let target = mapping.get(absolute) ?? mapping.get(absolute + '.md');
+    if (!target && !path.includes('/')) {
+      // A short link has no vault path. Use the committed set to identify its old target.
+      const basename = value => pathKey(posix.basename(value)).replace(/\.md$/, '');
+      const matches = registeredPaths.filter(value => basename(value) === basename(path));
+      if (matches.some(value => mapping.has(value))) {
+        if (matches.length !== 1) fail('P22_RELOCATION_CANVAS_LINK_AMBIGUOUS', { canvas: from, target: base });
+        target = mapping.get(matches[0]);
+      }
+    }
+    if (!target && relative && posix.dirname(from) !== posix.dirname(to) && !absolute.startsWith('../')) target = absolute;
+    return target && (path.endsWith('.md') ? target : target.replace(/\.md$/, '')).replace(/[%#\[\]|]/g, encodeURIComponent);
+  };
+  let changed = false;
+  for (const node of canvas.nodes) {
+    if (node.type === 'text') {
+      const text = relocateLinks(node.text, from, to, mapping, wikiDestination);
+      if (text !== node.text) { node.text = text; changed = true; }
+    } else if (node.type === 'file' && mapping.has(node.file)) {
+      node.file = mapping.get(node.file); changed = true;
+    }
+  }
+  return changed ? Buffer.from(JSON.stringify(canvas, null, 2) + '\n') : bytes;
 }
 
 function assertFigureDestination(row, presentations) {
@@ -132,12 +172,12 @@ function navigationPaths(value, mapping, retired) {
   return mapping.get(value) ?? value;
 }
 
-function assetHistory(manifest, moves, retired, restore) {
+function assetHistory(manifest, moves, retired, restore, rewrites) {
   const history = new Map();
   for (const row of manifest.path_migration?.assets ?? []) {
     if (retired.has(row.new_path)) continue;
     const target = moves.get(row.new_path)?.new_path ?? row.new_path;
-    if (target !== row.old_path) history.set(row.old_path, { ...row, new_path: target });
+    if (target !== row.old_path) history.set(row.old_path, { ...row, new_path: target, ...rewrites.get(row.new_path) });
   }
   for (const [path, row] of moves) {
     if (!manifest.targets.assets.includes(path)) continue;
@@ -151,7 +191,7 @@ function assetHistory(manifest, moves, retired, restore) {
     }
     const sourceId = boundId ?? declaredId;
     const resourceId = prior.find(previous => previous.resource_id)?.resource_id ?? path;
-    history.set(path, { ...fields, ...(sourceId ? { source_id: sourceId } : { resource_id: resourceId }) });
+    history.set(path, { ...fields, ...rewrites.get(path), ...(sourceId ? { source_id: sourceId } : { resource_id: resourceId }) });
   }
   const retirementHistory = (manifest.path_migration?.retired_assets ?? []).filter(row => !restore.has(row.path));
   for (const [path, row] of retired) {
@@ -269,12 +309,21 @@ export async function buildNoteRelocationReview({ vaultRoot, runId, generation, 
     object.path = to;
     if (from !== to) files.delete(from);
   }
-  for (const [from, row] of moves) {
-    const bytes = files.get(from);
-    if (row.targetExists) files.set(row.new_path, bytes);
-    else add(row.new_path, 'asset', bytes);
-    files.delete(from);
-    active.objects.find(object => object.path === from).path = row.new_path;
+  const rewrites = new Map(), registeredPaths = [...baseFiles.keys()];
+  for (const object of active.objects.filter(row => row.kind === 'asset')) {
+    const from = object.path, move = moves.get(from), to = move?.new_path ?? from;
+    const original = files.get(from);
+    const bytes = mapping.size && /\.canvas$/i.test(from) ? relocateCanvasLinks(original, from, to, mapping, registeredPaths) : original;
+    const changed = !bytes.equals(original);
+    if (!move && !changed) continue;
+    if (move?.targetExists && !changed) files.set(to, bytes);
+    else add(to, 'asset', bytes);
+    if (move) files.delete(from);
+    object.path = to;
+    if (changed) {
+      object.sha256 = sha(bytes);
+      rewrites.set(from, { sha256: object.sha256, byte_length: bytes.length });
+    }
   }
   active.objects = active.objects.filter(row => !retired.has(row.path));
   for (const path of retired.keys()) files.delete(path);
@@ -284,7 +333,7 @@ export async function buildNoteRelocationReview({ vaultRoot, runId, generation, 
   const claimedPresentations = new Set(manifests.filter(row => row.paper).map(row => row.paper.paper_id));
   for (const { object, manifest, paper } of manifests) {
     const oldManifest = object.path;
-    const affectedAssets = manifest.targets.assets.filter(path => moves.has(path) || retired.has(path));
+    const affectedAssets = manifest.targets.assets.filter(path => moves.has(path) || retired.has(path) || rewrites.has(path));
     for (const path of affectedAssets) assetsSeen.add(path);
     const restoredRows = (manifest.path_migration?.retired_assets ?? []).filter(row => restore.has(row.path));
     const navigation = navigationPaths(manifest.navigation, mapping, retired);
@@ -305,8 +354,10 @@ export async function buildNoteRelocationReview({ vaultRoot, runId, generation, 
       }
       manifest.path_migration = { previous_generation: base.generation_id, previous_presentation_sha256: object.sha256,
         path_mapping_fingerprint: hash(currentContent ? { mapping: [...mapping], retired: [...retired.values()], restored: [...restore.values()] } : [...mapping]),
-        ...assetHistory(manifest, moves, retired, restore) };
+        ...assetHistory(manifest, moves, retired, restore, rewrites) };
       manifest.targets.assets = manifest.targets.assets.filter(path => !retired.has(path)).map(path => mapping.get(path) ?? path);
+      if (manifest.presentation_assets) manifest.presentation_assets = manifest.presentation_assets
+        .map(row => ({ ...row, path: mapping.get(row.path) ?? row.path, ...rewrites.get(row.path) }));
       for (const row of restoredRows.sort((left, right) => left.asset_index - right.asset_index)) manifest.targets.assets.splice(row.asset_index, 0, row.path);
       if (manifest.navigation) manifest.navigation = navigation;
       for (const source of manifest.citation?.sources ?? []) {

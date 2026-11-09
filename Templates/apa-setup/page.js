@@ -1,6 +1,10 @@
 export const scienceRoles = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'];
 export const writingRoles = ['english-writer', 'chinese-writer', 'translation', 'reading-editor', 'independent-verifier'];
-export const writingSkills = ['nature-writing', 'nature-polishing', 'nature-shared', 'humanizer', 'humanizer-zh', 'stss', 'brainstorming-research-ideas', 'creative-thinking-for-research'];
+export const writingSkills = ['nature-writing', 'nature-polishing', 'humanizer', 'humanizer-zh', 'stss'];
+const ideationSkills = ['brainstorming-research-ideas', 'creative-thinking-for-research'];
+const natureSkills = ['nature-writing', 'nature-polishing'];
+const sharedSkillKey = 'writing_skills.nature-shared';
+const installationOptions = { mineru: 'MinerU 解析器', global_integration: '全局 MinerU 启动器', better_embedded_canvas: 'Better Embedded Canvas' };
 const roleNames = { evidence: '证据梳理', methods: '研究设计与方法', results: '结果与图表', interpretation: '解释与局限', 'scientific-reading': '科学阅读综合', integration: '内容整合', 'english-writer': '英文写作', 'chinese-writer': '中文写作', translation: '翻译', 'reading-editor': '阅读编辑', 'independent-verifier': '独立核验' };
 const roleHelp = { evidence: '找出主结论对应的证据和关键缺口。', methods: '解释研究怎样设计、方法怎样运行。', results: '解释结果、数值关系和图表。', interpretation: '判断结论强度、替代解释和适用边界。', 'scientific-reading': '把分散材料组织成完整研究讲解。', integration: '合并各角色内容，处理分歧，交给写作角色。', 'english-writer': '写英文阅读笔记。每篇论文只运行原文语言对应的写作角色：论文原文是英文时由它根据科学底稿完整成文，原文是中文时不运行；这里仍需保存模型选择。', 'chinese-writer': '写中文阅读笔记。每篇论文只运行原文语言对应的写作角色：论文原文是中文时由它根据科学底稿完整成文，原文是英文时不运行；这里仍需保存模型选择。', translation: '把已接受的原文稿译成另一种语言，模块与小节一一对应，按目标语言习惯表达。只依据原文稿、术语表和双语标签，不接收科学底稿；发现原文稿的问题时回报给原文写作角色，不自行改写事实。', 'reading-editor': '整理阅读笔记的重点、层级和导航；不是再分析一遍论文。仅在“笔记呈现方式”中选择阅读编辑时调用，但这里仍需保存模型选择。', 'independent-verifier': '审查最终候选的关键内容、双语意义和呈现；独立核验指独立任务，不要求换成不同型号的模型。' };
 const skillHelp = { 'nature-writing': '帮助组织科学论证和解释方法步骤。', 'nature-polishing': '帮助改善已有学术表达，保留事实和术语。', 'nature-shared': 'Nature 两项技能共同依赖的指导；启用其中任一项时也要启用它。', humanizer: '减少英文中的模板句、空泛表达与机械结构。', 'humanizer-zh': '减少中文翻译腔、套话与机械表达。', stss: '减少冗余的自我说明和防御性措辞，保留必要科学限定。', 'brainstorming-research-ideas': '可选构思指导：从张力、边界与方法迁移产生研究方向，在同一次构思任务内使用。', 'creative-thinking-for-research': '可选构思指导：使用类比、组合与约束操纵扩展候选方向，在同一次构思任务内使用。' };
@@ -12,7 +16,7 @@ export const groups = [
   { id: 'paths', title: '工作文件和阅读笔记存到哪里', location: true, help: '三个目录分别存放执行记录、解析资料和最终阅读候选，不需要自己为每篇论文建目录，系统会追加独立运行编号。填写相对于上一步所选项目的路径，例如 Eval/apa-v3/runs；也可用位于该项目内的绝对路径。改路径只影响新运行，不会搬动已有文件。' },
   { id: 'parser', title: 'MinerU PDF 解析环境放在哪里', location: true, help: 'MinerU 把 PDF 转为后续阅读所需的文字、表格和图片。这一块选择已安装的环境，不选择语言模型。运行目录是必填项，可填写项目内相对路径（如 .runtime/mineru），或已有外部环境的绝对路径；若还没有安装，先让助手检测并报告缺项与安装目标，再决定安装。仅填写路径不会安装软件。' },
   { id: 'reading', title: '笔记呈现', help: '决定写作与翻译完成后是否增加阅读编辑整理。每篇论文的写作语言由论文实际原文语言决定：原文语言对应的写作角色先成稿，翻译角色再译成另一种语言，此处不需要选择语言顺序。直接使用写作与翻译结果可省去编辑这一步；阅读编辑会整理重点、编号层级和目录，需要计入本次运行预算。两种方式都沿用一次整体审查和既有发布规则。' },
-  { id: 'skills', title: '是否使用额外写作指导', help: '这些是给写作角色参考的表达规则，不是新的模型，也不会另开润色任务。每项都要明确选择“启用”或“不使用”；启用时必须填写该技能的 SKILL.md 文件路径。没有安装且暂时不需要的项目可以选“不使用”。关闭文风指导不会关闭科学事实、证据和双语质量要求。' }
+  { id: 'skills', title: '是否使用额外写作指导', help: '首次配置默认勾选五项写作指导，可取消或修改 SKILL.md 路径。勾选任一 Nature 技能会自动附带 nature-shared。预览会列出最终选择，安装前由助手另行检查安装目标和缺项。' }
 ];
 const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 export const optionNames = { '': '请选择…', explicit: '指定模型和推理强度', 'follow-main': '跟随当前主会话', true: '启用这项指导', false: '不使用这项指导', en: '先写英文，再写中文', 'zh-CN': '先写中文，再写英文', writer: '直接使用写作与翻译结果', 'reading-editor': '由阅读编辑整理重点、层级与导航', none: '不启用推理 · none', minimal: '最低 · minimal', low: '低 · low', medium: '中 · medium', high: '高 · high', xhigh: '更高 · xhigh', max: '最大 · max', ultra: '最高 · ultra' };
@@ -33,11 +37,12 @@ export const fields = [
   { key: 'parser.python', label: 'Python 程序路径（可选）', type: 'text', group: 'parser', help: '未配置时使用 MinerU 安装目录下的 venv/Scripts/python.exe。仅在实际位置不同或需明确指定时填写。' },
   { key: 'parser.config_path', label: 'MinerU 配置文件（可选）', type: 'text', group: 'parser', help: '未配置时使用 MinerU 安装目录下的 config.yaml。应填现有文件路径，不是文件内容。' },
   { key: 'reading.presentation_mode', label: '笔记呈现方式', type: 'select', group: 'reading', help: '直接使用写作结果：省去编辑这一步。阅读编辑：额外整理重点、编号层级和目录，需要计入本次运行预算。', options: ['writer', 'reading-editor'] },
-  ...writingSkills.map(key => ({ key: `writing_skills.${key}`, label: key, type: 'skill', group: 'skills', help: skillHelp[key] }))
+  ...writingSkills.map(key => ({ key: `writing_skills.${key}`, label: key, type: 'skill', group: 'skills', help: skillHelp[key] })),
+  ...ideationSkills.map(key => ({ key: `writing_skills.${key}`, label: key, type: 'skill', group: 'query', help: skillHelp[key] }))
 ];
 
 // Saved by older versions; still legal in the schema and importable, but new runs read the paper's own source language.
-const legacyLabels = { 'reading.source_language': '首先写作的语言（旧设置，新运行不再使用）' };
+const legacyLabels = { 'reading.source_language': '首先写作的语言（旧设置，新运行不再使用）', [sharedSkillKey]: 'nature-shared' };
 export const modelGroupSummary = '关键判断 ≥ 原文写作 ＞ 专项分析 ≥ 呈现与翻译';
 // A group choice is only a combined control: it writes the same value to each configuration key listed here.
 export const modelGroups = [
@@ -113,8 +118,14 @@ export function describeChanges(snapshot, payload) {
     return keys.map(key => `${fieldLabel(key)}：${describeValue(getValue(snapshot.config, key), key)} → 移除答案`);
   }
   const threshold = payload.host_settings?.threshold_compaction;
+  const installation = payload.installation;
+  const skills = installation?.companion_skills;
   return [
-    ...Object.entries(payload.set).map(([key, value]) => `${fieldLabel(key)}：${describeValue(getValue(snapshot.config, key), key)} → ${describeValue(value, key)}`),
+    ...Object.entries(payload.set).map(([key, value]) => `${key === sharedSkillKey && value.enabled ? '自动附带 nature-shared' : fieldLabel(key)}：${describeValue(getValue(snapshot.config, key), key)} → ${describeValue(value, key)}`),
+    ...(installation ? [
+      ...Object.entries(installationOptions).map(([id, name]) => `安装选择 · ${name}：${installation[id] ? '已选' : '已取消'}`),
+      `安装选择 · 写作指导：${skills.join('、') || '全部取消'}${natureSkills.some(name => skills.includes(name)) ? '（自动附带 nature-shared）' : ''}`
+    ] : []),
     ...(threshold ? [`宿主压缩阈值（${threshold.host}）：候选 ${threshold.tokens} token → 不写入个人配置；助手应用时据此生成宿主设置预览，你确认后才写入`] : []),
     ...Object.entries(payload.issue_choices ?? {}).map(([id, choice]) => `自检遗留问题 ${id}：${issueChoiceOptions[id.split(':')[0]]?.[choice] || choice} → 不写入个人配置；交给助手按此处理`)
   ];
@@ -164,11 +175,11 @@ export function configDifferences(before, after) {
   return Object.keys(right).filter(key => JSON.stringify(left[key]) !== JSON.stringify(right[key])).map(key => ({ key, before: left[key], after: right[key] }));
 }
 
-export function createOperation(snapshot, { action = 'patch', set = {}, remove = [], all = false, hostSettings = null, issueChoices = {} } = {}) {
+export function createOperation(snapshot, { action = 'patch', set = {}, remove = [], all = false, hostSettings = null, issueChoices = {}, installation = null } = {}) {
   // repo_root binds a page-generated operation to the project folder the user confirmed on the first page.
   const base = { schema_version: 'apa-config-operation-1.0', base_fingerprint: snapshot.fingerprint, ...(snapshot.repo_root ? { repo_root: snapshot.repo_root } : {}), action };
   if (action === 'remove') return all ? { ...base, all: true } : { ...base, remove: [...new Set(remove)] };
-  return { ...base, set, ...(remove.length ? { remove: [...new Set(remove)] } : {}), ...(hostSettings ? { host_settings: hostSettings } : {}), ...(Object.keys(issueChoices).length ? { issue_choices: issueChoices } : {}) };
+  return { ...base, set, ...(remove.length ? { remove: [...new Set(remove)] } : {}), ...(hostSettings ? { host_settings: hostSettings } : {}), ...(Object.keys(issueChoices).length ? { issue_choices: issueChoices } : {}), ...(installation ? { installation } : {}) };
 }
 
 export function serializePayload(payload) {
@@ -257,11 +268,15 @@ export function readinessMessages(inspection, queryInspection, hostProfile = nul
   const hostState = { match: '已保存的派发方式与本次检测一致。', differs: '已保存的派发方式与本次检测不同；如已换宿主，请在“运行宿主与派发”页采用新结果。', 'not-saved': '尚未保存派发方式，可在“运行宿主与派发”页采用本次检测结果。' };
   const host = !hostProfile ? '本页没有宿主检测结果：模型需要手动填写，派发方式无法设置。请让助手先检测自身环境再生成页面。'
     : `本页依据助手对 ${hostProfile.host} 的检测（${hostProfile.detected_at}）。${check ? hostState[check.host] : ''}${check?.issues?.length ? ` 需要处理：${check.issues.map(item => `${fieldLabel(item.key)}——${hostIssueNames[item.issue] || item.issue}${item.model ? `（${item.model}${item.reasoning_effort ? ` / ${item.reasoning_effort}` : ''}）` : ''}`).join('；')}。` : ''}`;
+  const queryValidation = queryInspection?.validation;
+  const queryIssues = [];
+  if (queryValidation?.conflicts?.length) queryIssues.push('知识库查询模型需改为跟随主会话。');
+  if (queryValidation?.missing?.length) queryIssues.push(`请为已启用的 ${queryValidation.missing.map(fieldLabel).join('、')} 填写路径。`);
   return {
     host,
     reading: validation?.conflicts?.length ? `已保存的派发方式不能为子代理选择模型，以下项目需改为“跟随主会话”后才能开始新论文：${[...new Set(validation.conflicts.map(item => fieldLabel(item.split(' ')[0])))].join('、')}。`
       : inspection?.ready ? '阅读配置已齐全，所选依赖文件可找到。' : validation?.complete ?'阅读配置已填全，但部分依赖文件还不可用。请查看检查结果，修正路径或先安排安装检测。' : `阅读还需填写：${[...new Set((validation?.missing || ['模型、目录、解析器、阅读与写作技能选择']).map(fieldLabel))].join('、')}。可分次保存，全部必填项和所选依赖就绪后才能开始新论文。`,
-    query: `${queryInspection?.ready ? '查询配置已就绪；未选查询模型时跟随当前会话。' : '查询配置尚未检查或存在结构错误。'} 此处未检查当前宿主的模型可用性，也未执行模型；实际查询时确认支持的模型与推理强度。`
+    query: `${queryIssues.length ? queryIssues.join('') : queryInspection?.ready ? '查询配置已就绪；未选查询模型时跟随当前会话。' : '查询配置尚未检查或存在结构错误。'} 此处未检查当前宿主的模型可用性，也未执行模型；实际查询时确认支持的模型与推理强度。`
   };
 }
 
@@ -512,7 +527,7 @@ export function resolveInProject(repoRoot, value) {
   return `${repoRoot.replace(/[\\/]+$/, '')}${separator}${value.replace(/^\.[\\/]/, '').replace(/[\\/]+/g, separator)}`;
 }
 
-export function mountApaSetup(document, snapshot, inspection, queryInspection, hostProfile = null, repoRoot = null) {
+export function mountApaSetup(document, snapshot, inspection, queryInspection, hostProfile = null, repoRoot = null, setupDefaults = null) {
   if (repoRoot) snapshot = { ...snapshot, repo_root: repoRoot };
   const byId = id => document.getElementById(id);
   const make = (tag, text, className) => {
@@ -547,6 +562,14 @@ export function mountApaSetup(document, snapshot, inspection, queryInspection, h
   const dependencies = inspection?.dependencies || [];
   const dependencyStatus = { available: '文件或目录可找到', missing: '未找到，请检查路径或安装情况', 'wrong-type': '路径类型不符，请检查填的是文件还是目录', unavailable: '暂时无法读取' };
   byId('dependencies').textContent = dependencies.length ? dependencies.map(item => `${fieldLabel(item.key)}：${dependencyStatus[item.status] || item.status}\n${item.path || ''}`).join('\n\n') : '尚无可检查的依赖路径。填写解析器和已启用技能的位置后，由助手回读检查。';
+  const installControls = {};
+  if (setupDefaults) for (const [id, name] of Object.entries(installationOptions)) {
+    const label = make('label', name);
+    const input = make('input'); input.type = 'checkbox'; input.name = `install-${id}`; input.checked = true;
+    input.addEventListener('change', () => clearResult('edit'));
+    label.prepend(input); byId('installation-options').append(label);
+    installControls[id] = input;
+  }
   const containers = {};
   const groupElements = {};
   for (const group of groups) {
@@ -606,11 +629,14 @@ export function mountApaSetup(document, snapshot, inspection, queryInspection, h
   }
   for (const field of fields) {
     if (field.groupOnly) continue;
+    const defaultWritingSkill = setupDefaults && field.group === 'skills';
     const row = make('fieldset');
     const legend = make('legend');
-    const toggleLabel = make('label', `${field.label} · 修改此项`);
+    const toggleLabel = make('label', defaultWritingSkill ? field.label : `${field.label} · 修改此项`);
     const selected = make('input'); selected.type = 'checkbox'; selected.setAttribute('aria-label', `修改 ${field.label}`);
-    toggleLabel.prepend(selected); legend.append(toggleLabel); row.append(legend);
+    if (defaultWritingSkill) selected.checked = true;
+    else toggleLabel.prepend(selected);
+    legend.append(toggleLabel); row.append(legend);
     const current = getValue(snapshot.config, field.key);
     row.append(make('p', field.help, 'field-help'));
     row.append(make('p', `当前：${current === undefined && scienceRoles.includes(field.role) ? '沿用专项分析组的共同模型，无需单独填写' : display(current, field.key)}`, 'hint'));
@@ -629,8 +655,15 @@ export function mountApaSetup(document, snapshot, inspection, queryInspection, h
       ({ inputs: modelInputs, refreshEfforts } = addModelInputs(row, field.key, current));
       Object.assign(inputs, modelInputs);
     } else if (field.type === 'skill') {
-      inputs.enabled = addInput(row, '是否使用', `${field.key}-enabled`, current?.enabled === undefined ? '' : String(current.enabled), ['', 'true', 'false']);
-      inputs.path = addInput(row, 'SKILL.md 文件路径（启用时必填）', `${field.key}-path`, current?.path || '');
+      if (defaultWritingSkill) {
+        const label = make('label', `使用 ${field.label}`);
+        inputs.enabled = make('input'); inputs.enabled.type = 'checkbox'; inputs.enabled.name = `${field.key}-enabled`;
+        inputs.enabled.checked = current?.enabled ?? true;
+        label.prepend(inputs.enabled); row.append(label);
+      } else {
+        inputs.enabled = addInput(row, '是否使用', `${field.key}-enabled`, current?.enabled === undefined ? '' : String(current.enabled), ['', 'true', 'false']);
+      }
+      inputs.path = addInput(row, 'SKILL.md 文件路径（启用时必填）', `${field.key}-path`, current?.path || (defaultWritingSkill ? setupDefaults.skillPaths[field.label] : ''));
       inputs.path.placeholder = '填写实际 SKILL.md 文件，不是它所在的文件夹';
     } else inputs.value = addInput(row, field.label, field.key, current ?? '', field.options ? ['', ...field.options] : undefined, field.optionNames);
     if (groups.find(group => group.id === field.group)?.location) {
@@ -639,7 +672,7 @@ export function mountApaSetup(document, snapshot, inspection, queryInspection, h
       inputs.value.addEventListener('input', showActual); showActual(); row.append(actual);
     }
     const sync = () => {
-      for (const [key, input] of Object.entries(inputs)) input.disabled = !selected.checked || (field.type === 'model' && key !== 'mode' && inputs.mode.value !== 'explicit') || (field.type === 'skill' && key === 'path' && inputs.enabled.value !== 'true');
+      for (const [key, input] of Object.entries(inputs)) input.disabled = !selected.checked || (field.type === 'model' && key !== 'mode' && inputs.mode.value !== 'explicit') || (field.type === 'skill' && key === 'path' && !(defaultWritingSkill ? inputs.enabled.checked : inputs.enabled.value === 'true'));
     };
     selected.addEventListener('change', sync);
     for (const input of Object.values(inputs)) input.addEventListener('change', sync);
@@ -685,21 +718,45 @@ export function mountApaSetup(document, snapshot, inspection, queryInspection, h
   byId('locations-continue').addEventListener('click', () => pageNavigator.home('functions'));
   byId('functions-back').addEventListener('click', () => pageNavigator.home('project'));
   for (const flow of Object.keys(flowNames)) byId(`enter-${flow}`).addEventListener('click', () => pageNavigator.enter(flow));
+  const syncNatureSupport = (set, force = false) => {
+    const keys = natureSkills.map(name => `writing_skills.${name}`);
+    if (!setupDefaults || !force && !keys.some(key => Object.hasOwn(set, key))) return;
+    const enabled = keys.some(key => (set[key] ?? getValue(snapshot.config, key))?.enabled);
+    const current = getValue(snapshot.config, sharedSkillKey);
+    const value = enabled
+      ? { enabled, path: set[sharedSkillKey]?.path || current?.path || setupDefaults.skillPaths['nature-shared'] }
+      : { enabled };
+    if (JSON.stringify(current) !== JSON.stringify(value)) set[sharedSkillKey] = value;
+    else delete set[sharedSkillKey];
+  };
   const collect = () => {
     const set = {};
     const roleSelections = {};
+    const companionSkills = [];
     for (const { field, selected, inputs } of controls) {
       if (!selected.checked) continue;
       const values = Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value]));
+      if (setupDefaults && field.group === 'skills') {
+        values.enabled = String(inputs.enabled.checked);
+        if (inputs.enabled.checked) {
+          if (!values.path.trim()) throw new Error(`请填写已选写作指导 ${field.label} 的 SKILL.md 路径。`);
+          companionSkills.push(field.label);
+        }
+      }
       if (field.type === 'model') { roleSelections[field.key] = values; continue; }
       if ((field.type === 'skill' && !values.enabled) || (field.type !== 'skill' && !values.value.trim())) throw new Error(`请填写已选择的 ${field.label}；需要清除时使用去除配置。`);
       const value = fieldValue(field, values, hostProfile);
       if (JSON.stringify(getValue(snapshot.config, field.key)) !== JSON.stringify(value)) set[field.key] = value;
     }
+    syncNatureSupport(set, true);
     const groupSelections = Object.fromEntries(groupControls.filter(item => item.selected.checked).map(({ group, inputs }) => [group.id, Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value]))]));
     Object.assign(set, collectModelSet({ config: snapshot.config, hostProfile, groupSelections, roleSelections }));
     const hostSettings = thresholdHostSetting(thresholdInput()?.value, inspection?.capability_check?.host || hostProfile?.host);
-    return createOperation(snapshot, { set, hostSettings, issueChoices: issueChoices() });
+    const installation = setupDefaults ? {
+      ...Object.fromEntries(Object.entries(installControls).map(([id, input]) => [id, input.checked])),
+      companion_skills: companionSkills
+    } : null;
+    return createOperation(snapshot, { set, hostSettings, issueChoices: issueChoices(), installation });
   };
   const thresholdInput = () => document.querySelector('input[name="threshold-threshold_compaction"]');
   thresholdInput()?.addEventListener('input', () => clearResult('edit'));
@@ -786,6 +843,7 @@ export function mountApaSetup(document, snapshot, inspection, queryInspection, h
     }
     for (const { field, selected, inputs, refreshEfforts } of controls) {
       const value = getValue(imported.answers, field.key); if (value === undefined) continue;
+      if (setupDefaults && field.group === 'skills') continue;
       selected.checked = false;
       if (field.type === 'host') continue;
       if (field.type === 'model') { inputs.mode.value = value.mode || 'explicit'; inputs.model.value = value.model || ''; refreshEfforts(); inputs.effort.value = value.reasoning_effort || ''; }
@@ -799,6 +857,7 @@ export function mountApaSetup(document, snapshot, inspection, queryInspection, h
   byId('generate-import').addEventListener('click', guard('edit', () => {
     clearResult('edit');
     const set = Object.fromEntries([...document.querySelectorAll('[name="import-change"]:checked')].map(input => [input.dataset.key, JSON.parse(input.dataset.value)]));
+    syncNatureSupport(set);
     preview('edit', createOperation(snapshot, { set }));
   }));
   byId('suggestions').addEventListener('click', () => {

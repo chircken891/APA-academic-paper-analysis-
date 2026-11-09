@@ -40,7 +40,13 @@ export function assertEditorRepairScope(base, revised, review, presentation) {
     : (item.section_ids ?? []).some(id=>sections.has(id)) || knowledge.has(item.knowledge_id) || (item.knowledge_ids ?? []).some(id=>knowledge.has(id));
   const left=structuredClone(base), right=structuredClone(revised);
   delete left.views_fingerprint; delete right.views_fingerprint;
-  if (ids('editor_fields').has('map')) { delete left.map; delete right.map; }
+  if (ids('editor_fields').has('map')) {
+    const fields = base.schema_version === 'reading-editor-1.4' ? ['argument', 'primary_finding_ids'] : ['map'];
+    for (const field of fields) {
+      delete left[field];
+      delete right[field];
+    }
+  }
   for (const language of ['en','zh-CN']) for (const kind of ['overview','sections','methods','visuals']) {
     const before=left.languages?.[language]?.[kind];
     let after=right.languages?.[language]?.[kind];

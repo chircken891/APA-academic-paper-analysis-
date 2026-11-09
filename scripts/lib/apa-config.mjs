@@ -13,6 +13,8 @@ export const APA_SCIENCE_ROLES = Object.freeze(['evidence', 'methods', 'results'
 export const APA_CONFIG_ROLES = Object.freeze(['english-writer', 'chinese-writer', 'translation', 'reading-editor', 'independent-verifier']);
 export const APA_IDEATION_SKILLS = Object.freeze(['brainstorming-research-ideas', 'creative-thinking-for-research']);
 export const APA_WRITING_SKILLS = Object.freeze(['nature-writing', 'nature-polishing', 'nature-shared', 'humanizer', 'humanizer-zh', 'stss', ...APA_IDEATION_SKILLS]);
+export const APA_READING_WRITING_SKILLS = Object.freeze(APA_WRITING_SKILLS.filter(name => !APA_IDEATION_SKILLS.includes(name)));
+export const APA_SETUP_COMPANION_SKILLS = Object.freeze(APA_READING_WRITING_SKILLS.filter(name => name !== 'nature-shared'));
 const schemaPath = fileURLToPath(new URL('../../Schema/config/apa-config.schema.json', import.meta.url));
 const configSchema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
 const checkSchema = new Ajv({ allErrors: true }).compile(configSchema);
@@ -44,15 +46,19 @@ export function validateApaConfig(config, { repoRoot = process.cwd(), complete =
     if (typeof value === 'string' && !contained(repoRoot, absolute(repoRoot, value))) errors.push(`paths.${key} must be inside repository`);
   }
   const missing = [];
+  const query = capability === 'query';
   // A saved host that cannot choose the model leaves explicit choices unenforceable; report them instead of refusing to load.
   const conflicts = config?.host?.dispatch?.model_argument === null
-    ? modelChoiceEntries(config).filter(([key, choice]) => choice?.mode === 'explicit' && (capability === 'reading' || key === 'models.query')).map(([key]) => `${key} requires follow-main: host ${config.host.name} cannot select the model`)
+    ? modelChoiceEntries(config).filter(([key, choice]) => choice?.mode === 'explicit' && (key === 'models.query') === query).map(([key]) => `${key} requires follow-main: host ${config.host.name} cannot select the model`)
     : [];
-  if (capability === 'query') return { valid: errors.length === 0, complete: errors.length === 0 && conflicts.length === 0, errors, missing, conflicts };
-  for (const key of ['models.science', ...APA_CONFIG_ROLES.map(role => `models.roles.${role}`), 'paths.runs', 'paths.parse', 'paths.candidates', 'parser.runtime_home', 'reading.presentation_mode', ...APA_WRITING_SKILLS.filter(skill => !APA_IDEATION_SKILLS.includes(skill)).map(skill => `writing_skills.${skill}.enabled`)]) {
+  if (query) {
+    for (const key of APA_IDEATION_SKILLS) if (config?.writing_skills?.[key]?.enabled && !config.writing_skills[key].path) missing.push(`writing_skills.${key}.path`);
+    return { valid: errors.length === 0, complete: errors.length === 0 && missing.length === 0 && conflicts.length === 0, errors, missing, conflicts };
+  }
+  for (const key of ['models.science', ...APA_CONFIG_ROLES.map(role => `models.roles.${role}`), 'paths.runs', 'paths.parse', 'paths.candidates', 'parser.runtime_home', 'reading.presentation_mode', ...APA_READING_WRITING_SKILLS.map(skill => `writing_skills.${skill}.enabled`)]) {
     if (get(config, key) === undefined) missing.push(key);
   }
-  for (const key of APA_WRITING_SKILLS) if (config?.writing_skills?.[key]?.enabled && !config.writing_skills[key].path) missing.push(`writing_skills.${key}.path`);
+  for (const key of APA_READING_WRITING_SKILLS) if (config?.writing_skills?.[key]?.enabled && !config.writing_skills[key].path) missing.push(`writing_skills.${key}.path`);
   if (['nature-writing', 'nature-polishing'].some(key => config?.writing_skills?.[key]?.enabled) && !config?.writing_skills?.['nature-shared']?.enabled) missing.push('writing_skills.nature-shared.enabled');
   return { valid: errors.length === 0 && (!complete || missing.length === 0 && conflicts.length === 0), complete: errors.length === 0 && missing.length === 0 && conflicts.length === 0, errors, missing: [...new Set(missing)], conflicts };
 }
@@ -96,7 +102,7 @@ function merge(target, source) {
 }
 
 export function applyApaConfigOperation({ repoRoot = process.cwd(), operation }) {
-  const allowed = ['schema_version', 'base_fingerprint', 'repo_root', 'action', 'set', 'remove', 'all', 'answers', 'host_settings', 'issue_choices'];
+  const allowed = ['schema_version', 'base_fingerprint', 'repo_root', 'action', 'set', 'remove', 'all', 'answers', 'host_settings', 'issue_choices', 'installation'];
   if (!operation || Object.keys(operation).some(key => !allowed.includes(key)) || operation.schema_version !== 'apa-config-operation-1.0' || !['patch', 'remove', 'import'].includes(operation.action)) throw error('APA_CONFIG_OPERATION_INVALID');
   // host_settings carries the user's page choice for host settings; it is reported back, never written to the config.
   const hostSettings = operation.host_settings;
@@ -112,6 +118,14 @@ export function applyApaConfigOperation({ repoRoot = process.cwd(), operation })
     const valid = { investigate: ['investigate', 'defer'], authorize: ['prepare', 'defer'], 'known-limit': ['investigate', 'accept-limit'] };
     if (operation.action !== 'patch' || !issueChoices || typeof issueChoices !== 'object' || Array.isArray(issueChoices) || !Object.keys(issueChoices).length
       || Object.entries(issueChoices).some(([id, choice]) => !valid[id.split(':')[0]]?.includes(choice))) throw error('APA_CONFIG_OPERATION_INVALID');
+  }
+  const installation = operation.installation;
+  if (installation !== undefined) {
+    const switches = ['mineru', 'global_integration', 'better_embedded_canvas'];
+    if (operation.action !== 'patch' || !installation || typeof installation !== 'object' || Array.isArray(installation)
+      || Object.keys(installation).length !== switches.length + 1 || switches.some(key => typeof installation[key] !== 'boolean')
+      || !Array.isArray(installation.companion_skills) || new Set(installation.companion_skills).size !== installation.companion_skills.length
+      || installation.companion_skills.some(name => !APA_SETUP_COMPANION_SKILLS.includes(name))) throw error('APA_CONFIG_OPERATION_INVALID');
   }
   // Page operations carry the project folder the user confirmed; applying them to another checkout is refused.
   if (operation.repo_root !== undefined) {
@@ -143,7 +157,7 @@ export function applyApaConfigOperation({ repoRoot = process.cwd(), operation })
     fs.renameSync(temporary, snapshot.path);
   } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
   const applied = loadApaConfig({ repoRoot });
-  return { ...applied, ...(hostSettings ? { pending_host_settings: clone(hostSettings) } : {}), ...(issueChoices ? { pending_issue_choices: clone(issueChoices) } : {}) };
+  return { ...applied, ...(hostSettings ? { pending_host_settings: clone(hostSettings) } : {}), ...(issueChoices ? { pending_issue_choices: clone(issueChoices) } : {}), ...(installation ? { pending_installation: clone(installation) } : {}) };
 }
 
 export function exportApaConfig(config) {
@@ -207,7 +221,7 @@ export function inspectApaConfig({ repoRoot = process.cwd(), capability = 'readi
   const runtimeHome = snapshot.config.parser?.runtime_home;
   const parserDefaults = runtimeHome ? { python: path.join(runtimeHome, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'), config_path: path.join(runtimeHome, 'config.yaml') } : {};
   for (const key of ['python', 'config_path']) inspect(`parser.${key}`, snapshot.config.parser?.[key] ?? parserDefaults[key], 'file');
-  for (const key of APA_WRITING_SKILLS) if (snapshot.config.writing_skills?.[key]?.enabled) inspect(`writing_skills.${key}`, snapshot.config.writing_skills[key].path, 'file');
+  for (const key of APA_READING_WRITING_SKILLS) if (snapshot.config.writing_skills?.[key]?.enabled) inspect(`writing_skills.${key}`, snapshot.config.writing_skills[key].path, 'file');
   const inspection = { ...snapshot, capability, validation, dependencies, ready: validation.complete && dependencies.every(item => item.status === 'available'), model_availability: 'not_checked', ...hostCheck };
   return withIssues({ ...inspection, reading_preflight: evaluateReadingPreflight({ inspection, hostProfile }) });
 }
@@ -233,7 +247,7 @@ export function resolveApaConfig({ config, repoRoot = process.cwd(), mainSession
   for (const role of APA_SCIENCE_ROLES) roles[role] = resolveChoice(config.models.overrides?.[role] ?? config.models.science);
   for (const role of APA_CONFIG_ROLES) roles[role] = resolveChoice(config.models.roles[role]);
   const writingSkills = {};
-  for (const key of APA_WRITING_SKILLS) {
+  for (const key of APA_READING_WRITING_SKILLS) {
     const skill = config.writing_skills[key];
     if (!skill?.enabled) continue;
     const skillPath = absolute(repoRoot, skill.path);

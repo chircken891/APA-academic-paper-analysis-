@@ -22,6 +22,7 @@ import { captureReadingFirstPublicationRegistration, rebuildRegisteredReadingFir
   applyReadingFirstSourceDerivation, assertReadingFirstPublicationReviewLive, usesCurrentReadingFirstPublication } from './reading-first-publication.mjs';
 import { assertNoteRelocationReviewCurrent, NOTE_RELOCATION_PROFILE, usesCurrentNoteRelocation } from './note-relocation.mjs';
 import { KNOWLEDGE_MERGE_PROFILE, usesCurrentKnowledgeMerge } from './knowledge-merge.mjs';
+import { MAP_REFRESH_PROFILE, MAP_REFRESH_TOOL_URLS, assertMapRefreshReviewCurrent } from './research-map-refresh.mjs';
 
 const usesCurrentPublication = review => usesCurrentReadingFirstPublication(review) || usesCurrentTopicPublication(review)
   || usesCurrentNoteRelocation(review) || usesCurrentKnowledgeMerge(review);
@@ -657,7 +658,7 @@ function resultFor(journal) {
 async function withTopicHints(result, plan, record) {
   const paperId = record.review?.reviewManifest.identity.paper_id;
   if (result.status !== 'committed' || !paperId
-    || ['phase24-topic-1.0', 'writing-project-1.0', NOTE_RELOCATION_PROFILE, KNOWLEDGE_MERGE_PROFILE].includes(record.review.reviewManifest.profile)) return result;
+    || ['phase24-topic-1.0', 'writing-project-1.0', NOTE_RELOCATION_PROFILE, KNOWLEDGE_MERGE_PROFILE, MAP_REFRESH_PROFILE].includes(record.review.reviewManifest.profile)) return result;
   try {
     const { getTopicUpdateHints } = await import('./topic-library.mjs');
     const hints = await getTopicUpdateHints({ vaultRoot: plan.vault_root, generationId: result.generation, changedPaperIds: [paperId] });
@@ -999,10 +1000,13 @@ function captureMaintenanceBindings(authority, review) {
   if (!authority || typeof authority.inventory_path !== 'string') fail('P22_MAINTENANCE_APPROVAL_INVENTORY_REQUIRED');
   const inventory = fileBinding(authority.inventory_path);
   if (inventory.sha256 !== authority.inventory_sha256) fail('P22_MAINTENANCE_INVENTORY_MISMATCH');
-  const builder = review.reviewManifest.profile === NOTE_RELOCATION_PROFILE ? './note-relocation.mjs' : './knowledge-merge.mjs';
+  const profile = review.reviewManifest.profile;
+  const tools = profile === MAP_REFRESH_PROFILE ? MAP_REFRESH_TOOL_URLS : [
+    profile === NOTE_RELOCATION_PROFILE ? './note-relocation.mjs' : './knowledge-merge.mjs', './phase22-publication.mjs',
+  ];
   return { source_bindings: [inventory],
-    tool_bindings: [builder, './phase22-publication.mjs'].map(path => fileBinding(fileURLToPath(new URL(path, import.meta.url)))),
-    control_snapshot: { maintenance_profile: review.reviewManifest.profile } };
+    tool_bindings: tools.map(path => fileBinding(fileURLToPath(new URL(path, import.meta.url)))),
+    control_snapshot: { maintenance_profile: profile } };
 }
 async function writeRegisteredRecord(ctx, path, bytes, { replace = false } = {}) {
   const before = await observe(ctx.root, path);
@@ -1159,7 +1163,8 @@ export async function registerBilingualPublication(args = {}) {
   if (!record.review || args.run !== plan.run_id || resolve(args.vaultRoot ?? '') !== plan.vault_root) fail('P22_REGISTERED_LIVE_REVIEW_REQUIRED');
   await checkPreimages(plan.vault_root, plan);
   const maintenance = usesCurrentKnowledgeMerge(record.review) || (record.review.reviewManifest.profile === NOTE_RELOCATION_PROFILE
-    && Boolean(assertNoteRelocationReviewCurrent(record.review)));
+    && Boolean(assertNoteRelocationReviewCurrent(record.review))) || (record.review.reviewManifest.profile === MAP_REFRESH_PROFILE
+    && Boolean(assertMapRefreshReviewCurrent(record.review)));
   const maintenanceAuthority = maintenance ? await assertAuthority(args, plan) : null;
   const captured = maintenance
     ? captureMaintenanceBindings(maintenanceAuthority, record.review)
