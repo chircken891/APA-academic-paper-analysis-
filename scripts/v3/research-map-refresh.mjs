@@ -2,12 +2,12 @@ import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import MarkdownIt from 'markdown-it';
-import { normalizeIndexPath, phase22GenerationPaths, readCommittedGeneration } from './phase22-active-version.mjs';
+import { normalizeIndexPath, phase22GenerationPaths, readRegisteredCommit } from './phase22-active-version.mjs';
 import { createPhase22ContractValidator } from './phase22-contract-loader.mjs';
 import { inspectManagedNote } from './phase22-managed-markdown.mjs';
 import { buildBilingualIndex } from './phase22-search.mjs';
 import { validateReadingArgument } from './reading-first-editor.mjs';
-import { assertReadingFirstPublicationManifest, verifyReadingFirstPaperBytes, verifyReadingFirstPresentation } from './reading-first-index.mjs';
+import { assertReadingFirstPublicationManifest, parseRegisteredResearchMap, verifyReadingFirstPaperIdentity, verifyReadingFirstPresentation } from './reading-first-index.mjs';
 import { buildResearchMapCanvas, researchMapCanvasSection, serializeResearchMapCanvas } from './research-map-canvas.mjs';
 import { fingerprintV3Json as hash } from './semantic-package-validator.mjs';
 
@@ -30,6 +30,8 @@ const inventoryStamp = rows => rows.map(({ bytes, ...row }) => ({ ...row, observ
 const stamp = review => hash({ manifest: review.reviewManifest, output: inventoryStamp(review.outputInventory), hashes: review.hashes });
 const reference = (path, bytes) => ({ path, byte_sha256: sha(bytes), byte_length: bytes.length });
 const headingAnchor = title => encodeURIComponent(title).replaceAll('%2F', '/').replaceAll('(', '%28').replaceAll(')', '%29');
+const geometryKeys = ['x', 'y', 'width', 'height'];
+const geometry = node => Object.fromEntries(geometryKeys.map(key => [key, node[key]]));
 
 function bytesAt(root, path, optional = false) {
   if (normalizeIndexPath(path) !== path) fail('P22_MAP_REFRESH_PATH_INVALID', { path });
@@ -178,13 +180,13 @@ export async function buildMapRefreshReview({ vaultRoot, runId, generation, pape
   if (!Array.isArray(papers) || !papers.length || papers.some(row => !identifier(row?.paperId))
     || new Set(papers.map(row => row.paperId)).size !== papers.length) fail('P22_MAP_REFRESH_PAPERS_INVALID');
   const paths = phase22GenerationPaths(generation);
-  const base = await readCommittedGeneration({ vaultRoot: root });
+  const base = await readRegisteredCommit({ vaultRoot: root });
   if (!base.ok) fail('P22_MAP_REFRESH_COMMITTED_REQUIRED', { errors: base.errors });
   if (base.generation_id === generation) fail('P22_GENERATION_NOT_NEW');
   const active = structuredClone(base.generation), objects = new Map(active.objects.map(row => [row.path, row]));
   active.generation_id = generation;
   delete active.index_manifest;
-  const changed = [], previews = [], assets = [], output = [], selected = [], wordingEdits = [];
+  const changed = [], previews = [], assets = [], output = [], selected = [], wordingEdits = [], layoutEdits = [];
   const files = new Map();
   const add = (path, kind, bytes, before = null, extra = {}) => {
     if (before === null && (objects.has(path) || bytesAt(root, path, true) !== null)) fail('P22_MAP_REFRESH_TARGET_OCCUPIED', { path });
@@ -199,8 +201,36 @@ export async function buildMapRefreshReview({ vaultRoot, runId, generation, pape
     const paper = active.papers.find(row => row.paper_id === paperId);
     if (paper?.profile !== 'reading-first-obsidian-1.0' || !identifier(paper.run_id)) fail('P22_MAP_REFRESH_PAPER_INVALID', { paperId });
     const previousPresentation = paper.reader_presentation.path, priorPaper = base.generation.papers.find(row => row.paper_id === paperId);
-    const manifest = verifyReadingFirstPresentation(priorPaper, bytesAt(root, previousPresentation), base.generation);
+    const previousPresentationBytes = bytesAt(root, previousPresentation);
+    const manifest = verifyReadingFirstPresentation(priorPaper, previousPresentationBytes, base.generation);
+    files.set(previousPresentation, previousPresentationBytes);
     const registeredCanvases = manifest.presentation_assets ?? [];
+    if (selection.canvasLayout !== undefined) {
+      const { language, before_sha256: expected, nodes } = selection.canvasLayout ?? {};
+      const asset = registeredCanvases.find(row => row.language === language);
+      if (!asset || !Array.isArray(nodes) || !nodes.length || new Set(nodes.map(node => node?.id)).size !== nodes.length
+        || Object.keys(selection).some(key => !['paperId', 'canvasLayout'].includes(key))
+        || nodes.some(node => !node || typeof node.id !== 'string' || geometryKeys.some(key => !Number.isFinite(node[key]))
+          || node.width <= 0 || node.height <= 0)) fail('P22_MAP_REFRESH_LAYOUT_INVALID', { paperId, language });
+      const before = bytesAt(root, asset.path, true), canvas = parseRegisteredResearchMap(before, asset.path);
+      if (sha(before) !== expected) fail('P22_MAP_REFRESH_LAYOUT_PREIMAGE_CHANGED', { path: asset.path });
+      for (const update of nodes) {
+        const matching = canvas.nodes.filter(row => row.id === update.id);
+        if (matching.length !== 1) fail('P22_MAP_REFRESH_LAYOUT_NODE_INVALID', { path: asset.path, id: update.id });
+        const node = matching[0], next = geometry(update);
+        if (geometryKeys.every(key => node[key] === next[key])) continue;
+        layoutEdits.push({ paper_id: paperId, language, path: asset.path, id: update.id, before: geometry(node), after: next });
+        Object.assign(node, next);
+      }
+      if (!layoutEdits.some(row => row.path === asset.path)) fail('P22_MAP_REFRESH_LAYOUT_NO_CHANGES', { path: asset.path });
+      const bytes = Buffer.from(serializeResearchMapCanvas(canvas));
+      add(asset.path, 'asset', bytes, before);
+      objects.get(asset.path).sha256 = sha(bytes);
+      files.set(asset.path, bytes);
+      assets.push({ ...asset, sha256: sha(bytes), byte_length: bytes.length });
+      selected.push(paperId);
+      continue;
+    }
     const wording = wordingByLanguage(selection.noteWordingEdits, paperId);
     if (!registeredCanvases.length && Object.values(wording).some(rows => rows.length)) {
       fail('P22_MAP_REFRESH_WORDING_INVALID', { paperId, reason: 'registered-map-required' });
@@ -211,7 +241,7 @@ export async function buildMapRefreshReview({ vaultRoot, runId, generation, pape
     const notes = {}, presentationAssets = [];
     for (const language of languages) {
       const notePath = paper.paths[language], original = bytesAt(root, notePath);
-      const binding = verifyReadingFirstPaperBytes(priorPaper, language, original, base.generation, manifest);
+      const binding = verifyReadingFirstPaperIdentity(priorPaper, language, original);
       const headings = readingHeadings(binding.regions.find(row => row.id === 'reading').text);
       const targets = sectionTitles[language];
       for (const { section_id } of [...map.steps, ...map.findings, argument.question, ...argument.claims, argument.conclusion]) {
@@ -219,10 +249,8 @@ export async function buildMapRefreshReview({ vaultRoot, runId, generation, pape
       }
       const priorAsset = registeredCanvases.find(row => row.language === language);
       const canvasPath = priorAsset?.path ?? `Figures/${paper.run_id}/research-map.${language}.canvas`;
-      const priorCanvas = priorAsset ? bytesAt(root, priorAsset.path) : null;
-      if (priorAsset && (sha(priorCanvas) !== priorAsset.sha256 || priorCanvas.length !== priorAsset.byte_length)) {
-        fail('P22_MAP_REFRESH_CANVAS_PREIMAGE_INVALID', { path: priorAsset.path });
-      }
+      const priorCanvas = priorAsset ? bytesAt(root, priorAsset.path, true) : null;
+      const layout = priorAsset ? new Map(parseRegisteredResearchMap(priorCanvas, canvasPath).nodes.map(node => [node.id, node])) : new Map();
       const edits = wording[language] ?? [];
       const note = priorAsset
         ? { bytes: applyMapWordingEdits(original, binding, { language, path: notePath, edits }), titleChanges: new Map() }
@@ -232,6 +260,10 @@ export async function buildMapRefreshReview({ vaultRoot, runId, generation, pape
       wordingEdits.push(...edits.map(edit => ({ paper_id: paperId, language, path: notePath, ...edit })));
       const currentTitles = Object.fromEntries(Object.entries(targets).map(([id, title]) => [id, titleChanges.get(title) ?? title]));
       const canvas = buildResearchMapCanvas({ paperId, map, argument, primaryFindingIds, language, notePath, sectionTitles: currentTitles });
+      for (const node of canvas.nodes) {
+        const previous = layout.get(node.id);
+        for (const property of geometryKeys) if (Number.isFinite(previous?.[property])) node[property] = previous[property];
+      }
       const canvasBytes = Buffer.from(serializeResearchMapCanvas(canvas));
       const asset = { kind: 'research-map-canvas', language, path: canvasPath, sha256: sha(canvasBytes), byte_length: canvasBytes.length };
       if (!priorCanvas?.equals(canvasBytes)) add(canvasPath, 'asset', canvasBytes, priorCanvas);
@@ -263,16 +295,18 @@ export async function buildMapRefreshReview({ vaultRoot, runId, generation, pape
     files.set(presentationPath, manifestBytes);
     changed.push({ readingFirst: next, notes });
     selected.push(paperId);
-    for (const { path } of manifest.targets.support) if (!files.has(path)) files.set(path, bytesAt(root, path));
+    for (const { path } of manifest.targets.support) {
+      if (!files.has(path)) files.set(path, bytesAt(root, path));
+      objects.get(path).sha256 = sha(files.get(path));
+    }
   }
   active.objects = [...objects.values()].sort((a, b) => a.path.localeCompare(b.path));
-  const built = buildBilingualIndex({ generation: active, validatedInputs: { papers: changed, previousSnapshot: base,
+  const built = buildBilingualIndex({ generation: active, validatedInputs: { papers: changed, previousPrepared: base,
     carryHistoricalDocuments: true, files: [...files].map(([path, bytes]) => ({ path, bytes })) } });
   const activeRow = add(paths.active, 'active', json(built.generation));
   const indexRow = add(paths.index, 'index', built.bytes);
   const written = new Set(output.map(row => row.path));
-  const readDependencies = base.generation.objects.filter(row => !written.has(row.path))
-    .map(({ path }) => reference(path, files.get(path) ?? bytesAt(root, path)));
+  const readDependencies = [...files].filter(([path]) => !written.has(path)).map(([path, bytes]) => reference(path, bytes));
   const scientificReviewHash = hash({ previous_generation: base.generation_id,
     papers: base.generation.papers.map(({ paper_id, core_hash, dependencies }) => ({ paper_id, core_hash, dependencies })) });
   const tools = toolHashes(), actual = base.evidence_mode === 'actual';
@@ -286,6 +320,7 @@ export async function buildMapRefreshReview({ vaultRoot, runId, generation, pape
     index: { path: indexRow.path, byte_sha256: indexRow.byte_sha256 }, active: { path: activeRow.path, byte_sha256: activeRow.byte_sha256 },
     write_set: output.map(({ bytes, ...row }) => row), maintenance: { operation: 'map-refresh', papers: selected }, diagnostics: [],
     provenance_limits: { scientific_review_scope: 'existing committed acceptance retained; research map display only', native_presentation: 'not_run',
+      ...(layoutEdits.length ? { node_geometry_edits: layoutEdits } : {}),
       ...(wordingEdits.length ? { note_wording_edits: wordingEdits } : {}) } };
   (await createPhase22ContractValidator()).assert('phase22/review-manifest-1.0', reviewManifest);
   add(`.apa-v3/phase22/generations/${generation}/manifest.json`, 'manifest', json(reviewManifest));

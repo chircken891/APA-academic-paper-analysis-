@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { approveReadingFirstPublicationQueue, drainReadingFirstPublicationQueue, prepareReadingFirstPublicationQueue,
+import { approveAndDrainReadingFirstPublicationQueue, drainReadingFirstPublicationQueue, prepareReadingFirstPublicationQueue,
   readReadingFirstPublicationQueue } from './reading-first-publication-queue.mjs';
 
 const commands = {
@@ -13,6 +13,11 @@ const commands = {
 const readJson = async path => JSON.parse(await readFile(resolve(path), 'utf8'));
 const emit = (stream, value) => new Promise((done, reject) => stream.write(JSON.stringify(value) + '\n', error => error ? reject(error) : done()));
 const fail = code => { throw Object.assign(new Error(code), { code }); };
+const progress = {
+  onPrepared: summary => emit(process.stderr, { event: 'publication-inventory', ...summary }),
+  onPublished: result => emit(process.stderr, { event: 'publication-committed', ...result }),
+  onWait: owner => emit(process.stderr, { event: 'publication-waiting', ...owner }),
+};
 
 async function main([command, ...args]) {
   if (!Object.hasOwn(commands, command)) fail('RF_QUEUE_CLI_COMMAND_REQUIRED');
@@ -21,15 +26,14 @@ async function main([command, ...args]) {
   for (const key of keys.filter(name => name !== 'evidence-mode')) if (!values[key]) fail('RF_QUEUE_CLI_ARGUMENT_REQUIRED:' + key);
   const vaultRoot = resolve(values['vault-root']);
   const evidenceMode = values['evidence-mode'];
-  if (command === 'prepare') return prepareReadingFirstPublicationQueue({ vaultRoot, evidenceMode, entries: await readJson(values.entries) });
+  if (command === 'prepare') return prepareReadingFirstPublicationQueue({ vaultRoot, evidenceMode,
+    entries: await readJson(values.entries), onWait: progress.onWait });
   if (command === 'approve') {
     const input = await readJson(values.proposal);
-    return approveReadingFirstPublicationQueue({ vaultRoot, proposal: input.proposal, expectedProposalSha256: values['proposal-sha256'],
+    return approveAndDrainReadingFirstPublicationQueue({ vaultRoot, proposal: input.proposal, expectedProposalSha256: values['proposal-sha256'], ...progress,
       authorization: { authorization_id: values['authorization-id'], user_reply: values['user-reply'] } });
   }
-  if (command === 'drain') return drainReadingFirstPublicationQueue({ vaultRoot, evidenceMode,
-    onPrepared: summary => emit(process.stderr, { event: 'publication-inventory', ...summary }),
-    onPublished: result => emit(process.stderr, { event: 'publication-committed', ...result }) });
+  if (command === 'drain') return drainReadingFirstPublicationQueue({ vaultRoot, evidenceMode, ...progress });
   const state = await readReadingFirstPublicationQueue({ vaultRoot });
   return { ok: true, queue_path: state.queue_path, entries: state.entries.map((row, index) => ({
     position: index + 1, run_id: row.run, status: row.status,

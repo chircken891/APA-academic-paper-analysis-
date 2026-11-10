@@ -178,6 +178,10 @@ await recordReadingEvent(session, {
 
 用户要求改候选时，登记 `{kind:'user-revision',request:{revision_id,request,repair_owner,scientific,target_entries,repair_scope}}`，renderer 修订另带 `affected_paths`。内部 `request` 字段保留原话；Controller 定位条目、选择 Writer、Editor 或 renderer，并记录是否涉及科学内容。角色继续使用原有受控产物。涉及科学内容的修改需要一次局部复核；现有任务绑定、调用余额和复核轮次均够用时直接修订，缺少任一项才申请续接批准。标题、措辞及呈现修改还须保留对应文本中的数字、常用单位、引用目标和图表编号，通过范围、链接和双语镜像检查后使用原审查。若这类修改需新增额度，在同一批准请求中给出零调用选项：获准发布已审稿后，在正式 Wiki 中人工编辑。用户选择此方案且尚未新增调用时，用 `{kind:'retain-reviewed-candidate',revision_id}` 保存该选择并回到已审候选。
 
+用户指定并经主会话对照原文确认的单点事实更正，可以使用发布入口的 `user_corrections` 零调用路径。每项记录候选路径、唯一匹配的 before／after、原文位置和用户原话，两语分别列出；在批准清单展示后随同一事务写入，原审查记录保持不变。该路径限于数值、符号、系数、单位或方向词；段落论证与导图、导航结构修改仍按上述责任角色修订和局部复核处理。受限完成状态本身不授予发布资格，仍使用正式追加额度和复核续接入口。
+
+新建角色、修订和补缺任务冻结 `dispatch_message_profile:'instruction-path-1.0'`，派发消息仅为指令文件路径。观察时对消息去除首尾空白后与冻结路径完全比较，其他结构化参数逐项保持一致；控制器在观察和接收结果时各核验一次指令文件指纹。`configured-reading-2.2` 指令包版本继续沿用。没有该行为字段的旧绑定按原消息协议校验；原句柄续接没有新独立指令文件，仍使用既有冻结续接消息及进度合同。
+
 ## 命令行会话与回执
 
 `npm run apa:session -- create --input <JSON文件> --export-dir <目录>` 创建会话；`next`、`resume` 和 `event` 使用 `--run-root <运行目录>` 恢复，`event` 用 `--input <JSON文件>` 读取事件。`--input -` 可从标准输入读取。`create`、`next` 和 `resume` 必须提供 `--export-dir`，在打开会话前检查；返回派发动作时，完整动作按身份写入该目录，已有同名内容冲突会报错。

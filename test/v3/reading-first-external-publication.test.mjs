@@ -131,10 +131,18 @@ test('external preparation registers, reloads and publishes only to a synthetic 
     assert.ok(snapshot.generation.objects.some(row => row.path === asset.path && row.kind === 'asset' && row.sha256 === asset.sha256));
   }
   const asset = f.args.candidate.generated_assets[0];
+  const edited = JSON.parse(asset.content);
+  edited.nodes[0].x += 1;
+  await writeFile(join(f.vaultRoot, asset.path), JSON.stringify(edited));
+  assert.equal((await readCommittedGeneration({ vaultRoot: f.vaultRoot })).ok, true);
+
   await writeFile(join(f.vaultRoot, asset.path), asset.content.replace('nodes', 'nOdes'));
   const corrupted = await readCommittedGeneration({ vaultRoot: f.vaultRoot });
   assert.equal(corrupted.ok, false);
-  assert.equal(corrupted.errors[0].code, 'P22_OBJECT_HASH_MISMATCH');
+  assert.deepEqual(corrupted.errors[0], {
+    code: 'RF_PUBLICATION_PRESENTATION_ASSET_INVALID',
+    details: { path: asset.path, reason: 'invalid-canvas' },
+  });
 });
 
 test('external preparation rejects changed generated Canvas bytes before registration', async t => {

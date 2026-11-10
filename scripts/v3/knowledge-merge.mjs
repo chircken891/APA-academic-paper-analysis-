@@ -9,7 +9,8 @@ import { assertActiveGeneration, assertActiveIndexContract, assertRegisteredComm
   KNOWLEDGE_ALIASES_PATH, normalizeIndexPath, parseRegisteredKnowledgeAliases, phase22GenerationPaths,
   PHASE22_COMMIT_PATH, readRegisteredCommit, verifyReadingFirstPresentation } from './phase22-active-version.mjs';
 import { readKnowledgeMergePreimages } from './phase22-publication.mjs';
-import { assertReadingFirstPublicationManifest } from './reading-first-index.mjs';
+import { assertReadingFirstPublicationManifest, registeredResearchMapPaths } from './reading-first-index.mjs';
+import { bindPublishedKnowledgeReferences, registeredKnowledgeReference } from './reading-first-knowledge.mjs';
 import { inspectManagedNote } from './phase22-managed-markdown.mjs';
 import { buildBilingualIndex } from './phase22-search.mjs';
 import { createPhase22ContractValidator } from './phase22-contract-loader.mjs';
@@ -42,7 +43,7 @@ function read(root, path, optional = false) {
 }
 
 function toolHashes() {
-  return Object.fromEntries(['./knowledge-merge.mjs', './phase22-active-version.mjs', './phase22-publication.mjs', './phase22-review.mjs',
+  return Object.fromEntries(['./knowledge-merge.mjs', './reading-first-knowledge.mjs', './phase22-active-version.mjs', './phase22-publication.mjs', './phase22-review.mjs',
     './phase22-search.mjs', './reading-first-index.mjs', './phase22-managed-markdown.mjs', '../../Schema/phase22/review-manifest.schema.json',
     '../../Schema/phase22/active-index.schema.json', '../../Schema/phase22/reading-first-publication.schema.json',
     '../../Schema/phase22/publication-transaction.schema.json'].map(path => [path, sha(readFileSync(new URL(path, import.meta.url)))]));
@@ -70,7 +71,9 @@ async function context({ repoRoot, runId, generationId }) {
   if (!base.ok) fail('P22_KNOWLEDGE_MERGE_COMMITTED_REQUIRED', { errors: base.errors });
   if (generationId === base.generation_id) fail('P22_GENERATION_NOT_NEW');
   const files = new Map(), observed = new Map();
+  const currentMaps = registeredResearchMapPaths(base.generation, path => read(root, path));
   for (const { path, kind, sha256 } of base.generation.objects) {
+    if (currentMaps.has(path)) continue;
     const bytes = read(root, path), row = reference(path, bytes);
     if (!path.startsWith('Wiki/') && row.byte_sha256 !== sha256) fail('P22_OBJECT_HASH_MISMATCH', { path });
     observed.set(path, row);
@@ -241,7 +244,7 @@ function rewriteNavigation(value, mapping) {
   return mapping.get(value) ?? value;
 }
 
-async function prepare(ctx, { desired, writes, mapping = new Map(), maintenance, extraDependencies = [], changedSupports = new Set() }) {
+async function prepare(ctx, { desired, writes, mapping = new Map(), maintenance, extraDependencies = [], changedSupports = new Set(), referenceDiagnostics = [] }) {
   const { root, base, runId, generationId } = ctx;
   const active = structuredClone(desired), output = [], previews = [], papers = [];
   delete active.index_manifest;
@@ -332,14 +335,14 @@ async function prepare(ctx, { desired, writes, mapping = new Map(), maintenance,
     previews, support_notes: active.shared_nodes, assets: [], read_dependencies: readDependencies,
     dependencies: { previous_generation: base.generation_id }, tools, index: { path: paths.index, byte_sha256: built.sha256 },
     active: { path: paths.active, byte_sha256: activeRow.byte_sha256 }, write_set: output.map(({ bytes, ...row }) => row), maintenance,
-    diagnostics: [], provenance_limits: { scientific_review_scope: 'existing scientific acceptance retained', native_presentation: 'not_run' } };
+    diagnostics: referenceDiagnostics, provenance_limits: { scientific_review_scope: 'existing scientific acceptance retained', native_presentation: 'not_run' } };
   (await createPhase22ContractValidator()).assert('phase22/review-manifest-1.0', reviewManifest);
   add(posix.join(posix.dirname(paths.active), 'manifest.json'), 'manifest', json(reviewManifest), {}, false);
   output.sort((a, b) => a.path.localeCompare(b.path));
   assertRegisteredCommit(base);
   const hashes = { scientific_review_hash: scientificReviewHash, review_bundle_hash: hash({ reviewManifest, outputs: inventoryStamp(output) }),
     output_inventory_hash: hash({ generation: generationId, output: inventoryStamp(output), read_dependencies: readDependencies }) };
-  const result = freezeReview({ ok: true, status: reviewManifest.status, reviewManifest, outputInventory: output, hashes, diagnostics: [] });
+  const result = freezeReview({ ok: true, status: reviewManifest.status, reviewManifest, outputInventory: output, hashes, diagnostics: referenceDiagnostics });
   records.set(result, { stamp: stamp(result), tools });
   return result;
 }
@@ -407,12 +410,23 @@ export async function buildKnowledgeMergeReview({ merges, copyRegisteredContent 
   }
   const aliasRows = uniqueRows([...prior.map(row => ({ ...row, target_path: mapping.get(row.target_path) ?? row.target_path })), ...proposedAliases])
     .sort((a, b) => a.alias.localeCompare(b.alias) || a.target_path.localeCompare(b.target_path));
+  const referenceRegistry = desired.shared_nodes.map(row => ({ ...row,
+    registered_aliases: aliasRows.filter(alias => alias.target_path === row.path).map(alias => alias.alias) }));
+  const resolveReference = (id, kind) => registeredKnowledgeReference(referenceRegistry, id, kind)?.entity_id;
+  const referenceDiagnostics = [];
+  for (const { keep_path: path } of selection) {
+    const bound = bindPublishedKnowledgeReferences(decode(writes.get(path)), {
+      reused: true, resolveCurrent: resolveReference, resolveHistorical: resolveReference, registeredPapers: new Set(papers.keys()),
+    });
+    writes.set(path, Buffer.from(bound.content));
+    for (const reference of bound.unresolved) referenceDiagnostics.push({ code: 'RF_KNOWLEDGE_REFERENCE_UNRESOLVED', path, details: { reference } });
+  }
   const aliasBytes = json({ schema_version: aliasVersion, aliases: aliasRows });
   desired.objects = desired.objects.filter(row => !mapping.has(row.path) && row.path !== KNOWLEDGE_ALIASES_PATH);
   desired.objects.push({ path: KNOWLEDGE_ALIASES_PATH, kind: aliasKind, sha256: sha(aliasBytes) });
   writes.set(KNOWLEDGE_ALIASES_PATH, aliasBytes);
   const changedSupports = new Set([...writes.keys()].filter(path => nodes.has(path)));
-  return prepare(ctx, { desired, writes, mapping, changedSupports,
+  return prepare(ctx, { desired, writes, mapping, changedSupports, referenceDiagnostics,
     maintenance: { operation: 'merge', merges: selection, retired: [...mapping.keys()].map(path => ctx.observed.get(path)) } });
 }
 

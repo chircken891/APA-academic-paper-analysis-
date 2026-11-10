@@ -2,9 +2,9 @@ import { createHash } from 'node:crypto';
 import { readFileSync, lstatSync, realpathSync } from 'node:fs';
 import { resolve, join, posix } from 'node:path';
 import { fingerprintV3Json as hash } from './semantic-package-validator.mjs';
-import { readCommittedGeneration, readRegisteredCommit, assertRegisteredCommit, assertActiveGeneration, phase22GenerationPaths } from './phase22-active-version.mjs';
+import { readRegisteredCommit, assertRegisteredCommit, assertActiveGeneration, phase22GenerationPaths } from './phase22-active-version.mjs';
 import { inspectManagedNote } from './phase22-managed-markdown.mjs';
-import { assertReadingFirstPublicationManifest, verifyReadingFirstPresentation } from './reading-first-index.mjs';
+import { assertReadingFirstPublicationManifest, parseRegisteredResearchMap, registeredResearchMapPaths, verifyReadingFirstPresentation } from './reading-first-index.mjs';
 import { buildBilingualIndex } from './phase22-search.mjs';
 import { createPhase22ContractValidator } from './phase22-contract-loader.mjs';
 
@@ -85,7 +85,7 @@ function relocateLinks(text, from, to, mapping, wikiDestination) {
 }
 
 export function relocateCanvasLinks(bytes, from, to, mapping, registeredPaths) {
-  const canvas = JSON.parse(bytes);
+  const canvas = parseRegisteredResearchMap(bytes, from);
   const wikiDestination = base => {
     let path;
     try { path = decodeURIComponent(base); } catch { return undefined; }
@@ -128,12 +128,12 @@ function assertFigureDestination(row, presentations) {
   fail('P22_RELOCATION_FIGURE_TARGET_INVALID', { from, to, owner_runs: [...runIds] });
 }
 
-function assetChanges(root, objects, files, mappings, retirements, presentations) {
+function assetChanges(root, objects, files, mappings, retirements, presentations, currentMaps) {
   const registered = new Map(objects.map(row => [pathKey(row.path), row]));
   const moves = new Map(), retired = new Map(), destinations = new Set();
   const boundAsset = (path, row) => {
     const bytes = files.get(path), registeredAsset = registered.get(pathKey(path));
-    if (registeredAsset?.kind !== 'asset' || registeredAsset.path !== path || registeredAsset.sha256 !== row.sha256
+    if (registeredAsset?.kind !== 'asset' || registeredAsset.path !== path || !currentMaps.has(path) && registeredAsset.sha256 !== row.sha256
       || !bytes || bytes.length !== row.byte_length || sha(bytes) !== row.sha256) fail('P22_RELOCATION_ASSET_INVALID', { path });
     return bytes;
   };
@@ -211,10 +211,10 @@ export async function buildNoteRelocationReview({ vaultRoot, runId, generation, 
   if (!vaultRoot || realpathSync(root) !== root || !lstatSync(root).isDirectory()
     || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/.test(runId ?? '')) fail('P22_RELOCATION_SCOPE_INVALID');
   if (![assetMappings, assetRetirements, restoreAssetRetirements].every(Array.isArray)) fail('P22_RELOCATION_ASSET_INVALID');
-  const currentContent = Boolean(assetMappings.length || assetRetirements.length || restoreAssetRetirements.length);
-  const base = await (currentContent ? readRegisteredCommit : readCommittedGeneration)({ vaultRoot: root });
+  const hasAssetChanges = Boolean(assetMappings.length || assetRetirements.length || restoreAssetRetirements.length);
+  const base = await readRegisteredCommit({ vaultRoot: root });
   if (!base.ok) fail('P22_RELOCATION_COMMITTED_REQUIRED', { errors: base.errors });
-  if (!Array.isArray(papers) || !papers.length && !currentContent || new Set(papers.map(row => row.paperId)).size !== papers.length) fail('P22_RELOCATION_PAPERS_REQUIRED');
+  if (!Array.isArray(papers) || !papers.length && !hasAssetChanges || new Set(papers.map(row => row.paperId)).size !== papers.length) fail('P22_RELOCATION_PAPERS_REQUIRED');
   const generationPaths = phase22GenerationPaths(generation);
   if (generation === base.generation_id) fail('P22_GENERATION_NOT_NEW');
   const mapping = new Map(), relocations = [];
@@ -222,18 +222,20 @@ export async function buildNoteRelocationReview({ vaultRoot, runId, generation, 
   const clippingMoves = new Map(assetMappings.filter(row => typeof row?.old_path === 'string' && row.old_path.startsWith('Clippings/')
     && typeof row.new_path === 'string' && row.new_path.startsWith('Clippings/'))
     .map(row => [row.old_path, row.new_path]));
+  const currentMaps = registeredResearchMapPaths(base.generation, path => bytesAt(root, path));
   const baseFiles = new Map(base.generation.objects.map(row => {
     const replacement = row.kind === 'asset' && clippingMoves.get(row.path);
-    let bytes = bytesAt(root, row.path, Boolean(replacement));
+    let bytes = bytesAt(root, row.path, Boolean(replacement) || currentMaps.has(row.path));
+    if (currentMaps.has(row.path)) parseRegisteredResearchMap(bytes, row.path);
     if (bytes === null) {
       bytes = bytesAt(root, replacement, true);
       if (bytes === null) fail('P22_RELOCATION_CLIPPINGS_ORIGINAL_REQUIRED', { path: replacement });
       missingSources.add(row.path);
     }
-    if (currentContent && !row.path.startsWith('Wiki/') && sha(bytes) !== row.sha256) fail('P22_RELOCATION_COMMITTED_REQUIRED', { path: row.path });
+    if (!row.path.startsWith('Wiki/') && !currentMaps.has(row.path) && sha(bytes) !== row.sha256) fail('P22_RELOCATION_COMMITTED_REQUIRED', { path: row.path });
     return [row.path, bytes];
   }));
-  if (currentContent) assertRegisteredCommit(base);
+  assertRegisteredCommit(base);
   const files = new Map(baseFiles);
   const active = structuredClone(base.generation);
   delete active.index_manifest;
@@ -244,7 +246,7 @@ export async function buildNoteRelocationReview({ vaultRoot, runId, generation, 
       : assertReadingFirstPublicationManifest(JSON.parse(bytes));
     return { object, manifest, paper };
   });
-  const { moves, retired } = assetChanges(root, active.objects, files, assetMappings, assetRetirements, manifests);
+  const { moves, retired } = assetChanges(root, active.objects, files, assetMappings, assetRetirements, manifests, currentMaps);
   const restore = new Map();
   for (const path of restoreAssetRetirements) {
     const records = manifests.flatMap(({ manifest }) => manifest.path_migration?.retired_assets?.filter(row => row.path === path) ?? []);
@@ -287,10 +289,17 @@ export async function buildNoteRelocationReview({ vaultRoot, runId, generation, 
     if (retired.size && relocateNoteLinks(text, from, from, retirementProbe) !== text) fail('P22_RELOCATION_ASSET_STILL_REFERENCED', { path: from });
     const bytes = Buffer.from(relocateNoteLinks(text, from, to, mapping));
     if (from === to && bytes.equals(original)) continue;
-    if (object.kind === 'v3-note' || object.kind === 'topic' && currentContent) {
-      const inspected = inspectManagedNote(bytes), previous = inspectManagedNote(original);
-      if (currentContent && (previous.humanRanges.length !== inspected.humanRanges.length
-        || previous.humanRanges.some((row, index) => !row.bytes.equals(inspected.humanRanges[index].bytes)))) {
+    if (object.kind === 'v3-note' || object.kind === 'topic') {
+      let previous, inspected;
+      try {
+        previous = inspectManagedNote(original);
+        inspected = inspectManagedNote(bytes);
+      } catch (error) {
+        error.details = { ...error.details, path: from };
+        throw error;
+      }
+      if (previous.humanRanges.length !== inspected.humanRanges.length
+        || previous.humanRanges.some((row, index) => !row.bytes.equals(inspected.humanRanges[index].bytes))) {
         fail('P22_RELOCATION_PERSONAL_LINK', { path: from });
       }
       const topic = active.topics?.find(row => row.path === from);
@@ -315,6 +324,7 @@ export async function buildNoteRelocationReview({ vaultRoot, runId, generation, 
     const original = files.get(from);
     const bytes = mapping.size && /\.canvas$/i.test(from) ? relocateCanvasLinks(original, from, to, mapping, registeredPaths) : original;
     const changed = !bytes.equals(original);
+    if (currentMaps.has(from)) object.sha256 = sha(bytes);
     if (!move && !changed) continue;
     if (move?.targetExists && !changed) files.set(to, bytes);
     else add(to, 'asset', bytes);
@@ -330,7 +340,6 @@ export async function buildNoteRelocationReview({ vaultRoot, runId, generation, 
   for (const row of restore.values()) active.objects.push({ path: row.path, kind: 'asset', sha256: row.sha256 });
   const transformedPapers = [], writtenNotes = new Set(previews.map(row => row.path));
   const assetsSeen = new Set();
-  const claimedPresentations = new Set(manifests.filter(row => row.paper).map(row => row.paper.paper_id));
   for (const { object, manifest, paper } of manifests) {
     const oldManifest = object.path;
     const affectedAssets = manifest.targets.assets.filter(path => moves.has(path) || retired.has(path) || rewrites.has(path));
@@ -353,7 +362,7 @@ export async function buildNoteRelocationReview({ vaultRoot, runId, generation, 
         if (paper) active.objects.find(row => row.path === notePath).sha256 = managedHash;
       }
       manifest.path_migration = { previous_generation: base.generation_id, previous_presentation_sha256: object.sha256,
-        path_mapping_fingerprint: hash(currentContent ? { mapping: [...mapping], retired: [...retired.values()], restored: [...restore.values()] } : [...mapping]),
+        path_mapping_fingerprint: hash(hasAssetChanges ? { mapping: [...mapping], retired: [...retired.values()], restored: [...restore.values()] } : [...mapping]),
         ...assetHistory(manifest, moves, retired, restore, rewrites) };
       manifest.targets.assets = manifest.targets.assets.filter(path => !retired.has(path)).map(path => mapping.get(path) ?? path);
       if (manifest.presentation_assets) manifest.presentation_assets = manifest.presentation_assets
@@ -372,19 +381,17 @@ export async function buildNoteRelocationReview({ vaultRoot, runId, generation, 
       if (paper) paper.reader_presentation = { path, sha256: sha(bytes) };
       files.delete(oldManifest);
     }
-    if (paper && (changed || !currentContent)) transformedPapers.push({ readingFirst: manifest,
+    if (paper && changed) transformedPapers.push({ readingFirst: manifest,
       notes: Object.fromEntries(languages.map(language => [language, files.get(paper.paths[language])])) });
   }
   if ([...moves.keys(), ...retired.keys()].some(path => !assetsSeen.has(path))) fail('P22_RELOCATION_ASSET_UNBOUND');
-  if (!currentContent && claimedPresentations.size !== active.papers.length) fail('P22_RELOCATION_PROFILE_UNSUPPORTED');
-  if (currentContent) for (const path of new Set(transformedPapers.flatMap(row => row.readingFirst.targets.support.map(node => node.path)))) {
+  for (const path of new Set(transformedPapers.flatMap(row => row.readingFirst.targets.support.map(node => node.path)))) {
     active.objects.find(row => row.path === path).sha256 = sha(files.get(path));
   }
   active.objects.sort((a, b) => a.path.localeCompare(b.path));
   assertActiveGeneration(active);
   const built = await buildBilingualIndex({ generation: active, validatedInputs: { papers: transformedPapers,
-    files: [...files].map(([path, bytes]) => ({ path, bytes })), ...(currentContent
-      ? { previousPrepared: base, carryHistoricalDocuments: true } : { previousSnapshot: base }) } });
+    files: [...files].map(([path, bytes]) => ({ path, bytes })), previousPrepared: base, carryHistoricalDocuments: true } });
   add(generationPaths.active, 'active', jsonBytes(built.generation));
   add(generationPaths.index, 'index', built.bytes);
   const written = new Set(output.map(row => row.path));
@@ -401,7 +408,7 @@ export async function buildNoteRelocationReview({ vaultRoot, runId, generation, 
     papers: base.generation.papers.map(({ paper_id, core_hash, dependencies }) => ({ paper_id, core_hash, dependencies })) });
   const reviewManifest = { schema_version: 'phase22/review-manifest-1.0', profile: NOTE_RELOCATION_PROFILE,
     identity: { paper_id: 'library-path-maintenance', run_id: runId,
-      analysis_revision: 'paths_' + hash(currentContent ? { relocations, assetRelocations, ...assetRetirementChanges } : relocations).slice(7, 39) },
+      analysis_revision: 'paths_' + hash(hasAssetChanges ? { relocations, assetRelocations, ...assetRetirementChanges } : relocations).slice(7, 39) },
     status: base.evidence_mode === 'actual' ? 'review_ready' : 'synthetic_prepared', evidence_mode: base.evidence_mode,
     review_ready: base.evidence_mode === 'actual', publishable: false, reading_accepted: true,
     native_presentation: { status: 'not_run' }, scientific_review_hash: scientificReviewHash,
@@ -410,7 +417,7 @@ export async function buildNoteRelocationReview({ vaultRoot, runId, generation, 
     index: { path: generationPaths.index, byte_sha256: built.sha256 },
     active: { path: generationPaths.active, byte_sha256: sha(jsonBytes(built.generation)) },
     write_set: output.map(({ bytes, ...row }) => row), relocations,
-    ...(currentContent ? { asset_relocations: assetRelocations, ...assetRetirementChanges } : {}),
+    ...(hasAssetChanges ? { asset_relocations: assetRelocations, ...assetRetirementChanges } : {}),
     diagnostics: [], provenance_limits: { scientific_review_scope: 'existing committed acceptance retained; deterministic paths and link targets only', native_presentation: 'not_run' } };
   (await createPhase22ContractValidator()).assert('phase22/review-manifest-1.0', reviewManifest);
   add('.apa-v3/phase22/generations/' + generation + '/manifest.json', 'manifest', jsonBytes(reviewManifest));
@@ -419,7 +426,7 @@ export async function buildNoteRelocationReview({ vaultRoot, runId, generation, 
     review_bundle_hash: hash({ reviewManifest, outputs: inventoryStamp(output), read_dependencies: readDependencies }),
     output_inventory_hash: hash({ generation, previous_generation: base.generation_id, output: inventoryStamp(output), read_dependencies: readDependencies }) };
   const result = freeze({ ok: true, status: reviewManifest.status, reviewManifest, outputInventory: output, hashes, diagnostics: [] });
-  records.set(result, { stamp: stamp(result), tools: toolBindings, currentContent });
+  records.set(result, { stamp: stamp(result), tools: toolBindings, currentContent: true });
   return result;
 }
 

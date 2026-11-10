@@ -5,8 +5,9 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual as same } from 'node:util';
 import { normalizeIndexPath, readRegisteredCommit } from './phase22-active-version.mjs';
 import { projectReadingFirstPublicationQueue } from './reading-first-publication.mjs';
-import { inspectReadingFirstQueueCandidate, publishReadingFirstCandidate, recoverRegisteredReadingFirstPublication } from './reading-first-publish.mjs';
-import { withReadingRuntimeConsumer } from './reading-runtime-cleanup.mjs';
+import { inspectReadingFirstQueueCandidate, persistReadingFirstQueueApproval, publishReadingFirstCandidate, recoverRegisteredReadingFirstPublication } from './reading-first-publish.mjs';
+import { createReadingLockWait, withReadingRuntimeConsumer } from './reading-runtime-cleanup.mjs';
+import { readBilingualPublicationLock } from './phase22-publication.mjs';
 import { captureCompletedReadingSessionPublicationSource } from './reading-session.mjs';
 import { readReadingSessionExecution } from './reading-session-cli.mjs';
 
@@ -50,12 +51,14 @@ async function queueLocation(root, { create = false } = {}) {
 }
 
 function entryInput(row) {
-  const { run, runRoot, generation, resources, presentationAssetRegistrations } = row ?? {};
+  const { run, runRoot, generation, resources, presentationAssetRegistrations, user_corrections } = row ?? {};
   if (!identifier(run) || !isAbsolute(runRoot ?? '') || resolve(runRoot) !== runRoot
     || generation !== undefined && !identifier(generation) || !Array.isArray(resources)
-    || presentationAssetRegistrations !== undefined && !Array.isArray(presentationAssetRegistrations)) fail('RF_QUEUE_ENTRY_INVALID', { run });
+    || presentationAssetRegistrations !== undefined && !Array.isArray(presentationAssetRegistrations)
+    || user_corrections !== undefined && !Array.isArray(user_corrections)) fail('RF_QUEUE_ENTRY_INVALID', { run });
   return { run, runRoot, resources, ...(generation === undefined ? {} : { generation }),
-    ...(presentationAssetRegistrations === undefined ? {} : { presentationAssetRegistrations }) };
+    ...(presentationAssetRegistrations === undefined ? {} : { presentationAssetRegistrations }),
+    ...(user_corrections === undefined ? {} : { user_corrections }) };
 }
 
 function validateProposal(proposal, root) {
@@ -65,11 +68,12 @@ function validateProposal(proposal, root) {
   }
   const runs = new Set(), papers = new Set(), generations = new Set();
   for (const { input, original } of proposal.entries) {
-    const { run } = entryInput(input);
+    const { run, user_corrections } = entryInput(input);
     const { summary, original_source: source } = original ?? {};
     const paths = new Set();
     if (runs.has(run) || typeof original?.paper_id !== 'string' || papers.has(original.paper_id)
-      || summary?.run_id !== run || !identifier(summary.generation) || generations.has(summary.generation)
+      || summary?.run_id !== run || !same(summary.user_corrections ?? [], user_corrections ?? [])
+      || !identifier(summary.generation) || generations.has(summary.generation)
       || !digest(summary.hashes?.review_hash) || !digest(summary.hashes?.output_inventory_hash)
       || !digest(source?.recipe_fingerprint) || !digest(source?.candidate_fingerprint) || !digest(source?.reading_review_fingerprint)
       || !Array.isArray(summary.files) || !summary.files.length || summary.files.some(row => {
@@ -149,12 +153,25 @@ async function writeState(directory, state) {
   }
 }
 
-async function lockedQueue(root, callback) {
+async function lockedQueue(root, onWait, callback) {
   const directory = await queueLocation(root, { create: true });
-  return withReadingRuntimeConsumer({ repoRoot: root, runId: 'publication-queue', runRoot: directory }, async () => {
+  return withReadingRuntimeConsumer({ repoRoot: root, runId: 'publication-queue', runRoot: directory, onWait }, async () => {
     const state = await readState(root, directory);
     return callback(state, () => writeState(directory, state));
   });
+}
+
+async function waitForPublication(root, wait, recoverTransactionId) {
+  for (;;) {
+    const owner = await readBilingualPublicationLock(root);
+    if (!owner) return;
+    const { live, ...identity } = owner;
+    if (!live) {
+      if (owner.transaction_id === recoverTransactionId) return;
+      fail('P22_VAULT_LOCKED', { ...identity, stale: true });
+    }
+    await wait({ lock: 'publication', ...identity });
+  }
 }
 
 function captureFor(evidenceMode, captureSource) {
@@ -163,9 +180,10 @@ function captureFor(evidenceMode, captureSource) {
 }
 
 /** Prepare exact inventories against current committed bytes and advisory inventories against preceding projected writes. */
-export async function prepareReadingFirstPublicationQueue({ vaultRoot, entries, evidenceMode = 'actual', captureSource } = {}) {
+export async function prepareReadingFirstPublicationQueue({ vaultRoot, entries, evidenceMode = 'actual', captureSource, onWait = () => {} } = {}) {
   const root = await rootFor(vaultRoot, evidenceMode), capture = captureFor(evidenceMode, captureSource);
   if (!Array.isArray(entries) || !entries.length) fail('RF_QUEUE_PROPOSAL_INVALID');
+  await waitForPublication(root, createReadingLockWait(onWait));
   const rows = [], requests = [];
   for (const input of entries.map(entryInput)) {
     const { run, runRoot, ...request } = input;
@@ -186,29 +204,45 @@ export async function prepareReadingFirstPublicationQueue({ vaultRoot, entries, 
 }
 
 /** Append the approved order, or replace only the waiting head with a newly approved exact proposal. */
-export async function approveReadingFirstPublicationQueue({ vaultRoot, proposal, expectedProposalSha256, authorization } = {}) {
+async function approveQueue({ vaultRoot, proposal, expectedProposalSha256, authorization, onWait = () => {} }, consume) {
   const root = await rootFor(vaultRoot, proposal?.evidence_mode);
   if (!digest(expectedProposalSha256) || sha(proposal) !== expectedProposalSha256) fail('RF_QUEUE_PROPOSAL_CHANGED');
   validateProposal(proposal, root);
   validateAuthorization(authorization, proposal.entries.length);
-  return lockedQueue(root, async (state, save) => {
-    if (state.approvals.some(row => row.authorization.authorization_id === authorization.authorization_id)) fail('RF_QUEUE_AUTHORIZATION_REUSED');
+  const approved = { proposal: structuredClone(proposal), proposal_sha256: expectedProposalSha256,
+    authorization: { authorization_id: authorization.authorization_id, user_reply: authorization.user_reply } };
+  const { entries } = approved.proposal, authorizationId = approved.authorization.authorization_id;
+  const persist = () => Promise.all(entries.map(({ input }) => persistReadingFirstQueueApproval(root, input.run, approved)));
+  const approval_request_paths = await persist();
+  return lockedQueue(root, onWait, async (state, save) => {
+    await persist();
+    if (state.approvals.some(row => row.authorization.authorization_id === authorizationId)) fail('RF_QUEUE_AUTHORIZATION_REUSED');
     const head = state.entries.find(row => row.status !== 'published');
-    const replaced = proposal.entries.length === 1 && head?.status === 'awaiting_reapproval' && head.run === proposal.entries[0].input.run;
-    if (!replaced && proposal.entries.some(({ input }) => state.entries.some(row => row.run === input.run))) fail('RF_QUEUE_RUN_ALREADY_ENQUEUED');
-    const record = { proposal: structuredClone(proposal), proposal_sha256: expectedProposalSha256,
-      authorization: { authorization_id: authorization.authorization_id, user_reply: authorization.user_reply },
-      approved_at: new Date().toISOString() };
+    const replaced = entries.length === 1 && head?.status === 'awaiting_reapproval' && head.run === entries[0].input.run;
+    if (!replaced && entries.some(({ input }) => state.entries.some(row => row.run === input.run))) fail('RF_QUEUE_RUN_ALREADY_ENQUEUED');
+    const record = { ...approved, approved_at: new Date().toISOString() };
     state.approvals.push(record);
     const approvalSha256 = sha(record);
-    for (const { input: { run } } of proposal.entries) {
-      const row = { run, status: 'queued', authorization_id: authorization.authorization_id, approval_sha256: approvalSha256 };
+    for (const { input: { run } } of entries) {
+      const row = { run, status: 'queued', authorization_id: authorizationId, approval_sha256: approvalSha256 };
       if (replaced) state.entries[state.entries.indexOf(head)] = row;
       else state.entries.push(row);
     }
     await save();
-    return { ok: true, status: 'queued', proposal_sha256: expectedProposalSha256, runs: proposal.entries.map(row => row.input.run) };
+    if (consume) return { ...await consume(root, state, save), approval_request_paths };
+    return { ok: true, status: 'queued', proposal_sha256: expectedProposalSha256, runs: entries.map(row => row.input.run), approval_request_paths };
   });
+}
+
+export async function approveReadingFirstPublicationQueue(options = {}) {
+  return approveQueue(options);
+}
+
+/** Record approval before waiting, then enqueue and consume under the same lock. */
+export async function approveAndDrainReadingFirstPublicationQueue(options = {}) {
+  return approveQueue(options, (root, state, save) => drainQueue(root, state, save, {
+    ...options, evidenceMode: options.proposal.evidence_mode,
+  }));
 }
 
 /** Read the queue without reconstructing a candidate, modifying a lock or opening any paper body. */
@@ -223,27 +257,34 @@ function stop(row, status, error, published) {
 }
 
 /** Run the durable head through the one-step publisher. The next row starts only after the current result is stored. */
-export async function drainReadingFirstPublicationQueue({ vaultRoot, evidenceMode = 'actual', captureSource,
-  onPrepared = () => {}, onPublished = () => {} } = {}) {
-  const root = await rootFor(vaultRoot, evidenceMode), capture = captureFor(evidenceMode, captureSource);
-  return lockedQueue(root, async (state, save) => {
-    const published = [];
-    const report = async (row, result) => {
-      row.status = 'published';
-      row.result = result;
-      delete row.error;
-      await save();
-      const item = { run_id: row.run, ...result };
-      published.push(item);
-      await onPublished(structuredClone(item));
-    };
-    for (const row of state.entries) {
-      if (row.status === 'published') continue;
-      if (row.status === 'awaiting_reapproval') return stop(row, row.status, row.error, published);
-      const approval = state.approvals.find(item => item.authorization.authorization_id === row.authorization_id);
-      if (approval.proposal.evidence_mode !== evidenceMode) fail('RF_QUEUE_SCOPE_INVALID');
-      const { input, original } = approval.proposal.entries.find(item => item.input.run === row.run);
-      const { run, runRoot, ...request } = input;
+export async function drainReadingFirstPublicationQueue({ vaultRoot, evidenceMode = 'actual', onWait = () => {}, ...options } = {}) {
+  const root = await rootFor(vaultRoot, evidenceMode);
+  return lockedQueue(root, onWait, (state, save) => drainQueue(root, state, save, { ...options, evidenceMode, onWait }));
+}
+
+async function drainQueue(root, state, save, { evidenceMode, captureSource, onWait = () => {},
+  onPrepared = () => {}, onPublished = () => {} }) {
+  const capture = captureFor(evidenceMode, captureSource), wait = createReadingLockWait(onWait);
+  const published = [];
+  const report = async (row, result) => {
+    row.status = 'published';
+    row.result = result;
+    delete row.error;
+    await save();
+    const item = { run_id: row.run, ...result };
+    published.push(item);
+    await onPublished(structuredClone(item));
+  };
+  for (const row of state.entries) {
+    if (row.status === 'published') continue;
+    if (row.status === 'awaiting_reapproval') return stop(row, row.status, row.error, published);
+    const approval = state.approvals.find(item => item.authorization.authorization_id === row.authorization_id);
+    if (approval.proposal.evidence_mode !== evidenceMode) fail('RF_QUEUE_SCOPE_INVALID');
+    const { input, original } = approval.proposal.entries.find(item => item.input.run === row.run);
+    const { run, runRoot, ...request } = input;
+    for (;;) {
+      try { await waitForPublication(root, wait, row.attempt?.registration.transaction_id); }
+      catch (error) { return stop(row, 'recovery_required', error, published); }
       if (row.attempt) {
         let recovery;
         try {
@@ -252,8 +293,16 @@ export async function drainReadingFirstPublicationQueue({ vaultRoot, evidenceMod
               if (captureSource) return undefined;
               return readReadingSessionExecution(runRoot);
             } });
-        } catch (error) { return stop(row, 'recovery_required', error, published); }
-        if (recovery.status === 'committed') { await report(row, recovery); continue; }
+        } catch (error) {
+          if (error.code === 'P22_VAULT_LOCKED') {
+            let owner;
+            try { owner = await readBilingualPublicationLock(root); }
+            catch (cause) { return stop(row, 'recovery_required', cause, published); }
+            if (!owner || owner.live) continue;
+          }
+          return stop(row, 'recovery_required', error, published);
+        }
+        if (recovery.status === 'committed') { await report(row, recovery); break; }
         if (recovery.status !== 'rolled_back') return stop(row, 'recovery_required', { code: recovery.status, details: recovery }, published);
         (row.recovered_attempts ??= []).push({ ...row.attempt, recovery });
         delete row.attempt;
@@ -281,12 +330,30 @@ export async function drainReadingFirstPublicationQueue({ vaultRoot, evidenceMod
         if (row.attempt) return stop(row, 'recovery_required', error, published);
         result = { status: 'awaiting_reapproval', error: { code: error.code ?? error.message, details: error.details } };
       }
-      if (result.status === 'committed') { await report(row, result); continue; }
+      if (result.status === 'committed') { await report(row, result); break; }
+      if (result.error?.code === 'P22_VAULT_LOCKED') {
+        let owner;
+        try { owner = await readBilingualPublicationLock(root); }
+        catch (error) { return stop(row, 'recovery_required', error, published); }
+        if (owner && !owner.live) return stop(row, 'recovery_required', {
+          code: 'P22_VAULT_LOCKED', details: owner,
+        }, published);
+        if (row.attempt) {
+          // The low-level writer acquires its lock before opening a journal.
+          (row.deferred_attempts ??= []).push({ ...row.attempt, error: result.error });
+          delete row.attempt;
+          row.retry_generation = 'rf-queue-' + randomUUID();
+        }
+        row.status = 'queued';
+        await save();
+        if (owner) await wait({ lock: 'publication', transaction_id: owner.transaction_id, pid: owner.pid });
+        continue;
+      }
       row.error = result.error;
       if (!row.attempt) row.status = 'awaiting_reapproval';
       await save();
       return { ...stop(row, row.attempt ? 'recovery_required' : row.status, row.error, published), result };
     }
-    return { ok: true, status: 'complete', published };
-  });
+  }
+  return { ok: true, status: 'complete', published };
 }

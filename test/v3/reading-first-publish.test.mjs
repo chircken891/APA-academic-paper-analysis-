@@ -4,7 +4,8 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { publishReadingFirstCandidate } from '../../scripts/v3/reading-first-publish.mjs';
-import { applyBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
+import { applyBilingualPublication, getBilingualPublicationTrustAnchor, loadBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
+import { approveAndDrainReadingFirstPublicationQueue, prepareReadingFirstPublicationQueue } from '../../scripts/v3/reading-first-publication-queue.mjs';
 import { inspectManagedNote } from '../../scripts/v3/phase22-managed-markdown.mjs';
 import { prepareReadingFirstPublication } from '../../scripts/v3/reading-first-publication.mjs';
 import { captureReadingFirstPublicationSource } from '../../scripts/v3/reading-first-runtime.mjs';
@@ -36,6 +37,40 @@ async function write(path, bytes) {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, bytes);
 }
+
+test('精确用户更正写入两语候选对应正文，原复核字节保持不变', async t => {
+  const f = await readingFirstPublicationFixture(t, { register: false, findingText: 'The reported P value is 0.03.' });
+  const before = 'P value is 0.03. ^rf-findings', after = 'P value is 0.04. ^rf-findings';
+  const user_corrections = f.candidate.notes.map(({ path }) => ({ path, before, after,
+    source_location: 'Figure 2B, PDF page 5', user_reply: '图 2B 的 P 值改成 0.04，两份笔记同步。' }));
+  const reviewPath = join(f.artifactRoot, f.reviewReceipt.path), originalReview = await readFile(reviewPath);
+  const invalid = [
+    [{ ...user_corrections[0], before: 'P value is 0.03', after: 'P value is 0.04' }, 'RF_PUBLICATION_USER_CORRECTION_NOT_UNIQUE'],
+    [{ ...user_corrections[0], after: 'The group comparison supports an incremental benefit. ^rf-findings' }, 'RF_PUBLICATION_USER_CORRECTION_SCOPE'],
+  ];
+  for (const [row, code] of invalid) {
+    await assert.rejects(prepareReadingFirstPublication({ ...parameters(f), user_corrections: [row] }), { code });
+  }
+  const queue = { vaultRoot: f.vaultRoot, evidenceMode: 'synthetic', captureSource: () => f.source };
+  const { proposal, proposal_sha256 } = await prepareReadingFirstPublicationQueue({ ...queue,
+    entries: [{ run: f.runId, runRoot: f.artifactRoot, resources: f.resources, user_corrections }] });
+  assert.deepEqual(proposal.entries[0].original.summary.user_corrections, user_corrections);
+  let shown;
+  const approved = await approveAndDrainReadingFirstPublicationQueue({ ...queue, proposal, expectedProposalSha256: proposal_sha256,
+    authorization: approval, onPrepared: summary => { shown = summary; } });
+  assert.equal(approved.status, 'complete', JSON.stringify(approved.error));
+  const result = approved.published[0];
+  assert.equal(result.status, 'committed', JSON.stringify(result.error));
+  assert.deepEqual(shown.user_corrections, user_corrections);
+  assert.deepEqual((await readJson(result.inventory_path)).user_corrections, user_corrections);
+  for (const note of f.candidate.notes) {
+    assert.equal(await readFile(join(f.vaultRoot, note.path), 'utf8'), note.content.replace(before, after));
+  }
+  assert.deepEqual(await readFile(reviewPath), originalReview);
+  const loaded = await loadBilingualPublication({ vaultRoot: f.vaultRoot, run: f.runId, requireApproval: true,
+    trustAnchor: getBilingualPublicationTrustAnchor({ vaultRoot: f.vaultRoot, run: f.runId }) });
+  assert.deepEqual(loaded.reviewManifest.provenance_limits.user_corrections, user_corrections);
+});
 
 test('一步发布先展示精确清单，再绑定原话、15 分钟窗口和提交结果', async t => {
   const fixture = await readingFirstPublicationFixture(t, { register: false });

@@ -112,6 +112,11 @@
           "type": "string",
           "minLength": 1,
           "pattern": "\\S"
+        },
+        "max_concurrent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
         }
       }
     },

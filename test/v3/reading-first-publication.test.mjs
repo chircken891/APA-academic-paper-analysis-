@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, rm, readFile, writeFile, lstat, readdir } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { spawnSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { reviewedReadingFirstFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
 import { buildBilingualReview } from '../../scripts/v3/phase22-review.mjs';
@@ -366,6 +367,52 @@ async function currentPolicyNextPaper(t, change) {
   const prepare = () => prepareReadingFirstPublication({ source, vaultRoot: f.vaultRoot, generation: 'after-object-change', evidenceMode: 'synthetic', resources: g.resources });
   return Object.assign(prepare, { g, vaultRoot: f.vaultRoot });
 }
+
+for (const mode of ['layout', 'missing', 'invalid']) test('later publication observes current research maps without coupling unrelated papers: ' + mode, async t => {
+  let mapPath, expected;
+  const prepare = await currentPolicyNextPaper(t, async (f, objects) => {
+    const map = objects.find(row => row.path.endsWith('research-map.en.canvas'));
+    mapPath = map.path;
+    const path = join(f.vaultRoot, map.path);
+    if (mode === 'missing') await rm(path);
+    else if (mode === 'invalid') await writeFile(path, 'not JSON');
+    else {
+      const canvas = JSON.parse(await readFile(path));
+      canvas.nodes[0].x += 75;
+      for (const edge of canvas.edges) if (edge.toEnd === 'arrow') delete edge.toEnd;
+      const current = Buffer.from(JSON.stringify(canvas));
+      await writeFile(path, current);
+      expected = 'sha256:' + createHash('sha256').update(current).digest('hex');
+      const snapshot = await readCommittedGeneration({ vaultRoot: f.vaultRoot });
+      assert.equal(snapshot.ok, true, JSON.stringify(snapshot.errors));
+    }
+    expected ??= map.sha256;
+  });
+  const prepared = await prepare();
+  const { vaultRoot, g } = prepare;
+  const authority = await readingFirstPublicationAuthority({ ...g, vaultRoot }, prepared.plan);
+  await registerBilingualPublication({ vaultRoot, run: g.runId, plan: prepared.plan, sourceInputs: prepared.sourceInputs, ...authority });
+  const transaction = await applyBilingualPublication({ vaultRoot, run: g.runId, plan: prepared.plan, ...authority });
+  assert.equal(transaction.status, 'committed');
+  const { readRegisteredCommit, readRegisteredObject } = await import('../../scripts/v3/phase22-active-version.mjs');
+  const snapshot = await readRegisteredCommit({ vaultRoot });
+  assert.equal(snapshot.generation.objects.find(row => row.path === mapPath).sha256, expected);
+  if (mode === 'layout') {
+    assert.equal(readRegisteredObject(snapshot, mapPath).sha256, expected);
+    const { checkCommittedIndex } = await import('../../scripts/check-bm25-index.mjs');
+    const { queryLibrary } = await import('../../scripts/v3/library-query.mjs');
+    const { inspectV3Graph } = await import('../../scripts/v3/obsidian-graph.mjs');
+    assert.equal((await checkCommittedIndex(vaultRoot)).ok, true);
+    assert.equal((await queryLibrary({ vaultRoot, query: 'Synthetic publication study' })).ok, true);
+    assert.equal((await inspectV3Graph({ vaultRoot, checkConfiguration: false })).ok, true);
+  } else {
+    assert.throws(() => readRegisteredObject(snapshot, mapPath), error => {
+      assert.equal(error.code, mode === 'missing' ? 'RF_PUBLICATION_PRESENTATION_ASSET_MISSING' : 'RF_PUBLICATION_PRESENTATION_ASSET_INVALID');
+      assert.equal(error.details.path, mapPath);
+      return true;
+    });
+  }
+});
 
 test('current policy rejects drift in a registered non-Wiki object', async t => {
   const prepare = await currentPolicyNextPaper(t, async (f, objects) => {

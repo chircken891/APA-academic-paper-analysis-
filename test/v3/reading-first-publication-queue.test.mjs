@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { lstat, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { applyBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
+import { hostname } from 'node:os';
+import { applyBilingualPublication, inspectBilingualPublicationRecovery } from '../../scripts/v3/phase22-publication.mjs';
+import { fingerprintV3Json } from '../../scripts/v3/semantic-package-validator.mjs';
 import { PHASE22_COMMIT_PATH, readRegisteredCommit } from '../../scripts/v3/phase22-active-version.mjs';
 import { approveReadingFirstPublicationQueue, drainReadingFirstPublicationQueue, prepareReadingFirstPublicationQueue,
   readReadingFirstPublicationQueue } from '../../scripts/v3/reading-first-publication-queue.mjs';
@@ -18,8 +22,18 @@ import { reviewedReadingFirstFixture } from './helpers/reading-first-publication
 
 const readJson = async path => JSON.parse(await readFile(path, 'utf8'));
 
-async function fixture(t, count = 3, { sharedAsset = false, renamedNode = false, nearNode = false } = {}) {
-  const first = await readingFirstPublicationFixture(t, { register: false });
+async function fixture(t, count = 3, { sharedAsset = false, renamedNode = false, nearNode = false, crossReference = false } = {}) {
+  const placements = crossReference ? { knowledgePlacementIds: ['method', 'secondary'] } : {};
+  let first = await readingFirstPublicationFixture(t, { register: false });
+  if (crossReference) {
+    const presentation = structuredClone(first.presentationCatalog);
+    const companion = { ...structuredClone(presentation.knowledge[0]), id: 'secondary', canonical_key: 'secondary',
+      title: { en: 'Independent secondary concept', 'zh-CN': '合成互引术语' }, aliases: [],
+      paragraphs: { en: ['An independent concept.'], 'zh-CN': ['独立概念。'] } };
+    presentation.knowledge.push(companion);
+    first = await readingFirstPublicationFixture(t, { register: false, presentation, vaultRoot: first.vaultRoot,
+      currentRegistryRoot: first.vaultRoot, ...placements });
+  }
   const entries = [], sources = new Map(), papers = [first];
   for (const [index, id] of ['a', 'b', 'c'].slice(0, count).entries()) {
     const presentation = structuredClone(first.presentationCatalog);
@@ -40,7 +54,11 @@ async function fixture(t, count = 3, { sharedAsset = false, renamedNode = false,
     }
     presentation.knowledge[0].paragraphs.en.push('Independent addition for paper ' + id + '.');
     presentation.knowledge[0].paragraphs['zh-CN'].push('论文 ' + id + ' 的独立补充。');
-    if (index > 0) papers.push(await reviewedReadingFirstFixture(t, { currentRegistryRoot: first.vaultRoot, presentation,
+    if (crossReference && index === 1) {
+      presentation.knowledge[0].paragraphs.en.push('Apply [the secondary concept](apa-knowledge:secondary) to this comparison.');
+      presentation.knowledge[0].paragraphs['zh-CN'].push('将[次级概念](apa-knowledge:secondary)应用于此比较。');
+    }
+    if (index > 0) papers.push(await reviewedReadingFirstFixture(t, { currentRegistryRoot: first.vaultRoot, presentation, ...placements,
       runId: 'run_' + id.repeat(32), paperId: 'pap_' + id.repeat(32),
       sourceText: 'Independent source for paper ' + id + '.' }));
     const paper = papers[index];
@@ -50,6 +68,24 @@ async function fixture(t, count = 3, { sharedAsset = false, renamedNode = false,
   const options = { vaultRoot: first.vaultRoot, evidenceMode: 'synthetic', captureSource: async ({ run }) => sources.get(run) };
   return { ...options, entries, papers, options };
 }
+
+for (const order of ['012', '021', '102', '120', '201', '210']) test('共享互引可按任意候选顺序投影并提交 ' + order, async t => {
+  const f = await fixture(t, 3, { crossReference: true });
+  f.entries = [...order].map(index => f.entries[Number(index)]);
+  const proposal = await approve(f);
+  assert.ok(proposal.entries.every(row => row.projected.status === 'projected_dry_run'));
+  const result = await drainReadingFirstPublicationQueue(f.options);
+  assert.equal(result.status, 'complete', JSON.stringify(result.error));
+  const { generation } = await readRegisteredCommit(f.options);
+  const main = generation.shared_nodes.find(row => row.path === f.papers[0].candidate.supportNotes[0].path);
+  const companion = generation.shared_nodes.find(row => row.path === f.papers[0].candidate.supportNotes[1].path);
+  assert.equal(generation.shared_nodes.length, 2);
+  const output = await readFile(join(f.vaultRoot, main.path), 'utf8');
+  const state = JSON.parse(Buffer.from(/<!-- KNOWLEDGE_STATE ([A-Za-z0-9+/=]+) -->/.exec(output)[1], 'base64'));
+  assert.match(JSON.stringify(state.item), new RegExp('apa-entity:' + companion.entity_id));
+  assert.doesNotMatch(JSON.stringify(state.item), /apa-knowledge:secondary/);
+  assert.ok(output.includes(encodeURIComponent(basename(companion.path)) + '#English'));
+});
 
 async function approve(f, authorizationId = 'fixture-queue-approval') {
   const { proposal, proposal_sha256 } = await prepareReadingFirstPublicationQueue({ ...f.options, entries: f.entries });
@@ -185,11 +221,18 @@ test('登记后未开始写入的尝试经原事务恢复，队首换代重试�
     if (summary.generation === 'queue-paper-b') await writeFile(lock, JSON.stringify({ transaction_id: 'synthetic-held-lock' }), { flag: 'wx' });
   } });
   assert.equal(stopped.status, 'recovery_required', JSON.stringify(stopped.error));
-  assert.equal(stopped.error.code, 'P22_VAULT_LOCKED');
+  assert.equal(stopped.error.code, 'P22_VAULT_LOCK_UNKNOWN_OWNER');
   const state = await readReadingFirstPublicationQueue(f.options);
   assert.equal(state.entries[1].status, 'applying');
-  const attemptId = state.entries[1].attempt.registration.transaction_id;
+  const { transaction_id: attemptId, trust_anchor: trustAnchor } = state.entries[1].attempt.registration;
+  const { authority } = await inspectBilingualPublicationRecovery({ vaultRoot: f.vaultRoot, run: state.entries[1].run,
+    transactionId: attemptId, trustAnchor });
   await unlink(lock);
+  const exited = spawn(process.execPath, ['-e', '']);
+  const pid = exited.pid;
+  assert.equal((await once(exited, 'exit'))[0], 0);
+  await writeFile(lock, JSON.stringify({ version: 1, pid, host: hostname(), transaction_id: attemptId,
+    token: randomUUID(), authority_hash: fingerprintV3Json(authority) }), { flag: 'wx' });
   const start = Date.now();
   t.mock.method(Date, 'now', () => start + 16 * 60_000);
   const resumed = await drainReadingFirstPublicationQueue(f.options);
@@ -202,6 +245,36 @@ test('登记后未开始写入的尝试经原事务恢复，队首换代重试�
   const renewal = await readJson(final.entries[1].recovered_attempts[0].recovery.recovery_window_record);
   assert.equal(renewal.recovery.transaction_id, attemptId);
   assert.equal(Date.parse(renewal.ends_at) - Date.parse(renewal.starts_at), 15 * 60_000);
+});
+
+for (const timing of ['准备前', '应用前']) test('存活发布锁释放后队列自动继续，且维护窗口从等待结束后计算 ' + timing, async t => {
+  const f = await fixture(t, 1);
+  await approve(f);
+  const lock = join(f.vaultRoot, '.apa-v3', 'phase22', 'publication.lock');
+  await mkdir(dirname(lock), { recursive: true });
+  const transaction_id = 'synthetic-live-holder';
+  const hold = () => writeFile(lock, JSON.stringify({ version: 1, pid: process.pid, host: hostname(), transaction_id,
+    token: randomUUID(), authority_hash: 'sha256:' + '0'.repeat(64) }), { flag: 'wx' });
+  if (timing === '准备前') await hold();
+  let releasedAt, calls = 0;
+  const result = await drainReadingFirstPublicationQueue({ ...f.options,
+    onPrepared: () => timing === '应用前' && calls === 0 && hold(), onWait: async event => {
+    assert.equal(event.lock, 'publication');
+    assert.equal(event.transaction_id, transaction_id);
+    assert.equal(event.pid, process.pid);
+    assert.equal((await readReadingFirstPublicationQueue(f.options)).entries[0].status, 'queued');
+    calls++;
+    await unlink(lock);
+    releasedAt = Date.now();
+  } });
+  assert.equal(result.status, 'complete', JSON.stringify(result.error));
+  assert.equal(calls, 1);
+  const state = await readReadingFirstPublicationQueue(f.options);
+  assert.equal(state.entries[0].status, 'published');
+  assert.equal(state.entries[0].deferred_attempts?.length ?? 0, Number(timing === '应用前'));
+  const window = await readJson(result.published[0].maintenance_window_record);
+  assert.ok(Date.parse(window.starts_at) >= releasedAt);
+  assert.equal(Date.parse(window.ends_at) - Date.parse(window.starts_at), 15 * 60_000);
 });
 
 test('事务已提交但队列尚未记账时，从原核验记录确认，跳过已回收的来源', async t => {

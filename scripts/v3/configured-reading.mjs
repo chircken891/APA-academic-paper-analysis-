@@ -6,7 +6,7 @@ import { inspectApaConfig, resolveApaConfig } from '../lib/apa-config.mjs';
 import { createConfiguredApaRoleModelPolicy, resolveApaRoleModel, buildHostDispatchArguments } from '../apa-model-policy.mjs';
 import { SCIENCE_INDEX_PROFILE, createReadingFirstRunControl, fingerprintReadingFirst, getReadingFirstPresentation, renderReadingFirstNotes, snapshotReadingFirstRuntime, getReadingFirstState, recordReadingFirstCandidateInventory } from './reading-first-runtime.mjs';
 import { exportReadingFirstPreview, inspectReadingFirstCandidate } from './reading-first-preview.mjs';
-import { emitApprovedRunStep, createCurrentMineruBaselinePort } from './phase21-runner.mjs';
+import { emitApprovedRunStep, createCurrentMineruBaselinePort, INSTRUCTION_PATH_DISPATCH_PROFILE } from './phase21-runner.mjs';
 import { getRoleReplyContract } from './role-reply-contract.mjs';
 import { readCommittedReadingFirstKnowledgeRegistry, assertCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
 import { matchPlannedReadingFirstKnowledge, readPlannedReadingFirstKnowledge, recordPlannedReadingFirstKnowledge } from './reading-first-knowledge-plans.mjs';
@@ -94,6 +94,7 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
     ? deriveConfiguredMaxCalls({ maxTotalCalls: options.maxTotalCalls, presentationMode: resolvedConfig.reading.presentation_mode }) : undefined;
   const configuredSetup = { ...(derivedMaxCalls === undefined ? {} : { budget_derivation: { method: 'min-profile-cap-total-minus-six', max_calls: derivedMaxCalls, max_total_calls: options.maxTotalCalls } }), schema_version: 'apa-configured-reading-1.0', config_fingerprint: loaded.fingerprint, paths, parser: parserOptions,
     knowledge_registry: { policy: 'current-shared-nodes-1.0', vault_root: resolve(repoRoot) },
+    dispatch_message_profile: INSTRUCTION_PATH_DISPATCH_PROFILE,
     role_model_policy: createConfiguredApaRoleModelPolicy(mainSession, resolvedConfig.roles),
     ...buildConfiguredReadingInstructions(resolvedConfig.writingSkills, { instructionProfile }) };
   configuredSetup.results_resources = structuredClone(options.resultsResources ?? {
@@ -143,6 +144,9 @@ export function createConfiguredScienceRequest({ prepared, role, task, dispatchC
   if (!scienceSections[role]) throw new Error('APA_CONFIGURED_SCIENCE_ROLE_INVALID');
   const binding = prepared.runControl.reading_first_binding, source = prepared.scientificInput?.sources?.[0] ?? payload.sources?.[0];
   if (!source) throw new Error('APA_CONFIGURED_SCIENCE_SOURCE_REQUIRED');
+  const dispatchMessageProfile = binding.configured_setup.dispatch_message_profile;
+  if (dispatchMessageProfile === INSTRUCTION_PATH_DISPATCH_PROFILE
+    && (typeof task?.instruction_path !== 'string' || !task.instruction_path.trim())) throw new Error('APA_CONFIGURED_INSTRUCTION_PATH_REQUIRED');
   const reply = configuredRoleReply(binding);
   const sections = binding.configured_setup.science_sections;
   const outputPath = ownedPath(prepared.paths.runRoot, task.native_path);
@@ -167,9 +171,11 @@ export function createConfiguredScienceRequest({ prepared, role, task, dispatchC
       }
     } finally { try { unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
     instructionFile = { path, sha256: sha(Buffer.from(message)), byte_length: Buffer.byteLength(message) };
-    message = 'Read the complete instruction file: ' + path + '\nVerify SHA-256 before following it: ' + instructionFile.sha256 + '\nWrite only to: ' + outputPath;
+    message = dispatchMessageProfile === INSTRUCTION_PATH_DISPATCH_PROFILE ? path
+      : 'Read the complete instruction file: ' + path + '\nVerify SHA-256 before following it: ' + instructionFile.sha256 + '\nWrite only to: ' + outputPath;
   }
   const configuration = { profile: 'reading-first-1.0', config_fingerprint: prepared.configurationFingerprint, role, ...(binding.role_reply_contract ? { role_reply_contract: structuredClone(binding.role_reply_contract) } : {}), ...(instructionFile ? { instruction_file: instructionFile } : {}) };
+  if (instructionFile && dispatchMessageProfile !== undefined) configuration.dispatch_message_profile = dispatchMessageProfile;
   const model = resolveApaRoleModel(role, binding.role_model_policy.main_session, binding.role_model_policy);
   const packet = { workflow_profile: 'reading-first-1.0', run_id: prepared.runControl.run_id, user_approval_id: binding.authorization_id,
     intended_evidence_tier: 'local_dispatch', source, instruction_fingerprint: sha(Buffer.from(message)), configuration_fingerprint: fingerprintReadingFirst(configuration),
@@ -212,13 +218,16 @@ export function validateConfiguredReadingDispatch({ prepared, request } = {}) {
   const { action_id: expectedId, ...expectedStep } = expected;
   if (typeof actualId !== 'string' || !actualId.trim() || !expectedId
     || fingerprintReadingFirst(actualStep) !== fingerprintReadingFirst(expectedStep)) throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH');
+  const dispatchMessageProfile = binding.configured_setup?.dispatch_message_profile;
   if (request.instruction_file) {
     const file = request.instruction_file;
     let bytes;
     try { bytes = readFileSync(file.path); } catch { throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH'); }
-    if (fingerprintReadingFirst(file) !== fingerprintReadingFirst(packet.backend.configuration.instruction_file)
+    if (packet.backend.configuration.dispatch_message_profile !== dispatchMessageProfile
+      || fingerprintReadingFirst(file) !== fingerprintReadingFirst(packet.backend.configuration.instruction_file)
       || sha(bytes) !== file.sha256 || bytes.length !== file.byte_length) throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH');
-  } else if (packet.backend.configuration.instruction_file) throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH');
+  } else if (packet.backend.configuration.instruction_file
+    || dispatchMessageProfile === INSTRUCTION_PATH_DISPATCH_PROFILE) throw new Error('APA_CONFIGURED_DISPATCH_MISMATCH');
 }
 
 /** Parser packet configuration is fingerprinted by the existing approval gate. */

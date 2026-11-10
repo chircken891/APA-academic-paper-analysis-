@@ -11,6 +11,7 @@ import { DEFAULT_APA_REASONING_EFFORT, APA_VERIFIER_ROLES, resolveApaRoleModel, 
 
 const READING_FIRST_ROLE_ORDER = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'];
 const READING_FIRST_HOST_ROLES = [...READING_FIRST_ROLE_ORDER, 'comparison', 'ledger', 'english-writer', 'chinese-writer', 'translation', 'reading-editor', 'independent-verifier'];
+export const INSTRUCTION_PATH_DISPATCH_PROFILE = 'instruction-path-1.0';
 const ROLE_ORDER = ['source-check', 'evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'comparison', 'integration', 'ledger'];
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const p20 = () => ({ source_rule_binding: 'unverified', initial_delivery_binding: 'unverified', continuation_delivery_binding: 'unverified' });
@@ -83,6 +84,14 @@ function validatedPacket(packet, { mineruOnly = false, modelFreeParser = false }
   if (!validation.ok) fail(`APPROVAL_PACKET_INVALID:${validation.errors.join(',')}`);
   if (!mineruOnly && packet.backend.identity === 'current-collaboration') {
     validateHostScope(validation.packet);
+    const { backend: { configuration }, host_action_scope: scope } = validation.packet;
+    if (configuration.dispatch_message_profile !== undefined) {
+      const path = configuration.instruction_file?.path;
+      const message = scope.arguments[scope.dispatch?.instruction_argument ?? 'message'];
+      if (configuration.dispatch_message_profile !== INSTRUCTION_PATH_DISPATCH_PROFILE
+        || typeof path !== 'string' || !isAbsolute(path) || path.trim() !== path || /[\r\n]/.test(path)
+        || message !== path) fail('HOST_INSTRUCTION_PATH_MISMATCH');
+    }
     return validation.packet;
   }
   if (packet.backend.identity !== 'current-mineru' || packet.host_action_scope.action !== 'run_current_mineru') fail('CURRENT_MINERU_SCOPE_REQUIRED');
@@ -249,6 +258,39 @@ export function emitApprovedRunStep({ packet, run, dispatchContext, approvedBudg
   });
 }
 
+function matchesInterruptedEditorDispatch(approved, emittedStep, observation) {
+  const scope = approved.host_action_scope, actual = observation?.tool_call;
+  const authorization = observation?.editor_dispatch_recovery?.authorization_id;
+  if (scope.role !== 'reading-editor' || emittedStep.action !== 'collaboration.spawn_agent'
+    || actual?.name !== emittedStep.action || typeof authorization !== 'string' || !authorization.trim()
+    || typeof actual.arguments?.message !== 'string') return false;
+  const { message: expected, ...frozenArgs } = emittedStep.arguments;
+  const { message: submitted, ...actualArgs } = actual.arguments;
+  if (typeof expected !== 'string' || !same(frozenArgs, actualArgs)) return false;
+  const [expectedPath, expectedHashLine, outputLine, ...extra] = expected.split('\n');
+  const [actualPath, actualHashLine, ...actualExtra] = submitted.split('\n');
+  if (expectedPath !== actualPath || extra.length || actualExtra.length || !outputLine?.includes('exact owned native output:')) return false;
+  const expectedHash = /^Verify SHA-256 before following it: sha256:([0-9a-f]{64})$/.exec(expectedHashLine)?.[1];
+  const actualHash = /^Verify SHA-256 before following it: sha256:([0-9a-f]{16,63})$/.exec(actualHashLine)?.[1];
+  if (!expectedHash || !actualHash) return false;
+  const omitted = expectedHash.length - actualHash.length;
+  return [...actualHash].some((_, index) => index > 0 && expectedHash.slice(0, index) + expectedHash.slice(index + omitted) === actualHash);
+}
+
+function matchesNativeToolCall(approved, emittedStep, observation) {
+  const actual = observation?.tool_call;
+  const expected = { name: emittedStep.action, arguments: emittedStep.arguments };
+  if (approved.backend.configuration.dispatch_message_profile === INSTRUCTION_PATH_DISPATCH_PROFILE) {
+    if (observation?.editor_dispatch_recovery !== undefined) return false;
+    const key = approved.host_action_scope.dispatch?.instruction_argument ?? 'message';
+    const submitted = actual?.arguments?.[key];
+    return typeof submitted === 'string' && same({ ...actual, arguments: { ...actual.arguments, [key]: submitted.trim() } }, expected);
+  }
+  return observation?.editor_dispatch_recovery === undefined
+    ? same(actual, expected)
+    : matchesInterruptedEditorDispatch(approved, emittedStep, observation);
+}
+
 export function ingestObservedRunStep({ packet, emittedStep, observation, store, ledger, run, dispatchContext, approvedBudget, retryPolicy, previousObservation, legacySourceComparison = false, now = new Date().toISOString() } = {}) {
   void store; void dispatchContext; void approvedBudget; void retryPolicy;
   const approved = validatedPacket(packet);
@@ -272,7 +314,7 @@ export function ingestObservedRunStep({ packet, emittedStep, observation, store,
   if (nativeHost) {
     const correlated = matching && observation?.action_id === emittedStep.action_id && observation?.run_id === approved.run_id
       && observation?.input_fingerprint === expectedFingerprint && observation?.port === approved.backend.identity
-      && same(observation?.tool_call, { name: emittedStep.action, arguments: emittedStep.arguments });
+      && matchesNativeToolCall(approved, emittedStep, observation);
     const raw = typeof observation?.raw_result_text === 'string' ? observation.raw_result_text : null;
     const resultHandle = approved.host_action_scope.dispatch?.result_handle;
     const idPath = resultHandle ? null : approved.host_action_scope.result_bindings.agent_id;

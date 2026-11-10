@@ -12,6 +12,24 @@ const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex'
 const fail = (code, details = {}) => { throw Object.assign(new Error(code), { code, details }); };
 const validate = new Ajv2020({ strict: true, allErrors: true }).compile(JSON.parse(readFileSync(new URL('../../Schema/phase22/reading-first-publication.schema.json', import.meta.url), 'utf8')));
 
+export function registeredResearchMapPaths(generation, readPresentation) {
+  return new Set(generation.papers.filter(row => row.profile === INDEX_READING_FIRST_PROFILE)
+    .flatMap(paper => verifyReadingFirstPresentation(paper, readPresentation(paper.reader_presentation.path), generation).presentation_assets ?? [])
+    .map(asset => asset.path));
+}
+
+export function parseRegisteredResearchMap(bytes, path) {
+  if (!(bytes instanceof Uint8Array)) fail('RF_PUBLICATION_PRESENTATION_ASSET_MISSING', { path });
+  let canvas;
+  try { canvas = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
+  catch { fail('RF_PUBLICATION_PRESENTATION_ASSET_INVALID', { path, reason: 'invalid-json' }); }
+  if (!Array.isArray(canvas?.nodes) || !Array.isArray(canvas?.edges)
+    || canvas.nodes.some(row => !row || typeof row.id !== 'string')) {
+    fail('RF_PUBLICATION_PRESENTATION_ASSET_INVALID', { path, reason: 'invalid-canvas' });
+  }
+  return canvas;
+}
+
 export function assertReadingFirstPublicationManifest(manifest) {
   if (!validate(manifest)) fail('RF_PUBLICATION_MANIFEST_INVALID', { errors: structuredClone(validate.errors ?? []) });
   const support = manifest.targets.support;
@@ -19,8 +37,13 @@ export function assertReadingFirstPublicationManifest(manifest) {
     || manifest.targets.notes.en.path === manifest.targets.notes['zh-CN'].path) fail('RF_PUBLICATION_TARGET_COLLISION');
   const assets = manifest.presentation_assets;
   if (assets && (assets.length !== 2 || new Set(assets.map(row => row.language)).size !== 2
-    || assets.some(row => row.path !== `Figures/${manifest.identity.run_id}/research-map.${row.language}.canvas`
-      || !manifest.targets.assets.includes(row.path)))) fail('RF_PUBLICATION_PRESENTATION_ASSET_INVALID');
+    || assets.some(row => {
+      const name = 'research-map.' + row.language + '.canvas';
+      const original = 'Figures/' + manifest.identity.run_id + '/' + name;
+      const migrated = row.path.startsWith('Figures/') && row.path.endsWith('/' + name)
+        && manifest.path_migration?.assets?.some(move => move.new_path === row.path && move.old_path.endsWith('/' + name));
+      return (row.path !== original && !migrated) || !manifest.targets.assets.includes(row.path);
+    }))) fail('RF_PUBLICATION_PRESENTATION_ASSET_INVALID');
   return manifest;
 }
 
@@ -44,9 +67,6 @@ export function verifyReadingFirstPresentation(paper, bytes, generation) {
       || objects.get(node.path)?.kind !== 'support') fail('RF_PUBLICATION_RESOURCE_MISSING', { path: node.path });
   }
   if (manifest.targets.assets.some(path => objects.get(path)?.kind !== 'asset')) fail('RF_PUBLICATION_RESOURCE_MISSING');
-  for (const asset of manifest.presentation_assets ?? []) {
-    if (objects.get(asset.path)?.sha256 !== asset.sha256) fail('RF_PUBLICATION_PRESENTATION_ASSET_INVALID', { path: asset.path });
-  }
   return manifest;
 }
 
@@ -57,14 +77,21 @@ export function getReadingFirstManagedBinding(bytes) {
     content: region.bytes.toString('utf8').slice(('<!-- AUTO:START ' + region.id + ' -->').length, -('<!-- AUTO:END ' + region.id + ' -->').length) })) };
 }
 
-/** Deliberately compare managed bytes only; Personal Notes remain user-owned. */
-export function verifyReadingFirstPaperBytes(paper, language, bytes, generation, presentation) {
+export function verifyReadingFirstPaperIdentity(paper, language, bytes) {
   const binding = getReadingFirstManagedBinding(bytes), fm = binding.frontmatter;
-  const target = presentation?.targets.notes[language], expected = { type: 'paper', pipeline_version: '3.0',
+  const expected = { type: 'paper', pipeline_version: '3.0',
     rendering_profile: INDEX_READING_FIRST_PROFILE, paper_id: paper.paper_id, language, graph_scope: 'v3-candidate',
     status: 'candidate', alternate_language_path: paper.paths[language === 'en' ? 'zh-CN' : 'en'] };
-  if (Object.keys(expected).some(key => fm[key] !== expected[key]) || !target || target.path !== paper.paths[language]
-    || binding.managedHash !== target.managed_hash || generation.objects.find(row => row.path === target.path)?.sha256 !== binding.managedHash) fail('RF_INDEX_NOTE_BINDING_INVALID');
+  if (Object.keys(expected).some(key => fm[key] !== expected[key])) fail('RF_INDEX_NOTE_BINDING_INVALID', { path: paper.paths[language] });
+  return binding;
+}
+
+/** Deliberately compare managed bytes only; Personal Notes remain user-owned. */
+export function verifyReadingFirstPaperBytes(paper, language, bytes, generation, presentation) {
+  const binding = verifyReadingFirstPaperIdentity(paper, language, bytes);
+  const target = presentation?.targets.notes[language];
+  if (!target || target.path !== paper.paths[language] || binding.managedHash !== target.managed_hash
+    || generation.objects.find(row => row.path === target.path)?.sha256 !== binding.managedHash) fail('RF_INDEX_NOTE_BINDING_INVALID');
   return binding;
 }
 

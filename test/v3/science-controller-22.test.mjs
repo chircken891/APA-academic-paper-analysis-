@@ -57,7 +57,10 @@ test('2.2 unproven host return remains unknown through restore without redispatc
   await assert.rejects(() => restoreScienceController(f.options), /HOST_RECEIPT_EVIDENCE_INVALID/);
 });
 
-test('2.2 accepts a finished same-handle hash correction without replacing the rejected launch or spending a call', async () => {
+test('2.2 accepts a finished same-handle hash correction without replacing the rejected launch or spending a call', () => checkSameHandleHashCorrection('following'));
+test('2.2 recovers a same-handle hash correction with alternate wording in the hash line', () => checkSameHandleHashCorrection('using'));
+
+async function checkSameHandleHashCorrection(verb) {
   const dispatch = { tool: 'collaboration.spawn_agent', model_argument: 'model', effort_argument: 'reasoning_effort', instruction_argument: 'message', task_name_argument: 'task_name',
     fresh_context: { argument: 'fork_turns', value: 'none' }, result_handle: { source: 'text', pattern: '"task_name"\\s*:\\s*"([^"\\r\\n]+)"' } };
   const f = await fixture({ host: { name: 'codex', dispatch } });
@@ -72,7 +75,7 @@ test('2.2 accepts a finished same-handle hash correction without replacing the r
   }
   const handle = '/root/evidence';
   const wrongHash = 'sha256:' + 'a'.repeat(64);
-  const actualArguments = { ...step.arguments, message: step.arguments.message.replace(instructions.sha256, wrongHash) };
+  const actualArguments = { ...step.arguments, message: step.arguments.message.replace(instructions.sha256, wrongHash).replace('before following it:', 'before ' + verb + ' it:') };
   const spawn = { action_id: step.action_id, run_id: 'run', input_fingerprint: step.input_fingerprint, port: 'current-collaboration',
     tool_call: { name: step.action, arguments: actualArguments }, ...await capture('spawn', '{"task_name":"/root/evidence"}') };
   await assert.rejects(() => recordScienceHostObservation({ controller, role: 'evidence', observation: spawn }), /SCIENCE_OBSERVATION_INVALID/);
@@ -98,7 +101,7 @@ test('2.2 accepts a finished same-handle hash correction without replacing the r
   assert.deepEqual((await prepareScienceRequests({ controller })).map(row => row.role), ['methods', 'results']);
   await writeFile(instructionHashRecovery.verification.evidence.source_reference, 'changed verification');
   await assert.rejects(() => restoreScienceController(f.options), /HOST_RECEIPT_EVIDENCE_INVALID/);
-});
+}
 
 test('2.2 Results manifest uses its assigned figure directory and passes to Integrator after validation', async () => {
   const f = await fixture({ figuresDir: 'Figures/run/' }), controller = await createScienceController(f.options);

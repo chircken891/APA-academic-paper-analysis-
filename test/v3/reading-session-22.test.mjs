@@ -47,13 +47,14 @@ async function configuredFixture(t, { systemTemp = false, tempBase } = {}) {
 }
 
 test('the 1.4 presentation binding preserves 2.2 session preparation, budget and compaction decisions', async t => {
-  const f = await configuredFixture(t, { tempBase: join(process.cwd(), '.tmp', 'apa-research-map-canvas-20261108', 'task2') });
+  const f = await configuredFixture(t, { systemTemp: true });
   const session = await createReadingSession({ ...f.options, instructionProfile: 'configured-reading-2.2' });
   const root = join(f.root, 'runs', 'run');
   const readState = async () => JSON.parse(await readFile(join(root, 'control', 'science-state.json'), 'utf8')).data;
   const initial = await readState();
   const binding = initial.prepared.runControl.reading_first_binding;
   assert.equal(binding.configured_setup.instruction_profile, 'configured-reading-2.2');
+  assert.equal(binding.configured_setup.dispatch_message_profile, 'instruction-path-1.0');
   assert.deepEqual([binding.prior_calls, binding.max_calls, binding.max_total_calls], [6, 8, 14]);
   assert.deepEqual(Object.values(binding.task_bindings).map(task => [task.task_id, task.role, task.artifact_path]), [
     ['en', 'english-writer', 'reading/en.json'], ['en-r2', 'english-writer', 'reading/en-r2.json'],
@@ -65,6 +66,10 @@ test('the 1.4 presentation binding preserves 2.2 session preparation, budget and
   const dispatch = await nextReadingAction(session);
   assert.equal(dispatch.action, 'dispatch');
   assert.equal(dispatch.role, 'evidence');
+  const instructionPath = join(root, 'instructions', 'evidence.txt');
+  const instructions = await readFile(instructionPath);
+  assert.equal(dispatch.arguments.prompt, instructionPath);
+  assert.ok(instructions.toString('utf8').includes(join(root, 'native', 'evidence.json')));
   const raw = JSON.stringify({ agent_id: 'synthetic-evidence' });
   const rawPath = join(root, 'evidence-return.txt');
   await writeFile(rawPath, raw);
@@ -73,9 +78,15 @@ test('the 1.4 presentation binding preserves 2.2 session preparation, budget and
     tool_call: { name: dispatch.host_action, arguments: dispatch.arguments }, raw_result_text: raw,
     evidence: { kind: 'raw', capture: 'direct', sha256: createHash('sha256').update(raw).digest('hex'), source_reference: rawPath },
   };
+  await writeFile(instructionPath, Buffer.concat([instructions, Buffer.from('changed')]));
+  await assert.rejects(() => recordReadingEvent(session, { kind: 'host_observation', action_id: dispatch.action_id, observation }), /APA_CONFIGURED_DISPATCH_MISMATCH/);
+  await writeFile(instructionPath, instructions);
   await recordReadingEvent(session, { kind: 'host_observation', action_id: dispatch.action_id, observation });
   await mkdir(join(root, 'native'), { recursive: true });
   await writeFile(join(root, 'native', 'evidence.json'), JSON.stringify({ role: 'evidence' }));
+  await writeFile(instructionPath, Buffer.concat([instructions, Buffer.from('changed')]));
+  await assert.rejects(() => recordReadingEvent(session, { kind: 'result', action_id: dispatch.action_id, observation }), /APA_CONFIGURED_DISPATCH_MISMATCH/);
+  await writeFile(instructionPath, instructions);
   await recordReadingEvent(session, { kind: 'result', action_id: dispatch.action_id, observation });
   const budget = { total_used: 1, initial_dispatches: 1, continuations: 0, reserved: 0, occupied: 1, total_limit: 14, remaining_total: 13 };
   assert.deepEqual(executionBudgetSummary((await readState()).executionLedger, binding.max_total_calls), budget);
@@ -322,7 +333,7 @@ test('interrupted rebind preserves only the registered unreceipted metadata byte
 });
 
 for (const repairResources of [false, true]) test(`2.2 retains Results resources${repairResources ? ' with a scoped renderer repair' : ''} across recovery`, async t => {
-  const f = await configuredFixture(t), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.4' } });
+  const f = await configuredFixture(t, { systemTemp: true }), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.4' } });
   f.profile.capabilities = { task_continuation: { status: 'detected', method: 'ContinueTask target prompt', scope: 'current-session', evidence: [{ source: 'tool-schema', reference: 'synthetic schema' }], limitations: [], continuation: { tool: 'ContinueTask', handle_argument: 'target', instruction_argument: 'prompt', same_context: true, original_host_accessible: true } } };
   let session = await createReadingSession({ ...f.options, instructionProfile: 'configured-reading-2.2', maxTotalCalls: 22 });
   const root = join(f.root, 'runs', 'run'), resourceRoot = join(root, 'resources', 'results');
@@ -369,12 +380,34 @@ for (const repairResources of [false, true]) test(`2.2 retains Results resources
       tool_call: { name: action.host_action, arguments: action.arguments }, raw_result_text: raw, evidence: { kind: 'raw', capture: 'direct', sha256: hash(Buffer.from(raw)).slice(7), source_reference: path } };
   }
   const writerObservation = await hostObservation(next, 'writer');
+  const writerInstructionPath = join(root, 'instructions', 'en.txt');
+  const writerInstructions = await readFile(writerInstructionPath);
+  assert.equal(next.arguments.prompt, writerInstructionPath);
+  assert.ok(writerInstructions.toString('utf8').includes(join(root, 'native', 'en.json')));
+  for (const changes of [
+    { prompt: writerInstructionPath + '.bak' },
+    { prompt: writerInstructionPath + '\n' + join(root, 'instructions', 'zh-CN.txt') },
+    { description: 'wrong_task' },
+    { model: 'other-model' },
+    { effort: 'low' },
+    { extra: true },
+  ]) {
+    const observation = { ...writerObservation, tool_call: { ...writerObservation.tool_call, arguments: { ...next.arguments, ...changes } } };
+    await assert.rejects(() => recordReadingEvent(session, { kind: 'host_observation', action_id: next.action_id, observation }), /OBSERVATION_CORRELATION_MISMATCH/);
+  }
+  writerObservation.tool_call.arguments = { ...next.arguments, prompt: ' \t' + writerInstructionPath + '\r\n' };
   const { evidence: omitted, ...unknownWriterObservation } = writerObservation;
   await recordReadingEvent(session, { kind: 'host_observation', action_id: next.action_id, observation: unknownWriterObservation });
   assert.equal((await nextReadingAction(session)).action, 'reconcile');
   await assert.rejects(recordReadingEvent(session, { kind: 'continuation-intent', action_id: next.action_id, execution_id: 'unknown-writer', message: 'Continue.' }), /READING_SESSION_CONTINUATION_INVALID/);
+  await writeFile(writerInstructionPath, Buffer.concat([writerInstructions, Buffer.from('changed')]));
+  await assert.rejects(() => recordReadingEvent(session, { kind: 'host_observation', action_id: next.action_id, observation: writerObservation }), /READING_FIRST_INSTRUCTION_CHANGED/);
+  await writeFile(writerInstructionPath, writerInstructions);
   await recordReadingEvent(session, { kind: 'host_observation', action_id: next.action_id, observation: writerObservation });
   await writeFile(join(root, 'native', 'en.json'), JSON.stringify(template.views[0]));
+  await writeFile(writerInstructionPath, Buffer.concat([writerInstructions, Buffer.from('changed')]));
+  await assert.rejects(() => recordReadingEvent(session, { kind: 'result', action_id: next.action_id, observation: writerObservation }), /READING_FIRST_INSTRUCTION_CHANGED/);
+  await writeFile(writerInstructionPath, writerInstructions);
   await recordReadingEvent(session, { kind: 'result', action_id: next.action_id, observation: writerObservation });
   session = await resumeReadingSession({ runRoot: root });
   await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });

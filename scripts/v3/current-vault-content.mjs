@@ -3,7 +3,7 @@ import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { resolve, relative, sep } from 'node:path';
 import YAML from 'yaml';
 import MarkdownIt from 'markdown-it';
-import { readRegisteredCommit, assertRegisteredCommit, normalizeIndexPath } from './phase22-active-version.mjs';
+import { readRegisteredCommit, assertRegisteredCommit, normalizeIndexPath, readRegisteredObject } from './phase22-active-version.mjs';
 import { inspectManagedNote } from './phase22-managed-markdown.mjs';
 
 const records = new WeakMap();
@@ -191,11 +191,8 @@ export function readCurrentRegisteredBytes(snapshot, path, { verify = true } = {
     return { bytes: Buffer.from(row.bytes), sha256: row.sha256, changed: row.changed };
   }
   if (path.startsWith('Wiki/')) fail('P23_CURRENT_UNREADABLE', { path });
-  assertCurrentVaultContent(snapshot);
-  const bytes = readRegular(record.root, path);
-  if (sha(bytes) !== object.sha256) fail('P22_OBJECT_HASH_MISMATCH', { path });
-  assertCurrentVaultContent(snapshot);
-  return { bytes, sha256: object.sha256, changed: false };
+  const { bytes, sha256 } = readRegisteredObject(record.commit, path);
+  return { bytes, sha256, changed: sha256 !== object.sha256 };
 }
 
 /** Copy registered captured Markdown in one observation without validating unrelated edits. */

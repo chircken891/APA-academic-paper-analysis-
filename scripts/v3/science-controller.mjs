@@ -60,7 +60,8 @@ async function checkInstructionHashRecovery(state, entry, task, recovery) {
   const { prepared } = state.data;
   const binding = prepared.runControl.reading_first_binding;
   const request = entry?.request, original = entry?.raw_observation, instructions = request?.instruction_file;
-  if (binding.host?.name !== 'codex' || request?.emittedStep.action !== 'collaboration.spawn_agent' || !instructions
+  if (binding.configured_setup.dispatch_message_profile !== undefined
+    || binding.host?.name !== 'codex' || request?.emittedStep.action !== 'collaboration.spawn_agent' || !instructions
     || entry.observation?.status !== 'blocked' || entry.observation.blocked_reason !== 'OBSERVATION_CORRELATION_MISMATCH'
     || original?.tool_call?.name !== request.emittedStep.action || original.port !== request.emittedStep.port
     || original.action_id !== entry.intent?.action_id || original.run_id !== request.emittedStep.run_id
@@ -68,7 +69,7 @@ async function checkInstructionHashRecovery(state, entry, task, recovery) {
     || typeof recovery?.authorization_id !== 'string' || !recovery.authorization_id.trim() || recovery.authorization_id === binding.authorization_id) invalid();
   const key = binding.host.dispatch.instruction_argument;
   const actual = original.tool_call.arguments, message = actual?.[key], expected = request.emittedStep.arguments;
-  const hashLine = /^Verify SHA-256 before following it: sha256:[a-f0-9]+$/im;
+  const hashLine = /^Verify SHA-256 before (?:following|using) it: sha256:[a-f0-9]+$/im;
   if (typeof message !== 'string' || message === expected[key] || !hashLine.test(message)
     || !same({ ...actual, [key]: message.replace(hashLine, 'Verify SHA-256 before following it: ' + instructions.sha256) }, expected)) invalid();
 

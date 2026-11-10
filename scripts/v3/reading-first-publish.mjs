@@ -7,7 +7,7 @@ import { createOwnedArtifactBroker } from './owned-artifact-store.mjs';
 import { PHASE22_COMMIT_PATH, phase22GenerationPaths, readRegisteredCommit } from './phase22-active-version.mjs';
 import { applyBilingualPublication, dryRunBilingualPublication, inspectBilingualPublicationRecovery,
   recoverBilingualPublication, registerBilingualPublication } from './phase22-publication.mjs';
-import { applyReadingFirstSourceDerivation, assertReadingFirstPublicationSourceChoicesCurrent, assertReadingFirstRegisteredSourcesCurrent,
+import { applyReadingFirstSourceDerivation, applyReadingFirstUserCorrections, assertReadingFirstPublicationSourceChoicesCurrent, assertReadingFirstRegisteredSourcesCurrent,
   prepareReadingFirstPublication } from './reading-first-publication.mjs';
 import { deriveRebasedReadingFirstPublicationSource, inspectReadingFirstKnowledgeMergeCandidates,
   inspectReadingFirstPublicationSource } from './reading-first-runtime.mjs';
@@ -32,6 +32,21 @@ async function publicationDirectory(root, run) {
     if (!entry.isDirectory() || entry.isSymbolicLink() || await realpath(folder) !== folder) fail('RF_ONE_STEP_EVIDENCE_PATH_INVALID');
   }
   return folder;
+}
+
+export async function persistReadingFirstQueueApproval(root, run, record) {
+  const folder = await publicationDirectory(root, run);
+  const path = join(folder, 'QUEUE-APPROVAL-' + sha(record.authorization.authorization_id).slice(7) + '.json');
+  const bytes = json(record);
+  try { await writeFile(path, bytes, { flag: 'wx', flush: true }); }
+  catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    const stat = await lstat(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || !(await readFile(path)).equals(bytes)) {
+      fail('RF_QUEUE_APPROVAL_CHANGED', { path });
+    }
+  }
+  return path;
 }
 
 async function requireUnusedResult(folder) {
@@ -95,6 +110,9 @@ export function summarizeReadingFirstPublication(plan, publicationSources, revie
   });
   return { run_id: plan.run_id, analysis_revision: plan.analysis_revision, generation: plan.generation,
     previous_generation: plan.previous_generation, hashes: hashesOf(plan), counts, files,
+    ...(review?.reviewManifest.provenance_limits.user_corrections ? { user_corrections: review.reviewManifest.provenance_limits.user_corrections } : {}),
+    ...(review?.reviewManifest.provenance_limits.knowledge_render_hashes ? { knowledge_render_hashes: review.reviewManifest.provenance_limits.knowledge_render_hashes } : {}),
+    ...(review?.diagnostics.length ? { diagnostics: review.diagnostics } : {}),
     ...(review ? { candidate_source_bindings: { assets: review.reviewManifest.assets,
       derivation: review.reviewManifest.dependencies.source_derivation ?? null } } : {}),
     ...(publicationSources && Object.values(publicationSources).some(rows => rows.length) ? { publication_sources: publicationSources } : {}) };
@@ -102,13 +120,15 @@ export function summarizeReadingFirstPublication(plan, publicationSources, revie
 
 function comparePlans(original, derived, record, originalRecord, data) {
   if (original.run_id !== derived.run_id || original.analysis_revision !== derived.analysis_revision
-    || !same(original.candidate_source_bindings, derived.candidate_source_bindings)) fail('RF_ONE_STEP_REBASE_SOURCE_SCOPE');
+    || !same(original.candidate_source_bindings, derived.candidate_source_bindings)
+    || !same(original.user_corrections, derived.user_corrections)) fail('RF_ONE_STEP_REBASE_SOURCE_SCOPE');
   const old = new Map(original.files.map(row => [row.path, row]));
   const next = new Map(derived.files.map(row => [row.path, row]));
   const knownPapers = new Map(data.candidate.notes.map(note => [note.path, sha(note.content)]));
   const derivation = original.candidate_source_bindings?.derivation;
-  const paperHashes = candidate => new Map(applyReadingFirstSourceDerivation({ ...data, candidate }, derivation).notes
-    .map(note => [note.path, sha(note.content)]));
+  const paperHashes = candidate => new Map(applyReadingFirstSourceDerivation({
+    ...data, candidate: applyReadingFirstUserCorrections(candidate, original.user_corrections),
+  }, derivation).notes.map(note => [note.path, sha(note.content)]));
   const publicationBefore = paperHashes(data.candidate);
   const publicationAfter = record ? paperHashes(record.candidate) : publicationBefore;
   const knownNodes = new Map((data.candidate.supportNotes ?? []).map(note => [note.path, sha(note.content)]));
@@ -125,14 +145,16 @@ function comparePlans(original, derived, record, originalRecord, data) {
     const priorNode = rebaseNode(originalRecord?.nodes, path);
     const removedNode = before?.kind === 'support' && !after && (record?.nodes.some(row => (row.previous_path ?? row.path)
       === (priorNode?.previous_path ?? path) && row.path !== path) || priorNode?.previous_path && next.get(priorNode.previous_path)?.kind === 'support')
-      && (priorNode?.output_sha256 ?? knownNodes.get(path)) === before.byte_sha256;
+      && (priorNode?.output_sha256 ?? knownNodes.get(path)) === (original.knowledge_render_hashes?.[path] ?? before.byte_sha256);
     const addedNode = !before && after?.kind === 'support' && (node?.previous_path
       ? [...old.values()].some(row => row.kind === 'support' && (rebaseNode(originalRecord?.nodes, row.path)?.previous_path ?? row.path) === node.previous_path)
       : originalRecord?.nodes.some(row => row.previous_path === path && row.path !== path && old.get(row.path)?.kind === 'support'));
-    const currentNode = node?.base_sha256 === after?.before_sha256 && node?.output_sha256 === after?.byte_sha256;
+    const currentNode = node?.base_sha256 === after?.before_sha256
+      && node?.output_sha256 === (derived.knowledge_render_hashes?.[path] ?? after?.byte_sha256);
     const originalBase = data.recipe.rendering?.knowledgeRegistry?.find(row => row.path === path || row.canonical_path === path);
     const returnedToOriginal = !node && (addedNode || priorNode)
-      && (originalBase?.content_sha256 ?? null) === after?.before_sha256 && knownNodes.get(path) === after?.byte_sha256;
+      && (originalBase?.content_sha256 ?? null) === after?.before_sha256
+      && knownNodes.get(path) === (derived.knowledge_render_hashes?.[path] ?? after?.byte_sha256);
     const shared = removedNode || ((before?.kind === 'support' && after?.kind === 'support') || addedNode)
       && (currentNode || returnedToOriginal);
     const paperBefore = originalRecord?.papers?.find(row => row.path === path);
@@ -363,7 +385,7 @@ export async function recoverRegisteredReadingFirstPublication({ vaultRoot, run,
 
 /** Publish a single owned, reviewed candidate with explicit user authority. */
 export async function publishReadingFirstCandidate({ source, vaultRoot, generation, resources, authorization,
-  onPrepared, onRegistered, queuedApproval, evidenceMode = 'actual', presentationAssetRegistrations, run: expectedRun } = {}) {
+  onPrepared, onRegistered, queuedApproval, evidenceMode = 'actual', presentationAssetRegistrations, user_corrections, run: expectedRun } = {}) {
   if (typeof authorization?.authorization_id !== 'string' || !authorization.authorization_id.trim()
     || typeof authorization.user_reply !== 'string' || !/^(?:请|确认|同意)?(?:全部)?发布[。！!]?$/u.test(authorization.user_reply.trim())) {
     fail('RF_ONE_STEP_APPROVAL_REQUIRED');
@@ -380,14 +402,14 @@ export async function publishReadingFirstCandidate({ source, vaultRoot, generati
   const execution = { repoRoot: root, runId: run, runRoot: initial.recipe.artifact_root,
     manifest: initial.recipe.execution_runtime ?? initial.recipe.binding?.configured_setup?.runtime_binding };
   return withReadingRuntimePublicationConsumer(execution, () => publishBoundReadingFirstCandidate({ source, root, run, initial,
-    execution, generation, resources, authorization, onPrepared, onRegistered, queuedApproval, evidenceMode, presentationAssetRegistrations }));
+    execution, generation, resources, authorization, onPrepared, onRegistered, queuedApproval, evidenceMode, presentationAssetRegistrations, user_corrections }));
 }
 
 async function publishBoundReadingFirstCandidate({ source, root, run, initial, execution, generation, resources,
-  authorization, onPrepared, onRegistered, queuedApproval, evidenceMode, presentationAssetRegistrations }) {
+  authorization, onPrepared, onRegistered, queuedApproval, evidenceMode, presentationAssetRegistrations, user_corrections }) {
   const folder = await publicationDirectory(root, run), attempt = await mkdtemp(join(folder, 'attempt-'));
   const originalSource = sourceStamp(initial);
-  const request = { vaultRoot: root, generation, resources, evidenceMode, presentationAssetRegistrations };
+  const request = { vaultRoot: root, generation, resources, evidenceMode, presentationAssetRegistrations, user_corrections };
   let initialApproval, approval, rebase, summary, registration, transaction, changes, authority, selected, mergeDrafts;
   let displayed = 0;
   let applying = false;
@@ -447,7 +469,8 @@ async function publishBoundReadingFirstCandidate({ source, root, run, initial, e
       if (!same(original.hashes, summary.hashes)) {
         return comparePlans(original, summary, rebase.record, queuedApproval?.original.rebase_proof ?? firstRebase, initial);
       }
-      if (!same(original.files, summary.files) || !same(original.candidate_source_bindings, summary.candidate_source_bindings)) {
+      if (!same(original.files, summary.files) || !same(original.candidate_source_bindings, summary.candidate_source_bindings)
+        || !same(original.user_corrections, summary.user_corrections)) {
         fail('RF_ONE_STEP_QUEUE_INVENTORY_CHANGED');
       }
       return null;

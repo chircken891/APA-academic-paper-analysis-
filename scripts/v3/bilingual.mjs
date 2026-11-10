@@ -1,9 +1,9 @@
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import { resolve, join, relative, sep } from 'node:path';
 import * as publication from './phase22-publication.mjs';
-import { readCommittedGeneration } from './phase22-active-version.mjs';
+import { readCommittedGeneration, readRegisteredCommit } from './phase22-active-version.mjs';
 import { queryBilingualIndex } from './phase22-search.mjs';
-import { buildGraphProposal } from './phase22-graph.mjs';
+import { buildRegisteredGraphProposal } from './phase22-graph.mjs';
 
 const commands = new Set(['review', 'dry-run', 'apply', 'recover', 'query', 'graph-proposal', 'publish', 'maintenance-review', 'maintenance-apply']);
 const commonFlags = ['vault-root', 'run'];
@@ -12,7 +12,7 @@ const commandFlags = {
   review: ['profile'], 'dry-run': ['profile'],
   apply: ['review-sha256', 'output-sha256', 'approval-record', 'maintenance-window-record'],
   recover: ['transaction-id', 'approval-record', 'maintenance-window-record'],
-  publish: ['run-root', 'generation', 'resources', 'authorization-id', 'user-reply'],
+  publish: ['run-root', 'generation', 'resources', 'authorization-id', 'user-reply', 'user-corrections'],
   'maintenance-review': ['mode', 'options'],
   'maintenance-apply': ['inventory-sha256', 'authorization-id', 'user-reply'],
   query: ['query'], 'graph-proposal': [],
@@ -33,7 +33,8 @@ function parse(argv) {
     flags[key] = value;
   }
   const requireAllFlags = ['apply', 'publish', 'maintenance-review', 'maintenance-apply'].includes(command);
-  const required = [...commonFlags, ...(requireAllFlags ? commandFlags[command] : command === 'recover' ? ['transaction-id'] : command === 'query' ? ['query'] : [])];
+  const required = [...commonFlags, ...(requireAllFlags ? commandFlags[command].filter(key => key !== 'user-corrections')
+    : command === 'recover' ? ['transaction-id'] : command === 'query' ? ['query'] : [])];
   const missing = required.filter(key => !flags[key]);
   if (missing.length) fail('P22_CLI_ARGUMENT_REQUIRED', { missing }, 2);
   if (flags.profile && !profiles.has(flags.profile)) fail('P221_CLI_PROFILE_UNKNOWN', { profile: flags.profile }, 2);
@@ -66,8 +67,8 @@ async function graphInventory(vaultRoot) {
   return entries;
 }
 async function committed(vaultRoot, run) {
-  const snapshot = await readCommittedGeneration({ vaultRoot });
-  if (!snapshot.ok) fail(snapshot.error?.code ?? 'P22_CLI_COMMITTED_REQUIRED', snapshot.error?.details ?? { status: snapshot.status });
+  const snapshot = await readRegisteredCommit({ vaultRoot });
+  if (!snapshot.ok) fail(snapshot.errors?.[0]?.code ?? 'P22_CLI_COMMITTED_REQUIRED', snapshot.errors?.[0]?.details ?? { status: snapshot.status });
   if (!snapshot.generation.papers.some(paper => paper.run_id === run)) fail('P22_CLI_RUN_NOT_CURRENT', { run });
   return snapshot;
 }
@@ -76,14 +77,21 @@ async function main(argv) {
   if (command === 'publish') {
     const { assertReadingFirstRegisteredSourcesCurrent } = await import('./reading-first-publication.mjs');
     await assertReadingFirstRegisteredSourcesCurrent({ vaultRoot });
-    const { captureCompletedReadingSessionPublicationSource } = await import('./reading-session.mjs');
-    const { publishReadingFirstCandidate } = await import('./reading-first-publish.mjs');
+    const { prepareReadingFirstPublicationQueue, approveAndDrainReadingFirstPublicationQueue } = await import('./reading-first-publication-queue.mjs');
     const resources = JSON.parse(await readFile(flags.resources, 'utf8'));
-    const source = await captureCompletedReadingSessionPublicationSource({ runRoot: resolve(flags['run-root']), vaultRoot, run });
-    return publishReadingFirstCandidate({ source, vaultRoot, run, resources, generation: flags.generation,
+    const user_corrections = flags['user-corrections'] ? JSON.parse(await readFile(flags['user-corrections'], 'utf8')) : undefined;
+    const emit = (event, value) => new Promise((done, reject) => process.stderr.write(JSON.stringify({ event, ...value }) + '\n',
+      error => error ? reject(error) : done()));
+    const onWait = owner => emit('publication-waiting', owner);
+    const { proposal, proposal_sha256 } = await prepareReadingFirstPublicationQueue({ vaultRoot, onWait,
+      entries: [{ run, runRoot: resolve(flags['run-root']), resources, generation: flags.generation, user_corrections }] });
+    const initial = proposal.entries[0].original.summary;
+    await emit('publication-inventory', initial);
+    const result = await approveAndDrainReadingFirstPublicationQueue({ vaultRoot, proposal, expectedProposalSha256: proposal_sha256, onWait,
       authorization: { authorization_id: flags['authorization-id'], user_reply: flags['user-reply'] },
-      onPrepared: summary => new Promise((done, reject) => process.stderr.write(JSON.stringify({ event: 'publication-inventory', ...summary }) + '\n',
-        error => error ? reject(error) : done())) });
+      onPrepared: summary => (summary.run_id !== run || summary.derived || summary.requires_reapproval)
+        && emit('publication-inventory', summary) });
+    return result.published.find(row => row.run_id === run) ?? result;
   }
   if (command === 'maintenance-review' || command === 'maintenance-apply') {
     const { prepareMaintenanceReview, applyMaintenanceReview } = await import('./maintenance-publication.mjs');
@@ -103,9 +111,13 @@ async function main(argv) {
   }
   if (command === 'query' || command === 'graph-proposal') {
     const activeSnapshot = await committed(vaultRoot, run);
-    return { ok: true, ...(command === 'query'
-      ? queryBilingualIndex({ index: activeSnapshot.index, activeSnapshot, query: flags.query })
-      : buildGraphProposal({ activeSnapshot, entityInventory: await graphInventory(vaultRoot) })) };
+    if (command === 'graph-proposal') return { ok: true, ...buildRegisteredGraphProposal({ activeSnapshot, entityInventory: await graphInventory(vaultRoot) }) };
+    const historical = await readCommittedGeneration({ vaultRoot });
+    if (historical.ok && historical.generation_id === activeSnapshot.generation_id) {
+      return { ok: true, ...queryBilingualIndex({ index: historical.index, activeSnapshot: historical, query: flags.query }) };
+    }
+    const { queryLibrary } = await import('./library-query.mjs');
+    return { ...await queryLibrary({ vaultRoot, query: flags.query }), scientific_approval: false };
   }
   const loaded = await publication.loadBilingualPublication({ vaultRoot, run, requireApproval: command === 'apply' });
   if (flags.profile) {

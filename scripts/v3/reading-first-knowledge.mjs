@@ -9,6 +9,50 @@ const normalized = value => typeof value === 'string' ? value.normalize('NFC').t
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const text = value => typeof value === 'string' && value.trim();
 const heading = value => value.replace(/[\r\n#]/g, ' ').trim();
+const knowledgeReference = /\[([^\]\r\n]+)\]\(apa-(knowledge|entity):([^)\s]+)\)/gu;
+
+export function registeredKnowledgeReference(registry, id, kind) {
+  const unique = rows => rows.length === 1 ? rows[0] : undefined;
+  const direct = registry.filter(row => !row.unavailable && row.entity_id === id);
+  if (direct.length) return unique(direct);
+  const aliases = registry.filter(row => !row.unavailable && row.registered_aliases?.includes(id));
+  if (aliases.length) return unique(aliases);
+  if (kind === 'knowledge') return unique(registry.filter(row => !row.unavailable && row.id === id));
+}
+
+/** Convert a published hidden state without rewriting any visible Markdown. */
+export function bindPublishedKnowledgeReferences(content, { paperId, reused = false, resolveCurrent, resolveHistorical, registeredPapers }) {
+  const unresolved = new Set();
+  const next = content.replace(/<!-- KNOWLEDGE_STATE ([A-Za-z0-9+/=]+) -->/, (original, encoded) => {
+    const state = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+    const bind = (value, current) => value.replace(knowledgeReference, (match, label, kind, id) => {
+      const target = (current ? resolveCurrent : resolveHistorical)(id, kind);
+      if (target) return '[' + label + '](apa-entity:' + target + ')';
+      unresolved.add(kind + ':' + id);
+      return label;
+    });
+    const bindItem = (item, current) => {
+      const pairs = (value, map) => Object.fromEntries(Object.entries(value).map(([language, rows]) => [language, rows.map(map)]));
+      const paragraphs = values => values.map(value => bind(value, current));
+      if (item.paragraphs) item.paragraphs = pairs(item.paragraphs, value => bind(value, current));
+      if (item.sections) item.sections = pairs(item.sections, section => ({ ...section, paragraphs: paragraphs(section.paragraphs) }));
+      for (const formula of item.formulas ?? []) {
+        for (const language of languages) if (typeof formula.description?.[language] === 'string') {
+          formula.description[language] = bind(formula.description[language], current);
+        }
+      }
+    };
+    bindItem(state.item, !reused);
+    for (const addition of state.item.paper_additions ?? []) bindItem(addition, addition.paper_id === paperId);
+    if (registeredPapers) state.applications = state.applications.map(({ targets, ...application }) => {
+      if (!registeredPapers.has(application.paper_id)) unresolved.add('paper:' + application.paper_id);
+      return application;
+    });
+    const output = Buffer.from(JSON.stringify(state)).toString('base64');
+    return output === encoded ? original : '<!-- KNOWLEDGE_STATE ' + output + ' -->';
+  });
+  return { content: next, unresolved: [...unresolved].sort() };
+}
 
 export function applyReadingFirstKnowledgeContent({ presentation, views }) {
   if (presentation?.knowledge_layout !== 'shared-bilingual-1.0') return presentation;
@@ -41,10 +85,12 @@ const applicationLabel = (application, language) => {
 // Relocation can update visible links without rewriting the historical state.
 function priorVisibleTargets(region, target, applications) {
   const tokens = markdown.parse(region, {});
-  const headings = tokens.flatMap((token, index) => token.type === 'heading_open' && token.tag === 'h2' && tokens[index + 1]?.content === '论文应用 / Paper applications' ? [index] : []);
-  if (headings.length !== 1) return applications;
+  const names = ['论文应用 / Paper applications', '论文应用增补 / Additional paper applications'];
+  const headings = tokens.flatMap((token, index) => token.type === 'heading_open' && token.tag === 'h2'
+    && names.includes(tokens[index + 1]?.content) ? [index] : []);
+  if (!headings.length) return applications;
   const links = [];
-  for (let i = headings[0] + 3; i < tokens.length; i++) {
+  for (const heading of headings) for (let i = heading + 3; i < tokens.length; i++) {
     if (tokens[i].type === 'heading_open' && ['h1', 'h2'].includes(tokens[i].tag)) break;
     const children = tokens[i].type === 'inline' ? tokens[i].children ?? [] : [];
     for (let j = 0; j < children.length; j++) {
@@ -65,10 +111,10 @@ function priorVisibleTargets(region, target, applications) {
     const targets = { ...application.targets };
     for (const language of languages) {
       const previous = application.targets?.[language];
-      if (typeof previous !== 'string') continue;
       const label = applicationLabel(application, language);
-      const matches = links.filter(link => link.label === label && path.posix.basename(link.target) === path.posix.basename(previous));
-      const owners = applications.filter(row => applicationLabel(row, language) === label && path.posix.basename(row.targets?.[language] ?? '') === path.posix.basename(previous));
+      const matches = links.filter(link => link.label === label && (!previous || path.posix.basename(link.target) === path.posix.basename(previous)));
+      const owners = applications.filter(row => applicationLabel(row, language) === label
+        && (!previous || path.posix.basename(row.targets?.[language] ?? '') === path.posix.basename(previous)));
       if (matches.length === 1 && owners.length === 1) targets[language] = matches[0].target;
     }
     return { ...application, targets };
@@ -220,9 +266,11 @@ export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, p
   const previousApplications = prior ? priorVisibleTargets(original.slice(from, to), target, prior.applications) : [];
   const applications = [...new Map([...previousApplications, { paper_id: paperId, targets: paperTargets, title: paperTitle }].map(row => [row.paper_id, row])).values()];
   const node = prior ? composeKnowledgeAddition(prior.item, item, paperId, paperTitle) : item;
+  const preserveCurrent = from >= 0 && matches.some(row => row.current_content === true);
   let body = ['[中文](#%E4%B8%AD%E6%96%87)', '[English](#English)', ...(node.formulas?.length ? ['[公式 / Formulas](#%E5%85%AC%E5%BC%8F%20/%20Formulas)'] : []), ...(node.sources?.length ? ['[来源 / Sources](#%E6%9D%A5%E6%BA%90%20/%20Sources)'] : [])].join(' · ') + '\n\n';
   for (const language of languages) {
-    const paragraphs = values => values.map(value => resolveReferences(value, language, target)).join('\n\n');
+    // When preserving the current note, only the appended sections below need link resolution.
+    const paragraphs = values => (preserveCurrent ? values : values.map(value => resolveReferences(value, language, target))).join('\n\n');
     body += `## ${language === 'en' ? 'English' : '中文'}\n\n` + paragraphs(node.paragraphs[language]) + '\n\n';
     const sections = [...(node.sections?.[language] ?? []), ...(node.paper_additions ?? []).flatMap(addition => additionSections(addition, language))];
     if (!Array.isArray(sections)) fail('RF_OBSIDIAN_KNOWLEDGE_INVALID');
@@ -242,12 +290,13 @@ export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, p
     body += `- [${source.title.replace(/[\[\]\r\n]/g, ' ')}](${source.url.replace(/\(/g, '%28').replace(/\)/g, '%29')})\n`;
   }
   body += '\n## 论文应用 / Paper applications\n\n' + applications.flatMap(application => languages.map(language => {
-    return `- [${applicationLabel(application, language)}](${href(target, application.targets[language])})`;
+    const destination = application.targets?.[language], label = applicationLabel(application, language);
+    return destination ? `- [${label}](${href(target, destination)})` : '- ' + label;
   })).join('\n') + '\n';
   const state = Buffer.from(JSON.stringify({ item: node, applications })).toString('base64');
   const addition = `${start}\n<!-- KNOWLEDGE_STATE ${state} -->\n${body}${end}\n`;
   let content;
-  if (original !== undefined && from >= 0 && matches.some(row => row.current_content === true)) {
+  if (preserveCurrent) {
     // Keep every visible byte from the current node, including edits inside the managed region.
     const oldRegion = original.slice(from, to);
     const newItem = node.paper_additions?.find(row => row.paper_id === paperId);

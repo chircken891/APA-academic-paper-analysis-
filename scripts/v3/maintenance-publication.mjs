@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual as same } from 'node:util';
 import { createOwnedArtifactBroker } from './owned-artifact-store.mjs';
-import { readCommittedGeneration, readRegisteredCommit } from './phase22-active-version.mjs';
+import { readRegisteredCommit } from './phase22-active-version.mjs';
 import { applyBilingualPublication, dryRunBilingualPublication, inspectBilingualPublicationRecovery,
   prepareBilingualPublicationTrustAnchor, registerBilingualPublication } from './phase22-publication.mjs';
 import { buildNoteRelocationReview } from './note-relocation.mjs';
@@ -48,7 +48,18 @@ function checkOptions(mode, options) {
   } else if (mode === 'map-refresh') {
     keys(options, ['generation', 'papers'], mode);
     list(options.papers, row => {
-      keys(row, ['paperId', 'map', 'argument', 'primaryFindingIds', 'sectionTitles', 'noteWordingEdits'], 'papers');
+      keys(row, ['paperId', 'map', 'argument', 'primaryFindingIds', 'sectionTitles', 'noteWordingEdits', 'canvasLayout'], 'papers');
+      if (Object.hasOwn(row, 'canvasLayout')) {
+        keys(row, ['paperId', 'canvasLayout'], 'papers');
+        keys(row.canvasLayout, ['language', 'before_sha256', 'nodes'], 'canvasLayout');
+        list(row.canvasLayout.nodes, node => {
+          keys(node, ['id', 'x', 'y', 'width', 'height'], 'canvasLayout.nodes');
+          return isText(node.id) && ['x', 'y', 'width', 'height'].every(key => Number.isFinite(node[key]))
+            && node.width > 0 && node.height > 0;
+        }, 'canvasLayout.nodes');
+        return identifier(row.paperId) && ['en', 'zh-CN'].includes(row.canvasLayout.language)
+          && fingerprint(row.canvasLayout.before_sha256) && row.canvasLayout.nodes.length > 0;
+      }
       keys(row.sectionTitles, ['en', 'zh-CN'], 'sectionTitles');
       return identifier(row.paperId) && isObject(row.argument) && isObject(row.map)
         && ['steps', 'findings', 'relations'].every(key => Array.isArray(row.map[key]) && row.map[key].every(isObject))
@@ -208,8 +219,7 @@ async function bindApproval(folder, summary, inventoryPath, inventorySha256, aut
 async function verifyResult(folder, summary, transaction) {
   const committed = transaction.status === 'committed';
   if (!committed && transaction.status !== 'rolled_back') return transaction;
-  const readCurrent = summary.mode === 'map-refresh' ? readCommittedGeneration : readRegisteredCommit;
-  const verified = [], current = await readCurrent({ vaultRoot: summary.vault_root });
+  const verified = [], current = await readRegisteredCommit({ vaultRoot: summary.vault_root });
   if (!current.ok || current.generation_id !== (committed ? summary.generation : summary.previous_generation)) {
     fail('P22_MAINTENANCE_COMMIT_VERIFICATION', { transaction_id: transaction.transaction_id, generation: current.generation_id,
       ...(current.errors ? { errors: current.errors } : {}) });
@@ -231,9 +241,15 @@ async function verifyResult(folder, summary, transaction) {
   return { ...transaction, result_path: resultPath, verification_path: verificationPath };
 }
 
+/** A single-line reply that starts with an approval word, such as “批准按该清单恢复布局”; questions are not approvals. */
+export function isMaintenanceApprovalReply(value) {
+  if (!isText(value)) return false;
+  const reply = value.trim();
+  return /^(?:我)?(?:批准|确认|同意)[^\r\n]*$/u.test(reply) && !/(?:[?？]|吗)[。！!]?$/u.test(reply);
+}
+
 export async function applyMaintenanceReview({ vaultRoot, run, inventorySha256, authorizationId, userReply, onRegistered, onPromotionBoundary }) {
-  if (!isText(authorizationId) || !isText(userReply)
-    || !/^(?:我)?(?:批准|确认|同意)(?:[ \t]+[^\r\n]+|执行|应用|迁移|合并|补偿)?[。！!]?$/u.test(userReply.trim())) fail('P22_MAINTENANCE_APPROVAL_REQUIRED');
+  if (!isText(authorizationId) || !isMaintenanceApprovalReply(userReply)) fail('P22_MAINTENANCE_APPROVAL_REQUIRED');
   if (!fingerprint(inventorySha256)) fail('P22_MAINTENANCE_INVENTORY_MISMATCH');
   const root = resolve(vaultRoot), folder = await directory(root, run), candidate = await directory(root, run, { candidate: true });
   await checkUnused(folder);

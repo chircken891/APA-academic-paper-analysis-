@@ -249,11 +249,12 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
       recordReadingFirstRequestEvent({controller,request,eventKey:'intent',payload:{action_id:step.action_id}});
       recordReadingFirstRequestEvent({controller,request,eventKey:'host_observation',payload:observation});
     }
-    return acceptReadingFirstResult({ controller, request, observation, capability: broker.issueCapability({ runId, actorId: request.task.owner_actor_id, role: request.task.role, artifactPath: request.task.artifact_path, revision: request.task.revision }) });
+    return acceptReadingFirstResult({ controller, request, observation, capability: () => broker.issueCapability({ runId, actorId: request.task.owner_actor_id, role: request.task.role, artifactPath: request.task.artifact_path, revision: request.task.revision }) });
   };
   const views = languages.map(language => ({ language,
     sections: modules.map((id, index) => ({ id, module_id: id, heading: titles[language][index], paragraphs: [options.findingText ?? (language === 'en' ? 'The supported ' + id + ' explains the synthetic result and its limits.' : '有依据的' + titles[language][index] + '说明合成研究结果及其限制。')] })),
-    placements: { visuals: [{ id: 'fig-one', section_id: 'findings', after_paragraph: 0 }], knowledge: [{ id: 'method', section_id: 'methods', after_paragraph: 0 }] },
+    placements: { visuals: [{ id: 'fig-one', section_id: 'findings', after_paragraph: 0 }],
+      knowledge: (options.knowledgePlacementIds ?? ['method']).map(id => ({ id, section_id: 'methods', after_paragraph: 0 })) },
   }));
   for (const request of created.requests) await complete(request, views.find(view => view.language === request.language));
   for (const request of createReadingFirstDraftRequests({ controller })) await complete(request, views.find(view => view.language === request.language));

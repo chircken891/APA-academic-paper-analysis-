@@ -780,7 +780,17 @@ async function continuationIntent(state, event) {
     if (!found || found[1].status !== 'observed') fail('READING_SESSION_CONTINUATION_INVALID');
     role = found[0]; handle = found[1].agent_id;
   }
-  let message = event.message + '\nContinue only the original task, output ownership, model and authorized scope. Desktop control and native observation require explicit user authorization.';
+  const editorRecovery = entry?.events?.host_observation?.payload?.editor_dispatch_recovery;
+  let message = event.message;
+  if (editorRecovery) {
+    if (event.message !== entry.request.emittedStep.arguments.message) fail('READING_EDITOR_CORRECTION_REQUIRED');
+    try {
+      await lstat(join(state.prepared.paths.runRoot, entry.request.task.native_path));
+      fail('READING_EDITOR_RECOVERY_NATIVE_PRESENT');
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  } else {
+    message += '\nContinue only the original task, output ownership, model and authorized scope. Desktop control and native observation require explicit user authorization.';
+  }
   if (scopeOutput) {
     const routing=getReadingFirstState(state.reading).routing;
     message+='\nSupply only the missing fields for these existing issue IDs. Preserve the original review file and all scientific judgments. Write an array of {issue_id, fields} to '+join(state.prepared.paths.runRoot,scopeOutput)+'\n'+JSON.stringify(routing);
@@ -1053,6 +1063,8 @@ async function recordSessionEvent(session, event = {}) {
     }
     fail('READING_SESSION_EVENT_ACTION_INVALID');
   }
+  if (event.observation?.editor_dispatch_recovery !== undefined
+    && request.task.task_id !== state.prepared.runControl.reading_first_binding.task_bindings.presentation?.task_id) fail('READING_SESSION_EVENT_INVALID');
   const prior = getReadingFirstRequestEvents({ controller: state.reading, request });
   if (!prior.intent) fail('READING_SESSION_EVENT_INTENT_REQUIRED');
   const key = requestEventKey(event), payload = event.observation;

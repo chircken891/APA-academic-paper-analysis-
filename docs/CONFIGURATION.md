@@ -43,6 +43,7 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 | paths.runs/parse/candidates | 本库内输出根目录，每次追加独立 run ID |
 | parser.runtime_home | 已有 MinerU 环境 |
 | parser.python/config_path | 可选显式路径；否则从运行目录派生 |
+| parser.max_concurrent | 可选正整数，限制同一知识库同时运行的 MinerU 解析；未配置时按本机总内存计算 |
 | reading.source_language | 旧字段，新阅读运行忽略；可缺省，已有的 en 或 zh-CN 值保留且合法。写作顺序由每篇论文的实际原文语言决定 |
 | reading.presentation_mode | reading-editor 或 writer |
 | writing_skills | 五项写作指导按最终选择保存 enabled；选任一 Nature 时自动启用内部依赖 `nature-shared`；启用项提供 SKILL.md 路径；两项构思指导在查询页选填 |
@@ -84,6 +85,8 @@ Controller 的新运行入口使用当前宿主实际提供的 `sessionContext: 
 ## 页面与操作
 
 `npm run setup:check` 检查仓库默认 MinerU 环境等基础项，不证明其他自选解析环境可用。`apa-setup inspect` 检查个人配置所选路径和依赖文件，实际解析使用新运行冻结的配置；文件存在仍不等于实际解析验收。
+
+MinerU 在实际启动解析子进程前，从所选库的 `.runtime/mineru-slots/` 取得跨进程名额。默认上限为 `max(1, floor((总内存 GiB - 8) / 12))`；配置页中的可选 `parser.max_concurrent` 可覆盖该值。并发上限是库级调度设置，排队时重新读取当前值；调低上限后等待超限槽位中的解析退出，再放行新解析。解析器路径和运行参数仍使用已冻结选择。名额满时等待，持有会话退出后仍保留正在运行的解析子进程名额，全部持有进程退出后可回收。内存不足沿原错误如实报告，可在名额空闲后重试；本入口固定使用原页范围和原解析器。阅读任务数量不受解析名额限制。
 
 本次检测的页面通过 `--host-profile <本次档案实际路径> --output <本次检测目录的index.html>` 生成并使用返回的完整路径，避免覆盖其他预览。页面先要求用户确认所针对的项目文件夹（同页展示本项目自检和宿主能力自检），再核对工作目录与 MinerU 解析环境的存放位置并显示其实际位置，之后才提供完善配置、去除配置和导出配置三个独立入口。存放位置的修改并入完善配置的预览。进入功能后只显示该功能的分页、预览及输出；返回首页可切换功能，填写内容保留，各功能的结果和下载文件名独立。页面内嵌脚本和样式，不启动后台服务，不向网络发送答案。
 

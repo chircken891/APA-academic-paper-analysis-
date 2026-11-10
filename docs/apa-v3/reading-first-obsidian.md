@@ -31,7 +31,7 @@ Reading Editor 1.4 另提供图表呈现和导图论证。
 
 每种语言生成一份 JSON Canvas，路径为 `Figures/<run_id>/research-map.zh-CN.canvas` 或 `Figures/<run_id>/research-map.en.canvas`。研究问题和读图说明在顶部，步骤、发现和论点分三列，结论在底部。全部登记步骤、发现和步骤到发现的关系进入导图，重点发现有独立标记。画布中的卡片链接到同语言笔记的实际小节。
 
-笔记在“2.1 研究导图”或“2.1 Research map”小节给出读图说明、只读嵌入和完整 Canvas 链接。Better Embedded Canvas 为嵌入提供只读平移与缩放，完整画布链接可单独使用。预览检查两份 Canvas 和内部小节链接。发布时按展示资产登记路径、字节数与 SHA-256，默认图谱继续读取已登记笔记。
+笔记在“2.1 研究导图”或“2.1 Research map”小节给出读图说明、只读嵌入和完整 Canvas 链接。Better Embedded Canvas 为嵌入提供只读平移与缩放，完整画布链接可单独使用。预览检查两份 Canvas 和内部小节链接。发布时按展示资产登记路径、当时观察到的字节数与 SHA-256；已登记 Canvas 后续读取当前 JSON，用户调整布局或 Obsidian 省略默认边属性不触发重新批准。导图刷新以当前文件为底稿，ID 未变节点保留 x、y、width、height，新增节点使用自动布局。默认图谱继续读取已登记笔记。
 
 新运行的指令版本仍为 `configured-reading-2.2`，展示版本为 `reading-editor-1.4`。Editor 请求从两语视图移除已单独提供的知识正文，每份只传一次。首次整体审查的 Editor 输出及收据作为修订基线；Verifier 的 `repair_scope` 指定章节、知识、图表或导图字段。无法定位或越界的修订保存真实拒绝结果并结束为 `completed_with_limits`。
 

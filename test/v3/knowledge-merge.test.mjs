@@ -115,6 +115,24 @@ test('knowledge merge retargets balanced and escaped Markdown destinations while
   assert.ok(paper.endsWith('\n' + expected.join('\n\n') + '\n'), paper.slice(-850));
 });
 
+test('a new augmentation resolves the retired entity ID through its committed merge alias', async t => {
+  const f = await fixture(t);
+  const removed = f.snapshot.generation.shared_nodes.find(row => row.path === f.remove);
+  const kept = f.snapshot.generation.shared_nodes.find(row => row.path === f.keep);
+  assert.equal((await f.publish(await buildKnowledgeMergeReview(f.options))).status, 'committed');
+  const presentation = structuredClone(f.first.presentationCatalog);
+  presentation.bibliography.title = { en: 'Later augmentation', 'zh-CN': '后来增补' };
+  presentation.source_pdf = 'Raw/pap_' + 'c'.repeat(32) + '.pdf';
+  presentation.visuals[0].path = 'Figures/pap_' + 'c'.repeat(32) + '/figure.png';
+  presentation.knowledge[0].paragraphs.en.push('Use [the previous identity](apa-entity:' + removed.entity_id + ') as the method.');
+  const later = await readingFirstPublicationFixture(t, { vaultRoot: f.vaultRoot, currentRegistryRoot: f.vaultRoot, presentation,
+    generation: 'merge-later-augmentation', runId: 'run_' + 'c'.repeat(32), paperId: 'pap_' + 'c'.repeat(32), register: false });
+  const output = later.plan.inventory.find(row => row.path === f.keep).bytes;
+  assert.ok(output.toString().includes(encodeURIComponent(posix.basename(f.keep)) + '#English'));
+  assert.match(JSON.stringify(stateOf(output).item), new RegExp('apa-entity:' + kept.entity_id));
+  assert.doesNotMatch(JSON.stringify(stateOf(output).item), new RegExp('apa-entity:' + removed.entity_id));
+});
+
 test('knowledge merge stops on a missing destination anchor and compensation stops on a newer human edit', async t => {
   const f = await fixture(t);
   const path = f.second.candidate.notes[0].path, absolute = join(f.vaultRoot, path);

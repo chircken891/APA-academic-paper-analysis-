@@ -107,6 +107,25 @@ test('historical preview rejects caller-created registry', async t => {
   await assert.rejects(access(input.outputRoot), { code: 'ENOENT' });
 });
 
+test('historical preview preserves a legacy application link with a preview-only unavailable destination', async t => {
+  const prior = await readingFirstIndexFixture(t);
+  await prior.save(await prior.build());
+  const support = prior.files.find(row => row.kind === 'support');
+  const retired = 'Wiki/sources/retired-paper.md';
+  const text = (await readFile(path.join(prior.vaultRoot, support.path), 'utf8')) + '\n[[' + retired + '|Retired paper]]\n';
+  await writeFile(path.join(prior.vaultRoot, support.path), text);
+  const input = await fixture(t);
+  input.knowledgeRegistry = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot: prior.vaultRoot });
+  input.historicalKnowledge = { vaultRoot: prior.vaultRoot };
+  input.views[0].sections[0].paragraphs.push('[[' + support.path + '#English|History]]');
+  const result = await exportReadingFirstPreview(input);
+  const placeholder = result.manifest.files.find(row => row.path === retired);
+  assert.equal(placeholder.kind, 'historical-unavailable');
+  assert.equal(placeholder.publishable, false);
+  assert.equal(await readFile(path.join(input.outputRoot, support.path), 'utf8'), text);
+  assert.match(await readFile(path.join(input.outputRoot, retired), 'utf8'), /Historical paper unavailable/);
+});
+
 test('historical knowledge self-links terminate and registered assets are verified', async t => {
   const prior = await readingFirstIndexFixture(t);
   const support = prior.files.find(row => row.kind === 'support');

@@ -17,6 +17,7 @@ import { verifyReadingFirstPaperBytes, verifyReadingFirstPresentation } from '..
 import { syncCommittedGraph } from '../../scripts/v3/obsidian-graph-sync.mjs';
 import { buildMapRefreshReview } from '../../scripts/v3/research-map-refresh.mjs';
 import { researchMapCanvasSection } from '../../scripts/v3/research-map-canvas.mjs';
+import { isMaintenanceApprovalReply } from '../../scripts/v3/maintenance-publication.mjs';
 
 const script = fileURLToPath(new URL('../../scripts/v3/bilingual.mjs', import.meta.url));
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
@@ -53,6 +54,13 @@ function assetMapping(fixture) {
   const { path, sha256, byte_length } = fixture.resources.find(row => row.path.startsWith('Figures/'));
   return { old_path: path, new_path: `Figures/${fixture.runId}/${posix.basename(path)}`, sha256, byte_length };
 }
+
+test('maintenance approval accepts the user reply as written and rejects questions or refusals', () => {
+  for (const reply of ['批准', '我批准', '批准按该清单恢复 Dumas 布局', '确认执行', '同意 合并这两页。'])
+    assert.equal(isMaintenanceApprovalReply(reply), true, reply);
+  for (const reply of ['', '不批准', '暂不批准', '批准吗', '确认一下？', '批准\n再说', '看看再批准'])
+    assert.equal(isMaintenanceApprovalReply(reply), false, reply);
+});
 
 test('map refresh CLI rejects an empty paper selection', async t => {
   const root = await mkdtemp(join(tmpdir(), 'apa-map-refresh-empty-'));
@@ -151,6 +159,52 @@ async function registerLegacyCanvas(root, options) {
   assert.equal(base.generation_id, run, JSON.stringify(base.errors));
   return base;
 }
+
+test('refresh keeps the current geometry of every existing research map node', async t => {
+  const { f, options } = await legacyMapFixture(t), root = f.vaultRoot;
+  await registerLegacyCanvas(root, options);
+  const path = 'Figures/' + f.runId + '/research-map.en.canvas';
+  const original = await json(join(root, path));
+  const node = original.nodes[0];
+  const expected = { x: node.x + 87, y: node.y - 33, width: node.width + 8, height: node.height + 12 };
+  Object.assign(node, expected);
+  for (const edge of original.edges) if (edge.toEnd === 'arrow') delete edge.toEnd;
+  const bytes = Buffer.from(JSON.stringify(original));
+  await writeFile(join(root, path), bytes);
+  const prepared = await buildMapRefreshReview({ vaultRoot: root, runId: 'map-refresh-keeps-geometry',
+    generation: 'map-refresh-keeps-geometry', ...options });
+  const changed = prepared.outputInventory.find(row => row.path === path);
+  assert.equal(changed.before_sha256, sha(bytes));
+  const kept = JSON.parse(changed.bytes).nodes.find(row => row.id === node.id);
+  assert.deepEqual({ x: kept.x, y: kept.y, width: kept.width, height: kept.height }, expected);
+});
+
+test('maintenance can apply a precise geometry change to one language Canvas only', async t => {
+  const f = await published(t), root = f.vaultRoot, run = 'map-layout-only';
+  const selected = f.candidate.generated_assets.find(row => row.language === 'zh-CN');
+  const other = f.candidate.generated_assets.find(row => row.language === 'en');
+  const before = await readFile(join(root, selected.path));
+  const sibling = await readFile(join(root, other.path));
+  const notes = await Promise.all(f.candidate.notes.map(row => readFile(join(root, row.path))));
+  const expected = JSON.parse(before), { id, x, y, width, height } = expected.nodes[0];
+  const node = { id, x: x + 42, y: y - 13, width, height };
+  const canvasLayout = { language: 'zh-CN', before_sha256: sha(before), nodes: [node] };
+  const selection = { paperId: f.paperId, canvasLayout };
+  const options = { papers: [selection] };
+  await assert.rejects(buildMapRefreshReview({ vaultRoot: root, runId: run, generation: run,
+    papers: [{ ...selection, canvasLayout: { ...canvasLayout, before_sha256: 'sha256:' + '0'.repeat(64) } }] }),
+    { code: 'P22_MAP_REFRESH_LAYOUT_PREIMAGE_CHANGED' });
+  const candidate = await review(root, run, 'map-refresh', options);
+  assert.ok(candidate.targets.includes(selected.path));
+  assert.ok(!candidate.targets.includes(other.path));
+  assert.ok(!candidate.targets.some(path => path.startsWith('Wiki/')));
+  const transaction = apply(root, run, candidate.inventory_sha256);
+  assert.equal(transaction.status, 'committed', JSON.stringify(transaction));
+  Object.assign(expected.nodes[0], node);
+  assert.deepEqual(await json(join(root, selected.path)), expected);
+  assert.deepEqual(await readFile(join(root, other.path)), sibling);
+  assert.deepEqual(await Promise.all(f.candidate.notes.map(row => readFile(join(root, row.path)))), notes);
+});
 
 test('registered map refresh overwrites its assets in place and changes only the selected reading paragraph', async t => {
   const { f, options } = await legacyMapFixture(t), root = f.vaultRoot, run = 'registered-map-maintenance';

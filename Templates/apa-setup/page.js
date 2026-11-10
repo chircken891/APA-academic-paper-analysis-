@@ -36,6 +36,7 @@ export const fields = [
   { key: 'parser.runtime_home', label: 'MinerU 安装目录', type: 'text', group: 'parser', help: '填写环境文件夹，不是论文 PDF 或解析结果目录。例：.runtime/mineru。' },
   { key: 'parser.python', label: 'Python 程序路径（可选）', type: 'text', group: 'parser', help: '未配置时使用 MinerU 安装目录下的 venv/Scripts/python.exe。仅在实际位置不同或需明确指定时填写。' },
   { key: 'parser.config_path', label: 'MinerU 配置文件（可选）', type: 'text', group: 'parser', help: '未配置时使用 MinerU 安装目录下的 config.yaml。应填现有文件路径，不是文件内容。' },
+  { key: 'parser.max_concurrent', label: 'MinerU 同时解析上限（可选）', type: 'positive-integer', group: 'parser', help: '填写正整数。未配置时根据本机总内存决定。上限适用于此知识库中的 MinerU 解析。' },
   { key: 'reading.presentation_mode', label: '笔记呈现方式', type: 'select', group: 'reading', help: '直接使用写作结果：省去编辑这一步。阅读编辑：额外整理重点、编号层级和目录，需要计入本次运行预算。', options: ['writer', 'reading-editor'] },
   ...writingSkills.map(key => ({ key: `writing_skills.${key}`, label: key, type: 'skill', group: 'skills', help: skillHelp[key] })),
   ...ideationSkills.map(key => ({ key: `writing_skills.${key}`, label: key, type: 'skill', group: 'query', help: skillHelp[key] }))
@@ -257,6 +258,12 @@ export function fieldValue(field, values, hostProfile = null) {
   if (field.type === 'model') return values.mode === 'follow-main' ? { mode: 'follow-main' } : { mode: 'explicit', model: values.model.trim(), ...(values.effort ? { reasoning_effort: values.effort } : {}) };
   if (field.type === 'host') return { name: hostProfile.host, dispatch: hostProfile.dispatch };
   if (field.type === 'skill') return values.enabled === 'true' ? { enabled: true, ...(values.path.trim() ? { path: values.path.trim() } : {}) } : { enabled: false };
+  if (field.type === 'positive-integer') {
+    const text = values.value.trim();
+    const value = /^[0-9]+$/.test(text) ? Number(text) : null;
+    if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${field.label}需要填写正整数。`);
+    return value;
+  }
   return values.value.trim();
 }
 
@@ -666,7 +673,7 @@ export function mountApaSetup(document, snapshot, inspection, queryInspection, h
       inputs.path = addInput(row, 'SKILL.md 文件路径（启用时必填）', `${field.key}-path`, current?.path || (defaultWritingSkill ? setupDefaults.skillPaths[field.label] : ''));
       inputs.path.placeholder = '填写实际 SKILL.md 文件，不是它所在的文件夹';
     } else inputs.value = addInput(row, field.label, field.key, current ?? '', field.options ? ['', ...field.options] : undefined, field.optionNames);
-    if (groups.find(group => group.id === field.group)?.location) {
+    if (field.type === 'text' && groups.find(group => group.id === field.group)?.location) {
       const actual = make('p', undefined, 'hint');
       const showActual = () => { actual.textContent = inputs.value.value.trim() ? `实际位置：${resolveInProject(repoRoot, inputs.value.value.trim())}` : '未填写；按说明使用默认或派生位置。'; };
       inputs.value.addEventListener('input', showActual); showActual(); row.append(actual);

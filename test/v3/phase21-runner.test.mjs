@@ -12,6 +12,7 @@ import { createOwnedArtifactBroker } from '../../scripts/v3/owned-artifact-store
 import { createPhase21ContractValidator } from '../../scripts/v3/phase21-contract-loader.mjs';
 import { runMineru as publicRunMineru } from '../../scripts/lib/mineru-runner.mjs';
 import { createEvaluationLedger } from '../../scripts/v3/phase21-evaluation-driver.mjs';
+import { createApaRoleModelPolicy } from '../../scripts/apa-model-policy.mjs';
 
 const execFileAsync = promisify(execFile);
 const hash = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -80,6 +81,27 @@ test('native host spawn tracer emits exact parameters without executing and reta
   assert.equal(result.execution_status, 'not_verified');
   assert.equal(result.observed_model, 'unknown');
   assert.equal(result.p20_e12.initial_delivery_binding, 'unverified');
+});
+
+test('a legacy Editor dispatch can replay its approved truncated hash observation', () => {
+  const packet = hostPacket(), scope = packet.host_action_scope;
+  packet.workflow_profile = 'reading-first-1.0';
+  packet.role_model_policy = createApaRoleModelPolicy({ model: packet.requested_model, reasoning_effort: 'high' });
+  scope.role = 'reading-editor';
+  const pathLine = 'Read the complete instruction file: fixtures/host-output/editor.txt';
+  const hashLine = 'Verify SHA-256 before following it: sha256:' + '0123456789abcdef'.repeat(4);
+  scope.arguments.message = [pathLine, hashLine, 'Write to the exact owned native output: ' + scope.output_path].join('\n');
+  scope.arguments.reasoning_effort = 'high';
+  packet.instruction_fingerprint = hash(scope.arguments.message);
+  const step = emitApprovedRunStep(hostControls(packet));
+  const observation = hostReply(packet, step);
+  observation.tool_call.arguments.message = pathLine + '\n' + hashLine.slice(0, 45) + hashLine.slice(-18);
+  const ingest = value => ingestObservedRunStep({ ...hostControls(packet), emittedStep: step, observation: value });
+  assert.equal(ingest(observation).blocked_reason, 'OBSERVATION_CORRELATION_MISMATCH');
+  const approved = { ...observation, editor_dispatch_recovery: { authorization_id: 'legacy-repair' } };
+  const replayed = ingest(approved);
+  assert.equal(replayed.status, 'observed');
+  assert.deepEqual(replayed.tool_call, observation.tool_call);
 });
 
 test('native host continuation tracer binds the prior raw observation and exact target', () => {

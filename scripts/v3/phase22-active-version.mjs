@@ -8,6 +8,7 @@ import { fingerprintV3Json as hash } from './semantic-package-validator.mjs';
 import { freezePhase22Value } from './phase22-freeze.mjs';
 import { PHASE22_REGIONS, inspectManagedNote, machineFieldsForProfile } from './phase22-managed-markdown.mjs';
 import { INDEX_READING_FIRST_PROFILE, READING_FIRST_INDEX_REGIONS, getReadingFirstManagedBinding,
+  parseRegisteredResearchMap, registeredResearchMapPaths,
   verifyReadingFirstPresentation, verifyReadingFirstPaperBytes, readingFirstIndexDocuments } from './reading-first-index.mjs';
 
 export { INDEX_READING_FIRST_PROFILE, verifyReadingFirstPresentation, readingFirstIndexDocuments };
@@ -228,7 +229,7 @@ export function topicIndexDocuments({ topic, bytes, generation }) {
 
 function verifyObjects(root, generation, index) {
   const readerPaths = new Set();
-  const presentationAssets = new Map();
+  const presentationAssets = new Set();
   for (const topic of generation.topics ?? []) {
     const expected = topicIndexDocuments({ topic, bytes: readRegular(root, topic.path), generation }).sort((a, b) => a.id.localeCompare(b.id));
     const actual = index.documents.filter(row => ['topic', 'writing-project'].includes(row.entity_type) && (row.project_id ?? row.topic_id) === (topic.project_id ?? topic.topic_id)).sort((a, b) => a.id.localeCompare(b.id));
@@ -237,7 +238,7 @@ function verifyObjects(root, generation, index) {
   }
   for (const paper of generation.papers.filter(row => row.profile === INDEX_READING_FIRST_PROFILE)) {
     const presentation = verifyReadingFirstPresentation(paper, readRegular(root, paper.reader_presentation.path), generation);
-    for (const asset of presentation.presentation_assets ?? []) presentationAssets.set(asset.path, asset);
+    for (const asset of presentation.presentation_assets ?? []) presentationAssets.add(asset.path);
     const notes = Object.fromEntries(Object.entries(paper.paths).map(([language, path]) => [language, readRegular(root, path)]));
     const files = presentation.targets.support.map(row => ({ path: row.path, bytes: readRegular(root, row.path) }));
     const expected = readingFirstIndexDocuments({ paper, presentation, notes, generation, files }).sort((a, b) => a.id.localeCompare(b.id));
@@ -248,8 +249,11 @@ function verifyObjects(root, generation, index) {
   const papers = new Map(generation.papers.flatMap(p => Object.keys(p.paths).map(language => [p.paths[language], { p, language }])));
   for (const item of generation.objects) {
     if (readerPaths.has(item.path)) continue;
+    if (presentationAssets.has(item.path)) {
+      parseRegisteredResearchMap(readResearchMapBytes(root, item.path), item.path);
+      continue;
+    }
     const bytes = readRegular(root, item.path), record = papers.get(item.path);
-    if (presentationAssets.has(item.path) && bytes.length !== presentationAssets.get(item.path).byte_length) fail('RF_PUBLICATION_PRESENTATION_ASSET_INVALID', { path: item.path });
     if (item.kind === 'support') assertV3SupportBytes(bytes, item.path);
     if (item.kind === 'knowledge-aliases') parseRegisteredKnowledgeAliases(bytes, generation);
     if (record) {
@@ -339,16 +343,28 @@ export function assertRegisteredCommit(snapshot) {
   return record;
 }
 
-/** Read a registered immutable object under a pair-only capability. */
+function readResearchMapBytes(root, path) {
+  try { return readRegular(root, path); }
+  catch (error) {
+    if (error.code === 'ENOENT') fail('RF_PUBLICATION_PRESENTATION_ASSET_MISSING', { path });
+    throw error;
+  }
+}
+
+/** Read a registered object under a pair-only capability. */
 export function readRegisteredObject(snapshot, path) {
   const record = assertRegisteredCommit(snapshot);
   const object = snapshot.generation.objects.find(row => row.path === path);
   if (!object || path.startsWith('Wiki/')) fail('P22_REGISTERED_OBJECT_MISSING', { path });
-  const bytes = readRegular(record.root, path);
-  if (sha(bytes) !== object.sha256) fail('P22_OBJECT_HASH_MISMATCH', { path });
+  const currentMap = object.kind === 'asset' && /\.canvas$/i.test(path)
+    && registeredResearchMapPaths(snapshot.generation, sidecar => readRegular(record.root, sidecar)).has(path);
+  const bytes = currentMap ? readResearchMapBytes(record.root, path) : readRegular(record.root, path);
+  const sha256 = sha(bytes);
+  if (currentMap) parseRegisteredResearchMap(bytes, path);
+  else if (sha256 !== object.sha256) fail('P22_OBJECT_HASH_MISMATCH', { path });
   if (object.kind === 'knowledge-aliases') parseRegisteredKnowledgeAliases(bytes, snapshot.generation);
   assertRegisteredCommit(snapshot);
-  return { bytes, sha256: object.sha256 };
+  return { bytes, sha256 };
 }
 
 /** Only this double-read observer can mint a public-query snapshot capability. */

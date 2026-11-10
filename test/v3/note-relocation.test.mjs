@@ -109,15 +109,18 @@ test('path-only relocation uses the existing transaction and preserves scientifi
   assert.equal(navigation.status, 'passed');
   assert.ok(navigation.local_links > 0);
 });
-test('relocation refuses occupied target and stale committed source instead of overwriting', async t => {
+test('relocation refuses an occupied target and identifies an invalid registered source', async t => {
   const f = await published(t), old = f.before.generation.papers[0].paths['zh-CN'];
   const target = old.replace('Wiki/sources/', 'Wiki/translations/');
   await mkdir(join(f.vaultRoot, 'Wiki/translations'));
   await writeFile(join(f.vaultRoot, target), 'human note');
   await assert.rejects(relocation(f), /P22_RELOCATION_TARGET_OCCUPIED/);
   assert.equal(await readFile(join(f.vaultRoot, target), 'utf8'), 'human note');
+  await rename(join(f.vaultRoot, target), join(f.vaultRoot, 'occupied-target-fixture.md'));
   await writeFile(join(f.vaultRoot, old), 'changed source');
-  await assert.rejects(relocation(f), /P22_RELOCATION_COMMITTED_REQUIRED/);
+  await assert.rejects(relocation(f), { code: 'P22_FRONTMATTER_REQUIRED', details: { path: old } });
+  assert.equal(await readFile(join(f.vaultRoot, old), 'utf8'), 'changed source');
+  await assert.rejects(readFile(join(f.vaultRoot, target)), { code: 'ENOENT' });
 });
 test('relocation does not bypass the existing exact approval or rollback', async t => {
   const f = await published(t), original = new Map();

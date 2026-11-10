@@ -119,6 +119,7 @@ export async function withReadingRuntimeConsumer(options, callback) {
   const owner = `${process.pid}-${randomUUID()}`;
   const staging = join(runRoot, '.runtime-consumer-' + owner);
   await mkdir(staging);
+  const wait = options.onWait && createReadingLockWait(options.onWait);
   try {
     await writeFile(join(staging, owner), '', { flag: 'wx' });
     for (let attempt = 0; ; attempt++) {
@@ -126,7 +127,9 @@ export async function withReadingRuntimeConsumer(options, callback) {
         if (!['EEXIST', 'ENOTEMPTY', 'EPERM', 'EACCES'].includes(error.code)) throw error;
         if (attempt >= 3) fail('READING_RUNTIME_CONSUMER_ACTIVE', { path: lock });
         if (!await inspectPath(runRoot, lock, 'directory')) continue;
-        const owners = await readdir(lock);
+        let owners;
+        try { owners = await readdir(lock); }
+        catch (readError) { if (readError.code === 'ENOENT') continue; throw readError; }
         if (owners.length > 1 || owners.some(name => !/^\d+-[a-f0-9-]{36}$/.test(name))) {
           fail('READING_RUNTIME_CONSUMER_ACTIVE', { path: lock });
         }
@@ -138,7 +141,10 @@ export async function withReadingRuntimeConsumer(options, callback) {
             try { await unlink(join(lock, owners[0])); } catch (unlinkError) { if (unlinkError.code !== 'ENOENT') throw unlinkError; }
             continue;
           }
-          fail('READING_RUNTIME_CONSUMER_ACTIVE', { path: lock });
+          if (!wait) fail('READING_RUNTIME_CONSUMER_ACTIVE', { path: lock, pid });
+          await wait({ lock: 'runtime-consumer', transaction_id: null, pid });
+          attempt = -1;
+          continue;
         }
         try { await rmdir(lock); } catch (removeError) {
           if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(removeError.code)) throw removeError;
@@ -155,6 +161,20 @@ export async function withReadingRuntimeConsumer(options, callback) {
     await unlink(join(lock, owner));
     try { await rmdir(lock); } catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) throw error; }
   }
+}
+
+/** Poll a known live owner and report its last observed identity each minute. */
+export function createReadingLockWait(onWait) {
+  let since, reported;
+  return async owner => {
+    since ??= performance.now();
+    const waited_ms = Math.floor(performance.now() - since);
+    if (reported === undefined || waited_ms - reported >= 60_000) {
+      await onWait({ ...owner, waited_ms });
+      reported = waited_ms;
+    }
+    await setTimeout(5000);
+  };
 }
 
 export async function readReadingRuntimeTerminal(options) {

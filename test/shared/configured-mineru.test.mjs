@@ -1,13 +1,184 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
+import { mkdtemp, mkdir, readFile, readdir, rename, writeFile, rm } from 'node:fs/promises';
+import { tmpdir, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { runMineru } from '../../scripts/lib/mineru-runner.mjs';
 import { checkMineruRuntime } from '../../scripts/lib/mineru-runtime.mjs';
 import { createConfiguredMineruPort, configuredMineruConfiguration } from '../../scripts/v3/configured-reading.mjs';
 import { fingerprintReadingFirst } from '../../scripts/v3/reading-first-runtime.mjs';
 import { createHash } from 'node:crypto';
+import { validateApaConfig } from '../../scripts/lib/apa-config.mjs';
+import { fields, fieldValue } from '../../Templates/apa-setup/page.js';
+
+async function isolatedVault(t) {
+  const vaultRoot = await mkdtemp(join(tmpdir(), 'mineru-runner-'));
+  t.after(() => rm(vaultRoot, { recursive: true, force: true }));
+  await mkdir(join(vaultRoot, 'Clippings'), { recursive: true });
+  const sourcePath = join(vaultRoot, 'Clippings', 'new.pdf');
+  await writeFile(sourcePath, '%PDF-1.7\nsynthetic paper\n', 'utf8');
+  return { vaultRoot, sourcePath };
+}
+
+const workerScript = `
+  import { spawn } from 'node:child_process';
+  import { once } from 'node:events';
+  import { join } from 'node:path';
+  import { runMineru } from ${JSON.stringify(new URL('../../scripts/lib/mineru-runner.mjs', import.meta.url).href)};
+  const [vaultRoot, sourcePath, id] = process.argv.slice(1);
+  await runMineru({ vaultRoot, sourcePath, outputPath: join(vaultRoot, id), python: process.execPath,
+    readVersion: async () => { process.send({ type: 'ready' }); return '4.0.12'; },
+    runChild: async (command, args, options) => {
+      const child = spawn(command, ['-e', "const fs = require('node:fs'); const timer = setInterval(() => { if (fs.existsSync(process.argv[1])) clearInterval(timer); }, 25); setTimeout(() => process.exit(1), 15000).unref();", join(vaultRoot, id + '-release')], { detached: true, windowsHide: true, stdio: 'ignore' });
+      options.onSpawn?.(child);
+      process.send({ type: 'started', pid: child.pid });
+      const [code] = await once(child, 'exit');
+      if (code !== 0) throw new Error('synthetic parser did not complete');
+    },
+  });
+`;
+
+async function startWorkers(t) {
+  const workers = [];
+  t.after(async () => {
+    await Promise.all(workers.map(worker => worker.release()));
+    await Promise.all(workers.map(worker => worker.exit));
+  });
+  const { vaultRoot, sourcePath } = await isolatedVault(t);
+  const workerTemp = join(vaultRoot, 'temp');
+  await mkdir(workerTemp);
+  await mkdir(join(vaultRoot, '.runtime', 'mineru'), { recursive: true });
+  await mkdir(join(vaultRoot, 'config'));
+  const setLimit = async limit => {
+    const target = join(vaultRoot, 'config', 'apa.local.json');
+    const pending = target + '.tmp';
+    await writeFile(pending, JSON.stringify({ schema_version: 'apa-local-config-1.0', parser: { max_concurrent: limit } }));
+    await rename(pending, target);
+  };
+  await setLimit(1);
+  const start = id => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', workerScript, vaultRoot, sourcePath, id], {
+      env: { ...process.env, TMP: workerTemp, TEMP: workerTemp, TMPDIR: workerTemp },
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'], windowsHide: true,
+    });
+    const messages = [];
+    let stderr = '';
+    child.on('message', message => messages.push(message));
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    const worker = {
+      child, exit: once(child, 'exit'),
+      release: () => writeFile(join(vaultRoot, id + '-release'), ''),
+      seen: type => messages.find(message => message.type === type),
+      async expect(type) {
+        for (let i = 0; i < 200; i++) {
+          const message = this.seen(type);
+          if (message) return message;
+          if (child.exitCode !== null || child.signalCode !== null) break;
+          await delay(25);
+        }
+        assert.fail(`${id} did not emit ${type}: ${stderr}`);
+      },
+    };
+    workers.push(worker);
+    return worker;
+  };
+  return { start, vaultRoot, setLimit };
+}
+
+test('MinerU starts one parser at a time across independent runner processes', async t => {
+  const { start, vaultRoot } = await startWorkers(t);
+  const first = start('first');
+  await first.expect('started');
+  const slot = join(vaultRoot, '.runtime', 'mineru-slots', 'slot-1');
+  const runner = (await readdir(slot)).find(name => name.endsWith('-runner.json'));
+  assert.deepEqual(JSON.parse(await readFile(join(slot, runner), 'utf8')), {
+    pid: first.child.pid, max_concurrent: 1, limit_source: 'configuration',
+  });
+  const second = start('second');
+  await second.expect('ready');
+  await delay(600);
+  assert.equal(second.seen('started'), undefined, 'second parser started while the first held the only slot');
+  await first.release();
+  assert.deepEqual(await first.exit, [0, null]);
+  await second.expect('started');
+  await second.release();
+  assert.deepEqual(await second.exit, [0, null]);
+});
+
+test('MinerU reclaims the slot of a terminated runner after its parser exits', async t => {
+  const { start } = await startWorkers(t);
+  const first = start('first');
+  const { pid } = await first.expect('started');
+  assert.ok(first.child.kill('SIGKILL'));
+  assert.deepEqual(await first.exit, [null, 'SIGKILL']);
+  assert.doesNotThrow(() => process.kill(pid, 0));
+  const second = start('second');
+  await second.expect('ready');
+  await delay(600);
+  assert.equal(second.seen('started'), undefined, 'second parser overlapped the terminated runner’s surviving parser');
+  await first.release();
+  await second.expect('started');
+  await second.release();
+  assert.deepEqual(await second.exit, [0, null]);
+});
+
+test('reducing the MinerU limit applies to waiting runners while higher slots are still occupied', async t => {
+  const { start, setLimit } = await startWorkers(t);
+  await setLimit(2);
+  const first = start('first');
+  await first.expect('started');
+  const second = start('second');
+  await second.expect('started');
+  const third = start('third');
+  await third.expect('ready');
+  await delay(400);
+  assert.equal(third.seen('started'), undefined);
+  await setLimit(1);
+  await first.release();
+  assert.deepEqual(await first.exit, [0, null]);
+  await delay(600);
+  assert.equal(third.seen('started'), undefined, 'a queued runner used the lower slot while the higher slot was still active');
+  await second.release();
+  assert.deepEqual(await second.exit, [0, null]);
+  await third.expect('started');
+  await third.release();
+  assert.deepEqual(await third.exit, [0, null]);
+});
+
+test('records the memory-derived limit and releases a failed parse without changing its error', async t => {
+  const { vaultRoot, sourcePath } = await isolatedVault(t);
+  await mkdir(join(vaultRoot, '.runtime', 'mineru'), { recursive: true });
+  const slotRoot = join(vaultRoot, '.runtime', 'mineru-slots');
+  const failure = new Error('synthetic parser memory exhaustion');
+  await assert.rejects(runMineru({ vaultRoot, sourcePath, outputPath: join(vaultRoot, 'output'),
+    python: process.execPath,
+    readVersion: async () => '4.0.12',
+    runChild: async () => {
+      const slot = join(slotRoot, 'slot-1');
+      const [owner] = await readdir(slot);
+      const memoryGiB = totalmem() / (2 ** 30);
+      assert.deepEqual(JSON.parse(await readFile(join(slot, owner), 'utf8')), {
+        pid: process.pid, max_concurrent: Math.max(1, Math.floor((memoryGiB - 8) / 12)), limit_source: 'memory',
+      });
+      throw failure;
+    },
+  }), error => error === failure);
+  assert.deepEqual(await readdir(slotRoot), []);
+});
+
+test('the setup page and local configuration accept only positive integer MinerU limits', () => {
+  const field = fields.find(entry => entry.key === 'parser.max_concurrent');
+  assert.equal(fieldValue(field, { value: '2' }), 2);
+  for (const value of ['0', '-1', '1.5', '1e2', '9007199254740992']) {
+    assert.throws(() => fieldValue(field, { value }), /正整数/u);
+  }
+  const validate = max_concurrent => validateApaConfig({ schema_version: 'apa-local-config-1.0', parser: { max_concurrent } }).valid;
+  assert.equal(validate(2), true);
+  for (const value of [0, -1, 1.5, '2', Number.MAX_SAFE_INTEGER + 1]) assert.equal(validate(value), false);
+});
 
 test('configured MinerU uses the explicit Python and config in its actual subprocess without changing process environment', async t => {
   const root = await mkdtemp(join(tmpdir(), 'apa-configured-mineru-'));

@@ -19,13 +19,14 @@ import { getRunControlForDispatch, createOwnedArtifactBroker } from './owned-art
 import { assertActiveGeneration, assertIndexGeneration, assertActiveIndexContract, readCommittedGeneration, readRegisteredCommit, PHASE22_COMMIT_PATH } from './phase22-active-version.mjs';
 import { inspectManagedNote } from './phase22-managed-markdown.mjs';
 import { captureReadingFirstPublicationRegistration, rebuildRegisteredReadingFirstReview,
-  applyReadingFirstSourceDerivation, assertReadingFirstPublicationReviewLive, usesCurrentReadingFirstPublication } from './reading-first-publication.mjs';
+  applyReadingFirstSourceDerivation, applyReadingFirstUserCorrections, assertReadingFirstPublicationReviewLive,
+  usesCurrentReadingFirstPublication } from './reading-first-publication.mjs';
 import { assertNoteRelocationReviewCurrent, NOTE_RELOCATION_PROFILE, usesCurrentNoteRelocation } from './note-relocation.mjs';
 import { KNOWLEDGE_MERGE_PROFILE, usesCurrentKnowledgeMerge } from './knowledge-merge.mjs';
 import { MAP_REFRESH_PROFILE, MAP_REFRESH_TOOL_URLS, assertMapRefreshReviewCurrent } from './research-map-refresh.mjs';
 
 const usesCurrentPublication = review => usesCurrentReadingFirstPublication(review) || usesCurrentTopicPublication(review)
-  || usesCurrentNoteRelocation(review) || usesCurrentKnowledgeMerge(review);
+  || usesCurrentNoteRelocation(review) || usesCurrentKnowledgeMerge(review) || review?.reviewManifest.profile === MAP_REFRESH_PROFILE;
 
 const CONTROL = '.apa-v3/phase22';
 const LOCK = CONTROL + '/publication.lock';
@@ -392,6 +393,20 @@ async function durableNew(ctx, path, bytes, label) {
 function alive(pid) {
   try { process.kill(pid, 0); return true; }
   catch (error) { return error.code !== 'ESRCH'; }
+}
+/** Observe the owner without acquiring, retiring or altering its lock. */
+export async function readBilingualPublicationLock(vaultRoot) {
+  const root = (await rootState(vaultRoot)).root;
+  let file;
+  try { file = await observe(root, LOCK, { allowLinks: true }); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  if (!file.exists) return null;
+  let owner;
+  try { owner = JSON.parse(file.bytes); } catch { fail('P22_VAULT_LOCK_UNKNOWN_OWNER'); }
+  if (owner?.version !== 1 || owner.host !== hostname() || !identifier(owner.transaction_id)
+    || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 || !identifier(owner.token)
+    || !/^sha256:[a-f0-9]{64}$/.test(owner.authority_hash)) fail('P22_VAULT_LOCK_UNKNOWN_OWNER');
+  return { transaction_id: owner.transaction_id, pid: owner.pid, live: alive(owner.pid) };
 }
 async function acquireLock(ctx, authorityHash, { recover = false } = {}) {
   await ensureDirectories(ctx, CONTROL);
@@ -1002,7 +1017,7 @@ function captureMaintenanceBindings(authority, review) {
   if (inventory.sha256 !== authority.inventory_sha256) fail('P22_MAINTENANCE_INVENTORY_MISMATCH');
   const profile = review.reviewManifest.profile;
   const tools = profile === MAP_REFRESH_PROFILE ? MAP_REFRESH_TOOL_URLS : [
-    profile === NOTE_RELOCATION_PROFILE ? './note-relocation.mjs' : './knowledge-merge.mjs', './phase22-publication.mjs',
+    ...(profile === NOTE_RELOCATION_PROFILE ? ['./note-relocation.mjs'] : ['./knowledge-merge.mjs', './reading-first-knowledge.mjs']), './phase22-publication.mjs',
   ];
   return { source_bindings: [inventory],
     tool_bindings: tools.map(path => fileBinding(fileURLToPath(new URL(path, import.meta.url)))),
@@ -1278,18 +1293,25 @@ export async function loadBilingualPublication({ vaultRoot, run, requireApproval
   } else if (requireApproval) fail('P22_PUBLICATION_CONTROL_REQUIRED');
   let restoredReadingSource = null;
   if (simple && bundle.reading_first_source) {
-    const dependencies = bundle.reviewManifest.dependencies;
+    const { dependencies, provenance_limits: provenance } = bundle.reviewManifest;
+    const corrections = provenance?.user_corrections;
     if (bundle.reviewManifest.profile !== 'reading-first-obsidian-1.0'
-      || !bundle.reading_first_source.knowledge_rebase && !dependencies?.source_derivation) fail('P221_REGISTERED_REBUILD_MISMATCH');
+      || !bundle.reading_first_source.knowledge_rebase && !dependencies?.source_derivation && !dependencies?.user_corrections
+      || dependencies?.user_corrections !== (corrections ? hash(corrections) : undefined)) fail('P221_REGISTERED_REBUILD_MISMATCH');
     restoredReadingSource = await restoreReadingFirstPublicationSource(bundle.reading_first_source);
     const data = await inspectReadingFirstPublicationSource(restoredReadingSource);
     if (dependencies.knowledge_rebase !== data.recipe.knowledge_rebase?.rebase_fingerprint
       || dependencies.presentation !== data.candidate.presentation_fingerprint
       || dependencies.reading_review !== data.reading_review_fingerprint) fail('P221_REGISTERED_REBUILD_MISMATCH');
-    const candidate = applyReadingFirstSourceDerivation(data, dependencies.source_derivation);
+    const corrected = applyReadingFirstUserCorrections(data.candidate, corrections);
+    const candidate = applyReadingFirstSourceDerivation({ ...data, candidate: corrected }, dependencies.source_derivation);
+    const visible = value => value.replace(/<!-- KNOWLEDGE_STATE [A-Za-z0-9+/=]+ -->/, '');
     for (const note of [...candidate.notes, ...candidate.supportNotes]) {
       const output = plan.inventory.find(row => row.path === note.path);
-      if (!output || !output.bytes.equals(Buffer.from(note.content))) fail('P221_REGISTERED_REBUILD_MISMATCH');
+      const raw = Buffer.from(note.content), normalized = provenance?.knowledge_render_hashes?.[note.path];
+      const matches = normalized ? output?.kind === 'support' && digest(raw) === normalized
+        && visible(output.bytes.toString('utf8')) === visible(note.content) : output?.bytes.equals(raw);
+      if (!matches) fail('P221_REGISTERED_REBUILD_MISMATCH', { path: note.path });
     }
   }
   let rebuiltReview = null;

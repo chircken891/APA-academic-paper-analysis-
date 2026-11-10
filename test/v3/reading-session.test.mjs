@@ -170,13 +170,16 @@ for (const retries of [1,2]) test('translation continuation preserves completed 
   assert.equal(plan.recommended_additional_calls,2*retries);
 });
 
-async function startSyntheticDrafting(t) {
-  const f = await configuredFixture(t, { systemTemp: true }), template = await configuredSessionTemplate(t);
-  f.profile.capabilities = { task_continuation: continuationCapability() };
+async function startSyntheticDrafting(t, { codex = false } = {}) {
+  const f = await configuredFixture(t, { systemTemp: true, codex }), template = await configuredSessionTemplate(t);
+  const capability = continuationCapability();
+  if (codex) Object.assign(capability.continuation, { tool: 'collaboration.followup_task', instruction_argument: 'message' });
+  f.profile.capabilities = { task_continuation: capability };
   const session = await createReadingSession(f.options);
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const resultEvent = (action, observation = observe(action)) => ({ kind: 'result', action_id: action.action_id, observation });
   const accept = async (currentSession, action, path, value) => {
+    assert.equal(action.action, 'dispatch', JSON.stringify({ path, action }));
     const event = resultEvent(action);
     await recordReadingEvent(currentSession, { ...event, kind: 'host_observation' });
     await writeFile(join(runRoot, 'native', path + '.json'), JSON.stringify(value));
@@ -308,6 +311,28 @@ test('Editor structural rejection provides a CLI and API continuation on the ori
   assert.equal((await recordReadingEvent(recovered, event)).status, 'pending_review');
 });
 
+
+test('Codex Editor correlates only the assigned instruction path and exact structured arguments', async t => {
+  const { f, template, session, runRoot, accept, resultEvent } = await startSyntheticDrafting(t, { codex: true });
+  await accept(session, await nextReadingAction(session), 'zh-CN', template.views[1]);
+  const action = await nextReadingAction(session);
+  const path = join(runRoot, 'instructions', 'presentation.txt');
+  assert.equal(action.arguments.message, path);
+  const observation = observe({ ...action, arguments: { ...action.arguments, message: '\n' + path + ' ' } });
+  const event = { ...resultEvent(action, observation), kind: 'host_observation' };
+  const malformed = { ...observation, tool_call: { ...observation.tool_call, arguments: { ...action.arguments, message: path.slice(0, -1) } } };
+  await assert.rejects(() => recordReadingEvent(session, { ...event, observation: malformed }), /OBSERVATION_CORRELATION_MISMATCH/);
+  await assert.rejects(() => recordReadingEvent(session, { ...event, observation: { ...malformed, editor_dispatch_recovery: { authorization_id: 'legacy-repair' } } }), /OBSERVATION_CORRELATION_MISMATCH/);
+  const wrongContext = { ...observation, tool_call: { ...observation.tool_call, arguments: { ...observation.tool_call.arguments, fork_turns: 'all' } } };
+  await assert.rejects(() => recordReadingEvent(session, { ...event, observation: wrongContext }), /OBSERVATION_CORRELATION_MISMATCH/);
+  await recordReadingEvent(session, event);
+
+  const restored = await resumeReadingSession({ runRoot });
+  await recordReadingEvent(restored, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+  await writeFile(join(runRoot, 'native', 'presentation.json'), JSON.stringify(template.editor));
+  assert.equal((await recordReadingEvent(restored, resultEvent(action, observation))).status, 'pending_review');
+});
+
 // Synthetic scenarios explicitly choose to continue at each reminder.
 async function nextReadingAction(session) {
   let action = await nextAction(session);
@@ -339,7 +364,7 @@ test('session requires explicit source and authorization and rejects nonexistent
   await assert.rejects(() => resumeReadingSession({ runRoot: '' }), /READING_SESSION_ROOT_INVALID/);
 });
 
-async function configuredFixture(t, { systemTemp = false } = {}) {
+async function configuredFixture(t, { systemTemp = false, codex = false } = {}) {
   const base = systemTemp ? tmpdir() : join(process.cwd(), '.tmp', 'apa-session-enrichment-20261030');
   await mkdir(base, { recursive: true });
   const root = await mkdtemp(join(base, 'session-test-'));
@@ -351,6 +376,7 @@ async function configuredFixture(t, { systemTemp = false } = {}) {
   await writeFile(join(bin, process.platform === 'win32' ? 'python.exe' : 'python'), 'synthetic');
   await writeFile(join(parser, 'config.yaml'), 'synthetic');
   const dispatch = { tool: 'Agent', model_argument: 'model', effort_argument: 'effort', instruction_argument: 'prompt', task_name_argument: 'description', fresh_context: null, result_handle: { source: 'text', pattern: '"agent_id":"([^"]+)"' } };
+  if (codex) Object.assign(dispatch, { tool: 'collaboration.spawn_agent', instruction_argument: 'message', task_name_argument: 'task_name', fresh_context: { argument: 'fork_turns', value: 'none' } });
   const profile = { schema_version: 'apa-host-profile-1.0', host: 'test-host', detected_at: '2026-10-30T10:00:00Z', session: { model: 'm', reasoning_effort: 'high' }, models: [{ model: 'm', reasoning_efforts: ['high'] }], dispatch, sources: { session: 'system-context', models: 'tool-schema', dispatch: 'tool-schema' } };
   const choice = { mode: 'explicit', model: 'm', reasoning_effort: 'high' };
   const config = { schema_version: 'apa-local-config-1.0', models: { science: choice, overrides: {}, roles: Object.fromEntries(['english-writer', 'chinese-writer', 'translation', 'reading-editor', 'independent-verifier'].map(role => [role, choice])) }, paths: { runs: 'runs', parse: 'parse', candidates: 'candidates' }, parser: { runtime_home: parser }, reading: { source_language: 'en', presentation_mode: 'reading-editor' }, writing_skills: Object.fromEntries(['nature-writing', 'nature-polishing', 'nature-shared', 'humanizer', 'humanizer-zh', 'stss'].map(key => [key, { enabled: false }])), host: { name: profile.host, dispatch } };
@@ -358,7 +384,8 @@ async function configuredFixture(t, { systemTemp = false } = {}) {
   await mkdir(join(root, 'Clippings'));
   const bytes = Buffer.from('synthetic source'), source = join(root, 'Clippings', 'paper.pdf'); await writeFile(source, bytes);
   const scientificInput = { profile: 'reading-first-1.0', identity: { run_id: 'run', paper_id: 'pap_' + 'a'.repeat(32) }, sources: [{ id: 'paper', path: source, sha256: 'sha256:' + createHash('sha256').update(bytes).digest('hex'), byte_length: bytes.length }], context: 'synthetic', role_artifacts: ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'] };
-  const evidence = { current_host: { name: profile.host, reference: 'test session' }, dispatch: { source: 'tool-schema', tool: 'Agent', reference: 'test schema' }, fresh_context: { source: 'host-docs', reference: 'test host docs', blank_context: true }, file_read: { status: 'pass', reference: 'test read' }, input: { status: 'pass', reference: 'test source and parser' } };
+  const evidence = { current_host: { name: profile.host, reference: 'test session' }, dispatch: { source: 'tool-schema', tool: dispatch.tool, reference: 'test schema' }, fresh_context: { source: 'host-docs', reference: 'test host docs', blank_context: true }, file_read: { status: 'pass', reference: 'test read' }, input: { status: 'pass', reference: 'test source and parser' } };
+  if (codex) evidence.fresh_context = { source: 'tool-schema', reference: 'test schema', ...dispatch.fresh_context };
   const observedTool = { status: 'pass', source: 'tool-declaration', reference: 'synthetic', method: 'synthetic declaration', observation: 'declared available' };
   evidence.results_tools = { python: { ...observedTool, path: join(bin, process.platform === 'win32' ? 'python.exe' : 'python') }, libraries: { ...observedTool, names: ['fitz'] }, visual_read: observedTool, file_read: observedTool };
   return { root, profile, evidence, options: { repoRoot: root, runId: 'run', scientificInput, sourceLanguage: 'en', instructionProfile: 'configured-reading-2.2', authorizationId: 'test', deadline: '2099-01-01T00:00:00Z', maxCalls: 8, maxTotalCalls: 14, sessionContext: { model: 'm', effort: 'high' }, hostProfile: profile, evidence, includeRepairs: true } };
@@ -1181,10 +1208,14 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, path, value) => {
     assert.equal(action.action, 'dispatch');
-    assert.match(action.arguments.prompt, new RegExp('native[\\\\/]' + path.replace('-', '\\-') + '\\.json'));
+    const instructionPath = join(runRoot, 'instructions', path + '.txt');
+    const nativePath = join(runRoot, 'native', path + '.json');
+    assert.equal(action.arguments.prompt, instructionPath);
+    const instruction = await readFile(instructionPath, 'utf8');
+    assert.ok(instruction.split(/\r?\n/).some(line => line.endsWith(': ' + nativePath)), 'expected the assigned native output path in ' + instructionPath);
     const observation = observe(action);
     await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
-    await writeFile(join(runRoot, 'native', path + '.json'), JSON.stringify(value));
+    await writeFile(nativePath, JSON.stringify(value));
     return recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
   };
   for (let i = 0; i < 6; i++) { const action = await nextReadingAction(session); await accept(action, action.role, content(action.role)); }

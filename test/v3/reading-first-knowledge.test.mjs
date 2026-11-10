@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { draftReadingFirstKnowledgeComparisons, matchReadingFirstKnowledgeIdentity, renderSharedKnowledge } from '../../scripts/v3/reading-first-knowledge.mjs';
+import { bindPublishedKnowledgeReferences, draftReadingFirstKnowledgeComparisons, matchReadingFirstKnowledgeIdentity,
+  registeredKnowledgeReference, renderSharedKnowledge } from '../../scripts/v3/reading-first-knowledge.mjs';
 
 const item = { id: 'pie', kind: 'method', canonical_key: 'method:pie', title: { 'zh-CN': '饼图', en: 'Pie chart' }, source_kind: 'method-background', paragraphs: { 'zh-CN': ['中文'], en: ['English'] } };
 const prior = { paper_id: 'bray', title: 'Bray 2024', targets: { 'zh-CN': 'Wiki/sources/Bray.zh-CN.md', en: 'Wiki/sources/Bray.en.md' } };
@@ -65,10 +66,60 @@ test('preserves a prior paper relocated visible target in the candidate and hidd
   assert.ok(content.endsWith(after));
 });
 
+test('resolves only appended references when preserving a current shared note', () => {
+  const historical = {
+    ...item,
+    paper_additions: [{
+      paper_id: 'bray', title: prior.title,
+      paragraphs: { en: ['[Cox model](apa-knowledge:old-cox-id)'], 'zh-CN': ['[Cox 模型](apa-knowledge:old-cox-id)'] },
+    }],
+  };
+  const state = Buffer.from(JSON.stringify({ item: historical, applications: [prior] })).toString('base64');
+  const visible = '## English\n\nA preserved [Cox model](Cox.md#English).';
+  const original = `${before}${start}\n<!-- KNOWLEDGE_STATE ${state} -->\n${visible}\n${end}${after}`;
+  const resolveReferences = value => {
+    if (value.includes('apa-knowledge:old-cox-id')) throw new Error('RF_OBSIDIAN_REFERENCE_INVALID');
+    return value.replace('apa-knowledge:cox', 'Cox.md');
+  };
+  const options = {
+    item: { ...item, paragraphs: { ...item.paragraphs, en: ['New [Cox method](apa-knowledge:cox).'] } },
+    knowledgeRegistry: [{ id: item.id, path: 'Wiki/methods/饼图.md', content: original, current_content: true }],
+    paperTargets: currentTargets, paperId: 'new', paperTitle: 'New paper',
+    vaultPath: value => value, href, resolveReferences,
+  };
+  const content = renderSharedKnowledge(options).note.content;
+  assert.ok(content.includes(visible));
+  assert.ok(content.includes('New [Cox method](Cox.md).'));
+  const saved = JSON.parse(Buffer.from(/<!-- KNOWLEDGE_STATE ([A-Za-z0-9+/=]+) -->/.exec(content)[1], 'base64'));
+  assert.deepEqual(saved.item.paper_additions[0], historical.paper_additions[0]);
+  assert.throws(() => renderSharedKnowledge({
+    ...options, item: { ...item, paragraphs: { ...item.paragraphs, en: ['New [broken reference](apa-knowledge:old-cox-id).'] } },
+  }), /RF_OBSIDIAN_REFERENCE_INVALID/);
+});
+
 test('current paper targets override prior visible destinations', () => {
   const { content, applications } = render(links, { paperId: 'bray', targets: currentTargets });
   assert.deepEqual(applications[0].targets, currentTargets);
   assert.match(content, /\[New paper · 中文\]\(\.\.\/translations\/New\.zh-CN\.md\)/);
+});
+
+test('publication binds current entity IDs and keeps unresolvable legacy links visible', () => {
+  const visible = 'Uses [visible legacy context](retired.md).';
+  const legacy = { ...item, paragraphs: { ...item.paragraphs,
+    en: ['[Retired concept](apa-knowledge:retired) and [Moved concept](apa-entity:kept_id)'] } };
+  const original = '<!-- KNOWLEDGE_STATE ' + Buffer.from(JSON.stringify({ item: legacy, applications: [prior] })).toString('base64')
+    + ' -->\n' + visible;
+  const registry = [{ path: 'Wiki/concepts/new-path.md', entity_id: 'kept_id', registered_aliases: ['retired_id'] }];
+  const resolve = (id, kind) => registeredKnowledgeReference(registry, id, kind)?.entity_id;
+  const bound = bindPublishedKnowledgeReferences(original, {
+    reused: true, resolveHistorical: resolve, resolveCurrent: resolve, registeredPapers: new Set(),
+  });
+  assert.ok(bound.content.endsWith(visible));
+  assert.deepEqual(bound.unresolved, ['knowledge:retired', 'paper:bray']);
+  const state = JSON.parse(Buffer.from(/<!-- KNOWLEDGE_STATE ([A-Za-z0-9+/=]+) -->/.exec(bound.content)[1], 'base64'));
+  assert.deepEqual(state.item.paragraphs.en, ['Retired concept and [Moved concept](apa-entity:kept_id)']);
+  assert.deepEqual(state.applications, [{ paper_id: 'bray', title: 'Bray 2024' }]);
+  assert.equal(registeredKnowledgeReference(registry, 'retired_id', 'entity').path, 'Wiki/concepts/new-path.md');
 });
 
 test('does not infer a target from duplicate or external matching links', () => {

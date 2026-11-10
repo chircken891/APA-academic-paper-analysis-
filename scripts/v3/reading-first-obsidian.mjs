@@ -6,7 +6,8 @@ import { buildResearchMapCanvas, serializeResearchMapCanvas, researchMapCanvasSe
 import { fingerprintV3Json } from './semantic-package-validator.mjs';
 import { registerReaderTargets } from './phase221-targets.mjs';
 import { mergeManagedNote } from './phase22-managed-markdown.mjs';
-import { applyReadingFirstKnowledgeContent, draftReadingFirstKnowledgeComparisons, matchReadingFirstKnowledgeIdentity, renderSharedKnowledge } from './reading-first-knowledge.mjs';
+import { applyReadingFirstKnowledgeContent, draftReadingFirstKnowledgeComparisons, matchReadingFirstKnowledgeIdentity,
+  registeredKnowledgeReference, renderSharedKnowledge } from './reading-first-knowledge.mjs';
 
 const languages = ['en', 'zh-CN'];
 export const READING_FIRST_OBSIDIAN_SCHEMA = 'reading-first-obsidian-1.0';
@@ -219,11 +220,9 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
   if (sharedKnowledge) for (let index = 0; index < supportNotes.length; index++) {
     const item = knowledge.find(item => item.id === supportNotes[index].id);
     const resolveReferences = (value, language, target) => value.replace(/\[([^\]\n]+)\]\((apa-[^)]+)\)/g, (_, text, reference) => {
-      const concept = /^apa-knowledge:([a-z][a-z0-9-]*)$/.exec(reference);
-      const selected = concept && destinations.get(`${concept[1]}:${language}`);
-      const committed = concept && !selected ? knowledgeRegistry.filter(entry => entry.id === concept[1]) : [];
-      const paths = [...new Set(committed.map(entry => entry.path))];
-      const destination = selected ?? (paths.length === 1 ? paths[0] : undefined);
+      const concept = /^apa-(knowledge|entity):([A-Za-z0-9_-]+)$/.exec(reference);
+      const selected = concept?.[1] === 'knowledge' && destinations.get(concept[2] + ':' + language);
+      const destination = selected || (concept && registeredKnowledgeReference(knowledgeRegistry, concept[2], concept[1])?.path);
       if (!destination) fail('RF_OBSIDIAN_REFERENCE_INVALID');
       return md(text, href(target, destination) + '#' + encodeMarkdownComponent(language === 'en' ? 'English' : '中文'));
     });

@@ -78,11 +78,15 @@ const prepared = await prepareReadingFirstPublication({
 
 发布队列保存批准顺序、每篇原候选身份和原始精确清单、实际授权原话、事务身份及完成核验。用户对整批已审候选回复“全部发布”后，队列逐篇调用一次发布入口；写入始终串行。排到某篇时重新读取最新代次，执行确定性身份匹配、必要变基和 dry-run，再按上述差异范围判断。允许变化形成关联原批准的派生记录，写入后逐篇报告；其他变化保持待批准状态。
 
+单篇发布使用相同队列。批准请求先保存在各篇运行的 `publication/`，再等待队列消费锁；取得锁后入队，并由本会话消费已有未完成条目和新条目。前一个消费者结束后，后来的会话自行接手。存活进程持有全库发布锁时，条目保持 `queued`，每 5 至 10 秒检查一次，按分钟报告事务 ID、进程号和等待时长，不设总等待时限。占用不会写成 `awaiting_reapproval`，也不消耗批准。未知持有者仍停止并报告，已退出持有者沿既有失效锁流程处理。
+
+每次尝试在最新代次上完成 dry-run 后生成新的 15 分钟维护窗口；排队等待不预先消耗窗口。竞争失败后的重试重新准备窗口，变基超出批准范围和实际 dry-run 错误仍保留具体诊断并等待重新批准。官方入口无法处理的输入须返回明确错误，主会话停止并报告，不编写临时发布驱动绕过。
+
 后序候选的提前 dry-run 使用最新代次加前序候选的投影。投影只作提前检查，实际写入仍再次核对当前代次和目标。中断恢复从真实 owned 会话取得已审来源，并核对已保存事务和结果；已提交且核验完成的项目跳过，登记过但尚未完成的事务使用既有恢复入口。
 
 恢复时始终核对真实事务日志、原签名、批准与库根，结果文件本身不构成提交证明。尚未提交事务的维护窗口到期后，只有原批准允许恢复时，才派生绑定原事务 ID 的 15 分钟恢复窗口；该窗口不能用于 apply。恢复回滚后重新读取候选及当前代次，继续沿原队列批准范围准备。已经提交的事务补齐核验及回收记录后记为完成，崩溃留下的活跃运行引用继续按任务 8 的限定范围回收。
 
-队列保存在所选库的 `.runtime/apa-publication-queue/`。接口位于 `scripts/v3/reading-first-publication-queue.mjs`，命令入口为同目录的 `reading-first-publication-queue-cli.mjs`。`entries.json` 是按用户选定顺序排列的数组，每项包含 `run`、`runRoot`、`resources`，可指定 `generation` 和已有的 `presentationAssetRegistrations`。`resources` 沿用单篇发布格式。准备返回原始清单、前序投影检查和完整 proposal 指纹，批准参数绑定该指纹。
+队列保存在所选库的 `.runtime/apa-publication-queue/`。接口位于 `scripts/v3/reading-first-publication-queue.mjs`，命令入口为同目录的 `reading-first-publication-queue-cli.mjs`。`entries.json` 是按用户选定顺序排列的数组，每项包含 `run`、`runRoot`、`resources`，可指定 `generation`、已有的 `presentationAssetRegistrations` 和 `user_corrections`。`resources` 沿用单篇发布格式。准备返回原始清单、前序投影检查和完整 proposal 指纹，批准参数绑定该指纹。运行根可以是正式会话入口可恢复的派生运行；未支持的运行状态或缺失的真实产物仍以具体错误报告。
 
 ```powershell
 node scripts/v3/reading-first-publication-queue-cli.mjs prepare --vault-root <vault-root> --entries <entries.json>
@@ -91,7 +95,13 @@ node scripts/v3/reading-first-publication-queue-cli.mjs drain --vault-root <vaul
 node scripts/v3/reading-first-publication-queue-cli.mjs status --vault-root <vault-root>
 ```
 
-这些命令分担准备、保存批准和执行职责。用户已经明确要求“全部发布”时，助手在同一轮保存 prepare 的实际输出、展示摘要、绑定原话并继续 drain，不为相同范围追加确认。异常项目保留具体诊断；修订候选或超出允许差异后需要新的批准。
+`prepare` 准备精确清单，`approve` 先保存批准、等待锁后入队并消费，`drain` 用于恢复已有队列。用户已经明确要求“全部发布”时，助手在同一轮保存 prepare 的实际输出、展示摘要并绑定原话，不为相同范围追加确认。异常项目保留具体诊断；修订候选或超出允许差异后需要新的批准。
+
+**用户指定的单点更正**
+
+发布输入可带 `user_corrections` 数组，每项保存 `path`、`before`、`after`、`source_location` 和 `user_reply`。主会话先对照原文页码、图表或公式位置确认更正，再把每项替换展示在批准清单中。两语稿分别列出；`before` 必须在对应候选笔记中唯一匹配，可包含定位所需的短上下文。实际差异只允许一个数值、符号、系数、单位或方向词，段落论证、导图和导航结构的调整继续走 `user-revision`。
+
+更正随同一次批准事务写入，并与原审查记录一同保存在运行的 `publication/`。原审查记录保持原字节，不增加模型调用或复核轮次。未解决实质问题的 `completed_with_limits` 运行仍先使用 `inspect-continuation`、`authorize-continuation` 续接，完成既定修订与获批局部复核后再发布。
 
 **共享页合并维护**
 
@@ -125,7 +135,7 @@ node scripts/v3/bilingual.mjs maintenance-apply --vault-root <vault-root> --run 
 
 Canvas 卡片以完整库内路径 `[[Wiki/translations/笔记名#小节标题|文字]]` 链接正文，目标包含实际语言目录，避免候选副本或旧页同名造成歧义。当前 `relocate` 入口按语言调整目录并保留文件名，同一事务同步重写已登记 Canvas 的链接和文件卡片，更新画布前像、展示资产的哈希与字节数、对象登记和索引；旧页继续保留。已有相对链接按画布所在目录重算，短名引用只在已登记目标可唯一确定时迁移。需要分轨的论点关系使用有文字的关系标签卡，每张连接一个起点与一个终点。
 
-审阅命令在 `Eval/apa-v3/runs/<run-id>/publication/candidate/` 保存精确清单、审阅和用于重建的选项。检查 `INVENTORY.md` 中的新建、覆盖、删除数与路径，以及 `review_hash` 和 `output_inventory_hash`。用户对这份清单明确批准后，把 `INVENTORY.json` 的 SHA-256、批准 ID 和实际回复传给执行命令。执行入口在同一进程重建审阅并试算，清单内容或哈希发生变化时停止。核对通过后，入口保存批准和固定 15 分钟维护窗口，登记、执行，并在 `publication/` 下保存 `RESULT.md` 和 `VERIFICATION.json`。
+审阅命令在 `Eval/apa-v3/runs/<run-id>/publication/candidate/` 保存精确清单、审阅和用于重建的选项。检查 `INVENTORY.md` 中的新建、覆盖、删除数与路径，以及 `review_hash` 和 `output_inventory_hash`。用户对这份清单明确批准后，把 `INVENTORY.json` 的 SHA-256、批准 ID 和用户原话传给执行命令；原话以“批准”“确认”或“同意”开头即可，问句不作为批准。执行入口在同一进程重建审阅并试算，清单内容或哈希发生变化时停止。核对通过后，入口保存批准和固定 15 分钟维护窗口，登记、执行，并在 `publication/` 下保存 `RESULT.md` 和 `VERIFICATION.json`。
 
 执行入口在写入事务前向 stderr 发出 `maintenance-registered` 事件，包含事务 ID 和公钥信任锚。把这两项与可信调用记录一并保存。中断时用原信任锚设置 `APA_V3_PUBLICATION_TRUST_ANCHOR`，并运行既有 `bilingual.mjs recover --vault-root <vault-root> --run <run-id> --transaction-id <transaction-id>`。恢复按现有事务状态核验已提交结果或回滚前像。需要再次执行时，先核对恢复结果，再用新运行 ID 准备清单及取得新批准。
 

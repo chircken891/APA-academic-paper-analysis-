@@ -140,7 +140,22 @@ export async function exportReadingFirstPreview({ outputRoot, identity, views, p
   }
   if (history) {
     const historical = new Map(knowledgeRegistry.map(row => [row.path, row]));
-    const papers = new Set(history.paper_paths), nav = new Map();
+    const papers = new Set(history.paper_paths), nav = new Map(), unavailable = new Map();
+    const historicalReferences = new Map();
+    const preserveUnavailable = (file, reference, destination, fragment) => {
+      if (!/^Wiki\/(?:sources|translations|methods|concepts)\/[^/]+\.md$/i.test(destination)) return false;
+      if (file.kind !== 'historical-reference') {
+        const prior = historical.get(file.path);
+        if (file.kind !== 'knowledge-candidate' || !prior?.current_content || typeof prior.content !== 'string') return false;
+        if (!historicalReferences.has(file.path)) historicalReferences.set(file.path,
+          referencesFor({ path: file.path, bytes: Buffer.from(prior.content) }));
+        if (!historicalReferences.get(file.path).some(row => row.target === reference.target && row.wiki === reference.wiki)) return false;
+      }
+      const fragments = unavailable.get(localPath(destination)) ?? new Set();
+      if (fragment) fragments.add(fragment);
+      unavailable.set(destination, fragments);
+      return true;
+    };
     const catalog = () => [...new Set([...files.map(row => row.path), ...historical.keys(), ...papers, ...history.asset_paths])];
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -156,6 +171,7 @@ export async function exportReadingFirstPreview({ outputRoot, identity, views, p
           let options = [location, `${location}.md`, destination, `${destination}.md`].filter(value => candidates.includes(value));
           if (!options.length && !location.includes('/')) options = candidates.filter(value => value.endsWith('/' + location) || value.endsWith('/' + location + '.md'));
           options = [...new Set(options)];
+          if (!options.length && preserveUnavailable(file, reference, location.endsWith('.md') ? location : location + '.md', fragment)) continue;
           if (options.length !== 1) fail('RF_PREVIEW_LINK_UNRESOLVED', { source: file.path, target });
           destination = options[0];
         }
@@ -171,19 +187,29 @@ export async function exportReadingFirstPreview({ outputRoot, identity, views, p
           continue;
         }
         if (historical.has(destination)) {
-          if (typeof historical.get(destination).content !== 'string') fail('RF_PREVIEW_HISTORICAL_RESOURCE_UNAVAILABLE', { source: file.path, target, path: destination });
+          if (typeof historical.get(destination).content !== 'string') {
+            if (preserveUnavailable(file, reference, destination, fragment)) continue;
+            fail('RF_PREVIEW_HISTORICAL_RESOURCE_UNAVAILABLE', { source: file.path, target, path: destination });
+          }
           if (historical.get(destination).current_content) assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: historicalKnowledge.vaultRoot, registry: knowledgeRegistry, paths: [destination] });
           add(destination, Buffer.from(historical.get(destination).content), 'historical-reference');
         } else if (papers.has(destination)) {
           const fragments = new Set(fragment ? [fragment] : []); nav.set(destination, fragments);
           add(destination, Buffer.alloc(0), 'historical-navigation');
         } else {
+          if (preserveUnavailable(file, reference, destination, fragment)) continue;
           try {
             const asset = readCommittedReadingFirstRegistryResource({ vaultRoot: historicalKnowledge.vaultRoot, registry: knowledgeRegistry, path: destination });
             add(destination, asset.bytes, 'historical-asset');
           } catch (cause) { fail('RF_PREVIEW_HISTORICAL_RESOURCE_UNAVAILABLE', { source: file.path, target, path: destination, cause: cause.code ?? cause.message }); }
         }
       }
+    }
+    for (const [destination, fragments] of unavailable) {
+      const label = /^Wiki\/(?:sources|translations)\//.test(destination)
+        ? '历史论文不可用 / Historical paper unavailable' : '历史知识节点不可用 / Historical knowledge unavailable';
+      const anchors = [...fragments].map(fragment => fragment.startsWith('^') ? '历史位置 ' + fragment : '## ' + fragment);
+      add(destination, Buffer.from('# ' + label + '\n\n当前登记无法定位此引用。\n\n' + anchors.join('\n\n') + '\n'), 'historical-unavailable');
     }
     for (const [destination, fragments] of nav) {
       const labels = [...fragments].map(fragment => fragment.startsWith('^') ? `Navigation placeholder ${fragment}` : `## ${fragment}`);

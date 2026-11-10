@@ -253,5 +253,8 @@ export function resolveApaConfig({ config, repoRoot = process.cwd(), mainSession
     const skillPath = absolute(repoRoot, skill.path);
     try { writingSkills[key] = { path: skillPath, content: fs.readFileSync(skillPath, 'utf8') }; } catch { throw error('APA_SKILL_UNAVAILABLE', key); }
   }
-  return { roles, paths: Object.fromEntries(Object.entries(config.paths).map(([key, value]) => [key, absolute(repoRoot, value)])), parser: Object.fromEntries(Object.entries(config.parser).map(([key, value]) => [key, absolute(repoRoot, value)])), reading: clone(config.reading), writingSkills };
+  const { max_concurrent, ...parserPaths } = config.parser;
+  const parser = Object.fromEntries(Object.entries(parserPaths).map(([key, value]) => [key, absolute(repoRoot, value)]));
+  if (max_concurrent !== undefined) parser.max_concurrent = max_concurrent;
+  return { roles, paths: Object.fromEntries(Object.entries(config.paths).map(([key, value]) => [key, absolute(repoRoot, value)])), parser, reading: clone(config.reading), writingSkills };
 }

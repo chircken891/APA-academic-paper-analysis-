@@ -64,7 +64,7 @@ export function readKnowledgeRegistryRow({ path, content, entityId, registeredAl
   const title = basename(path, '.md');
   if (typeof id !== 'string' || !id || typeof canonical !== 'string' || !canonical
     || !Array.isArray(aliases) || aliases.some(value => typeof value !== 'string')) {
-    return { id: entityId, canonical_key: entityId, title, aliases: [], path, unavailable: true, current_content: true };
+    return { id: entityId, entity_id: entityId, canonical_key: entityId, title, aliases: [], path, unavailable: true, current_content: true };
   }
   const body = content.slice(front[0].length);
   const tokens = markdown.parse(body, {}), definitions = [];
@@ -94,7 +94,7 @@ export function readKnowledgeRegistryRow({ path, content, entityId, registeredAl
     }
     catch { fail('RF_KNOWLEDGE_REGISTRY_METADATA_INVALID', { path }); }
   }
-  return { id, canonical_key: canonical, title, ...(typeof titleZh === 'string' ? { title_zh: titleZh } : {}),
+  return { id, entity_id: entityId, canonical_key: canonical, title, ...(typeof titleZh === 'string' ? { title_zh: titleZh } : {}),
     ...(typeof titleEn === 'string' ? { title_en: titleEn } : {}), aliases, path,
     ...(registeredAliases.length ? { registered_aliases: [...registeredAliases] } : {}), ...(definitions.length ? { definitions } : {}),
     ...(typeof metadata.language === 'string' ? { language: metadata.language } : {}), content, current_content: true,
@@ -135,7 +135,7 @@ export async function readCommittedReadingFirstKnowledgeRegistry({ vaultRoot, po
     const entry = currentContents.get(node.path);
     if (!entry) {
       if (!snapshot.diagnostics.some(row => row.path === node.path)) fail('RF_KNOWLEDGE_REGISTRY_BINDING_INVALID', { path: node.path });
-      return { id: node.entity_id, canonical_key: node.entity_id, title: basename(node.path, '.md'), aliases: [], path: node.path,
+      return { id: node.entity_id, entity_id: node.entity_id, canonical_key: node.entity_id, title: basename(node.path, '.md'), aliases: [], path: node.path,
         ...(signedAliases.has(node.path) ? { registered_aliases: signedAliases.get(node.path) } : {}),
         unavailable: true, current_content: true };
     }
