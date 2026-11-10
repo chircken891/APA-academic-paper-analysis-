@@ -693,6 +693,18 @@ async function withCommittedGraph(result, vaultRoot) {
   }
 }
 
+// Runs under the publication lock: keep the committed and previous generations only.
+async function withGenerationRetention(result, vaultRoot, journal) {
+  if (result.status !== 'committed') return result;
+  try {
+    const { pruneSupersededGenerations } = await import('./generation-retention.mjs');
+    return { ...result, generation_retention: await pruneSupersededGenerations({ vaultRoot,
+      transactionId: journal.transaction_id, previousGeneration: journal.previous_generation ?? null }) };
+  } catch (error) {
+    return { ...result, generation_retention: { ok: false, status: 'retryable', error: { code: error.code ?? error.message } } };
+  }
+}
+
 /** Exact controller authority is required even for a synthetic temporary apply. */
 export async function applyBilingualPublication(args = {}) {
   const { plan } = args;
@@ -788,14 +800,14 @@ export async function applyBilingualPublication(args = {}) {
     if (!observed.ok) fail('P22_COMMITTED_READER_REJECTED', { errors: observed.errors });
     await ctx.operation('post_commit.retained', CONTROL + '/transactions/' + transactionId + '/retained.json',
       () => writeFile(join(ctx.root, CONTROL, 'transactions', transactionId, 'retained.json'), jsonBytes({ committed: true, cleanup_authorized: false }), { flag: 'wx' }));
-    return await withCommittedGraph(await withTopicHints(resultFor(journal), plan, planRecord), ctx.root);
+    return await withGenerationRetention(await withCommittedGraph(await withTopicHints(resultFor(journal), plan, planRecord), ctx.root), ctx.root, journal);
   } catch (error) {
     if (journal && !committed) {
       const marker = journal.inventory.find(row => row.kind === 'commit');
       try { committed = Boolean(marker && await ownedPostimage(ctx, marker)); } catch { /* Do not infer a commit from unreadable bytes. */ }
     }
     if (committed || journal?.state === 'committed') {
-      return await withCommittedGraph(await withTopicHints({ ...resultFor({ ...journal, state: 'committed' }), cleanup_warnings: [{ code: error.code ?? error.message }] }, plan, planRecord), ctx.root);
+      return await withGenerationRetention(await withCommittedGraph(await withTopicHints({ ...resultFor({ ...journal, state: 'committed' }), cleanup_warnings: [{ code: error.code ?? error.message }] }, plan, planRecord), ctx.root), ctx.root, journal);
     }
     if (journal && lock) {
       try { error.recovery = await rollback(ctx, journal, lock); }
@@ -912,7 +924,7 @@ export async function recoverBilingualPublication({ vaultRoot, run, transactionI
     } else if (journal.state !== 'rolled_back') {
       await rollback(ctx, journal, lock);
     }
-    return await withCommittedGraph(resultFor(journal), ctx.root);
+    return await withGenerationRetention(await withCommittedGraph(resultFor(journal), ctx.root), ctx.root, journal);
   } finally {
     await releaseLock(ctx, lock);
   }

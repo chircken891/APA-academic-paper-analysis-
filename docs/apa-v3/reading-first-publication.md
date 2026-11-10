@@ -183,7 +183,7 @@ node scripts/v3/bilingual.mjs publish --vault-root <vault-root> --run <run> --ru
 
 ## 发布后的索引与图谱
 
-事务成功后，`.apa-v3/phase22/COMMITTED.json` 选择新登记代次。默认检索读取登记笔记的当前 Markdown，在内存中刷新索引，命中链接落到当前标题或块并携带内容指纹；直接编辑正文后，下一次查询即可使用。原发布索引保留历史含义。默认图谱收录已登记论文唯一的 `Wiki/sources/` 原文语言入口及共享节点，排除 `Wiki/translations/` 译文；连接关系由 Obsidian 读取当前 Markdown。历史两语均在 sources 的布局保留中文入口。新增一篇论文或增补同一个知识节点时，其他已提交论文及人工修改继续保留。
+事务成功后，`.apa-v3/phase22/COMMITTED.json` 选择新登记代次。默认检索读取登记笔记的当前 Markdown，在内存中刷新索引，命中链接落到当前标题或块并携带内容指纹；直接编辑正文后，下一次查询即可使用。原发布索引保留历史含义。登记代次只保留当前与上一代次：事务提交并核验后，发布器在持有发布锁时删除更早的代次目录，未完成事务涉及的代次保留，共享节点合并代次的 `manifest.json`、`active.json` 及合并前代次的 `active.json` 留作补偿依据；删除文件的路径与 SHA-256 写入该事务目录的 `generation-retention.*.json`，结果字段为 `generation_retention`。默认图谱收录已登记论文唯一的 `Wiki/sources/` 原文语言入口及共享节点，排除 `Wiki/translations/` 译文；连接关系由 Obsidian 读取当前 Markdown。历史两语均在 sources 的布局保留中文入口。新增一篇论文或增补同一个知识节点时，其他已提交论文及人工修改继续保留。
 
 新文件只放入 `Wiki/`、只改 `status` 或版本字段，均不建立登记身份。未提交候选不进入默认检索和图谱。已登记正文可直接编辑，个人笔记专用区保持原有检索排除范围；原文来源身份或实际写入目标出现冲突时报告具体对象。
 

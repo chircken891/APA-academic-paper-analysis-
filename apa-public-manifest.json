@@ -119,7 +119,7 @@
     },
     {
       "path": "config/apa-public-files.json",
-      "sha256": "14e4d7857c337715c58059ecfd4d83c212151267330a5f694f263a396d83fa7b"
+      "sha256": "d85bd6063a4c4407c90bce12741fd1756df4b7fab058f3bd950a67a7fb1d9052"
     },
     {
       "path": "config/environment.json",
@@ -139,7 +139,7 @@
     },
     {
       "path": "docs/apa-v3/reading-first-publication.md",
-      "sha256": "515d5f968396553c377e4c55947fd2cbd05392203325135ae1561c17cae5c6ad"
+      "sha256": "4c6e75e0fb2d1325c0f13cbd5bd7d030c5404668335098b162f307a111a1f224"
     },
     {
       "path": "docs/apa-v3/reading-session.md",
@@ -179,7 +179,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "cd6f4e3a57f822dc5fbae948c1c015e4a27d2580f1793d29c58416da2de64b77"
+      "sha256": "8c8459c739ce2cb351ba0183b2a84fdfff9db090dd0b66d3b4ca7c8b70d92a52"
     },
     {
       "path": "prompts/v3/phase21-scientific-contracts.md",
@@ -223,7 +223,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "d8f482690ca9103cf7fb2eeb1787f27db3e8f986a20abe8d99c6b0c11185e479"
+      "sha256": "dce7436631265535d72abbb63a97410543119a4b5a5b640d7889f40d8f57a54a"
     },
     {
       "path": "Schema/config/apa-config.schema.json",
@@ -494,6 +494,10 @@
       "sha256": "2d5f85b6a980bfc5d6b7879efdb16ead38afeac89ef753b1ada8c709fb35fe0d"
     },
     {
+      "path": "scripts/v3/generation-retention.mjs",
+      "sha256": "8ad98c96a1a12569b38f3718bd98a357a31a214199335fe1bdf5a66ac68d2a2f"
+    },
+    {
       "path": "scripts/v3/grouped-source-comparison.mjs",
       "sha256": "b75381d8151c3cae3f2c427722963bd2e10c9cdca15ee30138a101eca9a259ec"
     },
@@ -619,7 +623,7 @@
     },
     {
       "path": "scripts/v3/phase22-publication.mjs",
-      "sha256": "bba7cdf09492b9f4cb1be34dd3d890c89420831ca4a008d710a12b36f869b3f3"
+      "sha256": "e8ba8dde66114e73a4601ec2661a4c8bdb60065d892d038e430ef9a5d46ff4c6"
     },
     {
       "path": "scripts/v3/phase22-render-context.mjs",
@@ -1008,6 +1012,10 @@
     {
       "path": "test/v3/fixtures/scientific-reading/methods-control.json",
       "sha256": "29e3fbb587d5dbd6ab07175a637e4eb0c76d7e35538dd387b85e5a0186288354"
+    },
+    {
+      "path": "test/v3/generation-retention.test.mjs",
+      "sha256": "45cf8e1fe908bcf5126824616102194edeb087b109a3589f21f8e1d019c1db5e"
     },
     {
       "path": "test/v3/helpers/phase22-fixtures.mjs",
