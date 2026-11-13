@@ -6,7 +6,7 @@ import { createConfiguredScienceRequest, getConfiguredReadingDispatchArguments, 
 import { createOwnedArtifactBroker, commitOwnedArtifact, readOwnedArtifact, repairOwnedArtifactReceipt } from './owned-artifact-store.mjs';
 import { ingestObservedRunStep } from './phase21-runner.mjs';
 import { fingerprintReadingFirst, assertReadingBindingCurrent, buildReadingFirstHandoff, createReadingFirstRequests, snapshotReadingFirstRuntime, restoreReadingFirstRuntime } from './reading-first-runtime.mjs';
-import { compactionEnabled, compactionControlBindings, evaluateCompactionBoundary, assertCompactionSettled, registerCompactionDispatch } from './reading-compaction.mjs';
+import { compactionEnabled, compactionReminder } from './reading-compaction.mjs';
 import { normalizeHostReceipt, validateHostReceiptEvidence } from './reading-host-evidence.mjs';
 import { validateReadingResources } from './reading-resources.mjs';
 import { normalizeReadingFirstMap } from './reading-first-obsidian.mjs';
@@ -263,12 +263,6 @@ function validateSetup(prepared, tasks, brokerConfig, statePath) {
     ownedPath(prepared.paths.runRoot,spec.output_root);
   }
   const stateTarget = resolve(statePath);
-  for (const expected of compactionControlBindings(prepared.runControl)) {
-    if (!brokerConfig.authorized_bindings.some(row => same(row, expected))) fail('SCIENCE_COMPACTION_CHECKPOINT_UNAUTHORIZED');
-    const target = ownedPath(prepared.paths.runRoot, expected.artifact_path).normalize('NFC').toLowerCase();
-    if (paths.has(target) || target === stateTarget.normalize('NFC').toLowerCase()) fail('SCIENCE_OUTPUT_CONFLICT');
-    paths.add(target);
-  }
   const stateRelative = relative(resolve(prepared.paths.runRoot), stateTarget);
   if (!stateRelative || stateRelative === '..' || stateRelative.startsWith('..' + sep) || isAbsolute(stateRelative) || stateRelative.split(sep)[0].toLowerCase() === '.phase21-receipts' || paths.has(stateTarget.normalize('NFC').toLowerCase())) fail('SCIENCE_STATE_PATH_INVALID');
 }
@@ -324,73 +318,29 @@ export function getScienceState(controller) {
     accepted_results: roles.filter(role => activeEntry(data, role).receipt).length,
     next_actions: data.handoff?.status === 'transferred' ? [{action:'continue_downstream'}] : roles.every(role => activeEntry(data, role).receipt) ? [{action: scienceCalls(data) > data.prepared.runControl.reading_first_binding.prior_calls ? 'prepare_adopted_reading' : data.handoff ? 'continue_handoff' : 'create_handoff'}] : roles.flatMap(role => { const e = activeEntry(data, role); return e.receipt ? [] : e.observation?.status === 'observed' ? (e.content_base64 ? [{role,action:'accept_result'}] : [{role,action:'wait_or_query_host'},{role,action:'accept_result_if_complete'}]) : e.intent ? [{role,action:'reconcile_host'}] : e.request ? [{role,action:'record_dispatch_intent'}] : dependencies[role].every(dep => activeEntry(data, dep).receipt) ? [{role,action:'prepare_request'}] : []; }),
     roles: Object.fromEntries(roles.map(role => { const e = activeEntry(data, role); return [role, { status: e.receipt ? 'accepted' : e.observation?.status === 'observed' ? 'observed' : e.intent ? 'outcome_unknown' : e.request ? 'prepared' : 'waiting', action_id: e.request?.emittedStep.action_id ?? null, agent_id: e.observation?.agent_id ?? null, receipt: e.receipt ?? null }]; })),
-    handoff: data.handoff ? { status: data.handoff.status, checkpoint_receipt: data.handoff.checkpointReceipt ?? null } : null,
-    compaction_boundary: scienceCompactionBoundary(state) });
+    handoff: data.handoff ? { status: data.handoff.status, checkpoint_receipt: data.handoff.checkpointReceipt ?? null } : null });
 }
 function scienceCompactionBoundary(state) {
-  const { data, path } = state;
+  const { data } = state;
   const accepted = role => Boolean(activeEntry(data, role).receipt);
   const pending = role => { const entry = activeEntry(data, role); return Boolean(entry.intent && !entry.receipt); };
-  const running = roles.filter(pending).length;
   const id = accepted('methods') && accepted('results') && !activeEntry(data, 'interpretation').intent ? 'methods-results-accepted'
     : accepted('evidence') && !activeEntry(data, 'methods').intent && !activeEntry(data, 'results').intent ? 'evidence-accepted' : null;
   if (!id) return null;
-  return { id, reached: true, recovery: { type: 'science-controller-state', saved: same(state.data, state.saved), path }, running_count: running,
-    reminder: copy(data.compaction_reminders?.[id] ?? { status: 'pending', reason: null }) };
+  return { id, saved: same(state.data, state.saved), running_count: roles.filter(pending).length };
 }
-/** Persist an observed reminder outcome in the existing durable science state. */
-export async function recordScienceCompactionBoundary({ controller, id, status, reason } = {}) {
-  const state = controllerState(controller);
-  if (compactionEnabled(state.data.prepared.runControl.reading_first_binding)) fail('APA_COMPACTION_POLICY_DECISION_REQUIRED');
-  return serial(state, async () => {
-    await validateCurrent(state);
-    const boundary = scienceCompactionBoundary(state);
-    if (!boundary || boundary.id !== id || boundary.running_count !== 0 || !boundary.recovery.saved) fail('SCIENCE_COMPACTION_UNAVAILABLE');
-    if (!['prompted', 'skipped', 'completed'].includes(status) || typeof reason !== 'string' || !reason.trim()) fail('SCIENCE_COMPACTION_INVALID');
-    const previous = boundary.reminder.status;
-    if (previous !== 'pending' && !(previous === 'prompted' && ['skipped', 'completed'].includes(status))) fail('SCIENCE_COMPACTION_ALREADY_RECORDED');
-    state.data.compaction_reminders ??= {};
-    state.data.compaction_reminders[id] = { status, reason };
-    await save(state);
-    return scienceCompactionBoundary(state);
-  });
-}
-/** Assess and durably record the common policy; returning await-user means the save succeeded. */
-export async function handleScienceCompactionBoundary({ controller, observation, sessionId, progress, userDecision } = {}) {
-  const state = controllerState(controller);
-  return serial(state, async () => {
-    await validateCurrent(state);
-    const binding = state.data.prepared.runControl.reading_first_binding;
-    if (!compactionEnabled(binding)) fail('APA_COMPACTION_POLICY_REQUIRED');
-    const result = evaluateCompactionBoundary({ boundary: scienceCompactionBoundary(state), observation, sessionId, progress, userDecision,
-      history: state.data.compaction_reminders, startedAt: binding.compaction_policy.started_at, policy: binding.compaction_policy,
-      continuation: { run_id: state.data.prepared.runControl.run_id, paper_id: state.data.prepared.scientificInput.identity.paper_id,
-        run_root: state.data.prepared.paths.runRoot, checkpoint_path: state.path, binding_source: state.path + '#data.prepared.runControl.reading_first_binding',
-        binding, calls_used: scienceCalls(state.data), budget_summary:scienceBudget(state.data), sources: state.data.prepared.scientificInput.sources,
-        accepted_artifacts: roles.filter(role => activeEntry(state.data, role).receipt).map(role => {
-          const receipt = activeEntry(state.data, role).receipt;
-          return { role, path: resolve(state.data.prepared.paths.runRoot, receipt.path), sha256: receipt.sha256 };
-        }) } });
-    if (result.record) {
-      const boundary = scienceCompactionBoundary(state);
-      state.data.compaction_reminders ??= {};
-      state.data.compaction_reminders[boundary.id] = result.record;
-      await save(state);
-    }
-    return copy(result);
-  });
-}
-
-function assertScienceCompactionDispatch(state, role) {
-  if (!compactionEnabled(state.data.prepared.runControl.reading_first_binding)) return;
-  if (state.poisoned || !same(state.data, state.saved)) fail('SCIENCE_CONTROLLER_RESTORE_REQUIRED');
-  const id = ['methods', 'results'].includes(role) ? 'evidence-accepted'
-    : ['interpretation', 'scientific-reading', 'integration'].includes(role) ? 'methods-results-accepted'
-    : scienceCompactionBoundary(state)?.id;
-  assertCompactionSettled(state.data.compaction_reminders, id);
-}
-function registerScienceRequest(state, request) {
-  return registerCompactionDispatch(request, () => assertScienceCompactionDispatch(state, request.packet.host_action_scope.role));
+/** Build the forced stage reminder from saved state; nothing is recorded. */
+export function getScienceCompactionReminder({ controller } = {}) {
+  const state = controllerState(controller), data = state.data, binding = data.prepared.runControl.reading_first_binding;
+  const boundary = scienceCompactionBoundary(state);
+  if (!compactionEnabled(binding) || !boundary || !boundary.saved || boundary.running_count !== 0) return null;
+  return compactionReminder(boundary.id, { run_id: data.prepared.runControl.run_id, paper_id: data.prepared.scientificInput.identity.paper_id,
+    run_root: data.prepared.paths.runRoot, checkpoint_path: state.path, binding_source: state.path + '#data.prepared.runControl.reading_first_binding',
+    binding, calls_used: scienceCalls(data), budget_summary: scienceBudget(data), sources: data.prepared.scientificInput.sources,
+    accepted_artifacts: roles.filter(role => activeEntry(data, role).receipt).map(role => {
+      const receipt = activeEntry(data, role).receipt;
+      return { role, path: resolve(data.prepared.paths.runRoot, receipt.path), sha256: receipt.sha256 };
+    }) });
 }
 /** Retrieve the immutable original action and actual observation history for host reconciliation. */
 export function getScienceRequest({ controller, role } = {}) {
@@ -423,7 +373,6 @@ export async function prepareScienceRequests({ controller } = {}) {
   const state = controllerState(controller);
   return serial(state, async () => {
     await validateCurrent(state);
-    assertScienceCompactionDispatch(state);
     const selected = roles.filter(role => !activeEntry(state.data, role).request && dependencies[role].every(dep => activeEntry(state.data, dep).receipt));
     for (const role of selected) await assertRegistryInput(state.data, role);
     if (selected.length) { const b=state.data.prepared.runControl.reading_first_binding; if (state.data.executionLedger.length+roles.filter(role=>!activeEntry(state.data,role).request).length+3+(b.presentation_mode==='reading-editor'?1:0)>b.max_total_calls) fail('SCIENCE_BUDGET_EXHAUSTED'); }
@@ -450,20 +399,19 @@ export async function prepareScienceRequests({ controller } = {}) {
       await save(state);
     }
     return roles.filter(role => activeEntry(state.data, role).request && !activeEntry(state.data, role).intent)
-      .map(role => ({ role, request: registerScienceRequest(state, copy(activeEntry(state.data, role).request)) }));
+      .map(role => ({ role, request: copy(activeEntry(state.data, role).request) }));
   });
 }
 export async function recordScienceDispatchIntent({ controller, role } = {}) {
   const state = controllerState(controller);
   return serial(state, async () => {
     await validateCurrent(state);
-    assertScienceCompactionDispatch(state, role);
     const entry = activeEntry(state.data, role);
     if (!entry?.request || entry.intent) fail('SCIENCE_DISPATCH_UNAVAILABLE');
     await assertRegistryInput(state.data, role);
     const maxScienceCalls = roles.map(key => state.data.entries[key].correction?.authorization.maxScienceCalls).find(Boolean) ?? 6;
     if (scienceCalls(state.data) >= maxScienceCalls) fail('SCIENCE_BUDGET_EXHAUSTED');
-    const args = getConfiguredReadingDispatchArguments({ prepared: state.data.prepared, request: registerScienceRequest(state, entry.request) });
+    const args = getConfiguredReadingDispatchArguments({ prepared: state.data.prepared, request: entry.request });
     markExecutionDispatched(state.data.executionLedger,entry.request.emittedStep.action_id);
     entry.intent = { action_id: entry.request.emittedStep.action_id, action: entry.request.emittedStep.action, arguments: args, recorded_at: new Date().toISOString() };
     await save(state); return copy(entry.intent);
@@ -630,7 +578,7 @@ export async function createScienceHandoff({ controller, checkpointTask } = {}) 
       await save(state);
     }
     if (!state.data.handoff.snapshot) {
-      const initial = createReadingFirstRequests({ handoff, runControl, reuseInitialInstruction: true, initialInstructionToken: state.data.handoff.instructionToken, compactionReminders: state.data.compaction_reminders, executionLedger:state.data.executionLedger });
+      const initial = createReadingFirstRequests({ handoff, runControl, reuseInitialInstruction: true, initialInstructionToken: state.data.handoff.instructionToken, executionLedger:state.data.executionLedger });
       if (!initial.ok) fail(initial.errors[0]?.code ?? 'SCIENCE_HANDOFF_FAILED');
       const snapshot = snapshotReadingFirstRuntime(initial.controller);
       state.data.handoff = { ...state.data.handoff, status: 'checkpoint_pending', snapshot: copy(snapshot) };

@@ -268,7 +268,7 @@ test('shared bilingual chart labels link to generic knowledge and formula images
   assert.match(result.notes[0].content, /A.*Weighted chart.*\.md#English/);
   assert.match(result.notes[1].content, /加权图.*\.md#%E4%B8%AD%E6%96%87/);
 });
-test('identical chart-type sets across panels collapse while mixed sets retain their associations', () => {
+test('identical and mixed chart-type sets both retain their named panels', () => {
   const data = input(); data.presentation.knowledge_layout = 'shared-bilingual-1.0';
   const second = { ...structuredClone(data.presentation.knowledge[0]), id: 'other', canonical_key: 'other', aliases: [], title: { en: 'Other', 'zh-CN': '其他' } };
   data.presentation.knowledge.push(second);
@@ -279,8 +279,8 @@ test('identical chart-type sets across panels collapse while mixed sets retain t
   const result = renderReadingFirstObsidian(data);
   const en = result.notes[0].content.split('\n').find(line => line.startsWith('**Chart type**'));
   const zh = result.notes[1].content.split('\n').find(line => line.startsWith('**图型**'));
-  assert.match(en, /Each panel: \[Pie\].*\[Bar\]/); assert.doesNotMatch(en, /Group [AB]/);
-  assert.match(zh, /各面板：\[饼图\].*\[条形图\]/); assert.doesNotMatch(zh, /Group [AB]/);
+  assert.match(en, /Group A: \[Pie\].*Group A: \[Bar\].*Group B: \[Pie\].*Group B: \[Bar\]/);
+  assert.match(zh, /Group A: \[饼图\].*Group A: \[条形图\].*Group B: \[饼图\].*Group B: \[条形图\]/);
   data.presentation.visuals[0].chart_types.pop();
   assert.match(renderReadingFirstObsidian(data).notes[0].content, /Group A:.*Group B:/);
 });
@@ -514,6 +514,19 @@ function compactInput() {
   Object.values(data.readingEditor.languages).forEach(language => { language.visuals = [{ id: 'fig-1', title: 'Figure 1 Burden', notes: [{ section_id: 'findings', paragraph_index: 2 }] }]; });
   return data;
 }
+
+test('compact rendering preserves partial panel coverage when the supplied chart types are identical', () => {
+  const data = compactInput();
+  const [visual] = data.presentation.visuals;
+  visual.caption = { en: 'a, First outcome. b, Second outcome. c, Third outcome.', 'zh-CN': 'a，第一项结果。b，第二项结果。c，第三项结果。' };
+  visual.chart_types = ['a', 'b'].map(panel => ({ ...visual.chart_types[0], panel }));
+
+  const { notes } = renderReadingFirstObsidian(data);
+  const en = notes[0].content.split('\n').find(line => line.startsWith('**Chart type**'));
+  const zh = notes[1].content.split('\n').find(line => line.startsWith('**图型**'));
+  assert.match(en, /a: \[Rate plot\].*b: \[Rate plot\]/);
+  assert.match(zh, /a: \[率图\].*b: \[率图\]/);
+});
 
 test('reading editor preserves uppercase research-map IDs and their relations in both languages', () => {
   const data = compactInput();

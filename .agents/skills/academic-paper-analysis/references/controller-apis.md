@@ -60,40 +60,11 @@ For new reading-first runs, limit Controller context growth without changing the
 
 New configured runs freeze `handoff_profile:'science-index-1.0'`, which also shrinks the downstream requests the Controller generates. Writer and revision requests inline only the Integrator output and list the other five scientific outputs in `handoff.science_index` by path, SHA-256 and byte length. The overall review request carries the same reduced handoff and moves the rendered shared-knowledge candidates into `review-inputs/<review|review-r2>/`, listed in `support_note_files`. The roles read indexed files on demand, and a fingerprint mismatch is an input error. The frozen rule text is `prompts/v3/science-index-1.0.md`; a changed note fails the request with `READING_FIRST_SCIENCE_INDEX_NOTE_CHANGED`. Real usage effects remain `not_run` until observed in an authorized run.
 
-### Compaction boundary decisions
+### Stage compaction reminders
 
-New configured runs freeze `compaction_policy.profile:'boundary-reminders-1.2'` and the current host's evidenced manual compaction entry, including its method and source, in `compaction_policy.manual_compaction`. At four safe boundaries, save state and return `await-user` with a recommendation to compact: Evidence accepted; Methods and Results both accepted; all six science results accepted before Writer; and the complete candidate rendered before overall review. Only an explicit user decision to continue or skip settles each prompt. Existing `boundary-reminders-1.0` and `boundary-reminders-1.1` bindings keep their original decision rules and checkpoint bytes.
+New configured runs freeze `compaction_policy:{profile:'boundary-reminders-2.0'}`. At four boundaries the Controller builds a forced reminder from saved state: Evidence accepted; Methods and Results both accepted; all six science results accepted before Writer; and the complete candidate rendered before overall review. Science boundaries come from `getScienceCompactionReminder({controller})`, which returns `null` until a boundary is reached with saved state and no running science task. Reading boundaries come from `getReadingCompactionReminder({controller, boundaryId, checkpointReceipt, presentation})`; omit `presentation` before Writer and pass the rendered candidate before review. Both return `{boundary_id, message, compaction_prompt}` built by `scripts/v3/reading-compaction.mjs`.
 
-Call `handleScienceCompactionBoundary({controller, observation, sessionId, progress, userDecision})` at the first two boundaries, identified by `getScienceState(science).compaction_boundary`. At the later boundaries call `handleReadingCompactionBoundary({controller, checkpointReceipt, hostRequests, presentation, observation, sessionId, progress, userDecision, capability})`; omit `presentation` before Writer and pass the actual rendered candidate before review. Both use `scripts/v3/reading-compaction.mjs`. A pending or prompted boundary blocks `prepareScienceRequests`, science dispatch intent, and `getConfiguredReadingDispatchArguments` as applicable. Serialized requests must be recovered through their owning Controller; `validateConfiguredReadingDispatch` only checks stored request integrity and grants no dispatch authority.
-
-Safety requires accepted results and receipts saved, readable recovery state, and no running or unknown host task. Science uses its durable state. Reading uses the latest owned checkpoint; `hostRequests` lists every unconsumed request's real `action_id` and `status` (`prepared`, `running`, or `unknown`). `prepared` means generated and never dispatched; do not infer it from an absent handle. Generated Writer or review requests remain unchanged while waiting. An empty list is valid only when no unconsumed requests exist. Missing safety conditions return `action:'reconcile'`; finish saving or correlate the original tasks before proceeding.
-
-Supply observations from the current host's tools, status or trusted logs. The host-neutral shape is:
-
-```js
-const observation = {
-  session_id: currentSessionId, // null when unavailable; never guess from file recency
-  observed_at: observedAt,
-  context: { tokens, kind: 'last-request-input', measured_at: measuredAt,
-    fresh: true, source: usageEvidence }, // or kind:'current-context'; null if unknown
-  manual_compaction: { available: true, method: actualHostEntry, source: capabilityEvidence },
-  last_compaction: null, // or {id, session_id, status:'succeeded', occurred_at, source}
-};
-const progress = {
-  remaining_work: { multiple_responses: true, reason: actualRemainingWork },
-  growth: { substantial: true, reason: actualGrowthSinceCompaction },
-};
-```
-
-`sessionId` is the independently known current main-session identity. Unknown fields use null or omission. The normalizer rejects mismatched sessions, cumulative consumption, unverified/stale readings and measurements predating observed successful compaction. Observation and measurement freshness currently have a conservative 60-second validity window; a fresh read of an older usage event does not renew the event. `last-request-input` remains explicitly labelled as the last request, without claiming exact live context. Successful compaction requires host evidence with its event identity, time, source and matching session within this run. No new plugin is required: unavailable usage follows the stage fallback.
-
-In 1.2, low or unknown usage, an unavailable or unknown manual entry, and an earlier prompt or successful compaction do not suppress a safe-boundary reminder. If a temporary manual-entry observation is absent, use the evidenced entry frozen for this host in `compaction_policy.manual_compaction`; a confirmed unavailable observation overrides the frozen method, and 1.2 still prompts the user. Show the actual method only when it has host-specific evidence; otherwise state that the entry is unknown or unavailable. Claude Code's evidenced `/compact` entry applies to that host; verify the current host separately. The 1.0 and 1.1 bindings retain their frozen thresholds and fallback decisions. Preserve each host's settings; the observed DSH 250k setting is a provisional host-specific choice. 200k plus 48k retained budget is only a future experiment, with no established savings estimate.
-
-The handlers return `continue`, `await-user` or `reconcile`. Before returning a new `await-user`, they save and verify the reminder state. For reading, add `prepared.compactionControlBindings` to the original broker authority: the frozen policy predeclares a `decision` and `resume` control artifact for each reading boundary. Issue the supplied capability for the matching `binding.compaction_policy.checkpoints[boundaryId][step]`; the handler writes that task and returns its receipt. Always update the latest checkpoint pointer to the returned receipt. These control artifacts add no model calls. Do not overwrite old checkpoints or manufacture authority for an old binding. Save failure returns no user prompt and blocks the affected in-memory Controller until recovery reconciles the saved artifact.
-
-On a `skipped` boundary, read the recorded reason from `science-state.json` at `data.compaction_reminders` or the applicable owned reading checkpoint at `state.compaction_reminders`, and briefly tell the user. On `await-user`, present the returned message and copyable stage-specific compaction prompt, then end the current reply immediately. The prompt includes available run and paper identities, original budget, main-session identity, source and artifact references, checkpoint and binding paths, and continuation metadata. It instructs the compactor to retain completed stages, the next action, scientific conclusions and evidence, key limitations, unresolved issues and real task handles; read the full role model policy from the binding path as needed. Mark unknown values as unknown and do not inline the paper or full role outputs. Evidence focuses on extracted design and evidence; Methods/Results on key methods, results, numbers and limits; before Writer on the integrated narrative, disagreements and Writer/Translation/Editor next steps; before overall review on candidate paths, presentation profile, review scope and at most one local recheck. This uses existing state and adds no model call. Offer the host's evidenced manual compaction entry when available and “跳过并继续”; state when the entry is unknown or unavailable. Do not compact automatically or keep dispatching in the same reply. A repeated waiting result has no new message, preventing repeated reminders. After the user returns, reconcile the original process and tasks as below, then call the same handler with `userDecision:'skip'` or `'continue'`, fresh available observations, and the reserved resume capability. Only observed successful compaction after the prompt records `completed`. Failed or unobservable compaction followed by an explicit continue records `skipped` with `compaction_verified:false`. Settled boundaries never prompt again. Waiting consumes no calls and nothing expires.
-
-Bindings without the new policy retain `recordScienceCompactionBoundary` and `recordReadingCompactionBoundary`; new bindings reject those direct status setters. Engineering tests cover substitute hosts and state recovery. Real host acceptance separately requires observing reminder, end of reply, user compaction or skip, and continuation of the same run. Savings require actual cached/uncached input, summary output, recovery costs and recovery-quality evidence.
+The session layer returns each boundary once per process as `await-user`; present the message and prompt, end the reply, and continue on the user's next reply. The prompt uses existing state, adds no model call, and marks unknown values as unknown without inlining the paper or full role outputs. Evidence focuses on extracted design and evidence; Methods/Results on key methods, results, numbers and limits; before Writer on the integrated narrative, disagreements and Writer/Translation/Editor next steps; before overall review on candidate paths, presentation profile, review scope and at most one local recheck. Automatic compaction is the host threshold setting applied through `scripts/setup/apa-host-settings.mjs`.
 
 ### Continue the same run after compaction
 
@@ -101,7 +72,7 @@ Follow the actual Controller's state management; a conversation compaction alone
 
 Keep these compact pointers across the conversation boundary: run ID, root and binding; accepted result and receipt locations; latest checkpoint path and receipt if established (explicitly record it as not established in the science stage); Controller process/command handles; generated request locations and dispatch status; actual host task handles for any previously dispatched work; status-file locations and the next step; remaining calls; authorization scope, user-added constraints and unresolved decisions. Consume the original generated requests rather than creating replacements. Correlate uncertain task outcomes before any dispatch; never reissue an already dispatched unfinished task. If the actual driver cannot resume a pending request, preserve it and report that limitation rather than reset the run.
 
-After restoring a prompted review boundary, reconstruct the presentation with the restored Controller and the original rendering inputs, then pass it to the boundary handler with the latest reminder checkpoint. Reuse the restored review request; do not create another review action.
+After restoring before overall review, reconstruct the presentation with the restored Controller and the original rendering inputs. Reuse the restored review request; do not create another review action.
 
 Waiting for the user to compact consumes no calls and nothing expires. Compaction grants no new calls, review rounds, source access or continuation authorization. Host-specific commands belong in the host adapter; these rules do not assume one host's command or process model.
 
@@ -137,7 +108,7 @@ For a new configured run, use the durable science Controller before the reading-
 import {
   createScienceController, prepareScienceRequests, recordScienceDispatchIntent,
   recordScienceHostObservation, acceptScienceResult, restoreScienceController,
-  getScienceState, getScienceRequest, createScienceHandoff, handleScienceCompactionBoundary,
+  getScienceState, getScienceRequest, createScienceHandoff, getScienceCompactionReminder,
 } from './scripts/v3/science-controller.mjs';
 import {
   acceptReadingFirstResult,
@@ -146,7 +117,7 @@ import {
   createReadingFirstPresentationRequest,
   createReadingFirstReviewRequest, createReadingFirstRevisionRequests,
   getReadingFirstState, snapshotReadingFirstRuntime, restoreReadingFirstRuntime,
-  handleReadingCompactionBoundary, renderReadingFirstNotes,
+  getReadingCompactionReminder, renderReadingFirstNotes,
 } from './scripts/v3/reading-first-runtime.mjs';
 
 import {
@@ -175,7 +146,7 @@ const artifactRoot = prepared.paths.runRoot;
 const brokerConfig = {
   control_actor_id: controllerActorId,
   artifact_root: artifactRoot,
-  authorized_bindings: [...authorizedBindings, ...prepared.compactionControlBindings],
+  authorized_bindings: authorizedBindings,
   run_controls: [control],
 };
 let science = await createScienceController({
@@ -194,10 +165,8 @@ const intent = await recordScienceDispatchIntent({ controller: science, role });
 await recordScienceHostObservation({ controller: science, role, observation });
 // After the actual native result is available and its observation validates:
 await acceptScienceResult({ controller: science, role });
-// At Evidence / Methods+Results boundaries, call handleScienceCompactionBoundary
-// with the actual host observation and progress. If action is await-user, end
-// this reply; if reconcile, finish status reconciliation before dispatch.
-// Repeat only eligible roles after the decision, retaining original requests.
+// At Evidence / Methods+Results boundaries, getScienceCompactionReminder returns
+// the stage reminder: show it, end this reply, and continue on the next reply.
 // On actual process exit, in the replacement process use this instead of create:
 // science = await restoreScienceController({statePath, prepared, tasks: scienceTasks,
 //   payloads: sciencePayloads, brokerConfig});
@@ -218,9 +187,8 @@ const created = await createScienceHandoff({ controller: science, checkpointTask
 if (!created.controller) throw new Error('READING_HANDOFF_ALREADY_TRANSFERRED');
 const { handoff, controller, requests, runControl, broker } = created;
 let checkpointReceipt = created.checkpointReceipt;
-// Before Writer dispatch, call handleReadingCompactionBoundary with this receipt,
-// actual hostRequests and the before-writer decision capability; update the receipt.
-// End the reply on await-user. Resume only after the user's decision and process check.
+// Before Writer dispatch, show getReadingCompactionReminder({ controller,
+// boundaryId: 'before-writer', checkpointReceipt }) and end the reply once.
 // prepared.runControl is the frozen proposal, not this runtime handle. When a
 // handle is needed elsewhere, derive it with getReadingFirstRunControlRef({prepared, broker})
 // from reading-first-runtime.mjs: {runId, artifactRoot, dispatchContext}.
@@ -267,9 +235,8 @@ const savedCandidate = await materializeConfiguredReadingCandidate({
 });
 let presentation = savedCandidate.candidate;
 const request = createReadingFirstReviewRequest({ controller, presentation });
-// Save the latest owned snapshot, then handleReadingCompactionBoundary with
-// presentation, actual hostRequests and the before-review decision capability.
-// Update checkpointReceipt; only continue permits the configured dispatch arguments.
+// Save the latest owned snapshot, then show the 'before-review' reminder with
+// this presentation and end the reply once before dispatching the review.
 // Execute this one overall request and accept its real native/owned result
 // with acceptReadingFirstResult, exactly as for Writers.
 let state = getReadingFirstState(controller);

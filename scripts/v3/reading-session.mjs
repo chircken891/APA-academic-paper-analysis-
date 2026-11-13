@@ -17,7 +17,7 @@ import { getScienceBudgetSummary, getSciencePendingContinuations, getScienceCont
 import { assertReadingBindingCurrent, getReadingBudgetSummary, getReadingPendingContinuations, reserveReadingContinuation, markReadingContinuationDispatched, recordReadingContinuationReceipt } from './reading-first-runtime.mjs';
 import { buildReadingSessionTasks } from './reading-session-tasks.mjs';
 import { ingestObservedRunStep } from './phase21-runner.mjs';
-import { COMPACTION_POLICY } from './reading-compaction.mjs';
+import { compactionEnabled } from './reading-compaction.mjs';
 import { validateHostReceiptEvidence, normalizeHostReceipt } from './reading-host-evidence.mjs';
 import { inspectReadingRuntime, validateRuntimeRepairApproval, validateHistoricalRuntimeRepairApproval, validateRuntimeRebindApproval, describeReadingRuntimeChanges } from './reading-runtime-binding.mjs';
 import { abandonReadingRuntimeSnapshotReference, prepareReadingRuntimeSnapshot, previewReadingRuntimeSnapshot, readReadingRuntimeSnapshotReference, registerReadingRuntimeSnapshotReference, verifyReadingRuntimeSnapshot } from './reading-runtime-snapshot.mjs';
@@ -25,8 +25,8 @@ import { closeReadingRuntimeRun, cleanupReadingRuntimeRun, readReadingRuntimeTer
 import { prepareReadingSessionExecution, readReadingSessionExecution, retryReadingSessionCleanup } from './reading-session-cli.mjs';
 import { createOwnedArtifactBroker, commitOwnedArtifact, readOwnedArtifact } from './owned-artifact-store.mjs';
 import { recoverReadingFirstRejectedEditor, authorizeReadingFirstContinuation, inspectReadingFirstContinuation, annotateReadingFirstReviewScope, inspectReadingFirstSavedCandidate, registerReadingFirstUserRevision, finalizeReadingFirstUserRevision, retainReviewedReadingFirstCandidate, recordReadingFirstKnowledgeIdentityResolution, recordReadingFirstResourceRepair, getReadingFirstRenderedResources } from './reading-first-runtime.mjs';
-import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, getScienceRequest, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, createScienceHandoff, handleScienceCompactionBoundary } from './science-controller.mjs';
-import { fingerprintReadingFirst, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, getReadingFirstPendingRequests, getReadingFirstState, recordReadingFirstRequestEvent, getReadingFirstRequestEvents, acceptReadingFirstResult, createReadingFirstEnrichmentRequests, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstReviewRequest, createReadingFirstRevisionRequests, validateReadingFirstRenderRepair, handleReadingCompactionBoundary, captureReadingFirstPublicationSource } from './reading-first-runtime.mjs';
+import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, getScienceRequest, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, createScienceHandoff, getScienceCompactionReminder } from './science-controller.mjs';
+import { fingerprintReadingFirst, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, getReadingFirstPendingRequests, getReadingFirstState, recordReadingFirstRequestEvent, getReadingFirstRequestEvents, acceptReadingFirstResult, createReadingFirstEnrichmentRequests, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstReviewRequest, createReadingFirstRevisionRequests, validateReadingFirstRenderRepair, getReadingCompactionReminder, captureReadingFirstPublicationSource } from './reading-first-runtime.mjs';
 
 const sessions = new WeakMap();
 const delegatedSessions = new WeakMap();
@@ -93,11 +93,6 @@ async function runtimeCheckpoint(state) {
   const science = JSON.parse(await readFile(controlPath(state.prepared.paths.runRoot), 'utf8'));
   const receipts = [];
   for (const task of state.checkpoints) {
-    const found = await existingControl(state, task);
-    if (found) receipts.push({ path: task.artifact_path, sha256: found.receipt.sha256 });
-  }
-  const compaction = Object.values(state.prepared.runControl.reading_first_binding.compaction_policy?.checkpoints ?? {}).flatMap(steps => Object.values(steps));
-  for (const task of compaction) {
     const found = await existingControl(state, task);
     if (found) receipts.push({ path: task.artifact_path, sha256: found.receipt.sha256 });
   }
@@ -168,9 +163,14 @@ async function saveSessionMetadata(state, value = sessionMetadata(state)) {
 }
 
 const wrap = state => { const session = Object.freeze({ profile: 'reading-session-1.0' }); sessions.set(session, state); return session; };
-const usesCompactionObservation = state => ['boundary-reminders-1.1', COMPACTION_POLICY].includes(state.prepared.runControl.reading_first_binding.compaction_policy?.profile);
-const needsCompactionObservation = (state, reminder) => usesCompactionObservation(state)
-  && reminder?.status !== 'prompted' && !state.compactionInput?.observation && state.compactionInput?.userDecision === undefined;
+// Each stage boundary pauses once per session process; the user's reply is not recorded.
+function compactionPause(state, reminder) {
+  if (!reminder) return null;
+  state.remindedBoundaries ??= new Set();
+  if (state.remindedBoundaries.has(reminder.boundary_id)) return null;
+  state.remindedBoundaries.add(reminder.boundary_id);
+  return { action: 'await-user', kind: 'compaction-reminder', ...reminder };
+}
 function evaluateSessionPreflight(state) {
   const inspection = clone(state.frozenInspection);
   const frozenPolicy = state.prepared.runControl.reading_first_binding.role_model_policy;
@@ -232,11 +232,6 @@ function extendsSnapshot(later, earlier) {
       const newer = next.events?.[key];
       if (!newer || !same(newer, event) && !(key === 'host_observation' && event.payload?.status === 'outcome_unknown' && newer.payload?.status !== 'outcome_unknown')) return false;
     }
-  }
-  for (const [key, prior] of Object.entries(b.compaction_reminders ?? {})) {
-    const next = a.compaction_reminders?.[key];
-    if (!next || prior.status !== 'prompted' && !same(prior, next) || prior.status === 'prompted' && !['prompted', 'skipped', 'completed'].includes(next.status)) return false;
-    if (prior.status === next.status && !same(prior, next)) return false;
   }
   return true;
 }
@@ -330,7 +325,7 @@ async function createSession(options, execution) {
   const configBytes = await readFile(join(repoRoot, 'config', 'apa.local.json'));
   if (createHash('sha256').update(configBytes).digest('hex') !== prepared.configurationFingerprint || !same(JSON.parse(configBytes), inspection.config)) fail('READING_SESSION_CONFIG_CHANGED');
   const actor = prepared.runControl.reading_first_binding.controller_actor_id;
-  const brokerConfig = { control_actor_id: actor, artifact_root: prepared.paths.runRoot, authorized_bindings: [...tasks.authorizedBindings, ...prepared.compactionControlBindings], run_controls: [prepared.runControl] };
+  const brokerConfig = { control_actor_id: actor, artifact_root: prepared.paths.runRoot, authorized_bindings: tasks.authorizedBindings, run_controls: [prepared.runControl] };
   const broker = createOwnedArtifactBroker(brokerConfig);
   const frozenInspection = { config: clone(inspection.config), validation: clone(inspection.validation), dependencies: clone(inspection.dependencies) };
   const state = { prepared, batchRun, runtimeBinding: prepared.runControl.reading_first_binding.configured_setup?.runtime_binding, consumerHeld: execution?.consumerHeld === true, sessionCheckpoints: tasks.sessionCheckpoints ?? [], nextSessionCheckpoint: 0, approvals: [], broker, brokerConfig, tasks: tasks.scienceTasks, checkpoints: tasks.checkpoints, nextCheckpoint: 3, reading: null, handoff: null, checkpointReceipt: null, evidence: clone(evidence), hostProfile: clone(hostProfile), sciencePayloads: clone(sciencePayloads), presentation: null, resources: null, frozenInspection, needsInitialSessionMatch: true };
@@ -427,8 +422,6 @@ async function resumeSession({ runRoot, readOnly }, execution) {
         if (gap) fail('READING_SESSION_CHECKPOINT_CONFLICT');
         candidates.push({ receipt: found.receipt, snapshot: JSON.parse(found.bytes) }); state.nextCheckpoint = i + 1;
       }
-      const compactionTasks = Object.values(prepared.runControl.reading_first_binding.compaction_policy?.checkpoints ?? {}).flatMap(steps => Object.values(steps));
-      for (const task of compactionTasks) { const found = await existingControl(state, task); if (found) candidates.push({ receipt: found.receipt, snapshot: JSON.parse(found.bytes) }); }
       let latest = candidates[0];
       for (const candidate of candidates) {
         const restored = await restoreReadingFirstRuntime({ handoff: state.handoff, runControl: transferred.runControl, checkpointReceipt: candidate.receipt });
@@ -592,15 +585,9 @@ async function nextSessionAction(session) {
       host_action: continuation.tool, arguments: continuation.arguments, run_id: state.prepared.runControl.run_id };
   }
   if (!state.reading) {
-    let current = getScienceState(state.science);
-    const boundary = current.compaction_boundary;
-    if (boundary && !['skipped', 'completed'].includes(boundary.reminder.status)) {
-      if (needsCompactionObservation(state, boundary.reminder)) return { action: 'provide-input', kind: 'compaction-observation', boundary_id: boundary.id };
-      const decision = await handleScienceCompactionBoundary({ controller: state.science, ...(state.compactionInput ?? {}) });
-      state.compactionInput = null;
-      if (decision.action !== 'continue') return decision;
-      current = getScienceState(state.science);
-    }
+    const current = getScienceState(state.science);
+    const pause = compactionPause(state, getScienceCompactionReminder({ controller: state.science }));
+    if (pause) return pause;
     if (current.accepted_results === 6) {
       const result = await createScienceHandoff({ controller: state.science, checkpointTask: state.checkpoints[2] });
       state.broker = result.broker; state.handoff = result.handoff; state.checkpointReceipt = result.checkpointReceipt;
@@ -720,7 +707,7 @@ async function nextSessionAction(session) {
   if (state.nextCheckpoint >= state.checkpoints.length - 3) return { action: 'reconcile', code: 'CONTROL_CHECKPOINT_CAPACITY' };
   const firstWriter = request.language === state.prepared.runControl.reading_first_binding.source_language && !request.task.task_id.endsWith('-r2');
   const firstReview = request.task.role === 'independent-verifier'
-    && (usesCompactionObservation(state)
+    && (compactionEnabled(state.prepared.runControl.reading_first_binding)
       ? request.task.task_id === state.prepared.runControl.reading_first_binding.task_bindings.review.task_id : current.review_rounds === 0);
   if (firstReview && !state.presentation && state.reviewedPresentation) {
     if (!state.resources || !state.renderOptions) return { action: 'provide-input', kind: 'render-assets' };
@@ -729,16 +716,8 @@ async function nextSessionAction(session) {
     state.presentation = restored.candidate;
   }
   if (firstWriter || firstReview) {
-    const boundaryId = firstReview ? 'before-review' : 'before-writer';
-    const snapshot = snapshotReadingFirstRuntime(state.reading);
-    const reminder = snapshot.state.compaction_reminders?.[boundaryId];
-    if (!reminder || !['completed', 'skipped'].includes(reminder.status)) {
-      if (needsCompactionObservation(state, reminder)) return { action: 'provide-input', kind: 'compaction-observation', boundary_id: boundaryId };
-      const slot = state.prepared.runControl.reading_first_binding.compaction_policy.checkpoints[boundaryId][reminder?.status === 'prompted' ? 'resume' : 'decision'];
-      const decision = await handleReadingCompactionBoundary({ controller: state.reading, checkpointReceipt: state.checkpointReceipt, hostRequests: pending.map(item => ({ action_id: item.emittedStep.action_id, status: 'prepared' })), ...(firstReview ? { presentation: state.presentation } : {}), capability: capability(state, slot), ...(state.compactionInput ?? {}) });
-      state.compactionInput = null; state.checkpointReceipt = decision.receipt;
-      if (decision.action !== 'continue') return decision;
-    }
+    const pause = compactionPause(state, getReadingCompactionReminder({ controller: state.reading, boundaryId: firstReview ? 'before-review' : 'before-writer', checkpointReceipt: state.checkpointReceipt, ...(firstReview ? { presentation: state.presentation } : {}) }));
+    if (pause) return pause;
   }
   const args = getConfiguredReadingDispatchArguments({ prepared: state.prepared, request });
   const intent = { action_id: request.emittedStep.action_id, host_action: request.emittedStep.action, arguments: args };
@@ -961,7 +940,6 @@ async function recordSessionEvent(session, event = {}) {
     await sealInitialPreflight(state);
     return clone(state.preflight);
   }
-  if (event.kind === 'compaction') { state.compactionInput = clone(event.input ?? {}); return { recorded: true }; }
   if (event.kind==='inspect-candidate') {
     if (!state.reading) fail('READING_SESSION_CANDIDATE_UNAVAILABLE');
     return inspectReadingFirstSavedCandidate({controller:state.reading,revision:event.revision});

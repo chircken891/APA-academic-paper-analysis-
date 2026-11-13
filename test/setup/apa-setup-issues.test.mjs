@@ -26,7 +26,7 @@ const capability = (overrides = {}) => ({
   status: 'detected', method: 'synthetic', scope: 'current-session', evidence, limitations: [],
   achievement: { state: 'achieved', summary: 'ok', steps: [] }, investigation: fullSearch(), ...overrides,
 });
-const allCapabilities = overrides => Object.fromEntries(['on_demand_reading', 'delegated_diagnostics', 'manual_compaction', 'concise_replies', 'science_recovery', 'threshold_compaction'].map(id => [id, overrides[id] ?? capability()]));
+const allCapabilities = overrides => Object.fromEntries(['on_demand_reading', 'delegated_diagnostics', 'concise_replies', 'science_recovery', 'threshold_compaction'].map(id => [id, overrides[id] ?? capability()]));
 const issuesFor = (t, hostProfile) => inspectApaConfig({ repoRoot: temporary(t), capability: 'query', hostProfile }).setup_issues;
 const ids = issues => issues.map(item => item.id);
 
@@ -64,11 +64,11 @@ test('unavailable dependency and persistent apa step are authorize', () => {
   const achievement = { state: 'needs-setting', summary: 'needs patch', steps: [step] };
   const inspection = {
     validation: { missing: [], conflicts: [] }, dependencies: [{ key: 'parser.python', path: '/x', status: 'missing' }], host_check: { host: 'match', issues: [] },
-    capability_check: { checks: [{ id: 'manual_compaction', status: 'detected', achievement }] },
+    capability_check: { checks: [{ id: 'delegated_diagnostics', status: 'detected', achievement }] },
   };
-  const issues = ids(deriveSetupIssues(inspection, profile(allCapabilities({ manual_compaction: capability({ achievement }) }))));
+  const issues = ids(deriveSetupIssues(inspection, profile(allCapabilities({ delegated_diagnostics: capability({ achievement }) }))));
   assert.ok(issues.includes('authorize:dependency:parser.python'));
-  assert.ok(issues.includes('authorize:capability:manual_compaction'));
+  assert.ok(issues.includes('authorize:capability:delegated_diagnostics'));
 });
 
 test('a user step routes the capability to the page', () => {
@@ -103,11 +103,11 @@ test('legacy profile still loads', t => {
   fs.writeFileSync(legacy, JSON.stringify(profile({ threshold_compaction: { status: 'unknown', method: null, scope: 'unknown', evidence: [], limitations: [] } })));
   assert.doesNotThrow(() => loadHostProfile(legacy));
   const modern = path.join(root, 'modern.json');
-  fs.writeFileSync(modern, JSON.stringify(profile(allCapabilities({ manual_compaction: capability({ evidence: [{ source: 'runtime-log', reference: 'session.jsonl:1' }, { source: 'installed-software', reference: 'host --help' }] }) }))));
+  fs.writeFileSync(modern, JSON.stringify(profile(allCapabilities({ delegated_diagnostics: capability({ evidence: [{ source: 'runtime-log', reference: 'session.jsonl:1' }, { source: 'installed-software', reference: 'host --help' }] }) }))));
   assert.doesNotThrow(() => loadHostProfile(modern));
   const legacyIssues = ids(issuesFor(t, loadHostProfile(legacy)));
   assert.deepEqual(legacyIssues.filter(id => id.startsWith('known-limit:capability:')).sort(), [
-    'concise_replies', 'delegated_diagnostics', 'manual_compaction', 'on_demand_reading',
+    'concise_replies', 'delegated_diagnostics', 'on_demand_reading',
     'science_recovery', 'task_continuation', 'threshold_compaction',
   ].map(id => 'known-limit:capability:' + id));
 });
@@ -146,19 +146,19 @@ test('ledger with agent decision is invalid', t => {
 test('not-found without evidence rewritten by the checker still needs investigation', t => {
   const bare = capability({ status: 'blocked', evidence: [], limitations: [], achievement: { state: 'not-found', summary: 'none', steps: [] } });
   delete bare.investigation;
-  const issues = ids(issuesFor(t, profile(allCapabilities({ manual_compaction: bare }))));
-  assert.ok(issues.includes('known-limit:capability:manual_compaction'), issues.join());
+  const issues = ids(issuesFor(t, profile(allCapabilities({ delegated_diagnostics: bare }))));
+  assert.ok(issues.includes('known-limit:capability:delegated_diagnostics'), issues.join());
 });
 
 test('achieved without method is sent back to investigation', t => {
   const weak = capability({ method: null });
-  const issues = ids(issuesFor(t, profile(allCapabilities({ manual_compaction: weak }))));
-  assert.ok(issues.includes('known-limit:capability:manual_compaction'), issues.join());
+  const issues = ids(issuesFor(t, profile(allCapabilities({ delegated_diagnostics: weak }))));
+  assert.ok(issues.includes('known-limit:capability:delegated_diagnostics'), issues.join());
 });
 
 test('unsupported without full search is investigate, not known-limit', t => {
   const lazy = capability({ status: 'unsupported', achievement: { state: 'not-found', summary: 'none', steps: [] } });
   delete lazy.investigation;
-  const issues = ids(issuesFor(t, profile(allCapabilities({ manual_compaction: lazy }))));
-  assert.ok(issues.includes('known-limit:capability:manual_compaction'));
+  const issues = ids(issuesFor(t, profile(allCapabilities({ delegated_diagnostics: lazy }))));
+  assert.ok(issues.includes('known-limit:capability:delegated_diagnostics'));
 });

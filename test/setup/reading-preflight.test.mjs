@@ -22,7 +22,7 @@ test('preflight requires current runtime evidence independently of ready', () =>
 });
 
 test('advanced investigation and dependency authorization do not prevent the basic page', () => {
-  const issues = [{ id: 'investigate:capability:manual_compaction', category: 'investigate' }, { id: 'authorize:dependency:parser.python', category: 'authorize' }];
+  const issues = [{ id: 'investigate:capability:delegated_diagnostics', category: 'investigate' }, { id: 'authorize:dependency:parser.python', category: 'authorize' }];
   assert.equal(checkPageGate(issues).ok, true);
 });
 

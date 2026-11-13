@@ -109,7 +109,7 @@ test('new configured writing refuses a missing instruction path', async t => {
   }), /READING_FIRST_INSTRUCTION_PATH_REQUIRED/);
 });
 
-test('new configured runs require a Controller decision while legacy bindings keep their dispatch contract', async t => {
+test('new configured runs freeze the stage reminder profile without locking dispatch', async t => {
   const { root } = await configuredRepo(t);
   let prepared;
   const runId = 'run_' + 'c'.repeat(32);
@@ -117,12 +117,8 @@ test('new configured runs require a Controller decision while legacy bindings ke
     createRunControl: options => { prepared = prepareConfiguredReading({ ...options, repoRoot: root }); return prepared.runControl; } });
   const request = createConfiguredScienceRequest({ prepared, role: 'methods', dispatchContext: fixture.broker.dispatchContext,
     task: { task_name: 'unmanaged_methods', native_path: 'native/unmanaged-methods.json', instruction_path: 'instructions/unmanaged-methods.txt' } });
-  assert.throws(() => getConfiguredReadingDispatchArguments({ prepared, request }), /APA_COMPACTION_CONTROLLER_REQUIRED/);
-  assert.equal(prepared.runControl.reading_first_binding.compaction_policy.profile, 'boundary-reminders-1.2');
-  assert.equal(prepared.compactionControlBindings.length, 4);
-  const legacy = structuredClone(prepared);
-  delete legacy.runControl.reading_first_binding.compaction_policy;
-  assert.deepEqual(getConfiguredReadingDispatchArguments({ prepared: legacy, request }), request.emittedStep.arguments);
+  assert.deepEqual(prepared.runControl.reading_first_binding.compaction_policy, { profile: 'boundary-reminders-2.0' });
+  assert.deepEqual(getConfiguredReadingDispatchArguments({ prepared, request }), request.emittedStep.arguments);
 });
 
 async function configuredCommittedReuseFixture(t) {

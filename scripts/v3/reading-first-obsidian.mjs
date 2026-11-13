@@ -372,13 +372,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
         const placements = placementSets.get(language);
         for (const visual of visuals.filter(value => writerLayout ? placements.visuals.some(row => row.id === value.id && placed(row)) : placed(value))) {
           const types = visual.chart_types ?? [];
-          const panels = [...new Set(types.map(type => type.panel))];
-          const panelTypes = panels.map(panel => types.filter(type => type.panel === panel));
-          const signature = rows => JSON.stringify(rows.map(type => [type.knowledge_id, local(type.label, language)]).sort());
-          const samePanels = panels.length > 1 && panels.every(Boolean) && panelTypes.every(rows => signature(rows) === signature(panelTypes[0]));
-          const chartTypes = samePanels
-            ? (en ? 'Each panel: ' : '各面板：') + panelTypes[0].map(type => md(local(type.label, language), knowledgeHref(type.knowledge_id))).join(' · ')
-            : types.map(type => `${type.panel ? label(panelLabel(type, language)) + ': ' : ''}${md(local(type.label, language), knowledgeHref(type.knowledge_id))}`).join(' · ');
+          const chartTypes = types.map(type => `${type.panel ? label(panelLabel(type, language)) + ': ' : ''}${md(local(type.label, language), knowledgeHref(type.knowledge_id))}`).join(' · ');
           if (compact) {
             const entry = edits.visuals.find(item => item.id === visual.id), source = md(visualSourcePage(visual, language), visualSourceHref(target, visual));
             const notesText = (entry?.notes ?? []).map(note => renderParagraph(section.paragraphs[note.paragraph_index], note.paragraph_index) + '\n\n').join('');

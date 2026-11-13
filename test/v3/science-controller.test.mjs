@@ -5,19 +5,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { getReadingBudgetSummary as readingApiBudget, createReadingFirstRunControl, acceptReadingFirstResult, getReadingFirstState, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, createReadingFirstDraftRequests, handleReadingCompactionBoundary } from '../../scripts/v3/reading-first-runtime.mjs';
+import { getReadingBudgetSummary as readingApiBudget, createReadingFirstRunControl, acceptReadingFirstResult, getReadingFirstState, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, createReadingFirstDraftRequests } from '../../scripts/v3/reading-first-runtime.mjs';
 import { commitOwnedArtifact } from '../../scripts/v3/owned-artifact-store.mjs';
 import { createApaRoleModelPolicy } from '../../scripts/apa-model-policy.mjs';
 import { buildConfiguredReadingInstructions, prepareConfiguredReading, getConfiguredReadingDispatchArguments } from '../../scripts/v3/configured-reading.mjs';
 import * as scienceApi from '../../scripts/v3/science-controller.mjs';
 import * as readingApi from '../../scripts/v3/reading-first-runtime.mjs';
-import { COMPACTION_POLICY, compactionControlBindings } from '../../scripts/v3/reading-compaction.mjs';
-import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, prepareScienceCorrection, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, getScienceRequest, createScienceHandoff, recordScienceCompactionBoundary } from '../../scripts/v3/science-controller.mjs';
+import { COMPACTION_POLICY } from '../../scripts/v3/reading-compaction.mjs';
+import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, prepareScienceCorrection, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, getScienceRequest, createScienceHandoff } from '../../scripts/v3/science-controller.mjs';
 import { ingestObservedRunStep } from '../../scripts/v3/phase21-runner.mjs';
 const roles = ['evidence','methods','results','interpretation','scientific-reading','integration'];
 const sha = b => 'sha256:' + createHash('sha256').update(b).digest('hex');
 
-async function acceptCompactionBatch(f, controller) {
+async function acceptBatch(f, controller) {
   for (const { role, request } of await prepareScienceRequests({ controller })) {
     const args = getConfiguredReadingDispatchArguments({ prepared: f.options.prepared, request });
     const intent = await recordScienceDispatchIntent({ controller, role });
@@ -28,86 +28,20 @@ async function acceptCompactionBatch(f, controller) {
   }
 }
 
-test('new science boundaries block dispatch until evaluated and retain the pause across restore', async t => {
+test('science stage boundaries build a reminder from saved state without locking dispatch', async t => {
   const f = await fixture(t, { compactionPolicy: COMPACTION_POLICY });
-  let controller = await createScienceController(f.options);
-  await acceptCompactionBatch(f, controller);
-  await assert.rejects(() => prepareScienceRequests({ controller }), /APA_COMPACTION_BOUNDARY_REQUIRED/);
-  const firstPause = await scienceApi.handleScienceCompactionBoundary({ controller });
-  assert.equal(firstPause.action, 'await-user');
-  await assert.rejects(() => prepareScienceRequests({ controller }), /APA_COMPACTION_AWAITING_USER/);
-  const skipped = await scienceApi.handleScienceCompactionBoundary({ controller, userDecision: 'skip' });
-  assert.equal(skipped.action, 'continue');
-  assert.equal(getScienceState(controller).compaction_boundary.reminder.status, 'skipped');
-  await acceptCompactionBatch(f, controller);
-  const at = new Date().toISOString();
-  const input = { controller, sessionId: 'main', observation: { session_id: 'main', observed_at: at,
-    manual_compaction: { available: true, method: 'compact in host', source: 'host tool contract' },
-    context: { tokens: 190000, kind: 'current-context', measured_at: at, fresh: true, source: 'host meter' } },
-    progress: { remaining_work: { multiple_responses: true, reason: 'Science and writing remain.' }, growth: { substantial: true, reason: 'Methods and Results added evidence.' } } };
-  const pause = await scienceApi.handleScienceCompactionBoundary(input);
-  assert.equal(pause.action, 'await-user');
-  assert.match(pause.message, /compact in host/);
-  const before = getScienceState(controller);
-  await assert.rejects(() => prepareScienceRequests({ controller }), /APA_COMPACTION_AWAITING_USER/);
-  const restored = await restoreScienceController(f.options); controller = restored;
-  assert.equal((await scienceApi.handleScienceCompactionBoundary({ controller })).action, 'await-user');
-  await assert.rejects(() => recordScienceCompactionBoundary({ controller, id: 'methods-results-accepted', status: 'skipped', reason: 'bypass' }), /APA_COMPACTION_POLICY_DECISION_REQUIRED/);
-  const resumed = await scienceApi.handleScienceCompactionBoundary({ controller, userDecision: 'continue' });
-  assert.equal(resumed.action, 'continue');
-  assert.equal(resumed.record.compaction_verified, false);
-  const after = getScienceState(controller);
-  assert.equal(after.reserved_calls, before.reserved_calls);
-  assert.equal(after.deadline, before.deadline);
-  assert.deepEqual(after.roles, before.roles);
+  const controller = await createScienceController(f.options);
+  assert.equal(scienceApi.getScienceCompactionReminder({ controller }), null);
+  await acceptBatch(f, controller);
+  const evidence = scienceApi.getScienceCompactionReminder({ controller });
+  assert.equal(evidence.boundary_id, 'evidence-accepted');
+  assert.match(evidence.message, /Evidence 完成/);
+  assert.ok(evidence.compaction_prompt.includes(JSON.stringify(f.options.statePath)));
+  await acceptBatch(f, controller);
+  assert.equal(scienceApi.getScienceCompactionReminder({ controller }).boundary_id, 'methods-results-accepted');
   assert.deepEqual((await prepareScienceRequests({ controller })).map(row => row.role), ['interpretation']);
-});
-
-test('a live science process continues after skip and carries reminder history into Writer', async t => {
-  const f = await fixture(t, { compactionPolicy: COMPACTION_POLICY });
-  const controller = await createScienceController(f.options);
-  await acceptCompactionBatch(f, controller);
-  const at = new Date().toISOString();
-  const pause = await scienceApi.handleScienceCompactionBoundary({ controller, sessionId: 'main',
-    observation: { session_id: 'main', observed_at: at,
-      manual_compaction: { available: true, method: 'host action', source: 'host contract' },
-      context: { tokens: 180000, kind: 'current-context', measured_at: at, fresh: true, source: 'meter' } },
-    progress: { remaining_work: { multiple_responses: true, reason: 'Science and writing remain.' }, growth: { substantial: true, reason: 'Evidence increased context.' } } });
-  assert.equal(pause.action, 'await-user');
-  const before = getScienceState(controller);
-  assert.equal((await scienceApi.handleScienceCompactionBoundary({ controller, userDecision: 'skip' })).record.reason, 'user-skipped');
-  assert.equal((await scienceApi.handleScienceCompactionBoundary({ controller })).record, null);
-  assert.equal(getScienceState(controller).deadline, before.deadline);
-  await acceptCompactionBatch(f, controller);
-  assert.equal((await scienceApi.handleScienceCompactionBoundary({ controller })).action, 'await-user');
-  await assert.rejects(() => prepareScienceRequests({ controller }), /APA_COMPACTION_AWAITING_USER/);
-  assert.equal((await scienceApi.handleScienceCompactionBoundary({ controller, userDecision: 'skip' })).record.reason, 'user-skipped');
-  for (let i = 0; i < 3; i++) await acceptCompactionBatch(f, controller);
-  const created = await createScienceHandoff({ controller, checkpointTask: f.checkpointTask });
-  const task = f.options.prepared.runControl.reading_first_binding.compaction_policy.checkpoints['before-writer'].decision;
-  const decision = await handleReadingCompactionBoundary({ controller: created.controller, checkpointReceipt: created.checkpointReceipt,
-    hostRequests: created.requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' })),
-    observation: { manual_compaction: { available: true, method: 'host action', source: 'host contract' } },
-    capability: created.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: task.artifact_path, revision: task.revision }) });
-  assert.equal(decision.action, 'await-user');
-  assert.throws(() => getConfiguredReadingDispatchArguments({ prepared: f.options.prepared, request: created.requests[0] }), /APA_COMPACTION_AWAITING_USER/);
-  const resume = f.options.prepared.runControl.reading_first_binding.compaction_policy.checkpoints['before-writer'].resume;
-  const continued = await handleReadingCompactionBoundary({ controller: created.controller, checkpointReceipt: decision.receipt,
-    hostRequests: created.requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' })), userDecision: 'skip',
-    capability: created.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: resume.artifact_path, revision: resume.revision }) });
-  assert.equal(continued.record.reason, 'user-skipped');
-  assert.deepEqual(getConfiguredReadingDispatchArguments({ prepared: f.options.prepared, request: created.requests[0] }), created.requests[0].emittedStep.arguments);
-});
-
-test('failed science reminder save never returns a prompt or unlocks a stale controller', async t => {
-  const f = await fixture(t, { compactionPolicy: COMPACTION_POLICY });
-  const controller = await createScienceController(f.options);
-  await acceptCompactionBatch(f, controller);
-  await assert.rejects(() => prepareScienceRequests({ controller }), /APA_COMPACTION_BOUNDARY_REQUIRED/);
-  const stale = await restoreScienceController(f.options);
-  await scienceApi.handleScienceCompactionBoundary({ controller });
-  await assert.rejects(() => scienceApi.handleScienceCompactionBoundary({ controller: stale }), /SCIENCE_STATE_CONFLICT/);
-  await assert.rejects(() => prepareScienceRequests({ controller: stale }), /SCIENCE_CONTROLLER_RESTORE_REQUIRED/);
+  const saved = JSON.parse(await readFile(f.options.statePath, 'utf8'));
+  assert.equal(saved.data.compaction_reminders, undefined);
 });
 
 async function hostEvidence(root, raw) {
@@ -149,7 +83,6 @@ async function fixture(t, { context = 'synthetic', compactionPolicy, promptFiles
   const checkpointTask={artifact_id:'checkpoint',artifact_path:'control/checkpoint.json',revision:'1',owner_actor_id:'controller',role:'control'};
   authorized_bindings.push({run_id:'run',actor_id:'controller',role:'control',artifact_path:checkpointTask.artifact_path,revision:'1'});
   authorized_bindings.push({run_id:'run',actor_id:'controller',role:'control',artifact_path:'control/checkpoint-r2.json',revision:'2'});
-  authorized_bindings.push(...compactionControlBindings(runControl));
   const brokerConfig={control_actor_id:'controller',artifact_root:root,authorized_bindings,run_controls:[runControl]};
   const options={prepared,tasks,brokerConfig,statePath:join(root,'state.json')};
   await mkdir(join(root,'native')); return {root,options,tasks,checkpointTask};
@@ -356,12 +289,6 @@ test('observed evidence is accepted once and unlocks methods and results in para
   assert.deepEqual(await acceptScienceResult({controller,role}),receipt);
   const recovered=await restoreScienceController(f.options);
   assert.equal(getScienceState(recovered).accepted_results,1);
-  assert.equal(getScienceState(recovered).compaction_boundary.id, 'evidence-accepted');
-  assert.equal(getScienceState(recovered).compaction_boundary.recovery.saved, true);
-  await recordScienceCompactionBoundary({ controller: recovered, id: 'evidence-accepted', status: 'skipped', reason: 'context unknown' });
-  const restoredAgain=await restoreScienceController(f.options);
-  assert.equal(getScienceState(restoredAgain).compaction_boundary.reminder.status, 'skipped');
-  await assert.rejects(() => recordScienceCompactionBoundary({ controller: restoredAgain, id: 'evidence-accepted', status: 'prompted', reason: 'again' }), /SCIENCE_COMPACTION_ALREADY_RECORDED/);
   assert.deepEqual((await prepareScienceRequests({controller:recovered})).map(row=>row.role),['methods','results']);
 });
 
@@ -372,32 +299,12 @@ test('handoff is gated by six owned results and restores the same Writer action'
     const requests=await prepareScienceRequests({controller}); assert.deepEqual(requests.map(row=>row.role),batch);
     for (const {role,request} of requests) {
       await recordScienceDispatchIntent({controller,role}); const step=request.emittedStep;
-      if (role === 'methods') {
-        assert.equal(getScienceState(controller).roles.methods.status,'outcome_unknown');
-        assert.equal(getScienceState(controller).compaction_boundary,null);
-        await assert.rejects(() => recordScienceCompactionBoundary({controller,id:'evidence-accepted',status:'prompted',reason:'unsafe while task may run'}), /SCIENCE_COMPACTION_UNAVAILABLE/);
-      }
+      if (role === 'methods') assert.equal(getScienceState(controller).roles.methods.status,'outcome_unknown');
       await recordScienceHostObservation({controller,role,observation:await observed(f.root,step,JSON.stringify({agent_id:'synthetic-'+role}))});
-      if (role === 'methods') {
-        assert.equal(getScienceState(controller).roles.methods.status,'observed');
-        await assert.rejects(() => recordScienceCompactionBoundary({controller,id:'methods-results-accepted',status:'prompted',reason:'task lacks receipt'}), /SCIENCE_COMPACTION_UNAVAILABLE/);
-      }
       await writeNative(f,role,{role,text:'synthetic result'});
       await acceptScienceResult({controller,role});
     }
-    if (batch[0] === 'evidence') await recordScienceCompactionBoundary({controller,id:'evidence-accepted',status:'skipped',reason:'context unknown'});
-    if (batch[0] === 'methods') {
-      const boundary=getScienceState(controller).compaction_boundary;
-      assert.equal(boundary.id,'methods-results-accepted');
-      assert.equal(boundary.running_count,0);
-      assert.equal(boundary.recovery.saved,true);
-      await recordScienceCompactionBoundary({controller,id:boundary.id,status:'skipped',reason:'context unknown'});
-    }
     controller=await restoreScienceController(f.options);
-    if (batch[0] === 'methods') {
-      assert.equal(getScienceState(controller).compaction_boundary.reminder.status,'skipped');
-      await assert.rejects(() => recordScienceCompactionBoundary({controller,id:'methods-results-accepted',status:'prompted',reason:'again'}),/SCIENCE_COMPACTION_ALREADY_RECORDED/);
-    }
   }
   assert.equal(getScienceState(controller).accepted_results,6);
   const first=await createScienceHandoff({controller,checkpointTask:f.checkpointTask});
@@ -410,8 +317,6 @@ test('handoff is gated by six owned results and restores the same Writer action'
   assert.equal(getScienceState(controller).handoff.status,'transferred');
   const downstream=await restoreReadingFirstRuntime({handoff:resumed.handoff,runControl:resumed.runControl,checkpointReceipt:resumed.checkpointReceipt});
   assert.equal(downstream.requests[0].emittedStep.action_id,firstId);
-  assert.equal(snapshotReadingFirstRuntime(downstream.controller).state.compaction_reminders['evidence-accepted'].status,'skipped');
-  assert.equal(snapshotReadingFirstRuntime(downstream.controller).state.compaction_reminders['methods-results-accepted'].status,'skipped');
   assert.deepEqual(downstream.requests,first.requests);
   const writer=downstream.requests[0], step=writer.emittedStep;
   await writeFile(join(f.root,writer.task.native_path),JSON.stringify({language:'en',sections:[{heading:'Study',paragraphs:['The synthetic study explains its design and limitation.']}]}));
@@ -546,7 +451,7 @@ for (const hostStyle of ['codex','mapped']) test(`configured reading binds and r
   await writeFile(join(configRoot,'config/apa.local.json'),JSON.stringify(config));
   const old=f.options.prepared, binding=old.runControl.reading_first_binding;
   const prepared=prepareConfiguredReading({repoRoot:configRoot,runId:'run',scientificInput:old.scientificInput,sessionContext:hostStyle==='mapped'?{model:'sonnet'}:{model:'gpt-6-astra',effort:'high'},authorizationId:'synthetic',deadline:binding.deadline,sourceLanguage:'en',taskBindings:{...binding.task_bindings,'zh-CN':{...binding.task_bindings['zh-CN'],role:'translation'}},maxCalls:6,priorCalls:6,maxTotalCalls:12});
-  const brokerConfig={...f.options.brokerConfig,artifact_root:prepared.paths.runRoot,authorized_bindings:[...f.options.brokerConfig.authorized_bindings,...prepared.compactionControlBindings],run_controls:[prepared.runControl]};
+  const brokerConfig={...f.options.brokerConfig,artifact_root:prepared.paths.runRoot,authorized_bindings:[...f.options.brokerConfig.authorized_bindings],run_controls:[prepared.runControl]};
   const options={...f.options,prepared,brokerConfig,statePath:join(prepared.paths.runRoot,'state.json')};
   const controller=await createScienceController(options); const [{request}]=await prepareScienceRequests({controller});
   const intent=await recordScienceDispatchIntent({controller,role:'evidence'});
@@ -637,7 +542,7 @@ test('claude-code science observations keep the agentId from result text across 
   await writeFile(join(configRoot,'config/apa.local.json'),JSON.stringify(config));
   const old=f.options.prepared, binding=old.runControl.reading_first_binding;
   const prepared=prepareConfiguredReading({repoRoot:configRoot,runId:'run',scientificInput:old.scientificInput,sessionContext:{model:'sonnet'},authorizationId:'synthetic',deadline:binding.deadline,sourceLanguage:'en',taskBindings:{...binding.task_bindings,'zh-CN':{...binding.task_bindings['zh-CN'],role:'translation'}},maxCalls:6,priorCalls:6,maxTotalCalls:12});
-  const brokerConfig={...f.options.brokerConfig,artifact_root:prepared.paths.runRoot,authorized_bindings:[...f.options.brokerConfig.authorized_bindings,...prepared.compactionControlBindings],run_controls:[prepared.runControl]};
+  const brokerConfig={...f.options.brokerConfig,artifact_root:prepared.paths.runRoot,authorized_bindings:[...f.options.brokerConfig.authorized_bindings],run_controls:[prepared.runControl]};
   const options={...f.options,prepared,brokerConfig,statePath:join(prepared.paths.runRoot,'state.json')};
   const controller=await createScienceController(options); const [{request}]=await prepareScienceRequests({controller});
   assert.deepEqual(request.packet.host_action_scope.result_bindings.agent_id,resultHandle);
@@ -677,7 +582,7 @@ test('science continuations survive restore and carry their occupied budget into
   }
   assert.equal(scienceApi.getScienceBudgetSummary({controller}).occupied,3);
   await writeFile(join(f.root,f.tasks.evidence.native_path),JSON.stringify({role:'evidence',text:'accepted source'})); await acceptScienceResult({controller,role:'evidence'});
-  for (let i=0;i<4;i++) await acceptCompactionBatch(f,controller);
+  for (let i=0;i<4;i++) await acceptBatch(f,controller);
   assert.equal(getScienceState(controller).reserved_calls,6);
   const handoff=await createScienceHandoff({controller,checkpointTask:f.checkpointTask});
   assert.equal(handoff.status,'transferred');

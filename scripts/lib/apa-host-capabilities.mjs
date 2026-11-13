@@ -4,7 +4,6 @@ import { inspectAchievement, inspectAdapters } from './apa-host-achievement.mjs'
 const checks = [
   ['on_demand_reading', '按需读取', '核对文件读取工具与技能入口；实际运行时检查是否只读取所需范围。'],
   ['delegated_diagnostics', '子代理排查', '核对当前派发工具、独立上下文及返回方式；真实派发另行验证。'],
-  ['manual_compaction', '阶段压缩', '核对本会话的手动压缩入口、作用范围及是否改变持久设置。'],
   ['concise_replies', '短回执', '核对请求携带 role-reply-1.0，实际回复是否遵守须在真实运行中观察。'],
   ['science_recovery', '科学阶段恢复', '核对真实任务句柄、查询或等待工具及参数；在原宿主仍可访问时验证退出续接。'],
   ['task_continuation', '原任务续接', '核对当前宿主的续接工具、参数及原任务句柄；派发前登记执行额度。'],

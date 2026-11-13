@@ -13,7 +13,7 @@ for (const scenario of ['unused-role', 'same-gap', 'new-gap']) test('explicit co
   t.after(() => rm(root, { recursive: true, force: true }));
   const key = 'enrich-late-evidence';
   const repeatedRole = scenario !== 'unused-role', originalLimit = repeatedRole ? 9 : 7;
-  const fixture = await reviewedReadingFirstFixture(t, { currentRegistryRoot: root, completeReview: false, instructionFiles: true,
+  const fixture = await reviewedReadingFirstFixture(t, { currentRegistryRoot: root, completeReview: false, instructionFiles: true, controlPaths: ['final-checkpoint.json'],
     createRunControl: input => runtime.createReadingFirstRunControl({ ...input, maxTotalCalls: originalLimit, maxCalls: repeatedRole ? 8 : 7,
       writingMode: 'source-translation', enrichmentPolicy: { sources: [], allow_targeted_methods: true },
       enrichmentSessionProfile: 'reading-session-enrichment-1.0',
@@ -91,7 +91,7 @@ for (const scenario of ['unused-role', 'same-gap', 'new-gap']) test('explicit co
   const { recipe } = await runtime.inspectReadingFirstPublicationSource(source);
   assert.ok(await runtime.restoreReadingFirstPublicationSource(recipe));
   const finalCheckpoint = await commitOwnedArtifact({ artifactRoot, dispatchContext: broker.dispatchContext,
-    capability: broker.issueCapability({ runId, actorId: 'controller', role: 'control', artifactPath: 'control/check-before-review.json', revision: '1' }),
+    capability: broker.issueCapability({ runId, actorId: 'controller', role: 'control', artifactPath: 'final-checkpoint.json', revision: '1' }),
     artifact: { artifact_id: 'continuation-final-checkpoint', content: JSON.stringify(runtime.snapshotReadingFirstRuntime(controller)) }, expectedRevision: '1' });
   const restored = await runtime.restoreReadingFirstRuntime({ handoff: fixture.handoff, runControl: fixture.runControl, checkpointReceipt: finalCheckpoint });
   assert.equal(restored.ok, true, JSON.stringify(restored.errors));

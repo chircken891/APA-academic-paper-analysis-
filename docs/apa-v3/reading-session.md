@@ -92,9 +92,9 @@ await recordReadingEvent(session, {
 
 `computer-control-observation` 单独记录操作事实，`observation` 包含唯一 `event_id`、`coverage`（`complete`、`partial` 或 `unknown`）、`source_reference` 和 `operations`。每项操作记录 `operation`、`application`、`occurred_at`、原始 `tool_call` 与 `raw_result_text`。确认没有操作时可以依据完整记录提交空数组；缺少记录时保持未知。结束动作的 `computer_control` 返回这些事实，与 `native_presentation.status` 分开，不授予操作权限。
 
-新配置化运行冻结 `boundary-reminders-1.2` 和本宿主有依据的手动压缩入口；既有 1.0 和 1.1 绑定沿用原合同。1.2 在四个安全边界保存状态后均返回 `await-user`，向用户推荐压缩，等待用户明确选择后继续。入口未知或不可用、用量低或未知、此前已压缩或提示均不自动跳过；入口未知时说明未知。四个压缩边界缺少临时观测时，`nextReadingAction` 返回 `provide-input`、`kind:'compaction-observation'` 和 `boundary_id`。调用方从当前宿主及可信运行记录收集一次观测，以 `recordReadingEvent(session, {kind:'compaction', input:{observation, sessionId, progress}})` 回传，并立即调用 `nextReadingAction`；观测和用量测量须在 60 秒内，无法取得的字段保持未知。缺少临时入口观测时使用绑定中本宿主已有证据的入口，不能跨宿主套用。
+新配置化运行冻结 `boundary-reminders-2.0`。Evidence 完成、Methods/Results 完成、Writer 前和整体审查前四个边界各强制提醒一次：`nextReadingAction` 返回 `await-user`、`kind:'compaction-reminder'`、`boundary_id`、`message` 与 `compaction_prompt`。展示消息与可复制的阶段压缩提示词并结束当前回复；用户下一次回复后再次调用 `nextReadingAction` 即继续，检查点和原额度保持不变。同一会话进程内每个边界只提醒一次，恢复后的新进程若仍停在该边界会再提醒一次。自动压缩由宿主阈值设置负责。
 
-返回 `await-user` 时展示消息与可复制的阶段压缩提示词并结束当前回复；用户决定后重新记录 `compaction` 并继续，检查点和原额度保持不变。提示词包含可用的运行和论文身份、原预算、来源及产物引用、检查点和绑定路径等续接元数据，并要求压缩时保留已完成阶段、下一步、关键科学结论及证据、限制、待决事项和真实任务句柄；完整角色模型策略按需从绑定路径回读。未知字段标明未知，原文及角色全文不写入提示词。Evidence 后突出设计和证据，Methods/Results 后突出关键方法、结果、数值与限制，Writer 前突出综合主线、分歧及写作、翻译、呈现下一步，整体审查前突出候选路径、呈现版本、审查范围及最多一次局部复核。生成提示词不增加模型调用。边界若记录 `skipped`，从已保存的 science-state `data.compaction_reminders` 或 owned 阅读检查点 `state.compaction_reminders` 读取原因并向用户简短说明。自动压缩事件只有关联当前主会话且有实际成功证据时才能记录；无成功事件时保留未核实状态。
+提示词包含可用的运行和论文身份、原预算、来源及产物引用、检查点和绑定路径等续接元数据，并要求压缩时保留已完成阶段、下一步、关键科学结论及证据、限制、待决事项和真实任务句柄；完整角色模型策略按需从绑定路径回读。未知字段标明未知，原文及角色全文不写入提示词。Evidence 后突出设计和证据，Methods/Results 后突出关键方法、结果、数值与限制，Writer 前突出综合主线、分歧及写作、翻译、呈现下一步，整体审查前突出候选路径、呈现版本、审查范围及最多一次局部复核。生成提示词不增加模型调用。
 
 渲染前的 `provide-input` 会要求 `render-assets`。会话从 Results 的受控清单读取来源文件、SHA-256 和字节长度，调用方提供可选渲染参数：
 

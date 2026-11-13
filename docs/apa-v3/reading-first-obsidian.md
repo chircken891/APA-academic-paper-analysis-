@@ -20,7 +20,7 @@
 
 - `languages[language].overview`：重点及实际 `section_ids`，让读者先看到研究主线和关键限制。
 - `sections`：按稳定 `section_id` 添加可选 `takeaway`、原段落精确引文 `emphasis` 和按 `before_paragraph` 放置的 `subheadings`。强调仅落在未加粗的纯文本，不进入公式、链接或代码，不交叠。渲染器负责编号和锚点。
-- `methods`：独立逐项列出方法、测量与必要概念，包含 `id,title,explanation,application,section_ids` 和登记过的 `knowledge_ids` 数组；兼容旧 `knowledge_id`。没有已确立通用知识身份的条目可省略关联或使用空 `knowledge_ids`；非空关联须属于登记目录，两语每项的知识身份集合（含空集合）一致。原理与本文应用分别充分说明，不只提一嘴。
+- `methods`：独立逐项列出方法、测量与必要概念，包含 `id,title,explanation,application,section_ids` 和登记过的 `knowledge_ids` 数组；兼容旧 `knowledge_id`。所给登记节点覆盖该操作时须关联，只有本文特有的操作才使用空 `knowledge_ids`；非空关联须属于登记目录，两语每项的知识身份集合（含空集合）一致。原理与本文应用分别充分说明，不只提一嘴。
 
 Reading Editor 1.4 另提供图表呈现和导图论证。
 
@@ -43,7 +43,7 @@ Nature/Humanizer 用于专业、自然的表达，不限制有效的重点加粗
 - `bibliography`：题名、首位作者、年份，可选 citation/doi；title 可为两语对象。完整 DOI 编号作为可点击文本显示。新论文文件名保留规范大小写、首字母和缩写；既有登记路径保持稳定，明确获准的候选改名须同步登记与引用。
 - `source_pdf`：新运行使用 `Clippings/` 内的相对 PDF 路径；`sources:[{id,path}]` 登记正文、补充材料和获准方法背景的可链接来源。主文及补充材料绑定其 `Clippings/` 原件；只有实际接受的 AI 补缺来源可登记到 `Raw/`。历史冻结记录的 `Raw/` 路径继续按原合同读取，不扩大原来源许可。
 - `sections`：已有资源或研究导图引用的稳定 `id`。Writer 沿用这些标识，并可组织其他必要子节。`indices:{en:0,"zh-CN":0}` 只供历史样例适配，不能替代新 Writer 输出。
-- `visuals`：`id,kind,label,caption,path,page`；kind 为 figure/table/formula，新运行的 path 必须位于冻结的 `Figures/<run_id>/`，且目录下只有一层文件名。未冻结 `figures_dir` 的旧绑定沿用原路径校验。page 是从1起的 PDF 物理页。图型用 `chart_types:[{knowledge_id,label:{en,'zh-CN'},panel?}]` 关联共享方法节点，复合图按子图标注。多页表分别登记并保留表头、续表及脚注；历史字段 section_id/after_paragraph 维持旧合同，新布局由 Writer 返回落点。
+- `visuals`：`id,kind,label,caption,path,page`；kind 为 figure/table/formula，新运行的 path 必须位于冻结的 `Figures/<run_id>/`，且目录下只有一层文件名。未冻结 `figures_dir` 的旧绑定沿用原路径校验。page 是从1起的 PDF 物理页。图型用 `chart_types:[{knowledge_id,label:{en,'zh-CN'},panel?}]` 关联共享方法节点，复合图按子图标注：原图注列出的每个字母面板都须出现在某项 `panel` 中（可写范围如 `b–d`），只有不含数据的面板可省略；含数据的图或表至少一项。多页表分别登记并保留表头、续表及脚注；历史字段 section_id/after_paragraph 维持旧合同，新布局由 Writer 返回落点。
 - `knowledge`：`id,kind,canonical_key,title,aliases,paragraphs,source_kind`；kind 为 method/concept，source_kind 为 method-background/paper-fact。标题和段落分语言提供。只有通用 method-background 形成共享候选或既有节点增补；本文应用、实际参数和限制留在论文。新布局由 Writer 返回落点，历史 placements 保持兼容。
 - `map`：steps/findings 各含 `id,label,section_id`，relations 为 `{step_id,finding_id}`。使用有科学依据的实际关系，不按序号强配；正文提供设计与发现的双向链接。Integrator 验收时校验该导图：节点 id 唯一、含标签、`section_id` 在目录中，relations 为连接 step 与 finding 端点的 `{step_id,finding_id}`（旧 `{from,to}` 作别名接受）；不通过为 `SCIENCE_CONTENT_INVALID`，退回 Integrator，而非到最终渲染才失败。采纳模式的 `scientificInput.presentation` 同样校验。
 
@@ -100,7 +100,7 @@ Methods 提供通用知识，Results 识别图型、子图和裁切区域，Inte
 
 可复用的区域渲染入口为 `python scripts/v3/render-pdf-regions.py <manifest.json>`，使用既有 PyMuPDF 环境，不调用 MinerU。输入包含 `source_pdf`、`output_root` 和 `regions:[{id,page,bbox,path,rotation?,dpi?}]`；页码从1开始，bbox使用PDF页面坐标，rotation为顺时针角度。输出逐图来源、裁切范围、像素尺寸和指纹；拒绝越界区域及覆盖已有图片。Results先确认区域内容，Controller登记派生资源，不能用程序成功代替裁切视觉检查。
 
-验证两语指向同一文件、页内语言定位、已有节点复用、跨论文增补和人工区域保护，并检查图型关联及裁切完整性。程序链接检查与实际 Obsidian 阅读验收分别记录，仍仅一次整体审查、最多一次局部复核。
+验证两语指向同一文件、页内语言定位、已有节点复用、跨论文增补和人工区域保护，并检查图型关联及裁切完整性。主要发现段落须写明承载各结论的面板（如“图 3b–d”/“Fig. 3b–d”），经 `apa-visual:` 链接到图。整体审查请求附带确定性的 `annotation_check`（`scripts/v3/reading-annotation-check.mjs`），列出缺图型行、图型未覆盖的面板、主要发现未引用面板的多面板图，以及名称命中登记节点却未挂链的方法/概念条目；Verifier 逐项确认，影响主结论或关键设计时按 Writer（引用）、Editor（挂链）、science（图型）定责，其余记为一般问题。已发布笔记可用 `node scripts/v3/reading-annotation-check.mjs --root <库根>` 只读检查。程序链接检查与实际 Obsidian 阅读验收分别记录，仍仅一次整体审查、最多一次局部复核。
 
 `exportReadingFirstPreview({outputRoot,identity,views,presentation,targetRegistry,knowledgeRegistry,resources})` 导出新候选目录，拒绝覆盖已有目录。资源可为 `{path,source_path,sha256,byte_length}` 或本次候选文本 `{path,content}`；所有输出 path 为库内相对路径。先检查来源字节、输出冲突、图片/链接和块锚点，再写出。`.apa-v3/presentation.json` 保留清单、建议增补和明确的未验收状态。
 

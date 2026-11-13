@@ -10,7 +10,7 @@ import { emitApprovedRunStep, createCurrentMineruBaselinePort, INSTRUCTION_PATH_
 import { getRoleReplyContract } from './role-reply-contract.mjs';
 import { readCommittedReadingFirstKnowledgeRegistry, assertCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
 import { matchPlannedReadingFirstKnowledge, readPlannedReadingFirstKnowledge, recordPlannedReadingFirstKnowledge } from './reading-first-knowledge-plans.mjs';
-import { COMPACTION_POLICY, compactionControlBindings, assertCompactionDispatchAllowed } from './reading-compaction.mjs';
+import { COMPACTION_POLICY } from './reading-compaction.mjs';
 import { inspectReadingRuntime } from './reading-runtime-binding.mjs';
 import { prepareReadingRuntimeSnapshot } from './reading-runtime-snapshot.mjs';
 import { registerReadingRuntimeCleanupFiles } from './reading-runtime-cleanup.mjs';
@@ -108,13 +108,6 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
   // A caller-supplied role for these keys must already be translation; anything else is a conflict, not something to overwrite.
   if (Object.entries(options.taskBindings ?? {}).some(([key, task]) => translationKeys.includes(key) && task?.role !== undefined && task.role !== 'translation')) throw new Error('READING_FIRST_TRANSLATION_ROLE_REQUIRED');
   const taskBindings = options.taskBindings && Object.fromEntries(Object.entries(options.taskBindings).map(([key, task]) => [key, translationKeys.includes(key) ? { ...task, role: 'translation' } : task]));
-  const manual = hostProfile?.host === loaded.config.host?.name ? hostProfile?.capabilities?.manual_compaction : null;
-  const evidence = structuredClone(manual?.evidence ?? []);
-  const source = evidence.filter(item => typeof item.source === 'string' && item.source.trim() && typeof item.reference === 'string' && item.reference.trim())
-    .map(item => item.source + ': ' + item.reference).join('; ');
-  const manualCompaction = { host: loaded.config.host?.name ?? null, status: manual?.status ?? 'unknown',
-    available: manual?.status === 'detected' && manual.scope === 'current-session' && typeof manual.method === 'string' && !!manual.method.trim() && !!source,
-    method: manual?.method ?? null, source: source || null, scope: manual?.scope ?? 'unknown', evidence };
   const { scientificInput, source_locations, raw_source_matches } = prepareReadingSources({
     repoRoot, scientificInput: options.scientificInput, sourceMatchMetadata: options.sourceMatchMetadata,
   });
@@ -125,12 +118,11 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
   }
   configuredSetup.runtime_binding = runtimeBinding ?? prepareReadingRuntimeSnapshot({ repoRoot, codeRoot: CODE_ROOT, runRoot: paths.runRoot, runId: options.runId });
   const runControl = createReadingFirstRunControl({ ...options, scientificInput, ...(derivedMaxCalls === undefined ? {} : { maxCalls: derivedMaxCalls }), ...(taskBindings ? { taskBindings } : {}), ...(loaded.config.host ? { host: loaded.config.host } : {}), mainSession, configuredSetup, writingMode: 'source-translation',
-    compactionPolicy: COMPACTION_POLICY, manualCompaction,
+    compactionPolicy: COMPACTION_POLICY,
     roleReplyContract: options.roleReplyContract === undefined ? getRoleReplyContract() : options.roleReplyContract,
     presentationProfile: READING_EDITOR_PROFILE,
     firstWritingLanguage: options.sourceLanguage, presentationMode: resolvedConfig.reading.presentation_mode, handoffProfile: SCIENCE_INDEX_PROFILE });
-  return freeze({ resolvedConfig, scientificInput, raw_source_matches, configurationFingerprint: loaded.fingerprint, paths, parserOptions, runControl,
-    compactionControlBindings: compactionControlBindings(runControl) });
+  return freeze({ resolvedConfig, scientificInput, raw_source_matches, configurationFingerprint: loaded.fingerprint, paths, parserOptions, runControl });
 }
 
 function ownedPath(root, path) {
@@ -194,7 +186,6 @@ export function createConfiguredScienceRequest({ prepared, role, task, dispatchC
 /** Return only the approved, correlated spawn arguments; this does not invoke the host tool. */
 export function getConfiguredReadingDispatchArguments({ prepared, request } = {}) {
   validateConfiguredReadingDispatch({ prepared, request });
-  assertCompactionDispatchAllowed(prepared.runControl.reading_first_binding, request);
   return structuredClone(request.emittedStep.arguments);
 }
 

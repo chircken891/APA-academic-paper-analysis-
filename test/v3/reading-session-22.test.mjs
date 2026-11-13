@@ -46,7 +46,7 @@ async function configuredFixture(t, { systemTemp = false, tempBase } = {}) {
   return { root, profile, evidence, options: { repoRoot: root, runId: 'run', scientificInput, sourceLanguage: 'en', authorizationId: 'test', deadline: '2099-01-01T00:00:00Z', maxCalls: 8, maxTotalCalls: 14, sessionContext: { model: 'm', effort: 'high' }, hostProfile: profile, evidence, includeRepairs: true } };
 }
 
-test('the 1.4 presentation binding preserves 2.2 session preparation, budget and compaction decisions', async t => {
+test('the 1.4 presentation binding preserves 2.2 session preparation, budget and stage reminders', async t => {
   const f = await configuredFixture(t, { systemTemp: true });
   const session = await createReadingSession({ ...f.options, instructionProfile: 'configured-reading-2.2' });
   const root = join(f.root, 'runs', 'run');
@@ -90,19 +90,15 @@ test('the 1.4 presentation binding preserves 2.2 session preparation, budget and
   await recordReadingEvent(session, { kind: 'result', action_id: dispatch.action_id, observation });
   const budget = { total_used: 1, initial_dispatches: 1, continuations: 0, reserved: 0, occupied: 1, total_limit: 14, remaining_total: 13 };
   assert.deepEqual(executionBudgetSummary((await readState()).executionLedger, binding.max_total_calls), budget);
-  const boundary = await nextReadingAction(session);
-  assert.equal(boundary.kind, 'compaction-observation');
-  assert.equal(boundary.boundary_id, 'evidence-accepted');
-  await recordReadingEvent(session, { kind: 'compaction', input: { observation: {} } });
   const reminder = await nextReadingAction(session);
   assert.equal(reminder.action, 'await-user');
-  assert.equal(reminder.record.reason, 'boundary-reminder-required');
-  await recordReadingEvent(session, { kind: 'compaction', input: { userDecision: 'skip' } });
+  assert.equal(reminder.kind, 'compaction-reminder');
+  assert.equal(reminder.boundary_id, 'evidence-accepted');
   const next = await nextReadingAction(session);
   assert.equal(next.action, 'dispatch');
   assert.equal(next.role, 'methods');
   const resumed = await readState();
-  assert.equal(resumed.compaction_reminders['evidence-accepted'].reason, 'user-skipped');
+  assert.equal(resumed.compaction_reminders, undefined);
   assert.equal(resumed.executionLedger.filter(row => row.task_id === 'evidence').length, 1);
   assert.equal(binding.presentation_profile, 'reading-editor-1.4');
 });
@@ -359,8 +355,7 @@ for (const repairResources of [false, true]) test(`2.2 retains Results resources
   presentation.visuals = [{ ...presentation.visuals[0], id: row.id, path: row.path, source_id: row.source_id, locator: row.locator }];
   for (let i = 0; i < 6; i++) {
     let action = await nextReadingAction(session);
-    if (action.kind === 'compaction-observation') { await recordReadingEvent(session, { kind: 'compaction', input: { observation: { manual_compaction: { available: false, source: 'synthetic' } } } }); action = await nextReadingAction(session); }
-    if (action.action === 'await-user') { await recordReadingEvent(session, { kind: 'compaction', input: { userDecision: 'skip' } }); action = await nextReadingAction(session); }
+    if (action.kind === 'compaction-reminder') action = await nextReadingAction(session);
     assert.equal(action.action, 'dispatch');
     const raw = JSON.stringify({ agent_id: 'agent-' + i }), evidencePath = join(root, 'host-' + i + '.txt'); await writeFile(evidencePath, raw);
     const observation = { action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port,
@@ -371,8 +366,7 @@ for (const repairResources of [false, true]) test(`2.2 retains Results resources
     await recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
   }
   let next = await nextReadingAction(session);
-  if (next.kind === 'compaction-observation') { await recordReadingEvent(session, { kind: 'compaction', input: { observation: { manual_compaction: { available: false, source: 'synthetic' } } } }); next = await nextReadingAction(session); }
-  if (next.action === 'await-user') { await recordReadingEvent(session, { kind: 'compaction', input: { userDecision: 'skip' } }); next = await nextReadingAction(session); }
+  if (next.kind === 'compaction-reminder') next = await nextReadingAction(session);
   assert.equal(next.action, 'dispatch');
   async function hostObservation(action, label) {
     const raw = JSON.stringify({ agent_id: 'handle-' + label }), path = join(root, 'host-' + label + '.txt'); await writeFile(path, raw);
@@ -491,8 +485,7 @@ for (const repairResources of [false, true]) test(`2.2 retains Results resources
   assert.match(preview, /Earlier registered study · English/);
   assert.match(preview, /Synthetic publication study · English/);
   assert.deepEqual(await readFile(join(f.root, target)), registered);
-  if (reviewAction.kind === 'compaction-observation') { await recordReadingEvent(session, { kind: 'compaction', input: { observation: { manual_compaction: { available: false, source: 'synthetic' } } } }); reviewAction = await nextReadingAction(session); }
-  if (reviewAction.action === 'await-user') { await recordReadingEvent(session, { kind: 'compaction', input: { userDecision: 'skip' } }); reviewAction = await nextReadingAction(session); }
+  if (reviewAction.kind === 'compaction-reminder') reviewAction = await nextReadingAction(session);
   assert.equal(reviewAction.action, 'dispatch');
   const reviewObservation = await hostObservation(reviewAction, 'review');
   await recordReadingEvent(session, { kind: 'host_observation', action_id: reviewAction.action_id, observation: reviewObservation });

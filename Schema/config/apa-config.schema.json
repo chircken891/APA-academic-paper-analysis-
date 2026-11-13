@@ -428,7 +428,6 @@
           "properties": {
             "on_demand_reading": { "$ref": "#/definitions/hostCapability" },
             "delegated_diagnostics": { "$ref": "#/definitions/hostCapability" },
-            "manual_compaction": { "$ref": "#/definitions/hostCapability" },
             "concise_replies": { "$ref": "#/definitions/hostCapability" },
             "science_recovery": { "$ref": "#/definitions/hostCapability" },
             "task_continuation": { "$ref": "#/definitions/hostCapability" },

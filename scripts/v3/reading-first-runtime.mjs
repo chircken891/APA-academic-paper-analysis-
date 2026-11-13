@@ -20,8 +20,9 @@ import { getRunControlForDispatch, readOwnedArtifact, commitOwnedArtifact, creat
 import { emitApprovedRunStep, ingestObservedRunStep, INSTRUCTION_PATH_DISPATCH_PROFILE } from './phase21-runner.mjs';
 import { loadRoleReplyContract } from './role-reply-contract.mjs';
 import { readCommittedReadingFirstKnowledgeRegistry, inspectCommittedReadingFirstRegistry, assertCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
-import { COMPACTION_POLICY, createCompactionPolicy, compactionEnabled, evaluateCompactionBoundary, assertCompactionSettled, registerCompactionDispatch } from './reading-compaction.mjs';
+import { createCompactionPolicy, compactionEnabled, compactionReminder } from './reading-compaction.mjs';
 import { verifyReadingRuntimeSnapshot } from './reading-runtime-snapshot.mjs';
+import { checkReadingNote } from './reading-annotation-check.mjs';
 
 export const READING_FIRST_PROFILE = 'reading-first-1.0';
 export const SCIENCE_INDEX_PROFILE = 'science-index-1.0';
@@ -63,7 +64,7 @@ export function resolveReadingWorkflowProfile({existingBinding, newRun = false} 
 }
 
 /** Controller proposal factory. Freeze this returned control in the existing broker. */
-export function createReadingFirstRunControl({runId, scientificInput, mainSession, authorizationId, maxCalls = 6, taskBindings, enrichmentPolicy, enrichmentSessionProfile, maxTotalCalls, priorCalls = 0, hostResultAgentIdPath = ['agent_id'], existingBinding, controllerActorId = 'controller', presentationRequired = true, writingMode = 'independent', sourceLanguage = 'en', firstWritingLanguage, presentationMode = 'writer', presentationProfile = READING_EDITOR_PROFILE, noteLayout = 'source-language-1.0', configuredSetup, host, roleReplyContract, handoffProfile, compactionPolicy, manualCompaction} = {}) {
+export function createReadingFirstRunControl({runId, scientificInput, mainSession, authorizationId, maxCalls = 6, taskBindings, enrichmentPolicy, enrichmentSessionProfile, maxTotalCalls, priorCalls = 0, hostResultAgentIdPath = ['agent_id'], existingBinding, controllerActorId = 'controller', presentationRequired = true, writingMode = 'independent', sourceLanguage = 'en', firstWritingLanguage, presentationMode = 'writer', presentationProfile = READING_EDITOR_PROFILE, noteLayout = 'source-language-1.0', configuredSetup, host, roleReplyContract, handoffProfile, compactionPolicy} = {}) {
   if (existingBinding !== undefined) fail('READING_FIRST_EXISTING_BINDING_PRESERVED');
   if (compactionPolicy !== undefined && !compactionEnabled({ compaction_policy: { profile: compactionPolicy } })) fail('APA_COMPACTION_POLICY_INVALID');
   loadRoleReplyContract(roleReplyContract);
@@ -91,7 +92,7 @@ export function createReadingFirstRunControl({runId, scientificInput, mainSessio
   }
   const input = {...copy(scientificInput), profile: resolveReadingWorkflowProfile({newRun:true})};
   return freeze({run_id:runId, reading_first_binding:{profile:input.profile, repair_routing:OWNER_REPAIR_ROUTING, ...(presentationMode === 'reading-editor' ? {presentation_mode:presentationMode, presentation_profile:presentationProfile, presentation_contract:loadReadingEditorContract(presentationProfile).metadata} : {}), presentation_required:presentationRequired, writing_mode:writingMode, source_language:sourceLanguage, ...(firstWritingLanguage !== undefined ? {first_writing_language:firstWritingLanguage} : {}), ...(writingMode === 'source-translation' ? {translation_profile:TRANSLATION_PROFILE} : {}), note_layout:noteLayout, ...(handoffProfile !== undefined ? {handoff_profile:handoffProfile} : {}), input_fingerprint:fingerprintV3Json(input),
-    role_model_policy:configuredSetup?.role_model_policy ?? createApaRoleModelPolicy(mainSession), ...(configuredSetup ? {configured_setup:copy(configuredSetup)} : {}), ...(roleReplyContract !== undefined ? {role_reply_contract:copy(roleReplyContract)} : {}), ...(compactionPolicy ? {compaction_policy:createCompactionPolicy(controllerActorId, undefined, { profile: compactionPolicy, manualCompaction })} : {}), authorization_id:authorizationId, controller_actor_id:controllerActorId, host_result_agent_id_path:copy(hostResultAgentIdPath), max_calls:maxCalls, task_bindings:copy(taskBindings), ...(priorCalls ? {prior_calls:priorCalls} : {}), ...(maxTotalCalls !== undefined ? {max_total_calls:maxTotalCalls} : {}), ...(enrichmentPolicy ? {enrichment_policy:copy(enrichmentPolicy)} : {}), ...(enrichmentSessionProfile !== undefined ? {enrichment_session_profile:enrichmentSessionProfile} : {}), ...(host !== undefined ? {host:copy(host)} : {})}});
+    role_model_policy:configuredSetup?.role_model_policy ?? createApaRoleModelPolicy(mainSession), ...(configuredSetup ? {configured_setup:copy(configuredSetup)} : {}), ...(roleReplyContract !== undefined ? {role_reply_contract:copy(roleReplyContract)} : {}), ...(compactionPolicy ? {compaction_policy:createCompactionPolicy()} : {}), authorization_id:authorizationId, controller_actor_id:controllerActorId, host_result_agent_id_path:copy(hostResultAgentIdPath), max_calls:maxCalls, task_bindings:copy(taskBindings), ...(priorCalls ? {prior_calls:priorCalls} : {}), ...(maxTotalCalls !== undefined ? {max_total_calls:maxTotalCalls} : {}), ...(enrichmentPolicy ? {enrichment_policy:copy(enrichmentPolicy)} : {}), ...(enrichmentSessionProfile !== undefined ? {enrichment_session_profile:enrichmentSessionProfile} : {}), ...(host !== undefined ? {host:copy(host)} : {})}});
 }
 
 function sourceCurrent(sources) {
@@ -622,13 +623,12 @@ function describe(state, key, payload) {
   const emittedStep = emitApprovedRunStep(controls);
   const request = freeze({task:copy(task), language, packet, emittedStep, ...(instructionFile ? {instruction_file:instructionFile} : {}), ...(language || enrichment || editing ? {} : {review_scope:payload.review_scope})});
   requests.set(request, {state, key, controls, payload:copy(payload), payloadFingerprint:fingerprintV3Json(payload), consumed:false});
-  registerReadingCompactionDispatch(state, request, key);
   if (usesExecutionLedger(binding)) reserveExecution(state.executionLedger,{execution_id:emittedStep.action_id,task_id:task.task_id,action_id:emittedStep.action_id,handle:null,tool:emittedStep.action,arguments:emittedStep.arguments,kind:'initial'},executionLimit(state));
   state.requestEntries.set(key, request); state.issued.add(key); state.callsUsed += 1; state.requestLog.push({role, task_id:task.task_id, action_id:emittedStep.action_id});
   return request;
 }
 
-export function createReadingFirstRequests({handoff, runControl, reuseInitialInstruction = false, initialInstructionToken, compactionReminders, executionLedger} = {}) {
+export function createReadingFirstRequests({handoff, runControl, reuseInitialInstruction = false, initialInstructionToken, executionLedger} = {}) {
   try {
     if (initialInstructionToken !== undefined && (!reuseInitialInstruction || typeof initialInstructionToken !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(initialInstructionToken))) fail('READING_FIRST_INSTRUCTION_TOKEN_INVALID');
     if (!handoffs.has(handoff)) fail('READING_FIRST_HANDOFF_REQUIRED');
@@ -658,7 +658,7 @@ export function createReadingFirstRequests({handoff, runControl, reuseInitialIns
       usedIds.add(task.artifact_id);
     }
     if (usesExecutionLedger(binding)) { validateExecutionLedger(executionLedger,binding.max_total_calls,{strict:!!binding.configured_setup}); if (executionLedger.filter(row=>row.kind==='initial').length !== (binding.prior_calls ?? 0)) fail('READING_FIRST_EXECUTION_LEDGER_INVALID'); }
-    const state = {runControl, binding, ...(usesExecutionLedger(binding) ? {executionLedger:copy(executionLedger ?? [])} : {}), reuseInitialInstruction, initialInstructionToken, ...(compactionReminders ? {compaction_reminders:copy(compactionReminders)} : {}), controlFingerprint:fingerprintV3Json(binding), handoff, promptFingerprint:promptCurrent(binding), sections, writingGuide, ...(captureScienceIndexNote(binding) ? {scienceIndexNote:captureScienceIndexNote(binding)} : {}), issued:new Set(), requestEntries:new Map(), callsUsed:binding.prior_calls ?? 0, requestLog:[], observations:[], views:{}, review:null, reviews:0, status:'drafting', draftsRevision:0, enrichmentSources:[], enrichmentRecords:[], enrichmentGaps:[], enrichmentRound:null};
+    const state = {runControl, binding, ...(usesExecutionLedger(binding) ? {executionLedger:copy(executionLedger ?? [])} : {}), reuseInitialInstruction, initialInstructionToken, controlFingerprint:fingerprintV3Json(binding), handoff, promptFingerprint:promptCurrent(binding), sections, writingGuide, ...(captureScienceIndexNote(binding) ? {scienceIndexNote:captureScienceIndexNote(binding)} : {}), issued:new Set(), requestEntries:new Map(), callsUsed:binding.prior_calls ?? 0, requestLog:[], observations:[], views:{}, review:null, reviews:0, status:'drafting', draftsRevision:0, enrichmentSources:[], enrichmentRecords:[], enrichmentGaps:[], enrichmentRound:null};
     for (const item of handoff.adopted_views ?? []) {
       validateLayoutView(state,item.content);
       state.views[item.content.language] = {value:item.content,receipt:item.receipt,artifact_root:item.artifact_root};
@@ -744,7 +744,6 @@ export async function acceptReadingFirstResult({controller, request, observation
   const state = stateFor(controller), record = requests.get(request);
   current(state);
   if (!record || record.state !== state || record.consumed) fail('READING_FIRST_REQUEST_INVALID');
-  assertReadingCompactionDispatch(state, record.key);
   if (state.binding.configured_setup) { validateHostReceiptEvidence(observation,{strict:true}); if (observation.status==='outcome_unknown') fail('READING_FIRST_HOST_OBSERVATION_INVALID'); }
   const native = ingestObservedRunStep({...record.controls, emittedStep:request.emittedStep, observation});
   if (native.status !== 'observed') fail(native.blocked_reason ?? 'READING_FIRST_HOST_OBSERVATION_INVALID');
@@ -1521,8 +1520,15 @@ export function createReadingFirstReviewRequest({controller, presentation, rende
   const key=repairKey(state,'review'), externalNotes=state.binding.handoff_profile===SCIENCE_INDEX_PROFILE;
   const {supportNotes,...inlinePresentation}=presentation;
   const supportNoteFiles=externalNotes ? (supportNotes ?? []).map(note=>writeSupportNote(state,key,note)) : null;
-  const result=describe(state,key,{presentation:externalNotes ? inlinePresentation : presentation, ...(externalNotes ? {support_note_files:supportNoteFiles} : {}), ...(includeEnrichmentContext(state) ? {enrichment_context:enrichmentContext(state)} : {}), ...(local ? {sources:state.handoff.sources, issues:minorOnly ? minorRenderIssues : activeReview(state).issues.filter(issue=>issue.severity==='material'), prior_overall:state.review.overall, ...(renderRepair ? {revision_scope:minorOnly ? 'Renderer-only correction of the reported minor layout/navigation issues; accepted Writer and Reading Editor outputs are unchanged.' : 'Review the corrected renderer targets and any other material repairs together; a changed target does not itself establish correctness.'} : {})} : {handoff:downstreamHandoff(state)}), review_scope:local?'local':'overall', key_node_policy:'Main conclusions, key design, and values/formulas/table relations that could change the conclusion only. Ordinary format and unchecked details do not block.'});
+  const result=describe(state,key,{presentation:externalNotes ? inlinePresentation : presentation, ...(externalNotes ? {support_note_files:supportNoteFiles} : {}), ...(includeEnrichmentContext(state) ? {enrichment_context:enrichmentContext(state)} : {}), ...(local ? {sources:state.handoff.sources, issues:minorOnly ? minorRenderIssues : activeReview(state).issues.filter(issue=>issue.severity==='material'), prior_overall:state.review.overall, ...(renderRepair ? {revision_scope:minorOnly ? 'Renderer-only correction of the reported minor layout/navigation issues; accepted Writer and Reading Editor outputs are unchanged.' : 'Review the corrected renderer targets and any other material repairs together; a changed target does not itself establish correctness.'} : {})} : {handoff:downstreamHandoff(state)}), ...(local ? {} : {annotation_check:annotationCheck(state, presentation)}), review_scope:local?'local':'overall', key_node_policy:'Main conclusions, key design, and values/formulas/table relations that could change the conclusion only. Ordinary format and unchecked details do not block.'});
   state.reviews+=1; state.status='reviewing'; return result;
+}
+/** Deterministic annotation gaps on the rendered pages, checked against this paper's knowledge catalogue. */
+function annotationCheck(state, presentation) {
+  const nodes = (state.handoff.presentation?.knowledge ?? []).map(item => ({ path: item.id,
+    names: [item.title?.en, item.title?.['zh-CN'], ...(Array.isArray(item.aliases) ? item.aliases : [])].filter(name => typeof name === 'string' && name.trim()) }));
+  return Object.fromEntries((presentation?.notes ?? []).filter(note => ['en', 'zh-CN'].includes(note.language) && typeof note.content === 'string')
+    .map(note => [note.language, checkReadingNote(note.content, { language: note.language, nodes })]));
 }
 /** Notes put before the Verifier: inline ones plus support notes registered as files, which must still match their recorded bytes. */
 function reviewedNotes(payload, includeGeneratedAssets = false) {
@@ -1612,101 +1618,20 @@ export function createReadingFirstPresentationRequest({controller} = {}) {
 
 export function getReadingFirstState(controller) {
   const state=stateFor(controller);
-  const observed = readingBoundaryStates.get(state);
-  const boundary = observed?.fingerprint === readingFirstSnapshot(state).checkpoint_fingerprint ? observed.boundary : null;
-  return freeze({profile:READING_FIRST_PROFILE,status:state.status,calls_used:state.callsUsed,review_rounds:state.reviews,review_round_limit:reviewLimit(state),candidate_revision:state.candidateInventories?.at(-1)?.revision ?? state.reviews,candidate_fingerprint:state.candidateInventories?.at(-1)?.presentation_fingerprint,revision_needs_continuation:!!state.revisionNeedsContinuation,user_revision:copy(pendingUserRevision(state)),...(state.binding.enrichment_policy ? {enrichment:{round:state.enrichmentRound,pending:enrichmentPending(state)}} : {}),requests:copy(state.requestLog),observations:copy(state.observations),review:copy(activeReview(state)),...(state.status==='review_unroutable' ? {routing:reviewRoutingReport(state)} : {}),...(state.rejection ? {rejection:copy(state.rejection)} : {}),publishable:false,compaction_boundary:copy(boundary)});
+  return freeze({profile:READING_FIRST_PROFILE,status:state.status,calls_used:state.callsUsed,review_rounds:state.reviews,review_round_limit:reviewLimit(state),candidate_revision:state.candidateInventories?.at(-1)?.revision ?? state.reviews,candidate_fingerprint:state.candidateInventories?.at(-1)?.presentation_fingerprint,revision_needs_continuation:!!state.revisionNeedsContinuation,user_revision:copy(pendingUserRevision(state)),...(state.binding.enrichment_policy ? {enrichment:{round:state.enrichmentRound,pending:enrichmentPending(state)}} : {}),requests:copy(state.requestLog),observations:copy(state.observations),review:copy(activeReview(state)),...(state.status==='review_unroutable' ? {routing:reviewRoutingReport(state)} : {}),...(state.rejection ? {rejection:copy(state.rejection)} : {}),publishable:false});
 }
 
-const compactionObservations = new WeakMap();
-const readingBoundaryStates = new WeakMap();
-function assertReadingCompactionDispatch(state, key) {
-  if (!compactionEnabled(state.binding)) return;
-  if (state.compactionSaveFailed) fail('APA_COMPACTION_RESTORE_REQUIRED');
-  const id = ['en', 'zh-CN'].includes(key) ? 'before-writer' : key === 'review' ? 'before-review' : null;
-  assertCompactionSettled(state.compaction_reminders, id);
-}
-function registerReadingCompactionDispatch(state, request, key) {
-  registerCompactionDispatch(request, () => {
-    current(state);
-    assertReadingCompactionDispatch(state, key);
-  });
-}
-/** Inspect an already saved owned checkpoint and host-supplied task observations. */
-export async function observeReadingCompactionBoundary({controller, checkpointReceipt, hostRequests, presentation} = {}) {
-  const state=stateFor(controller);
-  current(state);
-  const review = state.requestEntries.get('review');
-  const id = presentation && presentations.get(presentation)?.state===state && presentations.get(presentation)?.revision===state.draftsRevision && (!review || !requests.get(review).consumed) ? 'before-review'
-    : !Object.keys(state.views).length && !state.requestEntries.has('review') ? 'before-writer' : null;
-  if (!id) fail('READING_FIRST_COMPACTION_UNAVAILABLE');
-  const saved=await readOwnedArtifact({artifactRoot:state.runControl.artifactRoot,artifactId:checkpointReceipt?.artifact_id});
-  const valid=!!saved && fingerprintV3Json(saved.receipt)===fingerprintV3Json(checkpointReceipt) && saved.receipt.run_id===state.runControl.runId
-    && saved.receipt.role==='control' && saved.receipt.owner_actor_id===state.binding.controller_actor_id;
-  const currentSnapshot=readingFirstSnapshot(state);
-  const currentBytes=Buffer.from(JSON.stringify(currentSnapshot));
-  const savedCurrent=valid && saved.bytes.equals(currentBytes);
-  const pending=[...state.requestEntries.values()].filter(request=>!requests.get(request).consumed);
-  if (!Array.isArray(hostRequests) || hostRequests.length!==pending.length || new Set(hostRequests.map(row=>row.action_id)).size!==pending.length
-    || pending.some(request=>!hostRequests.some(row=>row.action_id===request.emittedStep.action_id && ['prepared','running','unknown'].includes(row.status)))) fail('READING_FIRST_COMPACTION_HOST_STATUS_REQUIRED');
-  const running=hostRequests.filter(row=>row.status!=='prepared').length;
-  const result=freeze({id,reached:true,recovery:{type:'owned-checkpoint',saved:savedCurrent,path:valid ? saved.receipt.path : null},running_count:running,
-    reminder:copy(state.compaction_reminders?.[id] ?? {status:'pending',reason:null})});
-  compactionObservations.set(result,{state,fingerprint:currentSnapshot.checkpoint_fingerprint});
-  readingBoundaryStates.set(state,{boundary:result,fingerprint:currentSnapshot.checkpoint_fingerprint});
-  return result;
-}
-/** Save reminder status in a new explicitly authorized owned checkpoint. */
-export async function recordReadingCompactionBoundary({controller,boundary,status,reason,checkpointTask,capability} = {}) {
-  const state=stateFor(controller), observed=compactionObservations.get(boundary);
-  if (compactionEnabled(state.binding)) fail('APA_COMPACTION_POLICY_DECISION_REQUIRED');
-  if (!observed || observed.state!==state || observed.fingerprint!==readingFirstSnapshot(state).checkpoint_fingerprint || !boundary.recovery.saved || boundary.running_count) fail('READING_FIRST_COMPACTION_UNAVAILABLE');
-  if (!['prompted','skipped','completed'].includes(status) || typeof reason!=='string' || !reason.trim()) fail('READING_FIRST_COMPACTION_INVALID');
-  const previous=boundary.reminder.status;
-  if (previous!=='pending' && !(previous==='prompted' && ['skipped','completed'].includes(status))) fail('READING_FIRST_COMPACTION_ALREADY_RECORDED');
-  if (!checkpointTask || !['artifact_id','artifact_path','revision'].every(key=>typeof checkpointTask[key]==='string' && checkpointTask[key]) || !capability) fail('READING_FIRST_COMPACTION_CHECKPOINT_REQUIRED');
-  state.compaction_reminders ??= {};
-  state.compaction_reminders[boundary.id]={status,reason};
-  const snapshot=readingFirstSnapshot(state);
-  const receipt=await commitOwnedArtifact({artifactRoot:state.runControl.artifactRoot,dispatchContext:state.runControl.dispatchContext,capability,
-    artifact:{artifact_id:checkpointTask.artifact_id,path:checkpointTask.artifact_path,content:JSON.stringify(snapshot)},expectedRevision:checkpointTask.revision});
-  const saved=await readOwnedArtifact({artifactRoot:state.runControl.artifactRoot,artifactId:checkpointTask.artifact_id});
-  if (!saved || fingerprintV3Json(saved.receipt)!==fingerprintV3Json(receipt) || saved.receipt.run_id!==state.runControl.runId
-    || saved.receipt.role!=='control' || saved.receipt.owner_actor_id!==state.binding.controller_actor_id || !saved.bytes.equals(Buffer.from(JSON.stringify(snapshot)))) fail('READING_FIRST_COMPACTION_CHECKPOINT_INVALID');
-  return {status,reason,receipt};
-}
-
-/** Common cross-host decision, committed to the next predeclared control artifact before returning. */
-export async function handleReadingCompactionBoundary({controller, checkpointReceipt, hostRequests, presentation, observation, sessionId, progress, userDecision, capability} = {}) {
+/** Build the forced reminder for the Writer or review boundary from the saved checkpoint; nothing is recorded. */
+export function getReadingCompactionReminder({controller, boundaryId, checkpointReceipt, presentation} = {}) {
   const state = stateFor(controller);
   current(state);
-  if (!compactionEnabled(state.binding)) fail('APA_COMPACTION_POLICY_REQUIRED');
-  const boundary = await observeReadingCompactionBoundary({controller, checkpointReceipt, hostRequests, presentation});
-  const result = evaluateCompactionBoundary({boundary, observation, sessionId, progress, userDecision,
-    history:state.compaction_reminders, startedAt:state.binding.compaction_policy.started_at, policy:state.binding.compaction_policy,
-    continuation:{run_id:state.runControl.runId,paper_id:state.handoff.identity.paper_id,run_root:state.runControl.artifactRoot,
-      checkpoint_path:resolve(state.runControl.artifactRoot,state.binding.compaction_policy.checkpoints[boundary.id].decision.artifact_path),
-      binding_source:'state.binding in the owned checkpoint',binding:state.binding,calls_used:state.callsUsed,budget_summary:readingBudget(state),sources:state.handoff.sources,
-      accepted_artifacts:[...state.handoff.science,...Object.values(state.views),...(state.readingEditor?[state.readingEditor]:[])].map(item=>({
-        role:item.receipt.role,path:nativePath(item.artifact_root??state.runControl.artifactRoot,item.receipt.path),sha256:item.receipt.sha256})),
-      candidate_paths:(presentation?.notes??[]).map(note=>note.path)}});
-  if (!result.record) return {...result, receipt:checkpointReceipt};
-  const step = boundary.reminder.status === 'prompted' ? 'resume' : 'decision';
-  const task = state.binding.compaction_policy.checkpoints[boundary.id][step];
-  if (!capability) fail('READING_FIRST_COMPACTION_CHECKPOINT_REQUIRED');
-  state.compaction_reminders ??= {};
-  state.compaction_reminders[boundary.id] = result.record;
-  try {
-    const snapshot = readingFirstSnapshot(state);
-    const receipt = await commitOwnedArtifact({artifactRoot:state.runControl.artifactRoot,dispatchContext:state.runControl.dispatchContext,capability,
-      artifact:{artifact_id:task.artifact_id,path:task.artifact_path,content:JSON.stringify(snapshot)},expectedRevision:task.revision});
-    const saved = await readOwnedArtifact({artifactRoot:state.runControl.artifactRoot,artifactId:task.artifact_id});
-    if (!saved || fingerprintV3Json(saved.receipt) !== fingerprintV3Json(receipt) || saved.receipt.run_id !== state.runControl.runId
-      || saved.receipt.role !== 'control' || saved.receipt.owner_actor_id !== state.binding.controller_actor_id || !saved.bytes.equals(Buffer.from(JSON.stringify(snapshot)))) fail('READING_FIRST_COMPACTION_CHECKPOINT_INVALID');
-    return {...result, receipt};
-  } catch (error) {
-    state.compactionSaveFailed = true;
-    throw error;
-  }
+  if (!compactionEnabled(state.binding)) return null;
+  return compactionReminder(boundaryId, {run_id:state.runControl.runId,paper_id:state.handoff.identity.paper_id,run_root:state.runControl.artifactRoot,
+    checkpoint_path:checkpointReceipt?.path ? resolve(state.runControl.artifactRoot,checkpointReceipt.path) : null,
+    binding_source:'state.binding in the owned checkpoint',binding:state.binding,calls_used:state.callsUsed,budget_summary:readingBudget(state),sources:state.handoff.sources,
+    accepted_artifacts:[...state.handoff.science,...Object.values(state.views),...(state.readingEditor?[state.readingEditor]:[])].map(item=>({
+      role:item.receipt.role,path:nativePath(item.artifact_root??state.runControl.artifactRoot,item.receipt.path),sha256:item.receipt.sha256})),
+    candidate_paths:(presentation?.notes??[]).map(note=>note.path)});
 }
 
 /** Save this through an assigned Controller-owned artifact before dispatch and after acceptance. */
@@ -1716,7 +1641,7 @@ export function snapshotReadingFirstRuntime(controller) {
 }
 function readingFirstSnapshot(state) {
   const snapshot={schema_version:'reading-first-checkpoint-1.0',control_fingerprint:state.controlFingerprint,handoff_fingerprint:state.handoff.handoff_fingerprint,prompt_fingerprint:state.promptFingerprint,
-    state:{...(state.executionLedger ? {executionLedger:state.executionLedger} : {}),...(state.compaction_reminders ? {compaction_reminders:state.compaction_reminders} : {}),...(state.rejection ? {rejection:state.rejection} : {}),...(state.readingEditor ? {readingEditor:state.readingEditor} : {}),...(state.reviewedPresentationFingerprint ? {reviewedPresentationFingerprint:state.reviewedPresentationFingerprint} : {}),...(state.renderRepairBaseViews ? {renderRepairBaseViews:state.renderRepairBaseViews} : {}),...(state.renderRepairBaseEditor ? {renderRepairBaseEditor:state.renderRepairBaseEditor} : {}),...(state.renderRepairBaseEditorReceipt ? {renderRepairBaseEditorReceipt:state.renderRepairBaseEditorReceipt} : {}),...(state.writingGuide ? {writingGuide:state.writingGuide} : {}),...(state.scienceIndexNote ? {scienceIndexNote:state.scienceIndexNote} : {}),callsUsed:state.callsUsed,status:state.status,draftsRevision:state.draftsRevision,views:state.views,review:state.review,reviews:state.reviews,observations:state.observations,requestLog:state.requestLog,
+    state:{...(state.executionLedger ? {executionLedger:state.executionLedger} : {}),...(state.rejection ? {rejection:state.rejection} : {}),...(state.readingEditor ? {readingEditor:state.readingEditor} : {}),...(state.reviewedPresentationFingerprint ? {reviewedPresentationFingerprint:state.reviewedPresentationFingerprint} : {}),...(state.renderRepairBaseViews ? {renderRepairBaseViews:state.renderRepairBaseViews} : {}),...(state.renderRepairBaseEditor ? {renderRepairBaseEditor:state.renderRepairBaseEditor} : {}),...(state.renderRepairBaseEditorReceipt ? {renderRepairBaseEditorReceipt:state.renderRepairBaseEditorReceipt} : {}),...(state.writingGuide ? {writingGuide:state.writingGuide} : {}),...(state.scienceIndexNote ? {scienceIndexNote:state.scienceIndexNote} : {}),callsUsed:state.callsUsed,status:state.status,draftsRevision:state.draftsRevision,views:state.views,review:state.review,reviews:state.reviews,observations:state.observations,requestLog:state.requestLog,
       ...(state.repairRecoveries ? {repairRecoveries:state.repairRecoveries} : {}),...(state.continuationAuthorizations ? {continuationAuthorizations:state.continuationAuthorizations} : {}),...(state.reviewScopeNotes ? {reviewScopeNotes:state.reviewScopeNotes} : {}),...(state.revisionNeedsContinuation ? {revisionNeedsContinuation:true} : {}),...(state.candidateInventories ? {candidateInventories:state.candidateInventories} : {}),...(state.user_revisions ? {user_revisions:state.user_revisions} : {}),...(state.userRevisionChecks ? {userRevisionChecks:state.userRevisionChecks} : {}),...(state.userRevisionWithdrawals ? {userRevisionWithdrawals:state.userRevisionWithdrawals} : {}),...(state.repairContinuation ? {repairContinuation:state.repairContinuation} : {}),...(state.reviewExtension ? {reviewExtension:state.reviewExtension} : {}),
       ...(state.knowledgeIdentityResolutions ? { knowledgeIdentityResolutions: state.knowledgeIdentityResolutions } : {}),
       ...(state.resourceRepair ? { resourceRepair: state.resourceRepair } : {}),
@@ -2217,7 +2142,6 @@ export async function restoreReadingFirstRuntime({handoff,runControl,checkpointR
       const request=freeze(copy(entry.request));
       const controls={packet:request.packet,run:{run_id:runControl.runId},dispatchContext:runControl.dispatchContext,approvedBudget:request.packet.approved_budget_cap,retryPolicy:{max_retries:0}};
       requests.set(request,{state,key:entry.key,controls,payload:entry.payload,consumed:entry.consumed,...(entry.events ? {events:copy(entry.events)} : {})});state.issued.add(entry.key);state.requestEntries.set(entry.key,request);
-      registerReadingCompactionDispatch(state,request,entry.key);
     }
     if(previous.pending_revision_keys?.length){state.pendingRevisions=previous.pending_revision_keys;state.revisionRequests=previous.pending_revision_keys.map(key=>state.requestEntries.get(key)).filter(Boolean);}
     for(const key of previous.adopted_keys ?? []){if(!(binding.task_bindings[key] || handoff.adopted_views?.some(item=>item.content.language===key)) || state.issued.has(key))fail('READING_FIRST_CHECKPOINT_TASK_INVALID');state.issued.add(key);}

@@ -16,160 +16,40 @@ import { buildConfiguredReadingInstructions } from '../../scripts/v3/configured-
 import { getConfiguredReadingDispatchArguments } from '../../scripts/v3/configured-reading.mjs';
 import { reviewedReadingFirstFixture, syntheticReadingMapArgument } from './helpers/reading-first-publication-source-fixtures.mjs';
 import * as readingApi from '../../scripts/v3/reading-first-runtime.mjs';
-import { COMPACTION_POLICY, compactionControlBindings } from '../../scripts/v3/reading-compaction.mjs';
-import { READING_FIRST_PROFILE, SCIENCE_INDEX_PROFILE, fingerprintReadingFirst, resolveReadingWorkflowProfile, acceptReadingFirstResult, createReadingFirstReviewRequest, getReadingFirstState, createReadingFirstRevisionRequests, createReadingFirstRunControl, snapshotReadingFirstRuntime, restoreReadingFirstRuntime, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstEnrichmentRequests, buildReadingFirstHandoff, observeReadingCompactionBoundary, recordReadingCompactionBoundary } from '../../scripts/v3/reading-first-runtime.mjs';
+import { COMPACTION_POLICY } from '../../scripts/v3/reading-compaction.mjs';
+import { READING_FIRST_PROFILE, SCIENCE_INDEX_PROFILE, fingerprintReadingFirst, resolveReadingWorkflowProfile, acceptReadingFirstResult, createReadingFirstReviewRequest, getReadingFirstState, createReadingFirstRevisionRequests, createReadingFirstRunControl, snapshotReadingFirstRuntime, restoreReadingFirstRuntime, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstEnrichmentRequests, buildReadingFirstHandoff } from '../../scripts/v3/reading-first-runtime.mjs';
 const createLanguageRequests = args => readingApi.createReadingFirstRequests(args);
 const renderReaderNotes = async ({ input, targetRegistry, existingTargets = [] } = {}) => readingApi.renderReadingFirstNotes({ controller: input.controller, targetRegistry, existingTargets });
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const roles = ['evidence','methods','results','interpretation','scientific-reading','integration'];
 
-const compactionObservation = () => ({ manual_compaction: { available: true, method: 'host compact action', source: 'host capability evidence' } });
 const dispatchArguments = (s, request) => getConfiguredReadingDispatchArguments({ prepared: { runControl: { run_id: 'run', reading_first_binding: s.binding }, paths: { runRoot: s.root } }, request });
-async function compactionCheckpoint(s, controller, id = 'checkpoint') {
+async function commitCheckpoint(s, controller, id = 'checkpoint') {
   return commitOwnedArtifact({ artifactRoot: s.root, dispatchContext: s.broker.dispatchContext,
     capability: s.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: id + '.json', revision: '1' }),
     artifact: { artifact_id: id, content: JSON.stringify(snapshotReadingFirstRuntime(controller)) }, expectedRevision: '1' });
 }
-function compactionCapability(s, id, step) {
-  const task = s.binding.compaction_policy.checkpoints[id][step];
-  return s.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: task.artifact_path, revision: task.revision });
-}
 
-for (const profile of ['boundary-reminders-1.0', 'boundary-reminders-1.1']) test(`a bound ${profile} runtime preserves the unavailable decision checkpoint bytes across restore`, async t => {
-  const s = await setup(t, { compactionPolicy: profile });
-  const { controller, requests } = s.created;
-  assert.equal(s.binding.compaction_policy.profile, profile);
-  assert.equal(s.binding.compaction_policy.manual_compaction, undefined);
-  const checkpoint = await compactionCheckpoint(s, controller);
-  const hostRequests = requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' }));
-  const first = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: checkpoint, hostRequests,
-    capability: compactionCapability(s, 'before-writer', 'decision') });
-  assert.equal(first.action, 'continue'); assert.equal(first.record.reason, 'manual-compaction-unavailable');
-  const path = join(s.root, s.binding.compaction_policy.checkpoints['before-writer'].decision.artifact_path);
-  const bytes = await readFile(path);
-  const restored = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: first.receipt });
-  assert.equal(restored.ok, true, JSON.stringify(restored.errors));
-  const repeated = await readingApi.handleReadingCompactionBoundary({ controller: restored.controller, checkpointReceipt: first.receipt, hostRequests });
-  assert.equal(repeated.action, 'continue'); assert.equal(repeated.record, null);
-  assert.deepEqual(await readFile(path), bytes);
-  assert.doesNotThrow(() => dispatchArguments(s, restored.requests[0]));
-});
-
-test('new reading runtime requires the Writer decision and preserves pending actions through pause and resume', async t => {
+test('stage compaction reminders freeze only the profile and never lock dispatch', async t => {
   const s = await setup(t, { compactionPolicy: COMPACTION_POLICY });
   const { controller, requests } = s.created;
-  assert.throws(() => dispatchArguments(s, requests[0]), /APA_COMPACTION_BOUNDARY_REQUIRED/);
-  const saved = await compactionCheckpoint(s, controller);
-  const hostRequests = requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' }));
-  const pause = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: saved, hostRequests,
-    observation: compactionObservation(), capability: compactionCapability(s, 'before-writer', 'decision') });
-  assert.equal(pause.action, 'await-user');
-  assert.match(pause.message, /用量未知/);
-  assert.throws(() => dispatchArguments(s, requests[0]), /APA_COMPACTION_AWAITING_USER/);
-  const recovered = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: pause.receipt });
-  assert.equal(recovered.ok, true, JSON.stringify(recovered.errors));
-  assert.deepEqual(recovered.requests.map(request => request.emittedStep.action_id), requests.map(request => request.emittedStep.action_id));
-  assert.throws(() => dispatchArguments(s, recovered.requests[0]), /APA_COMPACTION_AWAITING_USER/);
-  const waiting = await readingApi.handleReadingCompactionBoundary({ controller: recovered.controller, checkpointReceipt: pause.receipt, hostRequests });
-  assert.equal(waiting.action, 'await-user');
-  const continued = await readingApi.handleReadingCompactionBoundary({ controller: recovered.controller, checkpointReceipt: pause.receipt, hostRequests,
-    userDecision: 'continue', capability: compactionCapability(s, 'before-writer', 'resume') });
-  assert.equal(continued.action, 'continue');
-  assert.equal(continued.record.compaction_verified, false);
-  assert.deepEqual(dispatchArguments(s, recovered.requests[0]), requests[0].emittedStep.arguments);
-  assert.equal(getReadingFirstState(recovered.controller).calls_used, getReadingFirstState(controller).calls_used);
-  const oldBoundary = await observeReadingCompactionBoundary({ controller: recovered.controller, checkpointReceipt: continued.receipt, hostRequests });
-  await assert.rejects(() => recordReadingCompactionBoundary({ controller: recovered.controller, boundary: oldBoundary, status: 'prompted', reason: 'bypass' }), /APA_COMPACTION_POLICY_DECISION_REQUIRED/);
-});
-
-test('new reading runtime gates the rendered review, permits unknown-context skip and keeps the same review action', async t => {
-  const s = await setup(t, { compactionPolicy: COMPACTION_POLICY });
-  const { controller, requests } = s.created;
-  assert.throws(() => dispatchArguments(s, requests[0]), /APA_COMPACTION_BOUNDARY_REQUIRED/);
-  const saved = await compactionCheckpoint(s, controller);
-  const writerRequests = requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' }));
-  const writerPause = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: saved,
-    hostRequests: writerRequests,
-    observation: {}, capability: compactionCapability(s, 'before-writer', 'decision') });
-  assert.equal(writerPause.action, 'await-user');
-  assert.throws(() => dispatchArguments(s, requests[0]), /APA_COMPACTION_AWAITING_USER/);
-  await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: writerPause.receipt, hostRequests: writerRequests,
-    userDecision: 'skip', capability: compactionCapability(s, 'before-writer', 'resume') });
-  for (const request of requests) await s.complete(request, s.view(request.language));
-  const presentation = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller } });
-  const review = createReadingFirstReviewRequest({ controller, presentation });
-  assert.throws(() => dispatchArguments(s, review), /APA_COMPACTION_BOUNDARY_REQUIRED/);
-  const receipt = await compactionCheckpoint(s, controller, 'checkpoint-before-review');
-  for (const status of ['running', 'unknown']) {
-    const result = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: receipt, presentation,
-      hostRequests: [{ action_id: review.emittedStep.action_id, status }], observation: compactionObservation() });
-    assert.equal(result.action, 'reconcile');
-  }
-  const result = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: receipt, presentation,
-    hostRequests: [{ action_id: review.emittedStep.action_id, status: 'prepared' }], observation: compactionObservation(),
-    capability: compactionCapability(s, 'before-review', 'decision') });
-  assert.equal(result.action, 'await-user');
-  assert.throws(() => dispatchArguments(s, review), /APA_COMPACTION_AWAITING_USER/);
-  const continued = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: result.receipt, presentation,
-    hostRequests: [{ action_id: review.emittedStep.action_id, status: 'prepared' }], userDecision: 'skip',
-    capability: compactionCapability(s, 'before-review', 'resume') });
-  assert.equal(continued.action, 'continue');
-  assert.deepEqual(dispatchArguments(s, review), review.emittedStep.arguments);
-  const restored = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: continued.receipt });
+  assert.deepEqual(s.binding.compaction_policy, { profile: COMPACTION_POLICY });
+  const receipt = await commitCheckpoint(s, controller);
+  const writer = readingApi.getReadingCompactionReminder({ controller, boundaryId: 'before-writer', checkpointReceipt: receipt });
+  assert.equal(writer.boundary_id, 'before-writer');
+  assert.match(writer.message, /Writer 前/);
+  assert.match(writer.compaction_prompt, /"run_id":"run"/);
+  assert.match(writer.compaction_prompt, /checkpoint\.json/);
+  assert.deepEqual(dispatchArguments(s, requests[0]), requests[0].emittedStep.arguments);
+  assert.equal(snapshotReadingFirstRuntime(controller).state.compaction_reminders, undefined);
+  const restored = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: receipt });
   assert.equal(restored.ok, true);
-  assert.deepEqual(restored.requests.map(request => request.emittedStep.action_id), [review.emittedStep.action_id]);
-  assert.deepEqual(dispatchArguments(s, restored.requests[0]), review.emittedStep.arguments);
+  assert.deepEqual(dispatchArguments(s, restored.requests[0]), requests[0].emittedStep.arguments);
 });
 
-test('a prompted review resumes the same request after process recovery and observed compaction', async t => {
-  const s = await setup(t, { compactionPolicy: COMPACTION_POLICY });
-  const { controller, requests } = s.created;
-  const saved = await compactionCheckpoint(s, controller);
-  const writerRequests = requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' }));
-  const writerPause = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: saved,
-    hostRequests: writerRequests,
-    capability: compactionCapability(s, 'before-writer', 'decision') });
-  assert.equal(writerPause.action, 'await-user');
-  assert.throws(() => dispatchArguments(s, requests[0]), /APA_COMPACTION_AWAITING_USER/);
-  await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: writerPause.receipt, hostRequests: writerRequests,
-    userDecision: 'skip', capability: compactionCapability(s, 'before-writer', 'resume') });
-  for (const request of requests) await s.complete(request, s.view(request.language));
-  const presentation = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller } });
-  const review = createReadingFirstReviewRequest({ controller, presentation });
-  const receipt = await compactionCheckpoint(s, controller, 'checkpoint-before-review');
-  const hostRequests = [{ action_id: review.emittedStep.action_id, status: 'prepared' }];
-  const at = new Date().toISOString();
-  const pause = await readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: receipt, presentation, hostRequests, sessionId: 'main',
-    observation: { ...compactionObservation(), session_id: 'main', observed_at: at,
-      context: { tokens: 180000, kind: 'last-request-input', measured_at: at, fresh: true, source: 'host usage' } },
-    progress: { remaining_work: { multiple_responses: true, reason: 'Review and possible repair remain.' }, growth: { substantial: true, reason: 'Bilingual candidate expanded context.' } },
-    capability: compactionCapability(s, 'before-review', 'decision') });
-  assert.equal(pause.action, 'await-user');
-  const restored = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: pause.receipt });
-  assert.equal(restored.ok, true, JSON.stringify(restored.errors));
-  const recoveredPresentation = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller: restored.controller } });
-  const observedAt = new Date().toISOString();
-  const resumed = await readingApi.handleReadingCompactionBoundary({ controller: restored.controller, checkpointReceipt: pause.receipt,
-    presentation: recoveredPresentation, hostRequests, sessionId: 'main', userDecision: 'continue',
-    observation: { session_id: 'main', observed_at: observedAt, last_compaction: { id: 'host-event', session_id: 'main', status: 'succeeded', occurred_at: observedAt, source: 'host event log' } },
-    capability: compactionCapability(s, 'before-review', 'resume') });
-  assert.equal(resumed.record.status, 'completed');
-  assert.deepEqual(dispatchArguments(s, restored.requests[0]), review.emittedStep.arguments);
-  assert.deepEqual(snapshotReadingFirstRuntime(restored.controller).state.requestLog, snapshotReadingFirstRuntime(controller).state.requestLog);
-});
-
-test('a failed reading reminder save cannot expose a prompt or leave dispatch unlocked', async t => {
-  const s = await setup(t, { compactionPolicy: COMPACTION_POLICY });
-  const { controller, requests } = s.created;
-  assert.throws(() => dispatchArguments(s, requests[0]), /APA_COMPACTION_BOUNDARY_REQUIRED/);
-  const saved = await compactionCheckpoint(s, controller);
-  await assert.rejects(() => readingApi.handleReadingCompactionBoundary({ controller, checkpointReceipt: saved,
-    hostRequests: requests.map(request => ({ action_id: request.emittedStep.action_id, status: 'prepared' })),
-    observation: compactionObservation(), capability: {} }));
-  assert.throws(() => dispatchArguments(s, requests[0]), /COMPACTION_RESTORE_REQUIRED/);
-  const restored = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: saved });
-  assert.equal(restored.ok, true);
-  assert.throws(() => dispatchArguments(s, restored.requests[0]), /APA_COMPACTION_BOUNDARY_REQUIRED/);
+test('bindings without the stage reminder profile produce no reminder', async t => {
+  const s = await setup(t);
+  assert.equal(readingApi.getReadingCompactionReminder({ controller: s.created.controller, boundaryId: 'before-writer' }), null);
 });
 
 async function setup(t, { instructionProfile = 'configured-reading-2.2', presentation, presentationRequired = false, writingMode = 'independent', sourceLanguage = 'en', presentationMode = 'writer', priorCalls = 0, maxTotalCalls, roleReplyContract, enrichmentPolicy, handoffProfile, legacyPresentationProfile, legacyRepairRouting = false, invalidRepairRouting = false, maxCalls = presentationMode==='reading-editor'?7:6, firstWritingLanguage, integrationContent = {}, writingSkills = {}, compactionPolicy } = {}) {
@@ -196,8 +76,6 @@ async function setup(t, { instructionProfile = 'configured-reading-2.2', present
   if (legacyRepairRouting) delete binding.repair_routing;
   if (invalidRepairRouting) binding.repair_routing='unknown-routing';
   bindings.push({run_id:'run',actor_id:'controller',role:'control',artifact_path:'checkpoint.json',revision:'1'});
-  bindings.push({run_id:'run',actor_id:'controller',role:'control',artifact_path:'checkpoint-compaction.json',revision:'1'});
-  bindings.push(...compactionControlBindings(runBinding));
   bindings.push({run_id:'run',actor_id:'controller',role:'control',artifact_path:'checkpoint-before-review.json',revision:'1'});
   const fingerprints=Object.fromEntries(['source','parser_tool','permission','parent_revision','policy','authorization'].map(key=>[key,sha(Buffer.from(key))]));
   const required=roles.map(role=>({artifact_id:role,owner_actor_id:role,path:'science/'+role+'.json'}));
@@ -261,7 +139,7 @@ const maskPaths = (value, ...roots) => {
   return masked.replaceAll('\\\\', '/').replaceAll('\\', '/').replace(/"(input_fingerprint|handoff_fingerprint)":"sha256:[0-9a-f]{64}"/g, '"$1":"<ROOT-DERIVED>"').replace(/\{"writing_guide":\{[^}]*\}\}/, '<WRITING-GUIDE>');
 };
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url)).replace(/[\\/]$/, '');
-const CURRENT_CONTRACT_FINGERPRINT = 'sha256:e37966fc5ee35dfc6e82b5801fdd5025ad6783306896bf1afeecf04ff1c22d1f';
+const CURRENT_CONTRACT_FINGERPRINT = 'sha256:8ceab8ba28a3aa7c3ca82fc4a161ca7c6a7c1d63280ff251014d35dc9a8e3148';
 function maskedRequest(s, request) {
   const message = maskPaths(request.emittedStep.arguments.message, [s.root, '<ROOT>'], [repositoryRoot, '<REPO>']);
   const { input, writing_guide, ...configuration } = JSON.parse(maskPaths(JSON.stringify(request.packet.backend.configuration), [s.root, '<ROOT>'], [repositoryRoot, '<REPO>']));
@@ -269,12 +147,12 @@ function maskedRequest(s, request) {
   return { instruction_fingerprint: sha(Buffer.from(message)), configuration_fingerprint: fingerprintReadingFirst(configuration), message };
 }
 // Fingerprints of the masked en Writer request, captured from the code before science-index-1.0 existed (2026-10-28).
-// Configuration baseline updated 2026-11-08: 0c537329 added title?, doi?, trace_reason? to enrichment sources.
-// Previous contract: sha256:8fda8447e3b229fabb1c199d50da2dc59bb18ae54ebb17b41dd815aa562594e7.
-// Previous configuration fingerprint: sha256:260d65b2be453ff03476f6856289755115a74223cffc463f1c34771fbeb115aa.
+// Baseline updated 2026-11-11: the contract added chart-type panel coverage, findings panel citations, knowledge linking and annotation_check guidance.
+// Previous contract: sha256:e37966fc5ee35dfc6e82b5801fdd5025ad6783306896bf1afeecf04ff1c22d1f.
+// Previous configuration fingerprint: sha256:39e1acc453212d3b344f8c38e0001c127c600408e3dbbc0aa1534beea378db63.
 const LEGACY_EN_WRITER = {
-  instruction_fingerprint: 'sha256:f54d7e9a82646f82c43d8782f35219ff1bcd2969d60028e520223e096c96107a',
-  configuration_fingerprint: 'sha256:39e1acc453212d3b344f8c38e0001c127c600408e3dbbc0aa1534beea378db63',
+  instruction_fingerprint: 'sha256:65857d365a7282cf31050f8469a17aba2a3b21f49ff5db943d4d809768bbb347',
+  configuration_fingerprint: 'sha256:63ab891e72853fdd0da5d18d3aece002e9068771cc51cde8390aa00239196be2',
 };
 const requestPayload = request => JSON.parse(request.emittedStep.arguments.message.split('\n\n').at(-1));
 const INDEXED_ROLES = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading'];
@@ -554,48 +432,6 @@ test('original source drift prevents acceptance and a forged observation cannot 
 
 
 
-test('reading compaction requires a saved checkpoint and known idle host requests',async t=>{
-  const s=await setup(t), controller=s.created.controller;
-  const saved=snapshotReadingFirstRuntime(controller);
-  const receipt=await commitOwnedArtifact({artifactRoot:s.root,dispatchContext:s.broker.dispatchContext,capability:s.broker.issueCapability({runId:'run',actorId:'controller',role:'control',artifactPath:'checkpoint.json',revision:'1'}),artifact:{artifact_id:'checkpoint',content:JSON.stringify(saved)},expectedRevision:'1'});
-  const hostRequests=s.created.requests.map(r=>({action_id:r.emittedStep.action_id,status:'prepared'}));
-  let boundary=await observeReadingCompactionBoundary({controller,checkpointReceipt:receipt,hostRequests});
-  assert.equal(boundary.id,'before-writer'); assert.equal(boundary.recovery.saved,true); assert.equal(boundary.running_count,0);
-  assert.equal(getReadingFirstState(controller).compaction_boundary.id, 'before-writer');
-  const updated=await recordReadingCompactionBoundary({controller,boundary,status:'skipped',reason:'context unknown',checkpointTask:{artifact_id:'checkpoint-compaction',artifact_path:'checkpoint-compaction.json',revision:'1'},capability:s.broker.issueCapability({runId:'run',actorId:'controller',role:'control',artifactPath:'checkpoint-compaction.json',revision:'1'})});
-  assert.equal(snapshotReadingFirstRuntime(controller).state.compaction_reminders['before-writer'].status,'skipped');
-  boundary=await observeReadingCompactionBoundary({controller,checkpointReceipt:receipt,hostRequests});
-  assert.equal(boundary.recovery.saved,false);
-  const restored=await restoreReadingFirstRuntime({handoff:s.handoff,runControl:s.runControl,checkpointReceipt:updated.receipt});
-  assert.equal(restored.ok,true);
-  boundary=await observeReadingCompactionBoundary({controller:restored.controller,checkpointReceipt:updated.receipt,hostRequests});
-  assert.equal(boundary.reminder.status,'skipped');
-  await assert.rejects(()=>recordReadingCompactionBoundary({controller:restored.controller,boundary,status:'prompted',reason:'again'}),/READING_FIRST_COMPACTION_ALREADY_RECORDED/);
-});
-
-test('before-review compaction preserves a generated undispatched review request', async t => {
-  const s = await setup(t), controller = s.created.controller;
-  for (const request of s.created.requests) await s.complete(request, s.view(request.language));
-  const presentation = await renderReaderNotes({ input: { profile: READING_FIRST_PROFILE, controller } });
-  const request = createReadingFirstReviewRequest({ controller, presentation });
-  const receipt = await commitOwnedArtifact({ artifactRoot: s.root, dispatchContext: s.broker.dispatchContext,
-    capability: s.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: 'checkpoint.json', revision: '1' }),
-    artifact: { artifact_id: 'checkpoint', content: JSON.stringify(snapshotReadingFirstRuntime(controller)) }, expectedRevision: '1' });
-  for (const status of ['running', 'unknown']) {
-    const boundary = await observeReadingCompactionBoundary({ controller, checkpointReceipt: receipt, presentation, hostRequests: [{ action_id: request.emittedStep.action_id, status }] });
-    assert.equal(boundary.running_count, 1);
-    await assert.rejects(recordReadingCompactionBoundary({ controller, boundary, status: 'prompted', reason: 'large context' }), /COMPACTION_UNAVAILABLE/);
-  }
-  const boundary = await observeReadingCompactionBoundary({ controller, checkpointReceipt: receipt, presentation, hostRequests: [{ action_id: request.emittedStep.action_id, status: 'prepared' }] });
-  assert.equal(boundary.id, 'before-review');
-  const updated = await recordReadingCompactionBoundary({ controller, boundary, status: 'skipped', reason: 'context unknown',
-    checkpointTask: { artifact_id: 'checkpoint-compaction', artifact_path: 'checkpoint-compaction.json', revision: '1' },
-    capability: s.broker.issueCapability({ runId: 'run', actorId: 'controller', role: 'control', artifactPath: 'checkpoint-compaction.json', revision: '1' }) });
-  const restored = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: updated.receipt });
-  assert.equal(restored.ok, true);
-  assert.deepEqual(restored.requests.map(row => row.emittedStep.action_id), [request.emittedStep.action_id]);
-  assert.equal(snapshotReadingFirstRuntime(restored.controller).state.compaction_reminders['before-review'].status, 'skipped');
-});
 test('owned Controller checkpoint restores existing requests and budget without a second writer dispatch',async t=>{
   const s=await setup(t);
   await s.complete(s.created.requests[0],s.view('en'));
@@ -1050,7 +886,7 @@ test('owned original-page recovery corrects the consumed visual catalogue and su
   assert.match(rendered.notes.find(note=>note.language==='en').content,/Original S7 alternative-method sensitivity/);
   assert.match(rendered.notes.find(note=>note.language==='zh-CN').content,/原图 S7，替代方法敏感性分析/);
   assert.doesNotMatch(rendered.notes.map(note=>note.content).join('\n'),/Wrong independent-source caption/);
-  const receipt=await compactionCheckpoint(s,s.controller);
+  const receipt=await commitCheckpoint(s,s.controller);
   const restored=await restoreReadingFirstRuntime({handoff:s.handoff,runControl:s.runControl,checkpointReceipt:receipt});
   assert.equal(restored.ok,true,JSON.stringify(restored.errors));
   const again=await renderReaderNotes({input:{profile:READING_FIRST_PROFILE,controller:restored.controller}});
@@ -1174,12 +1010,12 @@ async function renderedWithSupport(t, options = {}) {
 }
 const reviewPayload = request => requestPayload(request);
 // Fingerprints of the masked overall review request, captured from the code before review support notes moved to files (2026-10-28).
-// Configuration baseline updated 2026-11-08: 0c537329 added title?, doi?, trace_reason? to enrichment sources.
-// Previous contract: sha256:8fda8447e3b229fabb1c199d50da2dc59bb18ae54ebb17b41dd815aa562594e7.
-// Previous configuration fingerprint: sha256:3419d4dc4279a0692e7e8d9db034ab061eff40cc89f953688c080a5a390f4941.
+// Baseline updated 2026-11-11: the contract added chart-type panel coverage, findings panel citations, knowledge linking and annotation_check guidance.
+// Previous contract: sha256:e37966fc5ee35dfc6e82b5801fdd5025ad6783306896bf1afeecf04ff1c22d1f.
+// Previous configuration fingerprint: sha256:f80d9fddfff44398cb7bc86a9752587f20ad08e7ec837a57d8d683d9892a18d3.
 const LEGACY_REVIEW = {
-  instruction_fingerprint: 'sha256:f3adae86a57598502f2635df546df78cb09d1024e73c12d22a7b1dee0d6cb2c8',
-  configuration_fingerprint: 'sha256:f80d9fddfff44398cb7bc86a9752587f20ad08e7ec837a57d8d683d9892a18d3',
+  instruction_fingerprint: 'sha256:cc962f3ae0c718d1504d1c8f878429d8f51a5e17a4fc80cddef8687b7429e20f',
+  configuration_fingerprint: 'sha256:0f870bee73c3e8da342a21481961a49ac0846a3756e03ba3c2c209904c2960ed',
 };
 test('legacy review requests are unchanged', async t => {
   const { s, rendered } = await renderedWithSupport(t);
@@ -1188,6 +1024,8 @@ test('legacy review requests are unchanged', async t => {
   assert.deepEqual({ instruction_fingerprint, configuration_fingerprint }, LEGACY_REVIEW);
   const payload = reviewPayload(request);
   assert.equal(payload.presentation.supportNotes.length, 2);
+  assert.deepEqual(Object.keys(payload.annotation_check).sort(), ['en', 'zh-CN']);
+  for (const report of Object.values(payload.annotation_check)) assert.deepEqual(Object.keys(report), ['missing_chart_type', 'uncovered_panels', 'findings_without_panel_citation', 'unlinked_cards']);
   assert.equal(payload.handoff.science.length, 6);
   assert.equal(Object.hasOwn(payload, 'support_note_files'), false);
   assert.doesNotMatch(message, /support_note_files|science_index/);
@@ -1274,14 +1112,14 @@ test('renderer issues may name a support note path under a new binding, and unkn
 });
 
 // Fingerprints of masked Writer requests for the existing writing modes, captured from the code before source-translation existed (2026-10-29).
-// Configuration baseline updated 2026-11-08: 0c537329 added title?, doi?, trace_reason? to enrichment sources.
-// Previous contract: sha256:8fda8447e3b229fabb1c199d50da2dc59bb18ae54ebb17b41dd815aa562594e7.
-// Previous configuration fingerprints: sha256:260d65b2be453ff03476f6856289755115a74223cffc463f1c34771fbeb115aa, sha256:69065e9a31cef04f3d85dc118a95768afa38bbf068d8e6f7a8c83911a581db1c.
+// Baseline updated 2026-11-11: the contract added chart-type panel coverage, findings panel citations, knowledge linking and annotation_check guidance.
+// Previous contract: sha256:e37966fc5ee35dfc6e82b5801fdd5025ad6783306896bf1afeecf04ff1c22d1f.
+// Previous configuration fingerprints: sha256:39e1acc453212d3b344f8c38e0001c127c600408e3dbbc0aa1534beea378db63, sha256:44659b2d498daf4697c72e353594d4d8489a424b67b61f240c30a4b02a7581e3.
 const EXISTING_MODE_WRITERS = {
-  'independent:en': { instruction_fingerprint: 'sha256:f54d7e9a82646f82c43d8782f35219ff1bcd2969d60028e520223e096c96107a', configuration_fingerprint: 'sha256:39e1acc453212d3b344f8c38e0001c127c600408e3dbbc0aa1534beea378db63' },
-  'independent:zh-CN': { instruction_fingerprint: 'sha256:186ec07065a912ae9fbf331a198319acffa486d851dfde042fe0504d9fa3e1e1', configuration_fingerprint: 'sha256:44659b2d498daf4697c72e353594d4d8489a424b67b61f240c30a4b02a7581e3' },
-  'source-first:en': { instruction_fingerprint: 'sha256:f54d7e9a82646f82c43d8782f35219ff1bcd2969d60028e520223e096c96107a', configuration_fingerprint: 'sha256:39e1acc453212d3b344f8c38e0001c127c600408e3dbbc0aa1534beea378db63' },
-  'source-first:zh-CN': { instruction_fingerprint: 'sha256:4b85ae5514c276dfa64467bed1cbbac5224b8371348df958466e8be348606202', configuration_fingerprint: 'sha256:44659b2d498daf4697c72e353594d4d8489a424b67b61f240c30a4b02a7581e3' },
+  'independent:en': { instruction_fingerprint: 'sha256:65857d365a7282cf31050f8469a17aba2a3b21f49ff5db943d4d809768bbb347', configuration_fingerprint: 'sha256:63ab891e72853fdd0da5d18d3aece002e9068771cc51cde8390aa00239196be2' },
+  'independent:zh-CN': { instruction_fingerprint: 'sha256:81ce8a8a6782280b3d3e5b54a186050cd7676a34a3fc96ee5b9c499d4e5ce83f', configuration_fingerprint: 'sha256:a6302ff8a413eed0fc849dbc07df092fbea3c509f8622ab45e28df90eac6795b' },
+  'source-first:en': { instruction_fingerprint: 'sha256:65857d365a7282cf31050f8469a17aba2a3b21f49ff5db943d4d809768bbb347', configuration_fingerprint: 'sha256:63ab891e72853fdd0da5d18d3aece002e9068771cc51cde8390aa00239196be2' },
+  'source-first:zh-CN': { instruction_fingerprint: 'sha256:5f739bb2763193f8ee6959e3e860034a15f2f0b3f54982a85bffed6c1b88de81', configuration_fingerprint: 'sha256:a6302ff8a413eed0fc849dbc07df092fbea3c509f8622ab45e28df90eac6795b' },
 };
 // Configured translation receives its source view and context as registered files; this rebuilds the logical payload from them.
 const translationPayload = request => {
@@ -1544,12 +1382,12 @@ test('chinese source papers revise the Chinese Writer first, then the English tr
 });
 
 // Fingerprints of masked en-r2 Writer revision requests, captured from the code before translation revisions existed (2026-10-29).
-// Configuration baseline updated 2026-11-08: 0c537329 added title?, doi?, trace_reason? to enrichment sources.
-// Previous contract: sha256:8fda8447e3b229fabb1c199d50da2dc59bb18ae54ebb17b41dd815aa562594e7.
-// Previous configuration fingerprint: sha256:7e3a2ddf3524729b9d45ae8a47b904fc7d126bd790efe69fe1314f472d7ebd1b.
+// Baseline updated 2026-11-11: the contract added chart-type panel coverage, findings panel citations, knowledge linking and annotation_check guidance.
+// Previous contract: sha256:e37966fc5ee35dfc6e82b5801fdd5025ad6783306896bf1afeecf04ff1c22d1f.
+// Previous configuration fingerprint: sha256:db484280710f2a41161309cb371615240253c870e8b66420a488bb0f81344aac.
 const EXISTING_MODE_REVISIONS = {
-  'independent:en-r2': { instruction_fingerprint: 'sha256:9eac1029610b2655cacc3f98669f8983dbdeb63b9d9065a12994e9271d4501fc', configuration_fingerprint: 'sha256:db484280710f2a41161309cb371615240253c870e8b66420a488bb0f81344aac' },
-  'source-first:en-r2': { instruction_fingerprint: 'sha256:9eac1029610b2655cacc3f98669f8983dbdeb63b9d9065a12994e9271d4501fc', configuration_fingerprint: 'sha256:db484280710f2a41161309cb371615240253c870e8b66420a488bb0f81344aac' },
+  'independent:en-r2': { instruction_fingerprint: 'sha256:686b0093b2758eb104343e5ce3739d3c72bdfa5580c520804ba0a5da0fe2631f', configuration_fingerprint: 'sha256:d2f176d1e8cf2e5fd103cfa7f7508966f038aed123ed8cb8d0589a0a2e93c5b8' },
+  'source-first:en-r2': { instruction_fingerprint: 'sha256:686b0093b2758eb104343e5ce3739d3c72bdfa5580c520804ba0a5da0fe2631f', configuration_fingerprint: 'sha256:d2f176d1e8cf2e5fd103cfa7f7508966f038aed123ed8cb8d0589a0a2e93c5b8' },
 };
 test('existing writing modes keep byte-identical Writer revision requests', async t => {
   for (const writingMode of ['independent', 'source-first']) {

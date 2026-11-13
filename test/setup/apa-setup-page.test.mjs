@@ -19,7 +19,7 @@ test('capability report shows host-specific methods, limits and evidence as text
   renderCapabilityCheck(document, missing, null);
   assert.match(missing.children[0].textContent, /未检测/);
   const hostile = '<img src=x onerror=alert(1)>';
-  const checks = ['on_demand_reading', 'delegated_diagnostics', 'manual_compaction', 'concise_replies', 'science_recovery', 'threshold_compaction'].map((id, index) => ({
+  const checks = ['on_demand_reading', 'delegated_diagnostics', 'task_continuation', 'concise_replies', 'science_recovery', 'threshold_compaction'].map((id, index) => ({
     id, label: `能力 ${index + 1}`, status: ['detected', 'conditional', 'blocked', 'unsupported', 'unknown', 'conditional'][index],
     method: index === 5 ? hostile : '按本宿主方式执行', scope: index === 5 ? 'new-session' : 'current-session',
     evidence: [{ source: 'tool-schema', reference: '当前工具定义' }], limitations: ['实际行为待验证'], next_check: '后续核验',
@@ -800,7 +800,7 @@ test('every setup issue offers a way to handle it and the choice travels as issu
   const choices = renderSetupIssues({ createElement: eventNode }, container, [
     { id: 'page-choice:capability:science_recovery', category: 'page-choice', subject: 'science_recovery', summary: '派发声明与本次宿主不符' },
     { id: 'authorize:dependency:parser.python', category: 'authorize', subject: 'parser.python', summary: '依赖缺失' },
-    { id: 'known-limit:capability:manual_compaction', category: 'known-limit', subject: 'manual_compaction', summary: '阶段压缩 尚未完成调查。' }
+    { id: 'known-limit:capability:delegated_diagnostics', category: 'known-limit', subject: 'delegated_diagnostics', summary: '子代理排查 尚未完成调查。' }
   ], { onChange: () => { changed += 1; } });
   const text = flattenText(container);
   assert.ok(text.includes('运行宿主与派发'));
@@ -811,9 +811,9 @@ test('every setup issue offers a way to handle it and the choice travels as issu
   selects[1].value = 'accept-limit';
   for (const handler of selects[1].listeners.change) handler();
   assert.equal(changed, 1);
-  assert.deepEqual(choices(), { 'known-limit:capability:manual_compaction': 'accept-limit' });
+  assert.deepEqual(choices(), { 'known-limit:capability:delegated_diagnostics': 'accept-limit' });
   const operation = createOperation(snapshot, { set: {}, issueChoices: choices() });
-  assert.deepEqual(operation.issue_choices, { 'known-limit:capability:manual_compaction': 'accept-limit' });
+  assert.deepEqual(operation.issue_choices, { 'known-limit:capability:delegated_diagnostics': 'accept-limit' });
   assert.equal(createOperation(snapshot).issue_choices, undefined);
   assert.ok(describeChanges(snapshot, operation).some(line => line.includes('接受限制') && line.includes('不写入个人配置')));
 });
@@ -821,7 +821,7 @@ test('every setup issue offers a way to handle it and the choice travels as issu
 test('apply reports issue_choices back without writing them and rejects mismatched handling', t => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'apa-issue-choices-op-'));
   t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
-  const issueChoices = { 'known-limit:capability:manual_compaction': 'investigate', 'authorize:dependency:parser.python': 'defer' };
+  const issueChoices = { 'known-limit:capability:delegated_diagnostics': 'investigate', 'authorize:dependency:parser.python': 'defer' };
   const base = () => createOperation(loadApaConfig({ repoRoot }), { set: {}, issueChoices });
   for (const bad of [{}, [], { 'known-limit:capability:x': 'prepare' }, { 'page-choice:host:differs': 'defer' }, { 'other:x': 'defer' }]) {
     assert.throws(() => applyApaConfigOperation({ repoRoot, operation: { ...base(), issue_choices: bad } }), /APA_CONFIG_OPERATION_INVALID/);
@@ -830,5 +830,5 @@ test('apply reports issue_choices back without writing them and rejects mismatch
   assert.throws(() => applyApaConfigOperation({ repoRoot, operation: removal }), /APA_CONFIG_OPERATION_INVALID/);
   const result = applyApaConfigOperation({ repoRoot, operation: base() });
   assert.deepEqual(result.pending_issue_choices, issueChoices);
-  assert.equal(JSON.stringify(result.config).includes('manual_compaction'), false);
+  assert.equal(JSON.stringify(result.config).includes('delegated_diagnostics'), false);
 });

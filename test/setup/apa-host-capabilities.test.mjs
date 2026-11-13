@@ -26,7 +26,7 @@ test('missing and legacy profiles retain unknown capabilities and do not write o
   const repoRoot = temporary(t);
   const inspection = inspectApaConfig({ repoRoot, capability: 'query' });
   assert.equal(inspection.ready, true);
-  assert.equal(inspection.capability_check.checks.length, 7);
+  assert.equal(inspection.capability_check.checks.length, 6);
   assert.ok(inspection.capability_check.checks.every(row => row.status === 'unknown'));
   assert.equal(inspection.capability_check.runtime_validation, 'not_run');
   assert.equal(check(repoRoot, profile(), 'delegated_diagnostics').status, 'detected');
@@ -165,12 +165,12 @@ const saveHost = (root, report, dispatch = report.dispatch, name = report.host) 
 test('unknown host declaration survives profile load and inspection without synthesized recipes', t => {
   const root = temporary(t);
   const report = profile();
-  report.capabilities = { manual_compaction: { ...finding(), achievement: achievement() } };
+  report.capabilities = { delegated_diagnostics: { ...finding(), achievement: achievement() } };
   const file = path.join(root, 'profile.json');
   fs.writeFileSync(file, JSON.stringify(report));
   const loaded = loadHostProfile(file);
   const result = inspectApaConfig({ repoRoot: root, hostProfile: loaded, capability: 'query' });
-  assert.deepEqual(result.capability_check.checks.find(row => row.id === 'manual_compaction').achievement, report.capabilities.manual_compaction.achievement);
+  assert.deepEqual(result.capability_check.checks.find(row => row.id === 'delegated_diagnostics').achievement, report.capabilities.delegated_diagnostics.achievement);
   assert.equal(result.capability_check.checks.find(row => row.id === 'concise_replies').achievement.state, 'needs-user-action');
   assert.deepEqual(result.capability_check.adapters, []);
   assert.equal(result.ready, true);
@@ -181,35 +181,35 @@ test('claims require evidence and cannot contradict status or lack investigation
   const root = temporary(t);
   const report = profile();
   const cap = { ...finding(), achievement: achievement() };
-  report.capabilities = { manual_compaction: cap };
+  report.capabilities = { delegated_diagnostics: cap };
   for (const status of ['blocked', 'unknown', 'unsupported']) {
     cap.status = status;
-    assert.equal(check(root, report, 'manual_compaction').achievement.state, 'needs-user-action');
+    assert.equal(check(root, report, 'delegated_diagnostics').achievement.state, 'needs-user-action');
   }
   cap.status = 'detected';
   cap.method = null;
-  assert.equal(check(root, report, 'manual_compaction').achievement.state, 'needs-user-action');
+  assert.equal(check(root, report, 'delegated_diagnostics').achievement.state, 'needs-user-action');
   cap.method = 'manual';
   cap.scope = 'unknown';
-  assert.equal(check(root, report, 'manual_compaction').achievement.state, 'needs-user-action');
+  assert.equal(check(root, report, 'delegated_diagnostics').achievement.state, 'needs-user-action');
   cap.scope = 'current-session';
   cap.evidence = [];
   cap.achievement.steps[0].evidence = [];
-  assert.equal(check(root, report, 'manual_compaction').achievement.state, 'needs-user-action');
+  assert.equal(check(root, report, 'delegated_diagnostics').achievement.state, 'needs-user-action');
   cap.achievement.state = 'not-found';
-  assert.equal(check(root, report, 'manual_compaction').achievement.state, 'needs-user-action');
+  assert.equal(check(root, report, 'delegated_diagnostics').achievement.state, 'needs-user-action');
   cap.limitations = ['已检查安装版帮助'];
-  assert.equal(check(root, report, 'manual_compaction').achievement.state, 'not-found');
+  assert.equal(check(root, report, 'delegated_diagnostics').achievement.state, 'not-found');
 });
 
 test('achieved declarations require evidence for every step', t => {
   const root = temporary(t);
-  const report = { ...profile(), capabilities: { manual_compaction: { ...finding(), achievement: achievement({ steps: [step(), step({ evidence: [] })] }) } } };
-  const result = check(root, report, 'manual_compaction').achievement;
+  const report = { ...profile(), capabilities: { delegated_diagnostics: { ...finding(), achievement: achievement({ steps: [step(), step({ evidence: [] })] }) } } };
+  const result = check(root, report, 'delegated_diagnostics').achievement;
   assert.equal(result.state, 'needs-user-action');
   assert.match(result.summary, /步骤.*依据/);
-  report.capabilities.manual_compaction.achievement.steps[1].evidence = evidence;
-  assert.equal(check(root, report, 'manual_compaction').achievement.state, 'achieved');
+  report.capabilities.delegated_diagnostics.achievement.steps[1].evidence = evidence;
+  assert.equal(check(root, report, 'delegated_diagnostics').achievement.state, 'achieved');
 });
 
 test('placeholder command without an explicit range is blocked', t => {
@@ -293,11 +293,11 @@ test('adapter declarations are checked read-only and block commands when unavail
   fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(path.join(folder, 'entry.mjs'), 'do not execute');
   const adapter = { id: 'host-patch', owner: 'example-owner', host: 'synthetic-host', root: 'config/backups/example-owner/adapters/host-patch', entrypoints: ['entry.mjs'], evidence };
-  const report = { ...profile(), adapters: [adapter], capabilities: { manual_compaction: { ...finding(), achievement: achievement({ steps: [step({ adapter_id: adapter.id, command: 'run entry' })] }) } } };
+  const report = { ...profile(), adapters: [adapter], capabilities: { delegated_diagnostics: { ...finding(), achievement: achievement({ steps: [step({ adapter_id: adapter.id, command: 'run entry' })] }) } } };
   const inspect = () => inspectApaConfig({ repoRoot: root, hostProfile: report, capability: 'query' }).capability_check;
   let result = inspect();
   assert.equal(result.adapters[0].status, 'available');
-  assert.equal(result.checks.find(row => row.id === 'manual_compaction').achievement.steps[0].command, 'run entry');
+  assert.equal(result.checks.find(row => row.id === 'delegated_diagnostics').achievement.steps[0].command, 'run entry');
   for (const change of [
     { root: 'config/backups/other-owner/adapters/host-patch' },
     { root: 'config/apa-adapters/example-owner/host-patch' },
@@ -310,12 +310,12 @@ test('adapter declarations are checked read-only and block commands when unavail
     result = inspect();
     assert.equal(result.adapters[0].status, 'blocked');
     assert.ok(result.adapters[0].issues.length);
-    const item = result.checks.find(row => row.id === 'manual_compaction').achievement;
+    const item = result.checks.find(row => row.id === 'delegated_diagnostics').achievement;
     assert.equal(item.state, 'needs-user-action');
     assert.equal(item.steps[0].command, null);
   }
   report.adapters = [];
-  assert.equal(inspect().checks.find(row => row.id === 'manual_compaction').achievement.steps[0].command, null);
+  assert.equal(inspect().checks.find(row => row.id === 'delegated_diagnostics').achievement.steps[0].command, null);
   assert.equal(fs.readFileSync(path.join(folder, 'entry.mjs'), 'utf8'), 'do not execute');
 });
 
@@ -337,9 +337,9 @@ test('schema rejects malformed declarations without affecting old profiles', t =
   const cap = { ...finding(), achievement: achievement() };
   const adapter = { id: 'host-patch', owner: 'example-owner', host: 'synthetic-host', root: 'config/backups/example-owner/adapters/host-patch', entrypoints: ['entry.mjs'], evidence };
   for (const report of [
-    { ...profile(), capabilities: { manual_compaction: { ...cap, achievement: achievement({ state: 'done' }) } } },
-    { ...profile(), capabilities: { manual_compaction: { ...cap, achievement: achievement({ steps: [step({ evidence: [{ source: 'unknown', reference: 'x' }] })] }) } } },
-    { ...profile(), capabilities: { manual_compaction: { ...cap, achievement: achievement({ steps: [step({ range: { min: 0, max: 1, unit: 'characters' } })] }) } } },
+    { ...profile(), capabilities: { delegated_diagnostics: { ...cap, achievement: achievement({ state: 'done' }) } } },
+    { ...profile(), capabilities: { delegated_diagnostics: { ...cap, achievement: achievement({ steps: [step({ evidence: [{ source: 'unknown', reference: 'x' }] })] }) } } },
+    { ...profile(), capabilities: { delegated_diagnostics: { ...cap, achievement: achievement({ steps: [step({ range: { min: 0, max: 1, unit: 'characters' } })] }) } } },
     { ...profile(), adapters: [{ ...adapter, owner: 'Other Owner' }] },
     { ...profile(), adapters: [{ ...adapter, entrypoints: [] }] },
   ]) {
