@@ -46,8 +46,8 @@ const configuredSessionTemplate = async t => {
 };
 
 // 2.2 Results register a resource manifest and Integration hands off the matching visuals.
-async function scienceOutputs(f, catalog) {
-  const runRoot = join(f.root, 'runs', 'run'), resourceRoot = join(runRoot, 'resources', 'results'), source = f.options.scientificInput.sources[0];
+async function scienceOutputs(f, catalog, runId = 'run') {
+  const runRoot = join(f.root, 'runs', runId), resourceRoot = join(runRoot, 'resources', 'results'), source = f.options.scientificInput.sources[0];
   await mkdir(resourceRoot, { recursive: true }); await mkdir(join(runRoot, 'native'), { recursive: true });
   const image = Buffer.from('synthetic figure'), imagePath = join(resourceRoot, 'figure.png'); await writeFile(imagePath, image);
   const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
@@ -356,7 +356,7 @@ test('session requires explicit source and authorization and rejects nonexistent
   await assert.rejects(() => resumeReadingSession({ runRoot: '' }), /READING_SESSION_ROOT_INVALID/);
 });
 
-async function configuredFixture(t, { systemTemp = false, codex = false } = {}) {
+async function configuredFixture(t, { systemTemp = false, codex = false, host = 'test-host' } = {}) {
   const base = systemTemp ? tmpdir() : join(process.cwd(), '.tmp', 'apa-session-enrichment-20261030');
   await mkdir(base, { recursive: true });
   const root = await mkdtemp(join(base, 'session-test-'));
@@ -369,7 +369,7 @@ async function configuredFixture(t, { systemTemp = false, codex = false } = {}) 
   await writeFile(join(parser, 'config.yaml'), 'synthetic');
   const dispatch = { tool: 'Agent', model_argument: 'model', effort_argument: 'effort', instruction_argument: 'prompt', task_name_argument: 'description', fresh_context: null, result_handle: { source: 'text', pattern: '"agent_id":"([^"]+)"' } };
   if (codex) Object.assign(dispatch, { tool: 'collaboration.spawn_agent', instruction_argument: 'message', task_name_argument: 'task_name', fresh_context: { argument: 'fork_turns', value: 'none' } });
-  const profile = { schema_version: 'apa-host-profile-1.0', host: 'test-host', detected_at: '2026-10-30T10:00:00Z', session: { model: 'm', reasoning_effort: 'high' }, models: [{ model: 'm', reasoning_efforts: ['high'] }], dispatch, sources: { session: 'system-context', models: 'tool-schema', dispatch: 'tool-schema' } };
+  const profile = { schema_version: 'apa-host-profile-1.0', host, detected_at: '2026-10-30T10:00:00Z', session: { model: 'm', reasoning_effort: 'high' }, models: [{ model: 'm', reasoning_efforts: ['high'] }], dispatch, sources: { session: 'system-context', models: 'tool-schema', dispatch: 'tool-schema' } };
   const choice = { mode: 'explicit', model: 'm', reasoning_effort: 'high' };
   const config = { schema_version: 'apa-local-config-1.0', models: { science: choice, overrides: {}, roles: Object.fromEntries(['english-writer', 'chinese-writer', 'translation', 'reading-editor', 'independent-verifier'].map(role => [role, choice])) }, paths: { runs: 'runs', parse: 'parse', candidates: 'candidates' }, parser: { runtime_home: parser }, reading: { source_language: 'en', presentation_mode: 'reading-editor' }, writing_skills: Object.fromEntries(['nature-writing', 'nature-polishing', 'nature-shared', 'humanizer', 'humanizer-zh', 'stss'].map(key => [key, { enabled: false }])), host: { name: profile.host, dispatch } };
   await writeFile(join(root, 'config', 'apa.local.json'), JSON.stringify(config));
@@ -382,6 +382,76 @@ async function configuredFixture(t, { systemTemp = false, codex = false } = {}) 
   evidence.results_tools = { python: { ...observedTool, path: join(bin, process.platform === 'win32' ? 'python.exe' : 'python') }, libraries: { ...observedTool, names: ['fitz'] }, visual_read: observedTool, file_read: observedTool };
   return { root, profile, evidence, options: { repoRoot: root, runId: 'run', scientificInput, sourceLanguage: 'en', instructionProfile: 'configured-reading-2.2', authorizationId: 'test', deadline: '2099-01-01T00:00:00Z', maxCalls: 8, maxTotalCalls: 14, sessionContext: { model: 'm', effort: 'high' }, hostProfile: profile, evidence, includeRepairs: true } };
 }
+
+test('Codex migration resumes at Results, preserves the original evidence and charges the stopped execution', async t => {
+  const f = await configuredFixture(t, { systemTemp: true, host: 'claude-code' });
+  f.profile.capabilities = { task_continuation: continuationCapability() };
+  const source = await createReadingSession(f.options), oldRoot = join(f.root, 'runs', 'run');
+  const statePath = root => join(root, 'control', 'science-state.json');
+  const accept = async (session, root, action, value, handle) => {
+    const observation = observe(action, handle);
+    await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
+    if (value === undefined) return;
+    await mkdir(join(root, 'native'), { recursive: true });
+    await writeFile(join(root, 'native', action.role + '.json'), JSON.stringify(value));
+    await recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
+  };
+  for (const role of ['evidence', 'methods']) {
+    const action = await nextReadingAction(source);
+    assert.equal(action.role, role);
+    await accept(source, oldRoot, action, { role });
+  }
+  const stopped = await nextReadingAction(source);
+  const handle = 'stopped-results';
+  await accept(source, oldRoot, stopped, undefined, handle);
+  const executionId = 'old-results-continuation';
+  await recordReadingEvent(source, { kind: 'continuation-intent', action_id: stopped.action_id, execution_id: executionId, message: 'Finish the original Results output.' });
+  const continued = await nextReadingAction(source);
+  await recordReadingEvent(source, { kind: 'continuation-receipt', execution_id: executionId, observation: withEvidence({ execution_id: executionId,
+    action_id: continued.action_id, agent_id: handle, tool_call: { name: continued.host_action, arguments: continued.arguments }, raw_result_text: 'continuation delivered', status: 'observed' }) });
+  const oldState = await readFile(statePath(oldRoot));
+  const old = JSON.parse(oldState);
+  const transcript = join(f.root, 'claude.jsonl');
+  const stopCall = { type: 'assistant', uuid: 'stop-call', sessionId: 'old-session', timestamp: new Date(Date.now() + 1000).toISOString(), message: { content: [{ type: 'tool_use', id: 'stop', name: 'TaskStop', input: { task_id: handle } }] } };
+  const stopResult = { type: 'user', parentUuid: stopCall.uuid, sessionId: stopCall.sessionId, timestamp: stopCall.timestamp, message: { content: [{ type: 'tool_result', tool_use_id: 'stop', content: JSON.stringify({ task_id: handle, task_type: 'local_agent', message: 'Successfully stopped task: ' + handle }) }] } };
+  await writeFile(transcript, [stopCall, stopResult].map(JSON.stringify).join('\n'));
+  const dispatch = { ...f.profile.dispatch, tool: 'collaboration.spawn_agent', effort_argument: 'reasoning_effort', instruction_argument: 'message', task_name_argument: 'task_name', fresh_context: { argument: 'fork_turns', value: 'none' } };
+  const hostProfile = { ...f.profile, host: 'codex', dispatch, capabilities: undefined };
+  const evidence = { ...f.evidence, current_host: { ...f.evidence.current_host, name: 'codex' }, dispatch: { ...f.evidence.dispatch, tool: dispatch.tool }, fresh_context: { source: 'tool-schema', reference: 'test schema', ...dispatch.fresh_context } };
+  const configPath = join(f.root, 'config', 'apa.local.json');
+  const config = JSON.parse(await readFile(configPath, 'utf8'));
+  await writeFile(configPath, JSON.stringify({ ...config, host: { name: 'codex', dispatch } }));
+  const scienceMigration = { sourceRunId: 'run', sourceCheckpoint: old.fingerprint, transcript, stopResultLine: 2, userReply: '确认' };
+  const { scientificInput, sourceLanguage, maxCalls, maxTotalCalls, includeRepairs, ...input } = f.options;
+  const options = { ...input, maxTotalCalls, runId: 'run-codex', authorizationId: 'migration-test', hostProfile, evidence, scienceMigration };
+  await assert.rejects(() => createReadingSession({ ...options, scienceMigration: { ...scienceMigration, stopResultLine: 1 } }), { code: 'SCIENCE_MIGRATION_STOP_INVALID' });
+  await assert.rejects(() => createReadingSession({ ...options, maxTotalCalls: maxTotalCalls + 1 }), { code: 'SCIENCE_MIGRATION_SOURCE_INVALID' });
+  let migrated = await createReadingSession(options);
+  const newRoot = join(f.root, 'runs', 'run-codex');
+  const content = await scienceOutputs(f, null, 'run-codex');
+  for (const role of ['results', 'interpretation', 'scientific-reading', 'integration']) {
+    const action = await nextReadingAction(migrated);
+    assert.equal(action.role, role);
+    assert.equal(action.host_action, 'collaboration.spawn_agent');
+    if (role === 'results') {
+      assert.equal(action.summary.budget.total_used, 5);
+      assert.equal(action.summary.budget.remaining_total, 9);
+      assert.equal(action.summary.budget.continuations, 1);
+      const state = JSON.parse(await readFile(statePath(newRoot), 'utf8')).data;
+      assert.deepEqual(state.entries.evidence.receipt, old.data.entries.evidence.receipt);
+      assert.deepEqual(state.entries.methods.receipt, old.data.entries.methods.receipt);
+      assert.notEqual(action.action_id, stopped.action_id);
+    }
+    await accept(migrated, newRoot, action, content(role));
+  }
+  migrated = await resumeReadingSession({ runRoot: newRoot });
+  await recordReadingEvent(migrated, { kind: 'runtime-evidence', hostProfile, evidence });
+  const writer = await nextReadingAction(migrated);
+  assert.equal(writer.action, 'dispatch');
+  assert.equal(writer.stage, 'reading');
+  assert.equal(writer.summary.budget.total_used, 9);
+  assert.deepEqual(await readFile(statePath(oldRoot)), oldState);
+});
 
 test('session summary exposes source matches from preparation and after recovery', async t => {
   const f = await configuredFixture(t, { systemTemp: true });
@@ -880,6 +950,85 @@ test('explicit additional execution budget resumes the first scoped Writer repai
   delete legacy.recipe_fingerprint;
   legacy.recipe_fingerprint=readingRuntime.fingerprintReadingFirst(legacy);
   await readingRuntime.restoreReadingFirstPublicationSource(legacy);
+});
+
+test('explicit original-page chart repair continues an unbound Results gap under the original budget', async t => {
+  const f = await configuredFixture(t, { systemTemp: true }), template = await configuredSessionTemplate(t);
+  const runRoot = join(f.root, 'runs', 'run');
+  let session = await createReadingSession({ ...f.options, includeRepairs: true, maxCalls: 8, maxTotalCalls: 16 });
+  const content = await scienceOutputs(f, template.presentationCatalog);
+  const accept = async (file, value, action = null) => {
+    action ??= await nextReadingAction(session);
+    assert.equal(action.action, 'dispatch');
+    const observation = observe(action);
+    await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
+    await writeFile(join(runRoot, 'native', file + '.json'), JSON.stringify(value));
+    return recordReadingEvent(session, { kind: 'result', action_id: action.action_id, observation });
+  };
+  for (let i = 0; i < 6; i++) {
+    const action = await nextReadingAction(session);
+    await accept(action.role, content(action.role), action);
+  }
+  await accept('en', template.views[0]);
+  await accept('zh-CN', template.views[1]);
+  await accept('presentation', template.editor);
+  await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
+  const sourceId = f.options.scientificInput.sources[0].id;
+  const target = template.views[0].sections[0].id;
+  const issue = { severity: 'material', kind: 'chart-type-coverage', detail: 'Panel f needs its own chart type.',
+    repair_owner: 'science', affected_languages: ['en', 'zh-CN'],
+    repair_scope: { status: 'located', section_ids: [target], knowledge_ids: [], visual_ids: ['fig-one'], editor_fields: [] },
+    scientific_gap: { id: 'chart-panel-f', question: 'How is intensity displayed?', impact: 'It controls interpretation.',
+      severity: 'material', owner_role: 'results', source_kind: 'original_page', source_ids: [sourceId], target_sections: [target] } };
+  assert.equal((await accept('review', { ...template.review, issues: [issue] })).status, 'completed_with_limits');
+  const baseline = await nextReadingAction(session);
+  const { checkpoint_fingerprint, issue_ids } = baseline.continuation;
+  assert.equal(baseline.continuation.reason, 'READING_FIRST_CONTINUATION_SCIENCE_SCOPE_UNAUTHORIZED');
+  const scope = { issue_id: 'issue-1', visual_id: 'fig-one', source_id: sourceId, panel: 'f' };
+  const authorization = { authorization_id: 'original-page-chart-repair', reason: 'Repair panel f using the original page.',
+    checkpoint_fingerprint, issue_ids, max_additional_calls: 0, max_additional_review_rounds: 0 };
+  const authorize = original_page_chart_repair => recordReadingEvent(session, { kind: 'authorize-continuation',
+    authorization: { ...authorization, ...(original_page_chart_repair ? { original_page_chart_repair } : {}) } });
+  await assert.rejects(() => authorize(), /CONTINUATION_SCIENCE_SCOPE_UNAUTHORIZED/);
+  await assert.rejects(() => authorize({ ...scope, source_id: 'unauthorized' }), /ORIGINAL_PAGE_CHART_REPAIR_INVALID/);
+  const plan = await recordReadingEvent(session, { kind: 'inspect-continuation', original_page_chart_repair: scope });
+  assert.deepEqual(plan.remaining_task_keys, ['enrich-late-results', 'en-r2', 'zh-CN-r2', 'presentation-r2', 'review-r2']);
+  assert.equal(plan.required_additional_calls, 0);
+  assert.equal((await authorize(scope)).status, 'authorized');
+  session = await resumeReadingSession({ runRoot });
+  await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+  const action = await nextReadingAction(session);
+  assert.equal(action.action, 'dispatch');
+  assert.match(action.arguments.prompt, /enrich-late-results/);
+  assert.equal(action.summary.budget.total_used, 11);
+  assert.equal(action.summary.budget.total_limit, 16);
+  const visual = template.presentationCatalog.visuals[0];
+  const result = { role: 'results', run_id: 'run', resolutions: [{ gap_id: issue.scientific_gap.id,
+    classification: 'paper_fact', status: 'recovered', explanation: 'Color encodes the measured intensity.',
+    consequence: 'Read intensity from the legend.', source_ids: [sourceId], target_sections: [target] }],
+  visual_corrections: [{ visual_id: visual.id, source_id: sourceId, page: 1, label: visual.label, caption: visual.caption,
+    chart_types: [...(visual.chart_types ?? []), { knowledge_id: 'intensity-colors', panel: 'f', label: { en: 'False-color intensity plot', 'zh-CN': '伪彩色强度图' } }] }],
+  chart_knowledge: { id: 'intensity-colors', kind: 'method', source_kind: 'method-background',
+    title: { en: 'False-color intensity plot', 'zh-CN': '伪彩色强度图' },
+    paragraphs: { en: ['Read signal intensity by matching the color to the legend.'], 'zh-CN': ['按色标将颜色对应到信号强度。'] } } };
+  await accept('enrich-late-results', result, action);
+  session = await resumeReadingSession({ runRoot });
+  await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+  const views = template.views.map(view => ({ ...view,
+    enrichment_consumption: [{ gap_id: issue.scientific_gap.id, section_heading: view.sections[0].heading }] }));
+  await accept('en-r2', views[0]);
+  await accept('zh-CN-r2', views[1]);
+  await accept('presentation-r2', { ...template.editor, views_fingerprint: readingFirstViewsFingerprint(views) });
+  const final = await accept('review-r2', template.review);
+  assert.equal(final.status, 'reading_complete');
+  const complete = await nextReadingAction(session);
+  assert.equal(complete.summary.budget.total_used, 15);
+  assert.equal(complete.summary.budget.total_limit, 16);
+  const source = await inspectReadingFirstPublicationSource(complete.publication_source);
+  assert.equal(source.presentation.visuals[0].chart_types.at(-1).knowledge_id, 'intensity-colors');
+  assert.equal(source.recipe.checkpoint.state.executionLedger.length, 15);
+  assert.equal(source.recipe.binding.enrichment_policy, undefined);
+  await readingRuntime.restoreReadingFirstPublicationSource(source.recipe);
 });
 
 for (const scenario of ['controller','verifier','missing-science','explicit-id']) test('unroutable review retains original bytes: '+scenario,async t=>{

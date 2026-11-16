@@ -94,6 +94,37 @@ async function approve(f, authorizationId = 'fixture-queue-approval') {
   return proposal;
 }
 
+test('明确的自然语言发布指令完成队列并保留用户原话', async t => {
+  const cases = [
+    { count: 1, reply: '发布所有未发布笔记。记录各笔记残留问题，发布后直接修改正式笔记' },
+    { count: 2, reply: '做好必要修复后两篇全部发布。小问题留到发布后' },
+  ];
+  for (const { count, reply } of cases) {
+    const f = await fixture(t, count);
+    const { proposal, proposal_sha256 } = await prepareReadingFirstPublicationQueue({ ...f.options, entries: f.entries });
+    const approveWith = user_reply => approveReadingFirstPublicationQueue({ vaultRoot: f.vaultRoot,
+      proposal, expectedProposalSha256: proposal_sha256, authorization: { authorization_id: 'fixture-original-reply', user_reply } });
+    const rejected = [
+      '先不要发布所有未发布笔记。',
+      '请全部发布吗？',
+      '确认后全部发布。',
+      '全部发布。先暂停，等我批准。',
+      '做好必要修复后三篇全部发布。小问题留到发布后',
+    ];
+    if (count > 1) rejected.push('发布');
+    for (const userReply of rejected) await assert.rejects(approveWith(userReply), { code: 'RF_QUEUE_APPROVAL_REQUIRED' });
+    const approval = await approveWith(reply);
+    assert.equal((await readJson(approval.approval_request_paths[0])).authorization.user_reply, reply);
+    const result = await drainReadingFirstPublicationQueue(f.options);
+    assert.equal(result.status, 'complete', JSON.stringify(result));
+    assert.equal(result.published.length, count);
+    for (const report of result.published) {
+      assert.equal((await readJson(report.original_approval_record)).user_reply, reply);
+      assert.equal((await readJson(report.approval_record)).user_reply, reply);
+    }
+  }
+});
+
 test('三篇共享节点的候选可预排演，并按批准顺序串行入库', async t => {
   const f = await fixture(t);
   const proposal = await approve(f);

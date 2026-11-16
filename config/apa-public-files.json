@@ -1,6 +1,9 @@
 {
   "version": 1,
   "files": [
+    "scripts/obsidian/apa-official-graph/main.cjs",
+    "scripts/obsidian/apa-official-graph/manifest.json",
+    "test/v3/obsidian-official-graph-plugin.test.mjs",
     "scripts/lib/paper-note-path.mjs",
     "test/v3/library-writing-cli.test.mjs",
     "test/v3/writing-project.test.mjs",
@@ -353,6 +356,7 @@
     }
   ],
   "tests": [
+    "test/v3/obsidian-official-graph-plugin.test.mjs",
     "test/v3/library-writing-cli.test.mjs",
     "test/v3/writing-project.test.mjs",
     "test/v3/library-query-search.test.mjs",

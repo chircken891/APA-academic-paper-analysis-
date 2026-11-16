@@ -7,7 +7,7 @@ import { fingerprintV3Json } from './semantic-package-validator.mjs';
 import { registerReaderTargets } from './phase221-targets.mjs';
 import { mergeManagedNote } from './phase22-managed-markdown.mjs';
 import { applyReadingFirstKnowledgeContent, draftReadingFirstKnowledgeComparisons, matchReadingFirstKnowledgeIdentity,
-  registeredKnowledgeReference, renderSharedKnowledge } from './reading-first-knowledge.mjs';
+  registeredKnowledgeReference, renderSharedKnowledge, sharedKnowledgeKind } from './reading-first-knowledge.mjs';
 
 const languages = ['en', 'zh-CN'];
 export const READING_FIRST_OBSIDIAN_SCHEMA = 'reading-first-obsidian-1.0';
@@ -121,7 +121,8 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     const section = byId.get(item.section_id);
     if (!section || (item.after_paragraph !== undefined && (!Number.isInteger(item.after_paragraph) || item.after_paragraph < 0 || (language ? [language] : languages).some(lang => item.after_paragraph >= views.find(view => view.language === lang).sections[section.indices[lang]].paragraphs.length)))) fail('RF_OBSIDIAN_PLACEMENT_INVALID');
   }
-  const visuals = p.visuals ?? [], knowledge = p.knowledge ?? [];
+  const visuals = p.visuals ?? [];
+  const knowledge = (p.knowledge ?? []).map(item => sharedKnowledge ? { ...item, kind: sharedKnowledgeKind(item.kind) } : item);
   for (const rows of [visuals, knowledge]) if (new Set(rows.map(row => row.id)).size !== rows.length) fail('RF_OBSIDIAN_ID_INVALID');
   for (const visual of visuals) {
     requireId(visual.id); vaultPath(visual.path); localized(visual.label); localized(visual.caption); if (!writerLayout) checkPlacement(visual);
@@ -240,7 +241,6 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     const en = language === 'en', target = registry.paper_targets[language], view = views.find(value => value.language === language), alternate = registry.paper_targets[languages.find(value => value !== language)];
     const edits = editor?.languages[language];
     const headingHref = heading => '#' + encodeMarkdownComponent(heading).replace(/%2F/g, '/');
-    const knowledgeHref = id => href(target, destinations.get(`${id}:${language}`)) + (sharedKnowledge ? headingHref(en ? 'English' : '中文') : '');
     const moduleHeadings = new Map(modules.map((module, index) => [module.id, `${index + 1}. ${local(compact ? FIXED_MODULE_LABELS[module.id] : module.label, language)}`]));
     const mapHeading = en ? '2.1 Research map' : '2.1 研究导图';
     const inventoryHeading = en ? '3.1 Methods and concepts at a glance' : '3.1 方法与概念索引';
@@ -254,16 +254,28 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     const subheadingTitle = (section, item, edit) => `${sectionHeadings.get(section.id).split(' ')[0]}.${edit.subheadings.filter(heading => heading.before_paragraph <= item.before_paragraph).length} ${item.heading}`;
     const visualHeadings = new Map(visuals.map(visual => [visual.id, visual.locator?.kind === 'docx-figure' ? `${local(visual.label, language)} · ${visualSourcePage(visual, language)}` : `${local(visual.label, language)} · ${en ? 'Source p.' : '原文页'} ${visualPage(visual)}`]));
     const visualLink = id => editor && !compact ? headingHref(visualHeadings.get(id)) : '#^rf-visual-' + id;
-    const sectionLink = (id, text) => md(text, editor ? headingHref(sectionHeadings.get(id)) : `#^${anchor(id)}`);
+    const sectionHref = id => editor ? headingHref(sectionHeadings.get(id)) : `#^${anchor(id)}`;
+    const sectionLink = (id, text) => md(text, sectionHref(id));
     const sectionLinks = ids => ids.map(id => sectionLink(id, view.sections.find(section => section.id === id).heading)).join(' · ');
+    const knowledgeHref = id => {
+      const item = knowledge.find(item => item.id === id);
+      if (item?.source_kind === 'paper-fact') {
+        const placement = writerLayout ? placementSets.get(language).knowledge.find(row => row.id === id) : item.placements[0];
+        if (!placement) fail('RF_OBSIDIAN_REFERENCE_INVALID');
+        return sectionHref(placement.section_id);
+      }
+      const path = destinations.get(`${id}:${language}`);
+      if (!path) fail('RF_OBSIDIAN_REFERENCE_INVALID');
+      return href(target, path) + (sharedKnowledge ? headingHref(en ? 'English' : '中文') : '');
+    };
     const callout = (kind, title, text, folded = false) => `> [!${kind}]${folded && fold ? '-' : ''} ${title}\n` + text.split('\n').map(line => '> ' + line).join('\n') + '\n\n';
     const methodInventory = () => `### ${inventoryHeading}\n\n` + edits.methods.map((method, index) => {
       const ids = [...new Set([...(method.knowledge_ids ?? []), ...(method.knowledge_id ? [method.knowledge_id] : [])])];
-      const shared = ids.map(id => {
-        if (!destinations.has(`${id}:${language}`)) fail('RF_OBSIDIAN_REFERENCE_INVALID');
-        return md(sharedKnowledge ? local(knowledge.find(item => item.id === id).title, language) : en ? 'Shared explanation' : '通用解释', knowledgeHref(id));
+      const links = ids.map(id => {
+        const destination = knowledgeHref(id);
+        return md(sharedKnowledge ? local(knowledge.find(item => item.id === id).title, language) : en ? 'Shared explanation' : '通用解释', destination);
       });
-      const body = `**${en ? 'Principle' : '原理'}**${en ? ': ' : '：'}${resolveReferences(method.explanation)}\n\n**${en ? 'Use in this study' : '本文中的作用'}**${en ? ': ' : '：'}${resolveReferences(method.application)}\n\n${sectionLinks(method.section_ids)}${shared.length ? ' · ' + shared.join(' · ') : ''}`;
+      const body = `**${en ? 'Principle' : '原理'}**${en ? ': ' : '：'}${resolveReferences(method.explanation)}\n\n**${en ? 'Use in this study' : '本文中的作用'}**${en ? ': ' : '：'}${resolveReferences(method.application)}\n\n${sectionLinks(method.section_ids)}${links.length ? ' · ' + links.join(' · ') : ''}`;
       return compact ? callout('info', label(method.title), body, true) : `#### ${methodHeading(method, index)}\n\n${body}\n\n`;
     }).join('');
     const resolveReferences = text => text.replace(/\[([^\]\n]+)\]\((apa-[^)]+)\)/g, (_, text, reference) => {
@@ -273,10 +285,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
       const concept = /^apa-knowledge:([a-z][a-z0-9-]*)$/.exec(reference);
       if (source && sources.has(source[1]) && Number.isSafeInteger(Number(source[2]))) destination = href(target, sources.get(source[1])) + '#page=' + source[2];
       else if (visual && visuals.some(item => item.id === visual[1])) destination = visualLink(visual[1]);
-      else if (concept && knowledge.some(item => item.id === concept[1])) {
-        const item = knowledge.find(item => item.id === concept[1]);
-        destination = item.source_kind === 'paper-fact' ? (editor ? headingHref(sectionHeadings.get(placementSets.get(language).knowledge.find(row => row.id === item.id).section_id)) : '#^rf-' + placementSets.get(language).knowledge.find(row => row.id === item.id).section_id) : knowledgeHref(item.id);
-      }
+      else if (concept && knowledge.some(item => item.id === concept[1])) destination = knowledgeHref(concept[1]);
       if (!destination) fail('RF_OBSIDIAN_REFERENCE_INVALID');
       return md(text, destination);
     });

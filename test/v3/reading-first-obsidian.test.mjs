@@ -131,6 +131,32 @@ test('shared knowledge cross-references resolve forward and backward to the matc
   assert.throws(() => renderReadingFirstObsidian(data), { code: 'RF_OBSIDIAN_REFERENCE_INVALID' });
 });
 
+test('shared measurement background renders as a bilingual concept with its measure identity', () => {
+  const data = input();
+  data.presentation.knowledge_layout = 'shared-bilingual-1.0';
+  Object.assign(data.presentation.knowledge[0], { kind: 'measure', canonical_key: 'measure:standardised-rate' });
+  const result = renderReadingFirstObsidian(data);
+  assert.equal(result.supportNotes.length, 1);
+  assert.equal(result.supportNotes[0].path, 'Wiki/concepts/年龄标化.md');
+  assert.match(result.supportNotes[0].content, /type: concept\n/);
+  assert.match(result.supportNotes[0].content, /canonical_key: measure:standardised-rate\n/);
+  for (const note of result.notes) assert.match(note.content, /\.\.\/concepts\//);
+  assert.equal(data.presentation.knowledge[0].kind, 'measure');
+});
+
+test('the method inventory links a paper-specific entry to its section in both notes', () => {
+  const data = canvasInput();
+  data.presentation.knowledge_layout = 'shared-bilingual-1.0';
+  data.presentation.knowledge[0].source_kind = 'paper-fact';
+  delete data.presentation.visuals[0].chart_types;
+  const result = renderReadingFirstObsidian(data);
+  assert.equal(result.supportNotes.length, 0);
+  for (const note of result.notes) {
+    const label = note.language === 'en' ? 'Age standardisation' : '年龄标化';
+    assert.ok(note.content.includes(`[${label}](#3.2%20methods%20details)`));
+  }
+});
+
 test('rebase preserves a separate new support page while remapping its cross-reference', () => {
   const data = input(); data.presentation.knowledge_layout = 'shared-bilingual-1.0';
   const rate = data.presentation.knowledge[0], other = structuredClone(rate);

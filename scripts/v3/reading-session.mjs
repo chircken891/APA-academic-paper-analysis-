@@ -25,7 +25,7 @@ import { closeReadingRuntimeRun, cleanupReadingRuntimeRun, readReadingRuntimeTer
 import { prepareReadingSessionExecution, readReadingSessionExecution, retryReadingSessionCleanup } from './reading-session-cli.mjs';
 import { createOwnedArtifactBroker, commitOwnedArtifact, readOwnedArtifact } from './owned-artifact-store.mjs';
 import { recoverReadingFirstRejectedEditor, authorizeReadingFirstContinuation, inspectReadingFirstContinuation, annotateReadingFirstReviewScope, inspectReadingFirstSavedCandidate, registerReadingFirstUserRevision, finalizeReadingFirstUserRevision, retainReviewedReadingFirstCandidate, recordReadingFirstKnowledgeIdentityResolution, recordReadingFirstResourceRepair, getReadingFirstRenderedResources } from './reading-first-runtime.mjs';
-import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, getScienceRequest, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, createScienceHandoff, getScienceCompactionReminder } from './science-controller.mjs';
+import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, getScienceRequest, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, createScienceHandoff, getScienceCompactionReminder, prepareScienceHostMigration } from './science-controller.mjs';
 import { fingerprintReadingFirst, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, getReadingFirstPendingRequests, getReadingFirstState, recordReadingFirstRequestEvent, getReadingFirstRequestEvents, acceptReadingFirstResult, createReadingFirstEnrichmentRequests, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstReviewRequest, createReadingFirstRevisionRequests, validateReadingFirstRenderRepair, getReadingCompactionReminder, captureReadingFirstPublicationSource } from './reading-first-runtime.mjs';
 
 const sessions = new WeakMap();
@@ -309,9 +309,14 @@ export async function createReadingSession(options = {}, execution) {
 }
 
 async function createSession(options, execution) {
+  const inspection = inspectApaConfig({ repoRoot: options.repoRoot, hostProfile: options.hostProfile });
+  if (options.scienceMigration) {
+    if (['scientificInput', 'sciencePayloads', 'sourceLanguage', 'maxCalls', 'presentationMode', 'includeRepairs', 'enrichmentPolicy', 'scienceTaskOverrides'].some(key => options[key] !== undefined)) fail('SCIENCE_MIGRATION_INPUT_INVALID');
+    const migration = await prepareScienceHostMigration({ ...options, runsPath: inspection.config.paths.runs, host: inspection.config.host });
+    options = { ...options, ...migration };
+  } else if (options.scientificInput?.science_migration !== undefined) fail('SCIENCE_MIGRATION_INPUT_INVALID');
   const { repoRoot, runId, scientificInput, sourceLanguage, authorizationId, maxCalls, maxTotalCalls, sessionContext, hostProfile, evidence = {}, sciencePayloads = {}, maxControlCheckpoints = 16 + 8 * maxTotalCalls } = options;
   if (![repoRoot, runId, authorizationId].every(text) || !scientificInput || !sessionContext || !Number.isSafeInteger(maxTotalCalls) || !Number.isSafeInteger(maxControlCheckpoints) || maxControlCheckpoints < 4) fail('READING_SESSION_INPUT_INVALID');
-  const inspection = inspectApaConfig({ repoRoot, hostProfile });
   const reference = execution && readReadingRuntimeSnapshotReference({ repoRoot, runId });
   const batchRun = execution && readBatchRun(execution.runRoot, runId, reference?.batch_run_sha256);
   if (batchRun) assertBatchRunOptions(batchRun, options, { manifest: execution.manifest, configurationFingerprint: inspection.fingerprint });
@@ -970,7 +975,7 @@ async function recordSessionEvent(session, event = {}) {
   }
   if (event.kind === 'inspect-continuation') {
     if (!state.reading) fail('READING_SESSION_RECOVERY_PREFLIGHT_REQUIRED');
-    return inspectReadingFirstContinuation({controller:state.reading,checkpointReceipt:state.checkpointReceipt});
+    return inspectReadingFirstContinuation({controller:state.reading,checkpointReceipt:state.checkpointReceipt,originalPageChartRepair:event.original_page_chart_repair});
   }
   if (event.kind === 'authorize-continuation') {
     if (!state.reading || state.preflight.status!=='pass') fail('READING_SESSION_RECOVERY_PREFLIGHT_REQUIRED');

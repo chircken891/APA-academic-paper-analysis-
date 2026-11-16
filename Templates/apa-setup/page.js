@@ -132,7 +132,7 @@ export function describeChanges(snapshot, payload) {
   ];
 }
 
-// The threshold typed on a capability card travels in the operation, so the agent receives it with the copied JSON.
+// The threshold input travels with the copied operation.
 export function thresholdHostSetting(raw, host) {
   const text = String(raw ?? '').trim();
   if (!text) return null;
@@ -301,21 +301,25 @@ const rangeText = range => {
   return `范围未知（${unit}）`;
 };
 
-// Re-evaluate each input against reported capacity, never the report's frozen feasibility.
-function thresholdArgument(tokens, range, threshold) {
-  if (threshold?.effective_target_verified === false) return { error: '有效后端未核实：检测显示未命中实际后端，无法生成命令。' };
-  const keys = ['context_window_tokens', 'output_reserve_tokens', 'headroom_tokens', 'retained_tokens'];
-  const complete = threshold && keys.every(key => Number.isSafeInteger(threshold[key]) && threshold[key] >= 0) && threshold.context_window_tokens > 0 && typeof threshold.measurement === 'string' && threshold.measurement.trim();
-  let value = tokens;
-  if (range.unit === 'ratio' || range.unit === 'percent') {
-    if (!complete || threshold.formula !== 'window-ratio-bounded' || threshold.effective_target_verified !== true) return { error: '比例公式或容量依据尚未核实，无法生成命令。' };
-    value = tokens / threshold.context_window_tokens * (range.unit === 'percent' ? 100 : 1);
-    const trigger = Math.floor(Math.min(threshold.context_window_tokens * (value / (range.unit === 'percent' ? 100 : 1)), threshold.context_window_tokens - threshold.output_reserve_tokens - threshold.headroom_tokens));
-    if (trigger !== tokens) return { error: '输入值超出容量约束或公式取整后无法达到目标。' };
-  } else if (range.unit !== 'tokens') return { error: '参数单位未知，无法生成命令。' };
-  if (complete && (tokens > threshold.context_window_tokens - threshold.output_reserve_tokens - threshold.headroom_tokens || tokens <= threshold.retained_tokens)) return { error: '输入值超出容量约束或不大于保留预算。' };
-  if ((Number.isFinite(range.min) && value < range.min) || (Number.isFinite(range.max) && value > range.max)) return { error: `参数超出允许范围（${rangeText(range)}）。` };
-  return { value: String(value) };
+export function renderThresholdSetting(document, container) {
+  const label = document.createElement('label');
+  label.textContent = '压缩阈值（token 整数）';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.inputMode = 'numeric';
+  input.name = 'threshold-threshold_compaction';
+  input.value = '';
+  label.append(input);
+  const error = document.createElement('p');
+  error.className = 'hint error';
+  error.hidden = true;
+  input.addEventListener('input', () => {
+    const raw = input.value.trim();
+    const value = /^[0-9]+$/.test(raw) ? Number(raw) : null;
+    error.textContent = raw && (!Number.isSafeInteger(value) || value < 1) ? '请输入正的安全整数 token 数。' : '';
+    error.hidden = !error.textContent;
+  });
+  container.append(label, error);
 }
 
 function renderAchievement(make, check) {
@@ -325,34 +329,6 @@ function renderAchievement(make, check) {
   box.append(make('p', `达成方式（${achievementNames[achievement.state] || achievement.state}）：${achievement.summary}`));
   if (Array.isArray(check.apa_support) && check.apa_support.length) box.append(make('p', `APA 自身规则：${check.apa_support.join('；')}`));
   const steps = Array.isArray(achievement.steps) ? achievement.steps : [];
-  const ranged = steps.filter(step => step.range && step.command);
-  const recorded = check.threshold?.candidate_tokens;
-  const commands = [];
-  let input = null;
-  let error = null;
-  let note = null;
-  if (ranged.length || check.id === 'threshold_compaction') {
-    const label = make('label', '候选阈值（token 整数）');
-    input = make('input');
-    input.type = 'text';
-    input.inputMode = 'numeric';
-    input.name = `threshold-${check.id}`;
-    input.value = Number.isSafeInteger(recorded) && recorded > 0 ? String(recorded) : '';
-    label.append(input);
-    error = make('p');
-    error.className = 'hint error';
-    error.hidden = true;
-    box.append(label);
-    if (check.id === 'threshold_compaction') box.append(make('p', '推荐阈值范围 250000–300000 token。仅作参考，不会自动填入；请按需要自行输入。', 'hint'));
-    if (ranged.length) box.append(make('p', '输入后按各步骤的参数范围和已知容量检查；本页只展示命令。'));
-    if (check.id === 'threshold_compaction') {
-      note = make('p');
-      note.hidden = true;
-      box.append(note);
-    }
-    box.append(error);
-    if (check.threshold?.effective_target_verified == null && ranged.some(step => step.range.unit === 'tokens')) box.append(make('p', '有效后端尚未核实；可展示符合已知范围的候选命令，实际效果仍待确认。'));
-  }
   if (steps.length) {
     const list = make('ol');
     for (const step of steps) {
@@ -365,11 +341,6 @@ function renderAchievement(make, check) {
         const code = make('code', step.command);
         line.append(code);
         entry.append(line);
-        if (step.range) {
-          commands.push({ template: step.command, range: step.range, line, code });
-          line.hidden = true;
-          code.textContent = '';
-        }
       }
       entry.append(make('p', `作用范围：${stepScopeNames[step.scope] || step.scope}；${step.persistent ? '持久保存' : '不持久保存'}。确认方法：${step.verify}`));
       if (step.evidence?.length) {
@@ -380,30 +351,6 @@ function renderAchievement(make, check) {
       list.append(entry);
     }
     box.append(list);
-  }
-  if (input) {
-    const update = () => {
-      const raw = String(input.value ?? '').trim();
-      const value = /^[0-9]+$/.test(raw) ? Number(raw) : null;
-      const valid = Number.isSafeInteger(value) && value > 0;
-      const messages = new Set();
-      if (raw && !valid) messages.add('请输入正的安全整数 token 数。');
-      for (const entry of commands) {
-        const result = valid ? thresholdArgument(value, entry.range, check.threshold) : {};
-        if (valid && !entry.template.includes('<N>')) result.error = '命令缺少 <N> 模板，无法生成。';
-        if (result.error) messages.add(result.error);
-        entry.code.textContent = result.value && !result.error ? entry.template.replaceAll('<N>', result.value) : '';
-        entry.line.hidden = !entry.code.textContent;
-      }
-      if (note) {
-        note.textContent = valid ? `候选阈值 ${value} token：生成“完善配置”结果时会写入 JSON 的 host_settings，随复制或下载的内容交给助手；助手据此生成宿主设置预览，你确认后才写入。` : '';
-        note.hidden = !valid;
-      }
-      error.textContent = [...messages].join(' ');
-      error.hidden = !error.textContent;
-    };
-    input.addEventListener('input', update);
-    update();
   }
   return box;
 }
@@ -417,7 +364,6 @@ export const issueChoiceOptions = {
 
 // Where a page-choice issue is answered; the page offers the actual options there.
 function issueChoiceLocation(item) {
-  if (item.subject === 'threshold_compaction') return '在上方“上下文压缩阈值”卡片填写候选值；不填写即保持现状。';
   if (['differs', 'missing', 'science_recovery'].includes(item.subject) || item.id.startsWith('page-choice:host')) return '在“完善配置 → 运行宿主与派发”页选择：采用本次检测结果，或不勾选以保留已保存的声明（相关能力保持受阻）。';
   const field = fields.find(entry => entry.key === item.subject.split(':')[0]);
   const page = field && setupPages.find(entry => entry.id === field.group);
@@ -432,6 +378,7 @@ export function renderSetupIssues(document, container, issues, { onChange = () =
     return element;
   };
   const selects = [];
+  if (Array.isArray(issues)) issues = issues.filter(item => item.subject !== 'threshold_compaction');
   if (!Array.isArray(issues) || !issues.length) {
     container.append(make('p', '自检没有遗留问题。'));
     return () => ({});
@@ -463,8 +410,8 @@ export function renderSetupIssues(document, container, issues, { onChange = () =
 }
 
 // Reported capabilities are informational; they never enter the user's configuration operation.
-// A featured container lifts the threshold choice out of the capability grid so it is seen early.
-export function renderCapabilityCheck(document, container, report, featured = null) {
+export function renderCapabilityCheck(document, container, report) {
+  if (Array.isArray(report?.checks)) report = { ...report, checks: report.checks.filter(check => check.id !== 'threshold_compaction') };
   const make = (tag, text) => {
     const element = document.createElement(tag);
     if (text !== undefined) element.textContent = text;
@@ -476,8 +423,6 @@ export function renderCapabilityCheck(document, container, report, featured = nu
   }
   const statusNames = { detected: '已发现实现方式', conditional: '方式已发现，条件待核实', blocked: '当前方式受阻', unsupported: '不支持', unknown: '尚不明确' };
   const scopeNames = { 'current-session': '当前会话', 'new-session': '新启动的会话', instance: '宿主实例', unknown: '范围尚不明确' };
-  const thresholdNames = { candidate_tokens: '检测时的候选 token 数', candidate_value: '检测时算出的候选参数值', unit: '参数单位', setting: '配置入口', formula: '触发公式', setting_min: '参数下限', setting_max: '参数上限', effective_target_verified: '已确认作用于有效后端', context_window_tokens: '上下文窗口 token 数', output_reserve_tokens: '输出预留 token 数', headroom_tokens: '安全余量 token 数', retained_tokens: '保留内容 token 数', measurement: '计量口径', effective_trigger_tokens: '检测时公式推算触发 token 数', feasibility: '检测时的候选约束检查' };
-  const thresholdValues = { tokens: 'token 数', ratio: '比例', percent: '百分比', absolute: '绝对 token 阈值', 'window-ratio-bounded': '窗口比例并受容量约束', unknown: '未知', 'within-reported-limits': '符合报告的数值约束', incompatible: '不符合约束' };
   container.append(make('p', `宿主：${report.host || '未确定'}；检测时间：${report.detected_at || '未记录'}。实际运行验证：${report.runtime_validation === 'not_run' ? '未运行' : report.runtime_validation || '未知'}。`));
   const counts = Object.entries(statusNames).map(([status, name]) => [name, report.checks.filter(check => check.status === status).length]).filter(([, count]) => count);
   container.append(make('p', `共 ${report.checks.length} 项：${counts.map(([name, count]) => `${name} ${count}`).join('，')}。`));
@@ -500,7 +445,7 @@ export function renderCapabilityCheck(document, container, report, featured = nu
     container.append(section);
   }
   for (const check of report.checks) {
-    // Status and method stay visible; limits, thresholds and evidence fold under each item.
+    // Status and method stay visible alongside the supporting details.
     const item = make('article');
     item.className = `capability capability-${check.status}`;
     item.append(make('h3', `${check.label}：${statusNames[check.status] || check.status}`));
@@ -508,10 +453,6 @@ export function renderCapabilityCheck(document, container, report, featured = nu
     if (check.achievement) item.append(renderAchievement(make, check));
     const more = make('details');
     more.append(make('summary', '限制、下一步与检测依据'));
-    if (check.threshold && typeof check.threshold === 'object') {
-      const details = Object.entries(check.threshold).map(([key, value]) => `${thresholdNames[key] || key}：${value === null ? '未知' : typeof value === 'boolean' ? value ? '是' : '否' : typeof value === 'object' ? JSON.stringify(value) : thresholdValues[value] || value}`).join('；');
-      if (details) more.append(make('p', `阈值信息：${details}。`));
-    }
     if (check.limitations?.length) more.append(make('p', `限制：${check.limitations.join('；')}。`));
     if (check.next_check) more.append(make('p', `下一步：${check.next_check}`));
     if (check.evidence?.length) {
@@ -520,10 +461,7 @@ export function renderCapabilityCheck(document, container, report, featured = nu
       more.append(make('p', '检测依据：'), list);
     }
     item.append(more);
-    if (featured && check.id === 'threshold_compaction') {
-      item.classList?.add('capability-featured');
-      featured.append(item);
-    } else container.append(item);
+    container.append(item);
   }
 }
 
@@ -564,7 +502,8 @@ export function mountApaSetup(document, snapshot, inspection, queryInspection, h
   byId('readiness').textContent = readiness.reading;
   byId('query-readiness').textContent = readiness.query;
   const issueChoices = renderSetupIssues(document, byId('setup-issues'), inspection?.setup_issues ?? [], { onChange: () => clearResult('edit') });
-  renderCapabilityCheck(document, byId('capability-check'), inspection?.capability_check, byId('threshold-pick'));
+  renderCapabilityCheck(document, byId('capability-check'), inspection?.capability_check);
+  renderThresholdSetting(document, byId('threshold-pick'));
   byId('threshold-step').hidden = !byId('threshold-pick').children.length;
   const dependencies = inspection?.dependencies || [];
   const dependencyStatus = { available: '文件或目录可找到', missing: '未找到，请检查路径或安装情况', 'wrong-type': '路径类型不符，请检查填的是文件还是目录', unavailable: '暂时无法读取' };

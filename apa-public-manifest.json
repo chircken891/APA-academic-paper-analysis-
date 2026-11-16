@@ -83,7 +83,7 @@
     },
     {
       "path": ".agents/skills/apa-setup/SKILL.md",
-      "sha256": "d4132e3a2c6c3b37f79cf0f609a899dffe7bf3981eab0e57cfe0303bf16fbe4c"
+      "sha256": "0582c73ece36a64d16c1fb23e3f9c99558897bf8ad725e14af6c836959ad58c3"
     },
     {
       "path": ".claude/skills/academic-paper-analysis/SKILL.md",
@@ -119,7 +119,7 @@
     },
     {
       "path": "config/apa-public-files.json",
-      "sha256": "3981dce04ca724122cbe281ca2120d1539914c4aab9962e5cabbcf12cd46af15"
+      "sha256": "ceb4dd369c521f50afe282e9eeaf9dbe15d5e72c8bdd996d81eeecb980ecc4a6"
     },
     {
       "path": "config/environment.json",
@@ -139,11 +139,11 @@
     },
     {
       "path": "docs/apa-v3/reading-first-publication.md",
-      "sha256": "4c6e75e0fb2d1325c0f13cbd5bd7d030c5404668335098b162f307a111a1f224"
+      "sha256": "a9fdf9602dac40e7869ced44428ca0f967df9cb4146d751766d6fc5fe1c236f1"
     },
     {
       "path": "docs/apa-v3/reading-session.md",
-      "sha256": "7868764e2238e74b678c3c3e12ec469c990aee1c26df5c77ece9e0cde3d2b64a"
+      "sha256": "e1fb66d5aff093ff068e1794fed5e2e3a148c4971e4f4dbb612f91295f43c94d"
     },
     {
       "path": "docs/apa-v3/scientific-writing-modules.md",
@@ -151,7 +151,7 @@
     },
     {
       "path": "docs/CONFIGURATION.md",
-      "sha256": "7a738f092f143a86fbc7b1252d0bb9770e1b1e612b1af142700f2947475b3a90"
+      "sha256": "ed589bfed81128521317d72bf2a4577a1b658c6422954fb106ac19905f501fdb"
     },
     {
       "path": "Figures/.gitkeep",
@@ -179,7 +179,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "6092bd33612a067eb934fbb922f4a2e8dafe2d6d4f3f29ebb57d9a79d0794050"
+      "sha256": "0392279caaf6d74b51fda5df6be1f84cbaa1a0e3e2e06e87e7d1c90bc7147208"
     },
     {
       "path": "prompts/v3/phase21-scientific-contracts.md",
@@ -410,6 +410,14 @@
       "sha256": "7f53b4ad1e950780f5b95919115caa4de8f8b5d8425e45e877e7296e43e532f1"
     },
     {
+      "path": "scripts/obsidian/apa-official-graph/main.cjs",
+      "sha256": "71504487a36385576f2b11ecd69f3e62d638898662eb113f2a1c91d99b752599"
+    },
+    {
+      "path": "scripts/obsidian/apa-official-graph/manifest.json",
+      "sha256": "453172f222da2a1e991220ba8187ca749aef62763313670a703f71a01eded39f"
+    },
+    {
       "path": "scripts/setup/apa-compact-context.mjs",
       "sha256": "e495fa77fd523a8956ed871b668402840e0b44ffb5857c28a04f81431ebbe1d5"
     },
@@ -419,7 +427,7 @@
     },
     {
       "path": "scripts/setup/apa-setup-page.mjs",
-      "sha256": "47318cf7748d4a9100b382b568e38b3e28c17128924bd1f158970cd46d77cc49"
+      "sha256": "181dd3d16e407547839b0ed910589d34b3c41a920c682ed487e67d3476d21dd9"
     },
     {
       "path": "scripts/setup/bootstrap-windows.ps1",
@@ -535,11 +543,11 @@
     },
     {
       "path": "scripts/v3/obsidian-graph-sync.mjs",
-      "sha256": "1fa1633fdb81ff135a364ebee0cd789c6897cef235e0d7485359b031f081eac0"
+      "sha256": "27fd3a9850e9ec472ca15e9db03133ab720614ad1a783c16c458f70f2ed87de0"
     },
     {
       "path": "scripts/v3/obsidian-graph.mjs",
-      "sha256": "d69205371f0bfcaac3129d1391cd9943d36b8250c4e8aef41ecfdb34337aa364"
+      "sha256": "4cc9d9e07aef3ffb2adcdfee9e8f5cbe3de59d395cfaf62c34d2da4830295dc2"
     },
     {
       "path": "scripts/v3/office-original-comparison.mjs",
@@ -679,7 +687,7 @@
     },
     {
       "path": "scripts/v3/reading-execution-budget.mjs",
-      "sha256": "eff04a984d14c94d0dcdd71cc2fbb88b981ca486f90314efce5501e4fa22f471"
+      "sha256": "cbc0435c1a59637c4225549576e96dbecf87e83f63b23bf8d4019d4d7dd41c10"
     },
     {
       "path": "scripts/v3/reading-first-editor-contract.mjs",
@@ -695,7 +703,7 @@
     },
     {
       "path": "scripts/v3/reading-first-knowledge-plans.mjs",
-      "sha256": "918562a9e89ab0d70e5ca2a8a2a012850a4ede1ea9534a0b15b7d43c63096558"
+      "sha256": "688df03ff5f4d44d944701600e88bbb9aeb4b368daf2439edc81b0eb1f92c179"
     },
     {
       "path": "scripts/v3/reading-first-knowledge-registry.mjs",
@@ -703,11 +711,11 @@
     },
     {
       "path": "scripts/v3/reading-first-knowledge.mjs",
-      "sha256": "33705f6721a9d7d4ca6b5a31f57885c5d9bc391a0a6ff3e98f2e56e129ecb5a7"
+      "sha256": "f19ca03e493f734daead9793d2863cbdbc416bbbe2c9349017e797293643877c"
     },
     {
       "path": "scripts/v3/reading-first-obsidian.mjs",
-      "sha256": "daadbd6ed253b93f977dbb17158a20a0226f2c7d38655beeba813fd010044587"
+      "sha256": "586c794666ef705a942a1bb954eb15be4aac381ceeb046bef85e33250441c2a4"
     },
     {
       "path": "scripts/v3/reading-first-preview.mjs",
@@ -719,15 +727,15 @@
     },
     {
       "path": "scripts/v3/reading-first-publication-queue.mjs",
-      "sha256": "ccaa4180bd3a7f3073a6ffd7ae2028295a1c9716866cc69fe7a353b2183c52e1"
+      "sha256": "ad1b9fdd6473072a717d64a0831843797233a0c896a5ef26be26962fc04e31d3"
     },
     {
       "path": "scripts/v3/reading-first-publication.mjs",
-      "sha256": "1f517f599bcf0f8d48972f30f67953da76f45b3fea9f9b7747230cf32d44ebde"
+      "sha256": "fa1475445b5fbbbec27c377b889ea41a77ddfd299ac95ab847811987eb2675e8"
     },
     {
       "path": "scripts/v3/reading-first-publish.mjs",
-      "sha256": "4cd6b072c4b7cb6247a5b0c58dd565a9404d0da77cd7a07e53a040aa9cc4f38d"
+      "sha256": "da06983eb6ae3964d5640614d65285f9c344abcbe7448047265c677b7ede4866"
     },
     {
       "path": "scripts/v3/reading-first-rebase.mjs",
@@ -739,7 +747,7 @@
     },
     {
       "path": "scripts/v3/reading-first-runtime.mjs",
-      "sha256": "e6e1f572d54e7a04d1b6731cfec4ab1731ee4f0154b9f578200b3bb0df258188"
+      "sha256": "b9abd4e278baa09d307a21434f7821f01289c4f67132e8de33ce716b0f747e7f"
     },
     {
       "path": "scripts/v3/reading-host-evidence.mjs",
@@ -763,7 +771,7 @@
     },
     {
       "path": "scripts/v3/reading-session-cli.mjs",
-      "sha256": "6ce3e794956f22cf860e728800c60b0b535238d0a644cce403188dee69fa5896"
+      "sha256": "6cbbaa407e97e93d711c27c62cc187e0145a479b0a1127b4c60a0b6144f7c357"
     },
     {
       "path": "scripts/v3/reading-session-tasks.mjs",
@@ -771,7 +779,7 @@
     },
     {
       "path": "scripts/v3/reading-session.mjs",
-      "sha256": "f2f11a4af2baf3cae6f924f537c246bf16cde48a425d12091b97375042ac5204"
+      "sha256": "3b5af1b9aeb5a9aa1375112ad5f200a3871f5b5ed3931f14979e47b1fa588d2f"
     },
     {
       "path": "scripts/v3/reading-source-policy.mjs",
@@ -799,7 +807,7 @@
     },
     {
       "path": "scripts/v3/science-controller.mjs",
-      "sha256": "8cc6c66621796fdbc0d0a96957648658d1f4a316b4b60b27182da88f50633292"
+      "sha256": "ac426fe398db2b4cdff81afbd08975d29ea5fb239bbf59bd2e76a61ef4062ae5"
     },
     {
       "path": "scripts/v3/scientific-input-validator.mjs",
@@ -899,7 +907,7 @@
     },
     {
       "path": "Templates/apa-setup/page.js",
-      "sha256": "727c2252f6a5e9e32589a9e95155e1e954e47c1885e22f8b7d77c9b6c195dcce"
+      "sha256": "62d023db4b5ba76b10b56028833a8dbc2e283b48620085b09028a94fefefaa95"
     },
     {
       "path": "Templates/apa-v3/apa-readable.css",
@@ -939,7 +947,7 @@
     },
     {
       "path": "test/setup/apa-setup-page.test.mjs",
-      "sha256": "678de1af2e0fd1bf7630a272475a6e3db8b4e368fd13e7322a7df5a823aa88a9"
+      "sha256": "5f0c1e55036174b4a8c90bb8879e1a35a301f76443312451706356983a14c9c3"
     },
     {
       "path": "test/setup/better-embedded-canvas.test.mjs",
@@ -1087,7 +1095,11 @@
     },
     {
       "path": "test/v3/obsidian-graph-sync.test.mjs",
-      "sha256": "adadb8230a619291233d9e893b30fa13708a335fe743bdd1e40e14ed54fcdbfa"
+      "sha256": "f27ae6e175f9b29c41ea22f5aeca1b0cd1407bfa36c756cf8fd7cb43f3973ada"
+    },
+    {
+      "path": "test/v3/obsidian-official-graph-plugin.test.mjs",
+      "sha256": "77e3624b1a3c7e9fa7a4a591f9e54132a44f5f95e2ed88ae20cba5cd69053810"
     },
     {
       "path": "test/v3/phase21-runner.test.mjs",
@@ -1167,7 +1179,7 @@
     },
     {
       "path": "test/v3/reading-first-knowledge.test.mjs",
-      "sha256": "7ca48d04d9f4d8239d8e6216ec8895d8ef3eaebe3f8e41f465977843c3f21b71"
+      "sha256": "8fcf796f201d228d9610ed3b61f16dcdfd78119e3b03a9152f7ccd26adb2f216"
     },
     {
       "path": "test/v3/reading-first-metadata-migration.test.mjs",
@@ -1179,7 +1191,7 @@
     },
     {
       "path": "test/v3/reading-first-obsidian.test.mjs",
-      "sha256": "2ae97cbc14675ae96995c46e578de8c3b4522edc0cc672ac77c5fd24511e5493"
+      "sha256": "dfe4444edd27db707b481994bad35e9d7eb95ab830bafa0b3aedfabfc5e0e121"
     },
     {
       "path": "test/v3/reading-first-preview.test.mjs",
@@ -1191,7 +1203,7 @@
     },
     {
       "path": "test/v3/reading-first-publication-queue.test.mjs",
-      "sha256": "ac7ff55f654b14a2d32154ac1b049c17988e5cfe845af6d43783ed8ad519ee9c"
+      "sha256": "efb11f322e3c0e7cf8b45d1b396686de6263f33c8510e4cf4e96da1abff07a5d"
     },
     {
       "path": "test/v3/reading-first-publication.test.mjs",
@@ -1255,7 +1267,7 @@
     },
     {
       "path": "test/v3/reading-session.test.mjs",
-      "sha256": "961f9f512b9baec6abc8957b9d5bdc2c7f5b3cd0b6096b5d15c731ebdb044e40"
+      "sha256": "e53649504030505666772a9f0bb7d9f2d9039358b2231bd4ccdf988be016f405"
     },
     {
       "path": "test/v3/reading-source-policy.test.mjs",

@@ -1,7 +1,7 @@
 import { validateExecutionLedger, reserveExecution, markExecutionDispatched, recordExecutionReceipt, executionBudgetSummary } from './reading-execution-budget.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, realpath, rename, writeFile, link, unlink } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createConfiguredScienceRequest, getConfiguredReadingDispatchArguments, validateConfiguredReadingDispatch } from './configured-reading.mjs';
 import { createOwnedArtifactBroker, commitOwnedArtifact, readOwnedArtifact, repairOwnedArtifactReceipt } from './owned-artifact-store.mjs';
 import { ingestObservedRunStep } from './phase21-runner.mjs';
@@ -54,7 +54,73 @@ function receiptMatches(receipt, state, task) {
 }
 const activeEntry = (data, role) => data.entries[role]?.correction ?? data.entries[role];
 const activeTask = (data, role) => data.entries[role]?.correction?.task ?? data.tasks[role];
-const scienceCalls = data => roles.reduce((total, role) => total + (data.entries[role].intent ? 1 : 0) + (data.entries[role].correction?.intent ? 1 : 0), 0);
+const migrationOf = data => data.prepared.scientificInput.science_migration;
+const migratedRole = (data, role) => migrationOf(data)?.artifacts.find(item => item.receipt.role === role);
+const scienceCalls = data => roles.reduce((total, role) => total + (data.entries[role].intent || migratedRole(data, role) ? 1 : 0) + (data.entries[role].correction?.intent ? 1 : 0), 0);
+const unpreparedRole = (data, role) => !activeEntry(data, role).request && !activeEntry(data, role).receipt;
+
+function claudeStopProof(records, entry) {
+  const [call, reply] = records.map(line => JSON.parse(line));
+  const handle = entry.observation.agent_id;
+  const tool = call.message?.content?.find(item => item.type === 'tool_use' && item.name === 'TaskStop' && item.input?.task_id === handle);
+  const result = reply.message?.content?.find(item => item.type === 'tool_result' && item.tool_use_id === tool?.id);
+  const response = typeof result?.content === 'string' ? JSON.parse(result.content) : null;
+  if (call.type !== 'assistant' || reply.type !== 'user' || !call.sessionId || call.sessionId !== reply.sessionId || !call.uuid || reply.parentUuid !== call.uuid
+    || !tool?.id || !result || result.is_error || response?.task_id !== handle || response.task_type !== 'local_agent'
+    || typeof response.message !== 'string' || !response.message.startsWith(`Successfully stopped task: ${handle}`)
+    || !(Date.parse(reply.timestamp) >= Date.parse(call.timestamp)) || !(Date.parse(call.timestamp) >= Date.parse(entry.observation.observed_at))) fail('SCIENCE_MIGRATION_STOP_INVALID');
+}
+
+export async function prepareScienceHostMigration({ repoRoot, runsPath, runId, authorizationId, scienceMigration, maxTotalCalls, host }) {
+  const { sourceRunId, sourceCheckpoint, transcript, stopResultLine, userReply } = scienceMigration;
+  if (host?.name !== 'codex' || host.dispatch?.tool !== 'collaboration.spawn_agent' || !/^[a-zA-Z0-9_-]+$/.test(sourceRunId ?? '')
+    || runId !== `${sourceRunId}-codex` || typeof userReply !== 'string' || !userReply.trim() || !isAbsolute(transcript ?? '')) fail('SCIENCE_MIGRATION_INPUT_INVALID');
+  const root = resolve(repoRoot, runsPath, sourceRunId);
+  if (await realpath(root) !== root) fail('SCIENCE_MIGRATION_INPUT_INVALID');
+  const path = join(root, 'control', 'science-state.json');
+  const { data, fingerprint } = await readState(path);
+  const binding = data.prepared.runControl.reading_first_binding;
+  if (fingerprint !== sourceCheckpoint || data.prepared.runControl.run_id !== sourceRunId || data.prepared.paths.runRoot !== root
+    || binding.configured_setup?.knowledge_registry?.vault_root !== resolve(repoRoot) || binding.host?.name !== 'claude-code'
+    || binding.host.dispatch?.tool !== 'Agent' || binding.max_total_calls !== maxTotalCalls || data.handoff || migrationOf(data)
+    || roles.some(role => data.entries[role].correction || (['evidence', 'methods'].includes(role) ? !data.entries[role].receipt
+      : role === 'results' ? data.entries[role].receipt || data.entries[role].content_base64 || data.entries[role].observation?.status !== 'observed' || !data.entries[role].observation.agent_id
+      : data.entries[role].request)) || data.executionLedger.some(row => row.status !== 'observed')) fail('SCIENCE_MIGRATION_SOURCE_INVALID');
+  if (!Number.isSafeInteger(stopResultLine) || stopResultLine < 2) fail('SCIENCE_MIGRATION_STOP_INVALID');
+  const lines = (await readFile(transcript, 'utf8')).split(/\r?\n/);
+  const records = lines.slice(stopResultLine - 2, stopResultLine);
+  try { claudeStopProof(records, data.entries.results); } catch { fail('SCIENCE_MIGRATION_STOP_INVALID'); }
+  for (const output of [data.tasks.results.native_path, binding.configured_setup.results_resources.manifest_task.native_path]) {
+    try { await lstat(ownedPath(root, output)); fail('SCIENCE_MIGRATION_RESULT_AVAILABLE'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  const controller = await restoreScienceController({ prepared: data.prepared, tasks: data.tasks, payloads: data.payloads, brokerConfig: data.brokerConfig, statePath: path });
+  const budget = getScienceBudgetSummary({ controller });
+  if (budget.remaining_total < 4 + (binding.presentation_mode === 'reading-editor' ? 4 : 3)) fail('SCIENCE_BUDGET_EXHAUSTED');
+  const identity = { ...data.prepared.scientificInput.identity, run_id: runId };
+  const artifacts = ['evidence', 'methods'].map(role => ({ artifact_root: root, receipt: data.entries[role].receipt }));
+  const science_migration = { source_run_id: sourceRunId, source_checkpoint: fingerprint, artifacts, authorization_id: authorizationId, user_reply: userReply,
+    stopped_action_id: data.entries.results.intent.action_id, stop: { transcript, result_line: stopResultLine, records } };
+  const sciencePayloads = Object.fromEntries(Object.entries(data.payloads).map(([role, payload]) => [role,
+    { ...payload, ...(payload.identity ? { identity: { ...payload.identity, run_id: runId } } : {}) }]));
+  return { scientificInput: { ...data.prepared.scientificInput, identity, science_migration }, sciencePayloads,
+    sourceLanguage: binding.source_language, maxCalls: binding.max_calls, presentationMode: binding.presentation_mode,
+    includeRepairs: !!binding.task_bindings['review-r2'], enrichmentPolicy: binding.enrichment_policy };
+}
+
+async function migratedLedger(data) {
+  const migration = migrationOf(data);
+  if (!migration) return [];
+  const root = migration.artifacts[0].artifact_root;
+  const { data: source, fingerprint } = await readState(join(root, 'control', 'science-state.json'));
+  if (fingerprint !== migration.source_checkpoint) fail('SCIENCE_MIGRATION_SOURCE_CHANGED');
+  return source.executionLedger.map(row => row.action_id === migration.stopped_action_id ? { ...row, superseded_by_host_migration: true } : row);
+}
+
+async function scienceArtifact(data, role) {
+  const migrated = migratedRole(data, role);
+  return readOwnedArtifact({ artifactRoot: migrated?.artifact_root ?? data.prepared.paths.runRoot, artifactId: migrated?.receipt.artifact_id ?? data.tasks[role].artifact_id });
+}
 async function checkInstructionHashRecovery(state, entry, task, recovery) {
   const invalid = () => fail('SCIENCE_INSTRUCTION_HASH_RECOVERY_INVALID');
   const { prepared } = state.data;
@@ -124,14 +190,18 @@ async function validateCurrent(state) {
   {
     validateExecutionLedger(data.executionLedger,binding.max_total_calls,{strict:true});
     validateComputerControlObservations(data.computer_control_observations ?? []);
+    const previous = await migratedLedger(data);
+    if (!same(data.executionLedger.slice(0, previous.length), previous)) fail('SCIENCE_EXECUTION_LEDGER_INVALID');
+    const current = data.executionLedger.slice(previous.length);
+    if (current.some(row => row.superseded_by_host_migration)) fail('SCIENCE_EXECUTION_LEDGER_INVALID');
     const entries=roles.flatMap(role=>[data.entries[role],...(data.entries[role].correction ? [data.entries[role].correction] : [])]);
-    if (data.executionLedger.filter(row=>row.kind==='initial').length !== entries.filter(entry=>entry.request).length) fail('SCIENCE_EXECUTION_LEDGER_INVALID');
+    if (current.filter(row=>row.kind==='initial').length !== entries.filter(entry=>entry.request).length) fail('SCIENCE_EXECUTION_LEDGER_INVALID');
     for (const role of roles) { const original=data.entries[role]; for (const entry of [original,...(original.correction ? [original.correction] : [])]) if (entry.request) {
       const task=entry===original ? data.tasks[role] : entry.task;
       const row=data.executionLedger.find(item=>item.execution_id===entry.request.emittedStep.action_id);
       if (!row || row.kind!=='initial' || row.task_id!==task.task_id || row.action_id!==entry.request.emittedStep.action_id || row.tool!==entry.request.emittedStep.action || !same(row.arguments,entry.request.emittedStep.arguments) || !!entry.intent !== (row.status!=='prepared')) fail('SCIENCE_EXECUTION_LEDGER_INVALID');
     }}
-    for (const row of data.executionLedger.filter(item=>item.kind==='continuation')) { const role=roles.find(key=>activeTask(data,key).task_id===row.task_id); if (!role || activeEntry(data,role).observation?.agent_id!==row.handle) fail('SCIENCE_EXECUTION_LEDGER_INVALID'); }
+    for (const row of current.filter(item=>item.kind==='continuation')) { const role=roles.find(key=>activeTask(data,key).task_id===row.task_id); if (!role || activeEntry(data,role).observation?.agent_id!==row.handle) fail('SCIENCE_EXECUTION_LEDGER_INVALID'); }
   }
   if (!same(data.prompt_files, configuredPromptFiles(data.prepared))) fail('SCIENCE_PROMPT_BINDING_INVALID');
   for (const source of data.prepared.scientificInput.sources) {
@@ -140,6 +210,12 @@ async function validateCurrent(state) {
   }
   for (const role of roles) {
     const original = data.entries[role];
+    const imported = migratedRole(data, role);
+    if (imported) {
+      const saved = await scienceArtifact(data, role);
+      if (!saved || !same(original, { receipt: imported.receipt }) || !same(saved.receipt, imported.receipt)) fail('SCIENCE_RECEIPT_INVALID');
+      continue;
+    }
     if (original.correction) validateCorrection(data, state.path, role, original.correction);
     for (const entry of [original, ...(original.correction ? [original.correction] : [])]) {
       const task = entry === original ? data.tasks[role] : entry.task;
@@ -278,6 +354,8 @@ export async function createScienceController({ prepared, tasks, payloads = {}, 
   const promptFiles = configuredPromptFiles(prepared);
   const data = { version: 0, prepared: copy(prepared), tasks: copy(tasks), payloads: copy(payloads), brokerConfig: copy(brokerConfig),
     prompt_files: copy(promptFiles), entries: Object.fromEntries(roles.map(role => [role, {}])), executionLedger:[], handoff: null };
+  data.executionLedger = await migratedLedger(data);
+  for (const artifact of migrationOf(data)?.artifacts ?? []) data.entries[artifact.receipt.role] = { receipt: copy(artifact.receipt) };
   const controller = makeController(statePath, data), state = controllerState(controller);
   await validateCurrent(state); await save(state, true); return controller;
 }
@@ -304,7 +382,7 @@ export function getSciencePendingContinuations({controller} = {}) { return copy(
 export async function reserveScienceContinuation({controller,role,executionId,actionId,handle,tool,arguments:args,context} = {}) {
   const state=controllerState(controller); return serial(state,async()=>{ await validateCurrent(state); const data=state.data,b=data.prepared.runControl.reading_first_binding,entry=activeEntry(data,role),task=activeTask(data,role);
     if (!entry?.intent || entry.receipt || entry.observation?.status!=='observed' || !entry.observation?.agent_id || entry.observation.agent_id!==handle) fail('EXECUTION_CONTINUATION_INVALID');
-    const remainingScience=roles.filter(key=>!activeEntry(data,key).request).length;
+    const remainingScience=roles.filter(key=>unpreparedRole(data,key)).length;
     const remainingReading=3+(b.presentation_mode==='reading-editor'?1:0);
     if (!data.executionLedger.some(row=>row.execution_id===executionId) && data.executionLedger.length+1+remainingScience+remainingReading>b.max_total_calls) fail('SCIENCE_BUDGET_EXHAUSTED');
     const result=reserveExecution(data.executionLedger,{execution_id:executionId,task_id:task.task_id,action_id:actionId,handle,tool,arguments:args,kind:'continuation',...(context === undefined ? {} : {context:copy(context)})},b.max_total_calls); await save(state); return result; });
@@ -314,7 +392,7 @@ export async function recordScienceContinuationReceipt({controller,executionId,r
 export function getScienceState(controller) {
   const state = controllerState(controller), { data, path } = state;
   return copy({ version: data.version, run_id: data.prepared.runControl.run_id, state_path: path,
-    reserved_calls: scienceCalls(data), observed_calls: roles.reduce((total, role) => total + (data.entries[role].observation?.status === 'observed' ? 1 : 0) + (data.entries[role].correction?.observation?.status === 'observed' ? 1 : 0), 0),
+    reserved_calls: scienceCalls(data) - (migrationOf(data)?.artifacts.length ?? 0), observed_calls: roles.reduce((total, role) => total + (data.entries[role].observation?.status === 'observed' ? 1 : 0) + (data.entries[role].correction?.observation?.status === 'observed' ? 1 : 0), 0),
     accepted_results: roles.filter(role => activeEntry(data, role).receipt).length,
     next_actions: data.handoff?.status === 'transferred' ? [{action:'continue_downstream'}] : roles.every(role => activeEntry(data, role).receipt) ? [{action: scienceCalls(data) > data.prepared.runControl.reading_first_binding.prior_calls ? 'prepare_adopted_reading' : data.handoff ? 'continue_handoff' : 'create_handoff'}] : roles.flatMap(role => { const e = activeEntry(data, role); return e.receipt ? [] : e.observation?.status === 'observed' ? (e.content_base64 ? [{role,action:'accept_result'}] : [{role,action:'wait_or_query_host'},{role,action:'accept_result_if_complete'}]) : e.intent ? [{role,action:'reconcile_host'}] : e.request ? [{role,action:'record_dispatch_intent'}] : dependencies[role].every(dep => activeEntry(data, dep).receipt) ? [{role,action:'prepare_request'}] : []; }),
     roles: Object.fromEntries(roles.map(role => { const e = activeEntry(data, role); return [role, { status: e.receipt ? 'accepted' : e.observation?.status === 'observed' ? 'observed' : e.intent ? 'outcome_unknown' : e.request ? 'prepared' : 'waiting', action_id: e.request?.emittedStep.action_id ?? null, agent_id: e.observation?.agent_id ?? null, receipt: e.receipt ?? null }]; })),
@@ -325,7 +403,7 @@ function scienceCompactionBoundary(state) {
   const accepted = role => Boolean(activeEntry(data, role).receipt);
   const pending = role => { const entry = activeEntry(data, role); return Boolean(entry.intent && !entry.receipt); };
   const id = accepted('methods') && accepted('results') && !activeEntry(data, 'interpretation').intent ? 'methods-results-accepted'
-    : accepted('evidence') && !activeEntry(data, 'methods').intent && !activeEntry(data, 'results').intent ? 'evidence-accepted' : null;
+    : accepted('evidence') && !accepted('methods') && !activeEntry(data, 'methods').intent && !activeEntry(data, 'results').intent ? 'evidence-accepted' : null;
   if (!id) return null;
   return { id, saved: same(state.data, state.saved), running_count: roles.filter(pending).length };
 }
@@ -339,7 +417,7 @@ export function getScienceCompactionReminder({ controller } = {}) {
     binding, calls_used: scienceCalls(data), budget_summary: scienceBudget(data), sources: data.prepared.scientificInput.sources,
     accepted_artifacts: roles.filter(role => activeEntry(data, role).receipt).map(role => {
       const receipt = activeEntry(data, role).receipt;
-      return { role, path: resolve(data.prepared.paths.runRoot, receipt.path), sha256: receipt.sha256 };
+      return { role, path: resolve(migratedRole(data, role)?.artifact_root ?? data.prepared.paths.runRoot, receipt.path), sha256: receipt.sha256 };
     }) });
 }
 /** Retrieve the immutable original action and actual observation history for host reconciliation. */
@@ -356,7 +434,7 @@ export async function prepareScienceCorrection({ controller, role, task, authori
   const state = controllerState(controller);
   return serial(state, async () => {
     await validateCurrent(state);
-    if (!roles.includes(role) || roles.some(key => state.data.entries[key].correction)) fail('SCIENCE_CORRECTION_UNAVAILABLE');
+    if (!roles.includes(role) || migratedRole(state.data, role) || roles.some(key => state.data.entries[key].correction)) fail('SCIENCE_CORRECTION_UNAVAILABLE');
     const correction = { task: copy(task), authorization: { authorizationId, maxScienceCalls, maxTotalCalls } };
     validateCorrection(state.data, state.path, role, correction);
     if (scienceCalls(state.data) !== 6) fail('SCIENCE_CORRECTION_UNAVAILABLE');
@@ -373,15 +451,16 @@ export async function prepareScienceRequests({ controller } = {}) {
   const state = controllerState(controller);
   return serial(state, async () => {
     await validateCurrent(state);
-    const selected = roles.filter(role => !activeEntry(state.data, role).request && dependencies[role].every(dep => activeEntry(state.data, dep).receipt));
+    const selected = roles.filter(role => unpreparedRole(state.data, role) && dependencies[role].every(dep => activeEntry(state.data, dep).receipt));
     for (const role of selected) await assertRegistryInput(state.data, role);
-    if (selected.length) { const b=state.data.prepared.runControl.reading_first_binding; if (state.data.executionLedger.length+roles.filter(role=>!activeEntry(state.data,role).request).length+3+(b.presentation_mode==='reading-editor'?1:0)>b.max_total_calls) fail('SCIENCE_BUDGET_EXHAUSTED'); }
+    if (selected.length) { const b=state.data.prepared.runControl.reading_first_binding; if (state.data.executionLedger.length+roles.filter(role=>unpreparedRole(state.data,role)).length+3+(b.presentation_mode==='reading-editor'?1:0)>b.max_total_calls) fail('SCIENCE_BUDGET_EXHAUSTED'); }
     if (selected.length) {
       for (const role of selected) {
         const upstream = {};
         for (const dep of dependencies[role]) {
-          const record = await readOwnedArtifact({ artifactRoot: state.data.prepared.paths.runRoot, artifactId: state.data.tasks[dep].artifact_id });
-          upstream[dep] = { receipt: record.receipt, content: JSON.parse(record.bytes.toString('utf8')) };
+          const record = await scienceArtifact(state.data, dep);
+          const inherited = migratedRole(state.data, dep);
+          upstream[dep] = { receipt: record.receipt, content: JSON.parse(record.bytes.toString('utf8')), ...(inherited ? { artifact_root: inherited.artifact_root } : {}) };
         }
         let resourcePayload = {};
         {

@@ -191,11 +191,17 @@ node scripts/v3/bilingual.mjs publish --vault-root <vault-root> --run <run> --ru
 
 ### 图谱自动同步
 
-在用户选定的库执行 `npm run obsidian:graph:sync -- --vault-root "<vault-root>"`，将图谱切换到当前已提交节点，并为该库启用后续自动同步。每次正式提交成功或已提交事务恢复后，发布器从重新校验的 COMMITTED 代次生成精确路径筛选，更新 `.obsidian/graph.json` 中的 `search`、`hideUnresolved` 和 `showOrphans`。原文语言入口、共享节点和专题纳入图谱，译文和未提交内容继续排除。
+图谱范围始终由重新校验的 COMMITTED 代次生成，纳入原文语言入口、共享节点和专题。每次正式提交成功或已提交事务恢复后，发布器调用同一同步入口，按本库已启用的模式更新。
 
-本库启用状态保存在 `.apa-v3/phase22/graph/MANAGED.json`，不进入公共导出；未启用的库保留原有行为。每次改写前，原配置按内容哈希保存在同目录的 `backups/` 中，颜色、布局、缩放等其余字段保留。若用户改过受管理的筛选字段，发布结果中的 `graph_sync.status` 为 `custom_filter_preserved`，自动同步保留该修改；再次显式执行 sync 可恢复自动管理。派生图谱同步失败时返回 `retryable` 等具体状态，已经提交的论文保持提交成功。
+本库安装并启用 `apa-official-graph` 插件后，可执行 `node scripts/v3/obsidian-graph.mjs sync-plugin --vault-root "<vault-root>"`。插件模式把精确节点清单写入 `.apa-v3/phase22/graph/SCOPE.json`，并在 `MANAGED.json` 登记 `scope_provider:'apa-official-graph'`。原生全局图谱在绘制前按此清单保留节点和内部连线，搜索框只保存用户查询；搜索结果与正式范围取交集。后续发布更新后台清单，保留搜索框、颜色、布局和其他图谱选项。关闭并重开图谱、重启 Obsidian 后，已启用插件继续读取该范围。局部图谱和全库搜索维持原行为。
 
-已打开的 Obsidian 图谱可能仍持有内存中的旧筛选；关闭并重新打开图谱标签页后会读取新配置。自动同步更新磁盘清单，发布结果和 `obsidian:graph:check` 不冒充原生界面检查。图谱已打开且用户要求展示时，应重开图谱并核对实际筛选。
+插件源码位于 `scripts/obsidian/apa-official-graph/`，安装目标为所选库的 `.obsidian/plugins/apa-official-graph/`，其中 `main.cjs` 安装为 `main.js`，其余运行文件按原名复制。插件只在桌面端运行，使用 Obsidian 内部图谱数据接口；升级 Obsidian 后须检查接口兼容性。安装、启用与切换模式需明确授权，切换前备份实际改动的配置；首次释放搜索框时只移除已经确认的旧范围表达式。`sync-plugin` 负责范围同步，不代为安装或启用插件。
+
+未采用插件模式时，在用户选定的库执行 `npm run obsidian:graph:sync -- --vault-root "<vault-root>"` 可启用原有搜索框模式。该模式更新 `.obsidian/graph.json` 中的 `search`、`hideUnresolved` 和 `showOrphans`。已采用插件模式的库再次执行普通 sync 时继续使用插件模式。
+
+本库启用状态保存在 `.apa-v3/phase22/graph/MANAGED.json`，不进入公共导出；未启用的库保留原有行为。原搜索框模式每次改写前，原配置按内容哈希保存在同目录的 `backups/` 中，颜色、布局、缩放等其余字段保留。该模式下，若用户改过受管理的筛选字段，发布结果中的 `graph_sync.status` 为 `custom_filter_preserved`，自动同步保留该修改；再次显式执行 sync 可恢复自动管理。插件模式下用户修改搜索词不阻止范围同步。派生图谱同步失败时返回 `retryable` 等具体状态，已经提交的论文保持提交成功。
+
+原搜索框模式下，已打开的 Obsidian 图谱可能仍持有内存中的旧筛选，关闭并重新打开图谱标签页后会读取新配置。插件模式会在后台清单变化后刷新已打开的全局图谱。`obsidian:graph:check` 在插件模式核对后台清单、当前代次及插件安装启用配置，在原模式核对受管理的图谱字段；两种检查均不代替原生界面验收。关闭插件后，原生图谱沿用用户搜索条件，固定范围限制随插件卸载而解除。
 
 ## 已提交笔记的路径整理
 

@@ -137,6 +137,12 @@ const next = await nextReadingAction(restored);
 
 `runRoot` 为原运行的绝对目录。恢复使用科学状态、原登记和 owned 阅读检查点，并依据冻结的配置重新核对当前宿主及实际依赖；后续个人配置的修改不会改写本次绑定。创建时核对并保存主会话身份；宿主可显式选择冻结模型时，后续主会话变化不改变该绑定。宿主实际继承主会话模型时，还需核对当前身份与冻结身份一致。已存请求与结果会重新校验；有未知派发结果时返回 `reconcile`，让调用方核对原宿主任务。已完成审查的候选恢复需要重新提供相同的 `render-assets`，会话重新生成并核验已有候选和已审指纹后准备发布引用。
 
+**Results 阶段从 Claude Code 续接至 Codex**
+
+用户明确选择改用 Codex 时，若 Evidence 和 Methods 均已接收，且 Results 有原 Claude Code `TaskStop` 成功回执，可以通过会话 `create` 创建续接记录。`runId` 使用 `<原 runId>-codex`。输入 `scienceMigration: {sourceRunId, sourceCheckpoint, transcript, stopResultLine, userReply}`，其中 `sourceCheckpoint` 取原科学状态的 `fingerprint`，`transcript` 是原宿主 JSONL 绝对路径，`stopResultLine` 是停止回执所在的 1 起始行号，`userReply` 保存实际批准原话。仍需提供 `repoRoot`、独立 `authorizationId`、与原运行相同的 `maxTotalCalls`、当前 `sessionContext`、`hostProfile` 和预检 `evidence`。会话从原受控状态读取来源、原文语言、科学输入和剩余任务范围。
+
+续接会话冻结当前已保存的 Codex 模型策略，保留原 Evidence 和 Methods 的所有者、回执和文件路径，并把原账本作为前缀。已停止的 Results 派发及其续接仍消耗实际额度。新 Results 通过现有派发和接收入口执行，原未登记裁图不能当作已接收资源。恢复时检查原科学状态指纹和复用回执。仅适用于未进入下游阅读阶段且其余科学角色尚未派发的原运行。
+
 阅读控制槽在创建时有限预登记，默认数量为 `16 + 8 * maxTotalCalls`；可通过 `maxControlCheckpoints` 明确增加。它控制本地记录容量，不增加模型调用额度。槽容量不足时返回 `reconcile` 和 `CONTROL_CHECKPOINT_CAPACITY`，并保留最后一个有效检查点。损坏、冲突或缺少回执的控制产物需要核对，不能静默退回旧状态。
 
 Codex 科学角色的首次派发若仅填错指令文件 SHA-256，可以在核实原任务收到更正、实际核验正确哈希并完成后，经明确授权恢复其已有结果。控制器对照冻结请求核查哈希所在行和其余参数，按真实派发回执提取句柄，并验证原任务的哈希核验、完成状态和原生产物。宿主证据由操作方从实际记录采集。
@@ -171,6 +177,8 @@ await recordReadingEvent(session, {
 先执行 `npm run apa:session -- inspect-continuation --run-root <运行目录>`，也可向会话发送 `{kind:'inspect-continuation'}`。只读报告给出检查点指纹、问题 ID、待协调结果、剩余任务键、确定缺口、按已完成翻译任务的实际续接次数估计的余量和建议额度。已观测但未接收的 Editor 先走原 `result`；登记拒收后，可按符合条件的 `recover-rejected-editor` 恢复，或重新推算所需任务。账本中有未观测执行时先协调实际宿主结果。
 
 用户批准后发送 `{kind:'authorize-continuation',authorization:{authorization_id,reason,checkpoint_fingerprint,max_additional_calls,max_additional_review_rounds,issue_ids}}`。新增执行上限可高于确定缺口。新增复核轮数仅可为 0 或 1，`includes_local_review` 单独报告本链是否要用复核。新增任务键和拥有者绑定随授权进入检查点。运行 ID 或论文 ID 已登记发布时拒绝续接，包括已被接替的运行；同一授权可重交，同号异内容报冲突。旧 `repairContinuation` 与 `reviewExtension` 用于读取历史检查点。会话终态和需追加额度的修订返回同一份推算报告。若原科学补缺任务未登记，报告给出科学范围未获授权的具体原因。余量按剩余翻译任务数乘本运行同一方向已完成任务的最大实测续接次数，已完成且无续接计为 0，没有可用历史时每任务计 1。原页图型更正仍可附 `chart_type_corrections`，其图、节点和来源须符合原范围校验。
+
+首次整体审查仅留下一个由 Results 负责、已定位原 PDF 且缺少一个分面图型说明的实质问题，而原运行未登记后期 Results 任务时，可在 `inspect-continuation` 事件传入 `original_page_chart_repair:{issue_id,visual_id,source_id,panel}` 推算。实际批准将同一对象写入 `authorize-continuation.authorization`，绑定原检查点和问题 ID，两项追加额度设为 0。会话为该图追加一项持久化 Results 任务，保留原科学回执、资源及全部调用账本。Results 只读取指定原页，保留既有图注、图型、图像和路径，补一个分面图型。若原目录无适配节点，可随 owned 回执提交一个可复用的双语图型知识条目。原文 Writer、Translation 和适用的 Reading Editor 更新受影响内容，最后使用已有的一次局部复核。一般科学缺口继续要求原有科学范围授权。
 
 `review_unroutable` 保留 Verifier 原回执，按问题 ID 报告缺字段、可用范围和描述中明确引用的 ID。Controller 可用 `annotate-review-scope` 补齐可定位范围。显式注记使用 `annotations:[{issue_id,fields}]`，仅可填报告中的缺失字段。反引号内或含连字符的 ID 唯一匹配时可省略 `annotations`，由 Controller 形成确定性范围注记。需要原 Verifier 澄清时，对同一 `action_id` 使用 `continuation-intent`、`continuation-receipt`，再用 `{kind:'accept-review-scope',execution_id}` 接收单独的原生范围文件。宿主续接计一次实际执行，余额不足先推算和授权。补齐后进入 `revision_required`，按责任方安排修订。新增方法目录条目可链接候选中已有方法身份，两个语言版本的链接一致。
 

@@ -11,39 +11,54 @@ const text = value => typeof value === 'string' && value.trim();
 const heading = value => value.replace(/[\r\n#]/g, ' ').trim();
 const knowledgeReference = /\[([^\]\r\n]+)\]\(apa-(knowledge|entity):([^)\s]+)\)/gu;
 
-export function registeredKnowledgeReference(registry, id, kind) {
+export const sharedKnowledgeKind = kind => kind === 'measure' ? 'concept' : kind;
+
+export function registeredKnowledgeReference(registry, id, kind, visiblePath) {
   const unique = rows => rows.length === 1 ? rows[0] : undefined;
   const direct = registry.filter(row => !row.unavailable && row.entity_id === id);
   if (direct.length) return unique(direct);
   const aliases = registry.filter(row => !row.unavailable && row.registered_aliases?.includes(id));
   if (aliases.length) return unique(aliases);
-  if (kind === 'knowledge') return unique(registry.filter(row => !row.unavailable && row.id === id));
+  if (kind === 'knowledge') {
+    const legacy = registry.filter(row => !row.unavailable && row.id === id);
+    if (legacy.length > 1 && visiblePath) return unique(legacy.filter(row => (row.canonical_path ?? row.path) === visiblePath));
+    if (legacy.length) return unique(legacy);
+    if (visiblePath) return unique(registry.filter(row => !row.unavailable && (row.canonical_path ?? row.path) === visiblePath));
+  }
 }
 
 /** Convert a published hidden state without rewriting any visible Markdown. */
-export function bindPublishedKnowledgeReferences(content, { paperId, reused = false, resolveCurrent, resolveHistorical, registeredPapers }) {
+export function bindPublishedKnowledgeReferences(content, { paperId, reused = false, resolveCurrent, resolveHistorical, registeredPapers, historicalSource }) {
   const unresolved = new Set();
+  let originalParagraphs, candidateParagraphs;
   const next = content.replace(/<!-- KNOWLEDGE_STATE ([A-Za-z0-9+/=]+) -->/, (original, encoded) => {
     const state = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
-    const bind = (value, current) => value.replace(knowledgeReference, (match, label, kind, id) => {
-      const target = (current ? resolveCurrent : resolveHistorical)(id, kind);
+    const bind = (value, current, application) => value.replace(knowledgeReference, (match, label, kind, id) => {
+      let target = (current ? resolveCurrent : resolveHistorical)(id, kind);
+      if (!target && !current && kind === 'knowledge' && historicalSource) {
+        originalParagraphs ??= sharedKnowledgeParagraphs(historicalSource.content);
+        const additionalParagraphs = application ? () => candidateParagraphs ??= sharedKnowledgeParagraphs(content) : undefined;
+        const visiblePath = historicalKnowledgePath(originalParagraphs, historicalSource.path, value, id, additionalParagraphs);
+        if (visiblePath) target = resolveHistorical(id, kind, visiblePath);
+      }
       if (target) return '[' + label + '](apa-entity:' + target + ')';
       unresolved.add(kind + ':' + id);
       return label;
     });
-    const bindItem = (item, current) => {
+    const bindItem = (item, current, application = false) => {
       const pairs = (value, map) => Object.fromEntries(Object.entries(value).map(([language, rows]) => [language, rows.map(map)]));
-      const paragraphs = values => values.map(value => bind(value, current));
-      if (item.paragraphs) item.paragraphs = pairs(item.paragraphs, value => bind(value, current));
+      const bindParagraph = value => bind(value, current, application);
+      const paragraphs = values => values.map(bindParagraph);
+      if (item.paragraphs) item.paragraphs = pairs(item.paragraphs, bindParagraph);
       if (item.sections) item.sections = pairs(item.sections, section => ({ ...section, paragraphs: paragraphs(section.paragraphs) }));
       for (const formula of item.formulas ?? []) {
         for (const language of languages) if (typeof formula.description?.[language] === 'string') {
-          formula.description[language] = bind(formula.description[language], current);
+          formula.description[language] = bindParagraph(formula.description[language]);
         }
       }
     };
     bindItem(state.item, !reused);
-    for (const addition of state.item.paper_additions ?? []) bindItem(addition, addition.paper_id === paperId);
+    for (const addition of state.item.paper_additions ?? []) bindItem(addition, addition.paper_id === paperId, true);
     if (registeredPapers) state.applications = state.applications.map(({ targets, ...application }) => {
       if (!registeredPapers.has(application.paper_id)) unresolved.add('paper:' + application.paper_id);
       return application;
@@ -77,6 +92,44 @@ export function applyReadingFirstKnowledgeContent({ presentation, views }) {
 
 const names = value => typeof value === 'string' ? [value] : Object.values(value ?? {});
 const markdown = new MarkdownIt();
+
+function knowledgeParagraph(inline) {
+  const children = inline.children ?? [];
+  return {
+    structure: JSON.stringify(children.map(({ type, tag, markup, content }) => [type, tag, markup, content])),
+    hrefs: children.filter(token => token.type === 'link_open').map(token => token.attrGet('href')),
+  };
+}
+
+function sharedKnowledgeParagraphs(content) {
+  const start = '<!-- AUTO:START shared-knowledge -->';
+  const from = content.indexOf(start);
+  const to = content.indexOf('<!-- AUTO:END shared-knowledge -->', from + start.length);
+  if (from < 0 || to < 0) return [];
+  const tokens = markdown.parse(content.slice(from + start.length, to), {});
+  return tokens.flatMap((token, index) => token.type === 'inline' && tokens[index - 1]?.type === 'paragraph_open'
+    ? [knowledgeParagraph(token)] : []);
+}
+
+function historicalKnowledgePath(paragraphs, notePath, value, id, additionalParagraphs) {
+  // Match the complete paragraph and the link's position before using its registered destination.
+  const hidden = knowledgeParagraph(markdown.parseInline(value, {})[0]);
+  const matchesHidden = row => row.structure === hidden.structure;
+  let matches = paragraphs.filter(matchesHidden);
+  // A newly included application can supply its visible link when the original has no matching paragraph.
+  if (!matches.length && additionalParagraphs) matches = additionalParagraphs().filter(matchesHidden);
+  if (matches.length !== 1) return;
+  const links = hidden.hrefs.flatMap((href, index) => href === `apa-knowledge:${id}` ? [matches[0].hrefs[index]] : []);
+  if (!links.length || new Set(links).size !== 1) return;
+  const file = links[0]?.split('#', 1)[0];
+  if (!file || /^(?:[a-z][a-z0-9+.-]*:|\/)|[?\\]/i.test(file)) return;
+  let decoded;
+  try { decoded = decodeURIComponent(file); } catch { return; }
+  if (/[\\?#]/.test(decoded)) return;
+  const target = path.posix.normalize(path.posix.join(path.posix.dirname(notePath), decoded));
+  if (/^Wiki\/(methods|concepts)\/[^/]+\.md$/.test(target)) return target;
+}
+
 const applicationLabel = (application, language) => {
   const name = typeof application.title === 'string' ? application.title : application.title?.[language];
   return name ? `${name.replace(/[\[\]\r\n]/g, ' ')} · ${language === 'en' ? 'English' : '中文'}` : language === 'en' ? 'Paper application (English)' : '本文中的应用（中文）';
@@ -237,6 +290,14 @@ function additionSections(addition, language) {
     ...(addition.sections?.[language] ?? []).map(section => ({ heading: label + ' · ' + section.heading, paragraphs: section.paragraphs }))];
 }
 
+function renderKnowledgeSource(source) {
+  const sourceLabel = source.title ?? source.label;
+  const localizedLabels = languages.map(language => sourceLabel?.[language]);
+  const label = localizedLabels.every(text) ? localizedLabels.join(' / ') : sourceLabel;
+  if (!text(label) || !/^https?:\/\/[^\s<>]+$/.test(source.url ?? '')) fail('RF_OBSIDIAN_KNOWLEDGE_SOURCE_INVALID');
+  return `- [${label.replace(/[\[\]\r\n]/g, ' ')}](${source.url.replace(/\(/g, '%28').replace(/\)/g, '%29')})`;
+}
+
 /** One generic identity produces one bilingual candidate; formal registry bytes are never mutated. */
 export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, paperId, paperTitle, vaultPath, href, resolveReferences = value => value, identityMatch }) {
   const match = identityMatch ?? matchReadingFirstKnowledgeIdentity({ item, knowledgeRegistry, vaultPath });
@@ -286,8 +347,7 @@ export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, p
   }
   if (node.sources?.length) body += '## 来源 / Sources\n\n';
   for (const source of node.sources ?? []) {
-    if (!text(source.title) || !/^https?:\/\/[^\s<>]+$/.test(source.url ?? '')) fail('RF_OBSIDIAN_KNOWLEDGE_SOURCE_INVALID');
-    body += `- [${source.title.replace(/[\[\]\r\n]/g, ' ')}](${source.url.replace(/\(/g, '%28').replace(/\)/g, '%29')})\n`;
+    body += `${renderKnowledgeSource(source)}\n`;
   }
   body += '\n## 论文应用 / Paper applications\n\n' + applications.flatMap(application => languages.map(language => {
     const destination = application.targets?.[language], label = applicationLabel(application, language);
@@ -308,7 +368,7 @@ export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, p
       appended += `\n$$\n${formula.latex}\n$$\n\n${formula.description['zh-CN']} / ${formula.description.en}\n`;
     }
     for (const source of node.sources ?? []) if (!(prior.item.sources ?? []).some(old => old.url === source.url)) {
-      appended += `\n- [${source.title.replace(/[\[\]\r\n]/g, ' ')}](${source.url.replace(/\(/g, '%28').replace(/\)/g, '%29')})\n`;
+      appended += `\n${renderKnowledgeSource(source)}\n`;
     }
     if (!previousApplications.some(row => row.paper_id === paperId)) {
       appended += '\n## 论文应用增补 / Additional paper applications\n\n' + languages.map(language =>

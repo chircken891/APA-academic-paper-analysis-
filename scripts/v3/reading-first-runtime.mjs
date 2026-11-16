@@ -3,7 +3,7 @@ import { readRegisteredCommit, PHASE22_COMMIT_PATH } from './phase22-active-vers
 import { normalizeHostReceipt, validateHostReceiptEvidence } from './reading-host-evidence.mjs';
 import { validateReadingResources } from './reading-resources.mjs';
 import { prepareTranslationInputs, checkTranslationProgress, verifyTranslationInputReferences, validateTranslationInputPayload } from './reading-translation-progress.mjs';
-import { usesExecutionLedger, validateExecutionLedger, reserveExecution, markExecutionDispatched, recordExecutionReceipt, executionBudgetSummary } from './reading-execution-budget.mjs';
+import { usesExecutionLedger, validateExecutionLedger, reserveExecution, markExecutionDispatched, recordExecutionReceipt, executionBudgetSummary, countInitialTasks } from './reading-execution-budget.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { validateRepairScopes, assertEditorRepairScope, repairScopeCatalog } from './reading-first-repair-scope.mjs';
@@ -247,15 +247,18 @@ export async function buildReadingFirstHandoff({run, dispatchContext, artifactRo
   sourceCurrent(input.sources);
   const science = [], roles = new Set();
   const adopted = input.adopted_science;
-  if (adopted !== undefined && (!Array.isArray(adopted) || !adopted.length || input.role_artifacts?.length)) fail('READING_FIRST_SCIENCE_RECEIPT_INVALID');
-  const entries = adopted ?? (input.role_artifacts ?? []).map(artifact_id=>({artifact_root:artifactRoot,artifact_id}));
+  const migrated = input.science_migration?.artifacts;
+  if (adopted !== undefined && (!Array.isArray(adopted) || !adopted.length || input.role_artifacts?.length || migrated)) fail('READING_FIRST_SCIENCE_RECEIPT_INVALID');
+  const carried = new Map((migrated ?? []).map(item => [item.receipt.artifact_id, item]));
+  const entries = adopted ?? (input.role_artifacts ?? []).map(artifact_id => ({ artifact_root: artifactRoot, ...carried.get(artifact_id), artifact_id }));
   for (const entry of entries) {
     if (!text(entry.artifact_root) || !text(entry.artifact_id)) fail('READING_FIRST_SCIENCE_RECEIPT_INVALID');
     const record = await readOwnedArtifact({artifactRoot:entry.artifact_root, artifactId:entry.artifact_id});
-    if (!record || (!adopted && record.receipt.run_id !== run.run_id) || adopted && fingerprintV3Json(record.receipt)!==fingerprintV3Json(entry.receipt)
+    const reused = adopted || carried.has(entry.artifact_id);
+    if (!record || (!reused && record.receipt.run_id !== run.run_id) || reused && fingerprintV3Json(record.receipt)!==fingerprintV3Json(entry.receipt)
       || ![...scienceRoles, 'comparison', 'ledger'].includes(record.receipt.role) || roles.has(record.receipt.role)) fail('READING_FIRST_SCIENCE_RECEIPT_INVALID');
     roles.add(record.receipt.role);
-    science.push({receipt:record.receipt, ...(adopted ? {artifact_root:entry.artifact_root} : {}), content:JSON.parse(record.bytes.toString('utf8'))});
+    science.push({receipt:record.receipt, ...(reused ? {artifact_root:entry.artifact_root} : {}), content:JSON.parse(record.bytes.toString('utf8'))});
   }
   if (scienceRoles.some(role => !roles.has(role))) fail('READING_FIRST_SCIENCE_ROLE_MISSING');
   if (adopted) await verifyReadingFirstResourceManifest({binding,handoff:{science,sources:input.sources},artifactRoot});
@@ -383,6 +386,13 @@ function effectivePresentation(state) {
   const corrections=[...(state.enrichmentRecords ?? []).flatMap(item=>item.value.visual_corrections ?? []),...(state.repairContinuation?.authorization.chart_type_corrections ?? []),...(state.continuationAuthorizations ?? []).flatMap(row=>row.authorization.chart_type_corrections ?? [])];
   if (!corrections.length) return resolvedPresentation(state, state.handoff.presentation);
   const presentation=copy(state.handoff.presentation);
+  for (const record of state.enrichmentRecords ?? []) {
+    if (record.value.chart_knowledge && state.continuationAuthorizations?.some(row=>
+      row.authorization.original_page_chart_repair && row.review_count===record.review_count
+      && row.task_bindings[originalPageResultsKey]?.artifact_id===record.receipt.artifact_id)) {
+      presentation.knowledge.push(copy(record.value.chart_knowledge));
+    }
+  }
   for (const {visual_id,...fields} of corrections) Object.assign(presentation.visuals.find(item=>item.id===visual_id),copy(fields));
   return resolvedPresentation(state, presentation);
 }
@@ -657,7 +667,7 @@ export function createReadingFirstRequests({handoff, runControl, reuseInitialIns
       if (usedIds.has(task.artifact_id)) fail('READING_FIRST_OUTPUT_CONFLICT');
       usedIds.add(task.artifact_id);
     }
-    if (usesExecutionLedger(binding)) { validateExecutionLedger(executionLedger,binding.max_total_calls,{strict:!!binding.configured_setup}); if (executionLedger.filter(row=>row.kind==='initial').length !== (binding.prior_calls ?? 0)) fail('READING_FIRST_EXECUTION_LEDGER_INVALID'); }
+    if (usesExecutionLedger(binding)) { validateExecutionLedger(executionLedger,binding.max_total_calls,{strict:!!binding.configured_setup}); if (countInitialTasks(executionLedger) !== (binding.prior_calls ?? 0)) fail('READING_FIRST_EXECUTION_LEDGER_INVALID'); }
     const state = {runControl, binding, ...(usesExecutionLedger(binding) ? {executionLedger:copy(executionLedger ?? [])} : {}), reuseInitialInstruction, initialInstructionToken, controlFingerprint:fingerprintV3Json(binding), handoff, promptFingerprint:promptCurrent(binding), sections, writingGuide, ...(captureScienceIndexNote(binding) ? {scienceIndexNote:captureScienceIndexNote(binding)} : {}), issued:new Set(), requestEntries:new Map(), callsUsed:binding.prior_calls ?? 0, requestLog:[], observations:[], views:{}, review:null, reviews:0, status:'drafting', draftsRevision:0, enrichmentSources:[], enrichmentRecords:[], enrichmentGaps:[], enrichmentRound:null};
     for (const item of handoff.adopted_views ?? []) {
       validateLayoutView(state,item.content);
@@ -1010,6 +1020,32 @@ async function continuationCheckpoint(state,recovery) {
 }
 const materialIssues = review => (review?.issues ?? []).flatMap((issue,index)=>issue.severity==='material' ? [{issue,id:'issue-'+(index+1)}] : []);
 
+const originalPagePolicy = Object.freeze({sources:[],allow_targeted_methods:false});
+const originalPageResultsKey = 'enrich-late-results';
+
+function originalPageChartGap(state, scope, review=activeReview(state)) {
+  const [entry, other] = materialIssues(review);
+  const issue = entry?.issue, gap = issue?.scientific_gap;
+  const visual = state.handoff.presentation?.visuals?.find(row=>row.id===scope?.visual_id);
+  if (!scope || Object.keys(scope).some(key=>!['issue_id','visual_id','source_id','panel'].includes(key))
+    || !text(scope.panel) || !/^[A-Za-z0-9]+$/.test(scope.panel)
+    || other || entry?.id!==scope.issue_id || issue?.kind!=='chart-type-coverage' || issue.repair_owner!=='science'
+    || issue.repair_scope?.status!=='located' || !sameArray(issue.repair_scope.visual_ids,[scope.visual_id])
+    || gap?.severity!=='material' || gap.owner_role!=='results' || gap.source_kind!=='original_page'
+    || !sameArray(gap.source_ids,[scope.source_id]) || !visual || !text(scope.source_id) || visual.source_id!==scope.source_id
+    || !state.handoff.sources.some(source=>source.id===scope.source_id)
+    || visual.locator?.kind!=='pdf-page' || !Number.isSafeInteger(visual.locator.page) || visual.locator.page<1) fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
+  return {gap,visual};
+}
+
+function sameArray(a,b) {
+  return Array.isArray(a) && fingerprintV3Json(a)===fingerprintV3Json(b);
+}
+
+const originalPageScope = state => lastAuthorization(state)?.review_count===state.enrichmentReviewCount
+  ? lastAuthorization(state)?.authorization.original_page_chart_repair : null;
+const effectiveEnrichmentPolicy = state => originalPageScope(state) ? originalPagePolicy : state.binding.enrichment_policy;
+
 async function assertContinuationUnpublished(state) {
   const vaultRoot=state.binding.configured_setup?.knowledge_registry?.vault_root;
   if (!vaultRoot) fail('READING_FIRST_CONTINUATION_REGISTRY_REQUIRED');
@@ -1020,7 +1056,7 @@ async function assertContinuationUnpublished(state) {
   if (committed.generation.papers.some(row=>row.run_id===state.runControl.runId || row.paper_id===state.handoff.identity.paper_id)) fail('READING_FIRST_CONTINUATION_PUBLISHED');
 }
 
-function continuationPlan(state, extraReviews) {
+function continuationPlan(state, extraReviews, originalPageChartRepair) {
   const review=activeReview(state);
   const requestEntries=[...state.requestEntries.entries()];
   const latestReview=requestEntries.findLastIndex(([,request])=>request.task.role==='independent-verifier');
@@ -1047,11 +1083,17 @@ function continuationPlan(state, extraReviews) {
       task_bindings[key]=continuationTask(key,role);
     }
   }
-  const late_gaps=review ? lateReviewGaps(state,review) : [];
+  const late_gaps=originalPageChartRepair ? collectGaps([originalPageChartGap(state,originalPageChartRepair).gap],state.binding)
+    : review ? lateReviewGaps(state,review) : [];
   const remaining = [...new Set(late_gaps.filter(gap => !hasEnrichmentResolution(state, gap.id, 'late', state.reviews))
     .map(gap => 'enrich-late-' + gap.owner_role))];
   const enrich = remaining.map(base => {
     const task = state.binding.task_bindings[base];
+    if (originalPageChartRepair && base===originalPageResultsKey && !task && !state.issued.has(base)) {
+      repair_keys[base]=base;
+      task_bindings[base]=continuationTask(base,'results');
+      return base;
+    }
     if (!task) fail('READING_FIRST_CONTINUATION_SCIENCE_SCOPE_UNAUTHORIZED');
     if (!state.issued.has(base)) return base;
     let round = state.reviews + 1, key = roundKey(base, round);
@@ -1087,7 +1129,7 @@ function observedTranslationReserve(state) {
   return counts.length ? Math.max(...counts) : 1;
 }
 
-export async function inspectReadingFirstContinuation({controller,checkpointReceipt,maxAdditionalReviewRounds}={}) {
+export async function inspectReadingFirstContinuation({controller,checkpointReceipt,maxAdditionalReviewRounds,originalPageChartRepair}={}) {
   const state=stateFor(controller);
   const checkpoint_fingerprint=readingFirstSnapshot(state).checkpoint_fingerprint;
   const unresolved=[...state.requestEntries.values()].flatMap(request=>{
@@ -1116,14 +1158,20 @@ export async function inspectReadingFirstContinuation({controller,checkpointRece
       || !report.issue_ids.length) fail('READING_FIRST_CONTINUATION_STATUS_UNAVAILABLE');
     if (unresolved.length) fail('READING_FIRST_CONTINUATION_RECONCILIATION_REQUIRED');
     const extraReviews=maxAdditionalReviewRounds ?? (pendingUserRevision(state)?.scientific!==false && state.reviews>=reviewLimit(state) ? 1 : 0);
+    if (originalPageChartRepair !== undefined) {
+      if (state.status!=='completed_with_limits' || state.reviews!==1 || extraReviews!==0
+        || state.binding.task_bindings[originalPageResultsKey] || state.issued.has(originalPageResultsKey)
+        || reviewRepairPlan(state.binding,activeReview(state)).affected.length!==languages.length) fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
+      originalPageChartGap(state,originalPageChartRepair);
+    }
     if (state.status==='review_unroutable') {
       const deficit=Math.max(0,totalUsed(state)+1-executionLimit(state));
       return {...report,can_continue:true,remaining_task_keys:['verifier-scope-continuation'],
         required_additional_calls:deficit,translation_allowance:0,recommended_additional_calls:deficit,
         includes_local_review:false,max_additional_review_rounds:0};
     }
-    if (!reviewScienceScopeAuthorized(state,activeReview(state))) fail('READING_FIRST_CONTINUATION_SCIENCE_SCOPE_UNAUTHORIZED');
-    const plan=continuationPlan(state,extraReviews);
+    if (!originalPageChartRepair && !reviewScienceScopeAuthorized(state,activeReview(state))) fail('READING_FIRST_CONTINUATION_SCIENCE_SCOPE_UNAUTHORIZED');
+    const plan=continuationPlan(state,extraReviews,originalPageChartRepair);
     const translationTasks=plan.required_keys.filter(key=>(plan.task_bindings[key] ?? taskFor(state,key))?.role==='translation');
     const translationAllowance=translationTasks.length*observedTranslationReserve(state);
     const deficit=Math.max(0,totalUsed(state)+plan.required_keys.length-executionLimit(state));
@@ -1155,8 +1203,10 @@ export async function authorizeReadingFirstContinuation({controller,checkpointRe
   if (!text(authorization?.authorization_id) || !text(authorization.reason)
     || !Number.isSafeInteger(authorization.max_additional_calls) || authorization.max_additional_calls<0
     || ![0,1].includes(authorization.max_additional_review_rounds)
-    || Object.keys(authorization).some(key=>!['authorization_id','reason','checkpoint_fingerprint','max_additional_calls','max_additional_review_rounds','issue_ids','chart_type_corrections'].includes(key))) fail('READING_FIRST_CONTINUATION_AUTHORIZATION_INVALID');
-  const inspection=await inspectReadingFirstContinuation({controller,checkpointReceipt,maxAdditionalReviewRounds:authorization.max_additional_review_rounds});
+    || Object.keys(authorization).some(key=>!['authorization_id','reason','checkpoint_fingerprint','max_additional_calls','max_additional_review_rounds','issue_ids','chart_type_corrections','original_page_chart_repair'].includes(key))) fail('READING_FIRST_CONTINUATION_AUTHORIZATION_INVALID');
+  const originalPageChartRepair=authorization.original_page_chart_repair;
+  if (originalPageChartRepair!==undefined && (authorization.max_additional_calls!==0 || authorization.chart_type_corrections!==undefined)) fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
+  const inspection=await inspectReadingFirstContinuation({controller,checkpointReceipt,maxAdditionalReviewRounds:authorization.max_additional_review_rounds,originalPageChartRepair});
   if (authorization.checkpoint_fingerprint!==inspection.checkpoint_fingerprint
     || !Array.isArray(authorization.issue_ids) || new Set(authorization.issue_ids).size!==authorization.issue_ids.length
     || authorization.issue_ids.length!==inspection.issue_ids.length || authorization.issue_ids.some(id=>!inspection.issue_ids.includes(id))) fail('READING_FIRST_CONTINUATION_AUTHORIZATION_INVALID');
@@ -1175,13 +1225,14 @@ export async function authorizeReadingFirstContinuation({controller,checkpointRe
   }
   const scopeOnly=state.status==='review_unroutable';
   if ((scopeOnly || pendingUserRevision(state)?.scientific===false) && authorization.max_additional_review_rounds!==0) fail('READING_FIRST_CONTINUATION_AUTHORIZATION_INVALID');
-  const plan=scopeOnly ? {repair_keys:{},task_bindings:{}} : continuationPlan(state,authorization.max_additional_review_rounds);
+  const plan=scopeOnly ? {repair_keys:{},task_bindings:{}} : continuationPlan(state,authorization.max_additional_review_rounds,originalPageChartRepair);
   for (const [base,key] of Object.entries(plan.repair_keys)) if (!inspection.remaining_task_keys.includes(key)) {
     delete plan.repair_keys[base]; delete plan.task_bindings[key];
   }
   const usedTasks=state.requestLog.filter(item=>!['evidence','methods','results'].includes(item.role)).length;
   const requiredTasks=inspection.remaining_task_keys.filter(key=>key!=='verifier-scope-continuation' && !key.startsWith('enrich-')).length;
   const additionalTasks=Math.max(0,usedTasks+requiredTasks-state.binding.max_calls-additionalTaskAllowance(state));
+  if (originalPageChartRepair && additionalTasks!==0) fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
   const row={...plan,required_keys:inspection.remaining_task_keys,authorization:copy(authorization),prior_checkpoint:copy(checkpointReceipt),
     review_count:state.reviews,additional_task_calls:additionalTasks,
     baseline_execution_count:state.executionLedger.length,baseline_ledger_fingerprint:fingerprintV3Json(state.executionLedger)};
@@ -1206,14 +1257,38 @@ async function verifyContinuations(state) {
   for (const row of state.continuationAuthorizations ?? []) {
     const record=await continuationCheckpoint(state,row);
     const {checkpoint_fingerprint,...body}=JSON.parse(record.bytes);
+    const chartScope=row.authorization.original_page_chart_repair;
+    if (chartScope!==undefined) {
+      const baselineReview=activeReview(body.state);
+      const {gap}=originalPageChartGap(state,chartScope,baselineReview);
+      const baseline=body.state;
+      const chartTask=row.task_bindings[originalPageResultsKey];
+      if (baseline.reviews!==1 || baseline.status!=='completed_with_limits'
+        || row.authorization.max_additional_calls!==0 || row.additional_task_calls!==0 || row.authorization.max_additional_review_rounds!==0
+        || row.authorization.chart_type_corrections!==undefined || !sameArray(row.authorization.issue_ids,[chartScope.issue_id])
+        || state.binding.task_bindings[originalPageResultsKey] || !chartTask
+        || !sameArray(row.late_gaps,collectGaps([gap],state.binding))) fail('READING_FIRST_CONTINUATION_CHECKPOINT_INVALID');
+      const resultRecords=state.enrichmentRecords.filter(item=>item.receipt.artifact_id===chartTask.artifact_id);
+      const consumed=requests.get(state.requestEntries.get(originalPageResultsKey))?.consumed;
+      if (resultRecords.length!==Number(consumed===true)) fail('READING_FIRST_CONTINUATION_CHECKPOINT_INVALID');
+      if (consumed) {
+        const accepted=resultRecords[0];
+        const artifact=await readOwnedArtifact({artifactRoot:state.runControl.artifactRoot,artifactId:chartTask.artifact_id});
+        if (!artifact || accepted.round!=='late' || accepted.review_count!==row.review_count
+          || !sameArray([artifact.receipt],[accepted.receipt])
+          || !sameArray([JSON.parse(artifact.bytes)],[accepted.value])) fail('READING_FIRST_CONTINUATION_RECEIPT_INVALID');
+        validateOriginalPageChartResult(state,chartScope,baselineReview,accepted.value);
+      }
+    }
     if (!Array.isArray(row.required_keys) || new Set(row.required_keys).size!==row.required_keys.length
       || !Number.isSafeInteger(row.additional_task_calls) || row.additional_task_calls<0
       || ![0,1].includes(row.authorization.max_additional_review_rounds)
       || fingerprintV3Json(body.state.continuationAuthorizations ?? [])!==fingerprintV3Json((state.continuationAuthorizations ?? []).slice(0,saved.length))
       || Object.entries(row.task_bindings).some(([key,task])=>{
         const base=key.replace(/-r\d+$/,'');
-        return !row.required_keys.includes(key) || row.repair_keys[base]!==key || !state.binding.task_bindings[base]
-          || fingerprintV3Json(task)!==fingerprintV3Json(continuationTask(key,state.binding.task_bindings[base].role));
+        const role=state.binding.task_bindings[base]?.role ?? (chartScope && key===originalPageResultsKey ? 'results' : null);
+        return !row.required_keys.includes(key) || row.repair_keys[base]!==key || !role
+          || fingerprintV3Json(task)!==fingerprintV3Json(continuationTask(key,role));
       })
       || fingerprintV3Json(body)!==checkpoint_fingerprint || body.control_fingerprint!==state.controlFingerprint
       || body.handoff_fingerprint!==state.handoff.handoff_fingerprint || body.state.executionLedger.length!==row.baseline_execution_count
@@ -1618,7 +1693,7 @@ export function createReadingFirstPresentationRequest({controller} = {}) {
 
 export function getReadingFirstState(controller) {
   const state=stateFor(controller);
-  return freeze({profile:READING_FIRST_PROFILE,status:state.status,calls_used:state.callsUsed,review_rounds:state.reviews,review_round_limit:reviewLimit(state),candidate_revision:state.candidateInventories?.at(-1)?.revision ?? state.reviews,candidate_fingerprint:state.candidateInventories?.at(-1)?.presentation_fingerprint,revision_needs_continuation:!!state.revisionNeedsContinuation,user_revision:copy(pendingUserRevision(state)),...(state.binding.enrichment_policy ? {enrichment:{round:state.enrichmentRound,pending:enrichmentPending(state)}} : {}),requests:copy(state.requestLog),observations:copy(state.observations),review:copy(activeReview(state)),...(state.status==='review_unroutable' ? {routing:reviewRoutingReport(state)} : {}),...(state.rejection ? {rejection:copy(state.rejection)} : {}),publishable:false});
+  return freeze({profile:READING_FIRST_PROFILE,status:state.status,calls_used:state.callsUsed,review_rounds:state.reviews,review_round_limit:reviewLimit(state),candidate_revision:state.candidateInventories?.at(-1)?.revision ?? state.reviews,candidate_fingerprint:state.candidateInventories?.at(-1)?.presentation_fingerprint,revision_needs_continuation:!!state.revisionNeedsContinuation,user_revision:copy(pendingUserRevision(state)),...(effectiveEnrichmentPolicy(state) ? {enrichment:{round:state.enrichmentRound,pending:enrichmentPending(state)}} : {}),requests:copy(state.requestLog),observations:copy(state.observations),review:copy(activeReview(state)),...(state.status==='review_unroutable' ? {routing:reviewRoutingReport(state)} : {}),...(state.rejection ? {rejection:copy(state.rejection)} : {}),publishable:false});
 }
 
 /** Build the forced reminder for the Writer or review boundary from the saved checkpoint; nothing is recorded. */
@@ -2047,7 +2122,7 @@ export async function inspectReadingFirstPublicationSource(source) {
 function validateReadingExecutionState(previous, binding, code) {
   if (!usesExecutionLedger(binding)) return;
   validateExecutionLedger(previous?.executionLedger,executionLimit({...previous,binding}),{strict:!!binding.configured_setup});
-  if (previous.executionLedger.filter(row=>row.kind==='initial').length !== previous.callsUsed || previous.request_entries?.some(entry=>{
+  if (countInitialTasks(previous.executionLedger) !== previous.callsUsed || previous.request_entries?.some(entry=>{
     const row=previous.executionLedger.find(item=>item.execution_id===entry.request.emittedStep.action_id);
     return !row || row.kind!=='initial' || row.task_id!==entry.request.task.task_id || row.action_id!==entry.request.emittedStep.action_id || row.tool!==entry.request.emittedStep.action || fingerprintV3Json(row.arguments)!==fingerprintV3Json(entry.request.emittedStep.arguments) || !!entry.events?.intent !== (row.status!=='prepared');
   })) fail(code);
@@ -2172,7 +2247,7 @@ function collectGaps(gaps,binding) {
   return result;
 }
 function includeEnrichmentContext(state) {
-  return !!state.binding.enrichment_policy && (state.binding.enrichment_session_profile !== 'reading-session-enrichment-1.0' || state.enrichmentRecords.length > 0);
+  return !!effectiveEnrichmentPolicy(state) && (state.binding.enrichment_session_profile !== 'reading-session-enrichment-1.0' || state.enrichmentRecords.length > 0);
 }
 function enrichmentContext(state) {
   const merged=new Map();for(const item of state.enrichmentRecords ?? [])for(const answer of item.value.resolutions)merged.set(answer.gap_id,answer);
@@ -2223,7 +2298,8 @@ export function createReadingFirstDraftRequests({controller}={}) {
 }
 export function createReadingFirstEnrichmentRequests({controller}={}) {
   const state=stateFor(controller),binding=current(state);
-  if(!binding.enrichment_policy || !state.enrichmentRound || state.status==='completed_with_limits' || !enrichmentPending(state))fail('READING_FIRST_ENRICHMENT_UNAVAILABLE');
+  const policy=effectiveEnrichmentPolicy(state);
+  if(!policy || !state.enrichmentRound || state.status==='completed_with_limits' || !enrichmentPending(state))fail('READING_FIRST_ENRICHMENT_UNAVAILABLE');
   const pending = pendingEnrichmentGaps(state);
   const roles = [...new Set(pending.map(gap => gap.owner_role))].filter(role => !state.issued.has(enrichmentTaskKey(state, role)));
   const keys = roles.map(role => enrichmentTaskKey(state, role));
@@ -2231,7 +2307,14 @@ export function createReadingFirstEnrichmentRequests({controller}={}) {
   const remainingWriters=state.enrichmentRound==='initial'?2:reviewRepairPlan(binding,activeReview(state)).affected.length;
   const remainingLanguageCalls=remainingWriters+1+(binding.presentation_mode==='reading-editor'?1:0);
   if((usesExecutionLedger(binding) ? totalUsed(state)+requiredReadingKeys(state).length>executionLimit(state) : totalUsed(state)+roles.length+remainingLanguageCalls>binding.max_total_calls) || binding.enrichment_session_profile === 'reading-session-enrichment-1.0' && state.requestLog.filter(item=>!['evidence','methods','results'].includes(item.role)).length+remainingLanguageCalls>binding.max_calls+additionalTaskAllowance(state))fail('READING_FIRST_CALL_BUDGET_EXHAUSTED');
-  const result=roles.map((role,index)=>describe(state,keys[index],{gaps:pending.filter(gap=>gap.owner_role===role),enrichment_policy:binding.enrichment_policy,original_sources:state.handoff.sources,prior_context:enrichmentContext(state)}));
+  const scope=originalPageScope(state);
+  const result=roles.map((role,index)=>describe(state,keys[index],{gaps:pending.filter(gap=>gap.owner_role===role),enrichment_policy:policy,
+    original_sources:scope ? state.handoff.sources.filter(source=>source.id===scope.source_id) : state.handoff.sources,
+    prior_context:enrichmentContext(state),...(scope ? {original_page_chart_repair:{
+      scope, visual:originalPageChartGap(state,scope).visual,
+      result_contract:'Return one recovered paper_fact resolution from the assigned original page. In visual_corrections return exactly the existing visual_id, source_id, page, label, caption and unchanged chart_types followed by one new chart type for the authorized panel. Use an existing appropriate method-background knowledge_id when available, otherwise provide chart_knowledge: {id, kind:"method", source_kind:"method-background", title:{en,zh-CN}, paragraphs:{en:[...],zh-CN:[...]}}. Keep the chart definition reusable and separate from the paper result. No new sources, crops or figure bytes.',
+      existing_knowledge:(state.handoff.presentation.knowledge ?? []).map(({id,title,source_kind})=>({id,title,source_kind})),
+    }} : {})}));
   state.status='enriching';return result;
 }
 /** Only method files actually used by accepted resolutions are publication candidates. */
@@ -2250,10 +2333,14 @@ export function readingFirstUsedMethodSources(state = {}) {
 function validateEnrichment(state,task,gaps,value) {
   const { role } = task;
   if(value?.run_id!==state.runControl.runId||value.role!==role||!Array.isArray(value.resolutions)||value.resolutions.length!==gaps.length)fail('READING_FIRST_ENRICHMENT_RESULT_INVALID');
-  const sources=[...(state.binding.enrichment_policy.sources ?? []),...(state.enrichmentSources ?? []),...(value.sources ?? [])];
+  const policy=effectiveEnrichmentPolicy(state);
+  const scope=task.task_id===originalPageResultsKey ? originalPageScope(state) : null;
+  if (scope) validateOriginalPageChartResult(state,scope,activeReview(state),value);
+  else if (value.chart_knowledge!==undefined) fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
+  const sources=[...(policy.sources ?? []),...(state.enrichmentSources ?? []),...(value.sources ?? [])];
   for(const source of value.sources ?? []){
     if(!['id','path','sha256','version','scope','reference'].every(key=>text(source[key])) || !Number.isInteger(source.byte_length)
-      || !['cited_method','authoritative_method','official_method'].includes(source.kind) || !state.binding.enrichment_policy.allow_targeted_methods)fail('READING_FIRST_ENRICHMENT_SOURCE_SCOPE');
+      || !['cited_method','authoritative_method','official_method'].includes(source.kind) || !policy.allow_targeted_methods)fail('READING_FIRST_ENRICHMENT_SOURCE_SCOPE');
     if (['title', 'trace_reason'].some(key => source[key] !== undefined && !text(source[key]))
       || source.doi !== undefined && source.doi !== null && !text(source.doi)) fail('READING_FIRST_ENRICHMENT_SOURCE_SCOPE');
     const sourceRoot=nativePath(state.runControl.artifactRoot,task.source_root),rel=relative(sourceRoot,resolve(source.path));
@@ -2286,10 +2373,38 @@ function validateEnrichment(state,task,gaps,value) {
         || correction.source_id!==visual.source_id || !answer.source_ids.includes(correction.source_id)
         || !Number.isInteger(correction.page) || correction.page<1
         || correction.kind!==undefined && !['figure','table'].includes(correction.kind)
-        || correction.chart_types!==undefined && !validChartTypes(correction.chart_types,state.handoff.presentation)
+        || !scope && correction.chart_types!==undefined && !validChartTypes(correction.chart_types,state.handoff.presentation)
         || ['label','caption'].some(key=>!correction[key] || languages.some(language=>!text(correction[key][language])) || Object.keys(correction[key]).some(language=>!languages.includes(language))))fail('READING_FIRST_VISUAL_CORRECTION_INVALID');
     }
   }
+}
+
+function validateOriginalPageChartResult(state,scope,review,value) {
+  const {gap,visual}=originalPageChartGap(state,scope,review);
+  const correction=value.visual_corrections?.[0], answer=value.resolutions?.[0], chart=value.chart_knowledge;
+  const existing=state.handoff.presentation.knowledge ?? [], prior=visual.chart_types ?? [], next=correction?.chart_types;
+  const added=Array.isArray(next) ? next.at(-1) : null;
+  const invalid=()=>fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
+  if (Object.keys(value).some(key=>!['run_id','role','resolutions','sources','visual_corrections','chart_knowledge'].includes(key))
+    || value.sources!==undefined && !sameArray(value.sources,[])
+    || !Array.isArray(value.visual_corrections) || value.visual_corrections.length!==1
+    || !Array.isArray(value.resolutions) || value.resolutions.length!==1
+    || answer?.gap_id!==gap.id || answer.classification!=='paper_fact' || answer.status!=='recovered'
+    || !sameArray(answer.source_ids,[scope.source_id]) || !sameArray(answer.target_sections,gap.target_sections)
+    || correction?.visual_id!==visual.id || correction.source_id!==scope.source_id || correction.page!==visual.locator.page
+    || correction.kind!==undefined && correction.kind!==visual.kind
+    || fingerprintV3Json(correction.label)!==fingerprintV3Json(visual.label)
+    || fingerprintV3Json(correction.caption)!==fingerprintV3Json(visual.caption)
+    || !added || added.panel!==scope.panel || next.length!==prior.length+1 || !sameArray(next.slice(0,-1),prior)
+    || prior.some(item=>item.panel?.split(/[\s,;]+/).includes(scope.panel))) invalid();
+  if (chart!==undefined && (!chart || Object.keys(chart).some(key=>!['id','kind','source_kind','title','paragraphs'].includes(key))
+    || !/^[a-z][a-z0-9-]*$/.test(chart.id ?? '') || chart.id!==added.knowledge_id || existing.some(item=>item.id===chart.id)
+    || chart.kind!=='method' || chart.source_kind!=='method-background'
+    || languages.some(language=>!text(chart.title?.[language]) || !Array.isArray(chart.paragraphs?.[language])
+      || !chart.paragraphs[language].length || chart.paragraphs[language].some(paragraph=>!text(paragraph)))
+    || [chart.title,chart.paragraphs].some(value=>Object.keys(value).some(language=>!languages.includes(language))))) invalid();
+  const knowledge=chart ? [...existing,chart] : existing;
+  if (!validChartTypes([added],{knowledge:knowledge.filter(item=>item.source_kind==='method-background')})) invalid();
 }
 
 function registerEnrichment(state,receipt,value) {
@@ -2298,8 +2413,8 @@ function registerEnrichment(state,receipt,value) {
     ...(state.enrichmentRound === 'late' && state.enrichmentReviewCount !== undefined ? { review_count: state.enrichmentReviewCount } : {}) });
 }
 export async function acceptReadingFirstEnrichmentArtifact({controller,artifactId}={}) {
-  const state=stateFor(controller),binding=current(state);
-  if(!binding.enrichment_policy || state.status==='completed_with_limits' || !enrichmentPending(state))fail('READING_FIRST_ENRICHMENT_UNAVAILABLE');
+  const state=stateFor(controller);current(state);
+  if(!effectiveEnrichmentPolicy(state) || state.status==='completed_with_limits' || !enrichmentPending(state))fail('READING_FIRST_ENRICHMENT_UNAVAILABLE');
   const record=await readOwnedArtifact({artifactRoot:state.runControl.artifactRoot,artifactId});
   const role=record?.receipt.role,key=enrichmentTaskKey(state,role),task=taskFor(state,key);
   if(!record||record.receipt.run_id!==state.runControl.runId||!task||record.receipt.owner_actor_id!==task.owner_actor_id||record.receipt.artifact_id!==task.artifact_id||record.receipt.path!==task.artifact_path||record.receipt.revision!==task.revision||state.issued.has(key))fail('READING_FIRST_RESULT_OWNER_INVALID');

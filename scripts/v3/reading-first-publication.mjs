@@ -640,7 +640,7 @@ async function buildReview({ source, data, options, base, preimages, projected }
   });
   const ownReferences = new Map(sharedNotes.map(note => [note.id, entityIdFor(note.path)]));
   const registeredPapers = new Set([identity.paper_id, ...(base.generation?.papers ?? []).map(paper => paper.paper_id)]);
-  const resolveHistorical = (id, kind) => registeredKnowledgeReference(referenceRegistry, id, kind)?.entity_id;
+  const resolveHistorical = (id, kind, visiblePath) => registeredKnowledgeReference(referenceRegistry, id, kind, visiblePath)?.entity_id;
   const resolveCurrent = (id, kind) => (kind === 'knowledge' ? ownReferences.get(id) : undefined) ?? resolveHistorical(id, kind);
   const knowledgeRenderHashes = {}, diagnostics = [];
   const migrations = metadataMigrations(options.knowledgeMetadataMigrations ?? [], candidate);
@@ -665,6 +665,7 @@ async function buildReview({ source, data, options, base, preimages, projected }
     if (!migration && data.presentation.knowledge_layout === 'shared-bilingual-1.0') {
       const bound = bindPublishedKnowledgeReferences(bytes.toString('utf8'), {
         paperId: identity.paper_id, reused: original !== null, resolveCurrent, resolveHistorical, registeredPapers,
+        ...(original === null ? {} : { historicalSource: { path, content: original.toString('utf8') } }),
       });
       if (bound.content !== note.content) {
         knowledgeRenderHashes[path] = sha(reviewed);

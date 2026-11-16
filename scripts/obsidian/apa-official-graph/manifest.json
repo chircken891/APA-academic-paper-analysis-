@@ -1,0 +1,9 @@
+{
+  "id": "apa-official-graph",
+  "name": "APA Official Graph",
+  "version": "1.0.0",
+  "minAppVersion": "1.15.1",
+  "description": "Limits the native global graph to the committed APA scope.",
+  "author": "APA",
+  "isDesktopOnly": true
+}

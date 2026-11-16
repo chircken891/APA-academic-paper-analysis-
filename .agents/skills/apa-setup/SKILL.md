@@ -73,7 +73,7 @@ description: Use for APA configuration requests such as 完善配置、为我配
 6. 写作指导：首次配置默认勾选 `nature-writing`、`nature-polishing`、`humanizer`、`humanizer-zh`、`stss`。用户可取消或修改启用项路径，已有选择沿用。选中任一 Nature 技能时，最终预览注明自动附带内部支持包 `nature-shared`；两项均取消时，该包保存为不启用。
 7. 查询偏好：在页面的独立查询分组选择查询模型、回答语言、详略与讲解对象；允许用户明确选择暂不配置，既有只读查询的运行时默认不写回个人配置。
 
-页面的阈值压缩卡片提示“推荐阈值范围 250000–300000 token”，这只是参考，不会自动填入；页面不预填数值，你也不能替用户选值。用户在卡片中输入的候选阈值，会以 `host_settings.threshold_compaction`（`host`、`tokens`）写进复制或下载的操作 JSON，不需要用户另行转告。
+页面提供独立的压缩阈值输入框，留空保持当前宿主设置，由用户填写 token 数。用户输入的候选阈值，会以 `host_settings.threshold_compaction`（`host`、`tokens`）写进复制或下载的操作 JSON，不需要用户另行转告。
 
 页面“自检遗留问题”为每项给出处理方式：“需要在本页选择”类注明在哪一页、可选什么；仍待调查、授权事项和已知限制各有下拉选择（继续调查、准备精确预览、接受限制或暂缓）。所选处理以 `issue_choices`（遗留问题 id → 处理方式）写进“完善配置”的操作 JSON，不写入个人配置；未选择的项保持现状，你不能替用户选。
 

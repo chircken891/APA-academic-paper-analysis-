@@ -26,9 +26,9 @@ async function verifyBootstrapFiles(manifest, repoRoot) {
   }
 }
 
-export async function prepareReadingSessionExecution({ repoRoot, runId, instructionProfile, authorizationId, scientificInput, sessionContext, maxTotalCalls, maxControlCheckpoints = 16 + 8 * maxTotalCalls, hostProfile } = {}) {
+export async function prepareReadingSessionExecution({ repoRoot, runId, instructionProfile, authorizationId, scientificInput, scienceMigration, sessionContext, maxTotalCalls, maxControlCheckpoints = 16 + 8 * maxTotalCalls, hostProfile } = {}) {
   if (typeof repoRoot !== 'string' || !repoRoot.trim() || !/^[a-zA-Z0-9_-]+$/.test(runId ?? '') || typeof authorizationId !== 'string' || !authorizationId.trim()
-    || !scientificInput || !sessionContext || !Number.isSafeInteger(maxTotalCalls) || !Number.isSafeInteger(maxControlCheckpoints) || maxControlCheckpoints < 4) fail('READING_SESSION_INPUT_INVALID');
+    || (!scientificInput && !scienceMigration) || !sessionContext || !Number.isSafeInteger(maxTotalCalls) || !Number.isSafeInteger(maxControlCheckpoints) || maxControlCheckpoints < 4) fail('READING_SESSION_INPUT_INVALID');
   if (instructionProfile !== undefined && instructionProfile !== 'configured-reading-2.2') fail('READING_BINDING_RETIRED');
   const { inspectApaConfig } = await import('../lib/apa-config.mjs');
   const { readBatchRun } = await import('./reading-batch-summary.mjs');
@@ -38,6 +38,10 @@ export async function prepareReadingSessionExecution({ repoRoot, runId, instruct
   const inspection = inspectApaConfig({ repoRoot, hostProfile });
   if (!inspection.exists) fail('APA_LOCAL_CONFIG_REQUIRED');
   if (!inspection.validation.complete) fail('APA_CONFIG_INCOMPLETE');
+  if (scienceMigration) {
+    const { prepareScienceHostMigration } = await import('./science-controller.mjs');
+    await prepareScienceHostMigration({ repoRoot, runsPath: inspection.config.paths.runs, runId, authorizationId, scienceMigration, maxTotalCalls, host: inspection.config.host });
+  }
   const runRoot = resolve(repoRoot, inspection.config.paths.runs, runId);
   await mkdir(runRoot, { recursive: true });
   return withReadingRuntimeConsumer({ repoRoot, runId, runRoot }, async () => {

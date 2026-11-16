@@ -5,7 +5,8 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual as same } from 'node:util';
 import { normalizeIndexPath, readRegisteredCommit } from './phase22-active-version.mjs';
 import { projectReadingFirstPublicationQueue } from './reading-first-publication.mjs';
-import { inspectReadingFirstQueueCandidate, persistReadingFirstQueueApproval, publishReadingFirstCandidate, recoverRegisteredReadingFirstPublication } from './reading-first-publish.mjs';
+import { inspectReadingFirstQueueCandidate, isReadingFirstPublicationAuthorization, persistReadingFirstQueueApproval,
+  publishReadingFirstCandidate, recoverRegisteredReadingFirstPublication } from './reading-first-publish.mjs';
 import { createReadingLockWait, withReadingRuntimeConsumer } from './reading-runtime-cleanup.mjs';
 import { readBilingualPublicationLock } from './phase22-publication.mjs';
 import { captureCompletedReadingSessionPublicationSource } from './reading-session.mjs';
@@ -92,10 +93,7 @@ function validateProposal(proposal, root) {
 }
 
 function validateAuthorization(authorization, count) {
-  const reply = authorization?.user_reply;
-  if (typeof authorization?.authorization_id !== 'string' || !authorization.authorization_id.trim()
-    || typeof reply !== 'string' || !(count === 1 ? /^(?:请|确认|同意)?(?:全部)?发布[。！!]?$/u
-      : /^(?:请|确认|同意)?全部发布[。！!]?$/u).test(reply.trim())) fail('RF_QUEUE_APPROVAL_REQUIRED');
+  if (!isReadingFirstPublicationAuthorization(authorization, count)) fail('RF_QUEUE_APPROVAL_REQUIRED');
 }
 
 function verifyApproval(record, root) {
@@ -320,7 +318,8 @@ async function drainQueue(root, state, save, { evidenceMode, captureSource, onWa
         const binding = { queue_proposal_sha256: approval.proposal_sha256, queue_approval_sha256: row.approval_sha256,
           approved_position: approval.proposal.entries.findIndex(item => item.input.run === run) + 1 };
         result = await publishReadingFirstCandidate({ ...request, generation: row.retry_generation ?? original.summary.generation,
-          source, vaultRoot: root, run, evidenceMode, authorization: approval.authorization, queuedApproval: { original, binding },
+          source, vaultRoot: root, run, evidenceMode, authorization: approval.authorization,
+          queuedApproval: { original, binding, count: approval.proposal.entries.length },
           onPrepared, onRegistered: async attempt => {
             row.status = 'applying';
             row.attempt = attempt;

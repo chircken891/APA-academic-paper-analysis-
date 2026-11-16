@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { lstatSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { normalizeKnowledgeName } from './reading-first-knowledge.mjs';
+import { normalizeKnowledgeName, sharedKnowledgeKind } from './reading-first-knowledge.mjs';
 import { listReadingRuntimeSnapshotReferences, readReadingRuntimeSnapshotReference } from './reading-runtime-snapshot.mjs';
 
 const profile = 'reading-first-knowledge-plan-1.0';
@@ -26,7 +26,7 @@ export function recordPlannedReadingFirstKnowledge({ repoRoot, runId, catalog, s
   const registered = new Set(registry.map(row => row.path));
   const planned = supportNotes.filter(note => !registered.has(note.path)).map(note => {
     const item = catalog.find(row => row.id === note.id);
-    const row = { id: note.id, canonical_key: item?.canonical_key ?? note.id, kind: item?.kind, title: item?.title, path: note.path };
+    const row = { id: note.id, canonical_key: item?.canonical_key ?? note.id, kind: sharedKnowledgeKind(item?.kind), title: item?.title, path: note.path };
     if (!validNode(row)) fail(path);
     return row;
   });
@@ -61,7 +61,7 @@ export function readPlannedReadingFirstKnowledge({ repoRoot, excludeRunId, runId
 export function matchPlannedReadingFirstKnowledge(catalog, planned) {
   return catalog.filter(item => item.source_kind !== 'paper-fact').flatMap(item => {
     const names = new Set(Object.values(item.title ?? {}).map(normalizeKnowledgeName).filter(Boolean));
-    return planned.filter(row => row.kind === item.kind && (row.canonical_key === (item.canonical_key ?? item.id)
+    return planned.filter(row => row.kind === sharedKnowledgeKind(item.kind) && (row.canonical_key === (item.canonical_key ?? item.id)
       || Object.values(row.title).some(value => names.has(normalizeKnowledgeName(value))))).map(row => ({
       knowledge_id: item.id, planned_run_id: row.run_id, planned_path: row.path, planned_title: row.title,
     }));

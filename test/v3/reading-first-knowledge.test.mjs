@@ -22,6 +22,15 @@ function render(links, options = {}) {
 }
 const links = '- [Bray 2024 · 中文](../translations/Bray.zh-CN.md)\n- [Bray 2024 · English](../sources/Bray.en.md)';
 
+test('renders both languages of a shared knowledge source as one link', () => {
+  const source = { label: { 'zh-CN': '原始研究', en: 'Original study' }, url: 'https://example.org/paper' };
+  const { note } = renderSharedKnowledge({
+    item: { ...item, sources: [source] }, knowledgeRegistry: [], paperTargets: currentTargets,
+    paperId: 'new', paperTitle: 'New paper', vaultPath: value => value, href,
+  });
+  assert.ok(note.content.includes('[原始研究 / Original study](https://example.org/paper)'));
+});
+
 test('uniquely matches registered exact, normalized, English and alias identities', () => {
   const target = 'Wiki/methods/另一术语.md';
   for (const [expected, terms] of [
@@ -120,6 +129,92 @@ test('publication binds current entity IDs and keeps unresolvable legacy links v
   assert.deepEqual(state.item.paragraphs.en, ['Retired concept and [Moved concept](apa-entity:kept_id)']);
   assert.deepEqual(state.applications, [{ paper_id: 'bray', title: 'Bray 2024' }]);
   assert.equal(registeredKnowledgeReference(registry, 'retired_id', 'entity').path, 'Wiki/concepts/new-path.md');
+});
+
+test('publication disambiguates a historical ID using only its registered link in the original paragraph', () => {
+  const historical = { ...item, paper_additions: [{ paper_id: 'bray', title: prior.title,
+    paragraphs: { en: ['The regional plot uses [LD](apa-knowledge:ld) to group variants.'] } }] };
+  const encoded = Buffer.from(JSON.stringify({ item: historical, applications: [prior] })).toString('base64');
+  const preferred = 'The regional plot uses [LD](../concepts/%E4%BF%A1%E5%8F%B7.md#English) to group variants.';
+  const other = 'The regional plot uses [LD](../concepts/general.md#English) to group variants.';
+  const registry = [
+    { id: 'ld', path: 'Wiki/concepts/general.md', entity_id: 'general' },
+    { id: 'ld', path: 'Wiki/concepts/信号.md', entity_id: 'signal' },
+    { id: 'unrelated', path: 'Wiki/concepts/unrelated.md', entity_id: 'unrelated' },
+  ];
+  const makeNote = visible => `${start}\n<!-- KNOWLEDGE_STATE ${encoded} -->\n\n${visible}\n\n${end}`;
+  const resolve = (id, kind, visiblePath) => registeredKnowledgeReference(registry, id, kind, visiblePath)?.entity_id;
+  const publish = original => bindPublishedKnowledgeReferences(`${original}\n\n${preferred}`, {
+    paperId: 'new', reused: true, resolveHistorical: resolve, resolveCurrent: resolve,
+    historicalSource: { path: 'Wiki/methods/plot.md', content: original },
+  });
+  const original = makeNote(`Other material uses [LD](../concepts/general.md).\n\n${preferred}`);
+  const bound = publish(original);
+  assert.deepEqual(bound.unresolved, []);
+  const hidden = /<!-- KNOWLEDGE_STATE ([A-Za-z0-9+/=]+) -->/;
+  const saved = JSON.parse(Buffer.from(hidden.exec(bound.content)[1], 'base64'));
+  assert.equal(saved.item.paper_additions[0].paragraphs.en[0], 'The regional plot uses [LD](apa-entity:signal) to group variants.');
+  assert.equal(bound.content.replace(hidden, ''), `${original}\n\n${preferred}`.replace(hidden, ''));
+
+  for (const visible of [
+    `${preferred}\n\n${other}`,
+    `\`\`\`md\n${preferred}\n\`\`\``,
+    preferred.replace('../concepts/%E4%BF%A1%E5%8F%B7.md', 'https://example.com/Wiki/concepts/general.md'),
+    preferred.replace('%E4%BF%A1%E5%8F%B7.md', 'unrelated.md'),
+  ]) {
+    assert.deepEqual(publish(makeNote(visible)).unresolved, ['knowledge:ld']);
+  }
+});
+
+test('publication binds a retired historical knowledge ID using its original registered link', () => {
+  const paragraph = 'Use [time-dependent AUC](apa-knowledge:time-dependent-auc) at a fixed horizon.';
+  const visible = paragraph.replace('apa-knowledge:time-dependent-auc', '../concepts/ROC%20AUC.md#English');
+  const candidateVisible = paragraph.replace('apa-knowledge:time-dependent-auc', '../concepts/other.md#English');
+  const legacy = { ...item, paragraphs: { ...item.paragraphs, en: [paragraph] } };
+  const encoded = Buffer.from(JSON.stringify({ item: legacy, applications: [] })).toString('base64');
+  const note = text => `${start}\n<!-- KNOWLEDGE_STATE ${encoded} -->\n\n${text}\n\n${end}`;
+  const registry = [
+    { id: 'time-dependent-roc-auc', path: 'Wiki/concepts/ROC AUC.md', entity_id: 'auc' },
+    { id: 'other', path: 'Wiki/concepts/other.md', entity_id: 'other_entity' },
+  ];
+  const resolve = (id, kind, visiblePath) => registeredKnowledgeReference(registry, id, kind, visiblePath)?.entity_id;
+  const result = bindPublishedKnowledgeReferences(note(candidateVisible), {
+    reused: true, resolveCurrent: resolve, resolveHistorical: resolve,
+    historicalSource: { path: 'Wiki/methods/plot.md', content: note(visible) },
+  });
+  assert.deepEqual(result.unresolved, []);
+  const hidden = /<!-- KNOWLEDGE_STATE ([A-Za-z0-9+/=]+) -->/;
+  const saved = JSON.parse(Buffer.from(hidden.exec(result.content)[1], 'base64'));
+  assert.equal(saved.item.paragraphs.en[0], 'Use [time-dependent AUC](apa-entity:auc) at a fixed horizon.');
+  assert.equal(result.content.replace(hidden, ''), note(candidateVisible).replace(hidden, ''));
+});
+
+test('publication binds a newly included historical application using its corresponding candidate paragraph', () => {
+  const paragraph = 'The tracing panel uses a [Sankey diagram](apa-knowledge:sankey-diagram) to show label flow.';
+  const visible = paragraph.replace('apa-knowledge:sankey-diagram', 'Sankey%20diagram.md#English');
+  const makeNote = (value, addition = true) => {
+    const state = { item: { ...item, paper_additions: addition ? [{ paper_id: 'bray', paragraphs: { en: [paragraph] } }] : [] }, applications: [] };
+    const encoded = Buffer.from(JSON.stringify(state)).toString('base64');
+    return `${start}\n<!-- KNOWLEDGE_STATE ${encoded} -->\n\n${value}\n\n${end}`;
+  };
+  const registry = [{ id: 'chart-sankey-diagram', path: 'Wiki/methods/Sankey diagram.md', entity_id: 'sankey' }];
+  const resolve = (id, kind, visiblePath) => registeredKnowledgeReference(registry, id, kind, visiblePath)?.entity_id;
+  const publish = (candidate, original) => bindPublishedKnowledgeReferences(makeNote(candidate), {
+    paperId: 'new', reused: true, resolveCurrent: resolve, resolveHistorical: resolve,
+    historicalSource: { path: 'Wiki/methods/tracing.md', content: original },
+  });
+  const original = makeNote('Common tracing definition.', false);
+  const result = publish(visible, original);
+  assert.deepEqual(result.unresolved, []);
+  const hidden = /<!-- KNOWLEDGE_STATE ([A-Za-z0-9+/=]+) -->/;
+  const saved = JSON.parse(Buffer.from(hidden.exec(result.content)[1], 'base64'));
+  assert.equal(saved.item.paper_additions[0].paragraphs.en[0], 'The tracing panel uses a [Sankey diagram](apa-entity:sankey) to show label flow.');
+  assert.equal(result.content.replace(hidden, ''), makeNote(visible).replace(hidden, ''));
+
+  assert.deepEqual(publish(`${visible}\n\n${visible}`, original).unresolved, ['knowledge:sankey-diagram']);
+  assert.deepEqual(publish(visible.replace('Sankey%20diagram.md', '../../Raw/Sankey.md'), original).unresolved, ['knowledge:sankey-diagram']);
+  assert.deepEqual(publish(visible, makeNote(visible.replace('Sankey%20diagram.md', 'unregistered.md'))).unresolved, ['knowledge:sankey-diagram']);
+  assert.deepEqual(publish(visible, makeNote(`${visible}\n\n${visible}`)).unresolved, ['knowledge:sankey-diagram']);
 });
 
 test('does not infer a target from duplicate or external matching links', () => {

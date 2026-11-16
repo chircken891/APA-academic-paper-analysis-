@@ -23,6 +23,29 @@ const driftCodes = new Set(['RF_PUBLICATION_KNOWLEDGE_CHANGED_SINCE_RENDER', 'RF
   'P22_PUBLICATION_PREIMAGE_CHANGED', 'P22_PUBLICATION_REUSE_CHANGED', 'P22_PREVIOUS_GENERATION_CHANGED']);
 const writeJson = (path, value) => writeFile(path, json(value), { flag: 'wx' });
 
+function matchesPublicationCount(text, count) {
+  if (/^[1-9][0-9]*$/u.test(text)) return Number(text) === count;
+  if (text === '两') return count === 2;
+  const digits = '零一二三四五六七八九';
+  if (!text.includes('十')) return digits.indexOf(text) === count;
+  const [tens, ones] = text.split('十');
+  return (tens ? digits.indexOf(tens) : 1) * 10 + (ones ? digits.indexOf(ones) : 0) === count;
+}
+
+export function isReadingFirstPublicationAuthorization(authorization, count = 1) {
+  const reply = authorization?.user_reply;
+  if (typeof authorization?.authorization_id !== 'string' || !authorization.authorization_id.trim() || typeof reply !== 'string') return false;
+  const [command, ...followup] = reply.trim().replace(/[。！!]$/u, '').split(/[。！!]/u).map(part => part.trim());
+  // Only recognize instructions for recording or fixing existing issues after publication.
+  const followupInstruction = /^(?:记录(?:各篇?|每篇)?笔记的?残留问题(?:[，,]\s*发布后(?:直接)?修改(?:正式)?笔记)?|(?:小|轻微)问题(?:留到|放到)发布后(?:再(?:处理|修改|修复))?|发布后(?:直接)?修改(?:正式)?笔记)$/u;
+  if (!followup.every(part => followupInstruction.test(part))) return false;
+  const instruction = command.replace(/^(?:请|确认|同意)?(?:做好必要修复后[，,]?\s*)?/u, '');
+  if (count === 1 && instruction === '发布') return true;
+  if (/^(?:全部发布|发布所有未发布的?笔记)$/u.test(instruction)) return true;
+  const batch = /^([1-9][0-9]*|[一二三四五六七八九两]|[二三四五六七八九]?十[一二三四五六七八九]?)\s*篇\s*全部发布$/u.exec(instruction);
+  return batch !== null && matchesPublicationCount(batch[1], count);
+}
+
 async function publicationDirectory(root, run) {
   let folder = root;
   for (const segment of ['Eval', 'apa-v3', 'runs', run, 'publication']) {
@@ -386,8 +409,7 @@ export async function recoverRegisteredReadingFirstPublication({ vaultRoot, run,
 /** Publish a single owned, reviewed candidate with explicit user authority. */
 export async function publishReadingFirstCandidate({ source, vaultRoot, generation, resources, authorization,
   onPrepared, onRegistered, queuedApproval, evidenceMode = 'actual', presentationAssetRegistrations, user_corrections, run: expectedRun } = {}) {
-  if (typeof authorization?.authorization_id !== 'string' || !authorization.authorization_id.trim()
-    || typeof authorization.user_reply !== 'string' || !/^(?:请|确认|同意)?(?:全部)?发布[。！!]?$/u.test(authorization.user_reply.trim())) {
+  if (!isReadingFirstPublicationAuthorization(authorization, queuedApproval?.count ?? 1)) {
     fail('RF_ONE_STEP_APPROVAL_REQUIRED');
   }
   if (typeof onPrepared !== 'function') fail('RF_ONE_STEP_SUMMARY_REQUIRED');

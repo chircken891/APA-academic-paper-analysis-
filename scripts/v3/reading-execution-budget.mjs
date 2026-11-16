@@ -3,6 +3,7 @@ import { validateHostReceiptEvidence } from './reading-host-evidence.mjs';
 const fail = code => { const error = new Error(code); error.code = code; throw error; };
 const copy = value => structuredClone(value);
 export const usesExecutionLedger = binding => binding?.configured_setup?.instruction_profile === 'configured-reading-2.2';
+export const countInitialTasks = ledger => ledger.filter(row => row.kind === 'initial' && row.superseded_by_host_migration !== true).length;
 export function validateExecutionLedger(ledger, limit, options = {}) {
   if (!Array.isArray(ledger) || !Number.isSafeInteger(limit) || limit < 0 || ledger.length > limit) fail('EXECUTION_LEDGER_INVALID');
   const ids = new Set(), actions = new Set();
@@ -12,6 +13,7 @@ export function validateExecutionLedger(ledger, limit, options = {}) {
       || !(row.handle === null || typeof row.handle === 'string' && row.handle.trim())
       || !row.arguments || typeof row.arguments !== 'object' || Array.isArray(row.arguments)
       || row.kind === 'continuation' && !row.handle || row.status === 'observed' && !row.receipt
+      || row.superseded_by_host_migration !== undefined && (row.superseded_by_host_migration !== true || row.kind !== 'initial' || row.status !== 'observed')
       || ids.has(row.execution_id) || actions.has(row.action_id)) fail('EXECUTION_LEDGER_INVALID');
     if (row.kind === 'continuation' && row.receipt && (row.receipt.execution_id !== row.execution_id || row.receipt.action_id !== row.action_id || row.receipt.agent_id !== row.handle || row.receipt.tool_call?.name !== row.tool || !isDeepStrictEqual(row.receipt.tool_call?.arguments,row.arguments) || typeof row.receipt.raw_result_text !== 'string' || !['observed','outcome_unknown'].includes(row.receipt.status) || (row.status === 'observed') !== (row.receipt.status === 'observed'))) fail('EXECUTION_LEDGER_INVALID');
     if (row.receipt) {

@@ -19,19 +19,19 @@ test('capability report shows host-specific methods, limits and evidence as text
   renderCapabilityCheck(document, missing, null);
   assert.match(missing.children[0].textContent, /未检测/);
   const hostile = '<img src=x onerror=alert(1)>';
-  const checks = ['on_demand_reading', 'delegated_diagnostics', 'task_continuation', 'concise_replies', 'science_recovery', 'threshold_compaction'].map((id, index) => ({
+  const checks = ['on_demand_reading', 'delegated_diagnostics', 'task_continuation', 'concise_replies', 'science_recovery'].map((id, index) => ({
     id, label: `能力 ${index + 1}`, status: ['detected', 'conditional', 'blocked', 'unsupported', 'unknown', 'conditional'][index],
-    method: index === 5 ? hostile : '按本宿主方式执行', scope: index === 5 ? 'new-session' : 'current-session',
+    method: index === 4 ? hostile : '按本宿主方式执行', scope: index === 4 ? 'new-session' : 'current-session',
     evidence: [{ source: 'tool-schema', reference: '当前工具定义' }], limitations: ['实际行为待验证'], next_check: '后续核验',
-    ...(index === 5 ? { threshold: { target_tokens: 200000 } } : {})
+    ...(index === 4 ? { threshold: { target_tokens: 200000 } } : {})
   }));
   const report = { host: '示例宿主', detected_at: '2026-10-28T00:00:00Z', runtime_validation: 'not_run', checks };
   const container = node('div');
   renderCapabilityCheck(document, container, report);
   const flatten = root => [root.textContent, ...root.children.flatMap(flatten)].join('\n');
   const text = flatten(container);
-  for (const phrase of ['示例宿主', '实际行为待验证', '后续核验', '当前工具定义', '新启动的会话', '200000', hostile, '未运行']) assert.ok(text.includes(phrase), phrase);
-  assert.equal(container.children.filter(child => child.tag === 'article').length, 6);
+  for (const phrase of ['示例宿主', '实际行为待验证', '后续核验', '当前工具定义', '新启动的会话', hostile, '未运行']) assert.ok(text.includes(phrase), phrase);
+  assert.equal(container.children.filter(child => child.tag === 'article').length, 5);
   assert.deepEqual(createOperation(snapshot).set, {});
   const html = renderApaSetupPage({ snapshot, inspection: { capability_check: report } });
   assert.match(html, /id="capability-check"/);
@@ -54,6 +54,27 @@ const achievement = steps => ({ state: 'achieved', summary: '静态能力', step
 const visibleCommands = container => findAll(container, node => node.tag === 'code' && node.textContent).map(node => node.textContent);
 const enter = (input, value) => { input.value = value; for (const handler of input.listeners.input) handler({ target: input }); };
 
+test('setup presents threshold input independently of capability investigation', async () => {
+  const { renderCapabilityCheck, renderSetupIssues, renderThresholdSetting, thresholdHostSetting } = await import('../../Templates/apa-setup/page.js');
+  const document = { createElement: eventNode };
+  const report = eventNode('div');
+  renderCapabilityCheck(document, report, { checks: [{ id: 'threshold_compaction', label: '阈值自动压缩', status: 'unknown', achievement: achievement([]) }] });
+  assert.doesNotMatch(flattenText(report), /阈值自动压缩|达成方式/);
+  const card = eventNode('div');
+  renderThresholdSetting(document, card);
+  const [input] = findAll(card, node => node.tag === 'input');
+  assert.equal(input.value, '');
+  enter(input, '230000');
+  assert.deepEqual(thresholdHostSetting(input.value, 'codex'), { threshold_compaction: { host: 'codex', tokens: 230000 } });
+  assert.doesNotMatch(flattenText(card), /检测|调查|推荐|实测|达成方式/);
+  assert.equal(findAll(card, node => node.tag === 'select' || node.tag === 'code').length, 0);
+  const issues = eventNode('div');
+  const collect = renderSetupIssues(document, issues, [{ id: 'known-limit:capability:threshold_compaction', category: 'known-limit', subject: 'threshold_compaction', summary: '阈值自动压缩 尚未完成调查。' }]);
+  assert.equal(findAll(issues, node => node.tag === 'select').length, 0);
+  assert.deepEqual(collect(), {});
+  assert.doesNotMatch(flattenText(issues), /阈值|调查/);
+});
+
 test('agent declarations, APA rules, step evidence and adapters are displayed as text', async () => {
   const hostile = '<img src=x onerror=alert(1)>';
   const container = await renderCards({ arbitrary: achievement([step('inspect <run_id>', null, { adapter_id: 'patch-1' })]), absent: { state: 'not-found', summary: hostile, steps: [] } }, null, {
@@ -65,68 +86,6 @@ test('agent declarations, APA rules, step evidence and adapters are displayed as
   assert.deepEqual(visibleCommands(container), ['inspect <run_id>']);
   assert.equal(findAll(container, node => node.tag === 'img').length, 0);
   assert.deepEqual(createOperation(snapshot).set, {});
-});
-
-test('each token command uses its own range, all placeholders, and safe user input', async () => {
-  const container = await renderCards({ threshold_compaction: achievement([
-    step('first <N> middle <N> end', { min: 100, max: 300, unit: 'tokens' }),
-    step('second <N>', { min: 200, max: 400, unit: 'tokens' }),
-    step('open <N>', { min: null, max: null, unit: 'tokens' })
-  ]) });
-  const [input] = findAll(container, node => node.tag === 'input');
-  assert.equal(input.value, '');
-  assert.deepEqual(visibleCommands(container), []);
-  assert.match(flattenText(container), /范围.*未知/);
-  enter(input, '150'); assert.deepEqual(visibleCommands(container), ['first 150 middle 150 end', 'open 150']);
-  enter(input, '250'); assert.deepEqual(visibleCommands(container), ['first 250 middle 250 end', 'second 250', 'open 250']);
-  enter(input, '350'); assert.deepEqual(visibleCommands(container), ['second 350', 'open 350']);
-  for (const value of ['0', '2e5', '9007199254740992', '']) { enter(input, value); assert.deepEqual(visibleCommands(container), []); }
-});
-
-test('ratio and percent commands require verified formula and recalculate capacity on each input', async () => {
-  const threshold = { candidate_tokens: 500, formula: 'window-ratio-bounded', effective_target_verified: true, context_window_tokens: 1000, output_reserve_tokens: 100, headroom_tokens: 100, retained_tokens: 100, measurement: 'input', feasibility: 'incompatible' };
-  const steps = [step('ratio <N> then <N>', { min: 0.4, max: 0.7, unit: 'ratio' }), step('percent <N>', { min: 20, max: 60, unit: 'percent' })];
-  const container = await renderCards({ threshold_compaction: achievement(steps) }, threshold);
-  const [input] = findAll(container, node => node.tag === 'input');
-  assert.equal(input.value, '500');
-  assert.deepEqual(visibleCommands(container), ['ratio 0.5 then 0.5', 'percent 50']);
-  enter(input, '650'); assert.deepEqual(visibleCommands(container), ['ratio 0.65 then 0.65']);
-  enter(input, '850'); assert.deepEqual(visibleCommands(container), []);
-  enter(input, '100'); assert.deepEqual(visibleCommands(container), []);
-  const unknown = await renderCards({ threshold_compaction: achievement(steps) }, { ...threshold, formula: 'unknown' });
-  assert.deepEqual(visibleCommands(unknown), []);
-  assert.match(flattenText(unknown), /公式.*未.*核实/);
-  const missing = await renderCards({ threshold_compaction: achievement(steps) }, { ...threshold, measurement: null });
-  assert.deepEqual(visibleCommands(missing), []);
-});
-
-test('recorded token input is rechecked against capacity and commands require placeholders', async () => {
-  const threshold = { candidate_tokens: 900, context_window_tokens: 1000, output_reserve_tokens: 100, headroom_tokens: 100, retained_tokens: 100, measurement: 'input', feasibility: 'within-reported-limits' };
-  const container = await renderCards({ threshold_compaction: achievement([
-    step('valid <N>', { min: null, max: null, unit: 'tokens' }),
-    step('stale 900', { min: null, max: null, unit: 'tokens' })
-  ]) }, threshold);
-  const [input] = findAll(container, node => node.tag === 'input');
-  assert.deepEqual(visibleCommands(container), []);
-  enter(input, '500');
-  assert.deepEqual(visibleCommands(container), ['valid 500']);
-  assert.match(flattenText(container), /缺少 <N> 模板/);
-  enter(input, '100');
-  assert.deepEqual(visibleCommands(container), []);
-});
-
-test('an explicitly unverified effective target hides token commands and scope names are readable', async () => {
-  const steps = [step('token <N>', { min: 1, max: 1000, unit: 'tokens' }, { scope: 'instance' }), step(null, null, { scope: 'unknown' })];
-  const blocked = await renderCards({ threshold_compaction: achievement(steps) }, { candidate_tokens: 500, effective_target_verified: false });
-  assert.deepEqual(visibleCommands(blocked), []);
-  assert.match(flattenText(blocked), /有效.*后端.*未.*核实/);
-  assert.match(flattenText(blocked), /宿主实例/);
-  assert.match(flattenText(blocked), /范围尚不明确/);
-  for (const effective_target_verified of [null, undefined]) {
-    const unknown = await renderCards({ threshold_compaction: achievement(steps) }, { candidate_tokens: 500, effective_target_verified });
-    assert.deepEqual(visibleCommands(unknown), ['token 500']);
-    assert.match(flattenText(unknown), /有效.*后端.*尚未核实/);
-  }
 });
 
 test('query selection uses existing patch, export, import difference and removal boundaries', t => {
@@ -732,16 +691,32 @@ test('page without profile keeps manual fallback', t => {
   assert.ok(fs.existsSync(path.join(repoRoot, '.tmp/apa-setup/index.html')));
 });
 
-test('threshold input renders without command template', async () => {
-  const container = await renderCards({ threshold_compaction: { state: 'needs-user-action', summary: '用户决定阈值', steps: [step(null, null, { actor: 'user' })] } });
-  const [input] = findAll(container, node => node.name === 'threshold-threshold_compaction');
-  assert.ok(input);
+test('threshold input validates positive integer tokens and starts empty', async () => {
+  const { renderThresholdSetting } = await import('../../Templates/apa-setup/page.js');
+  const container = eventNode('div');
+  renderThresholdSetting({ createElement: eventNode }, container);
+  const [input] = findAll(container, node => node.tag === 'input');
   assert.equal(input.value, '');
-  assert.ok(!flattenText(container).includes('候选阈值 123456 token'));
-  assert.ok(flattenText(container).includes('推荐阈值范围 250000–300000 token'));
-  enter(input, '123456');
-  assert.ok(flattenText(container).includes('候选阈值 123456 token：生成“完善配置”结果时会写入 JSON 的 host_settings'));
-  assert.ok(findAll(container, node => node.tag === 'code').every(node => !node.textContent.includes('apa-host-settings')));
+  for (const value of ['0', '2e5', '9007199254740992', '-1']) {
+    enter(input, value);
+    assert.match(flattenText(container), /请输入正的安全整数/);
+  }
+  for (const value of ['', '230000']) {
+    enter(input, value);
+    assert.doesNotMatch(flattenText(container), /请输入/);
+  }
+});
+
+test('mounted page exports the threshold selected in its standalone input', async () => {
+  const { named, preview } = mountFake({});
+  const input = named('threshold-threshold_compaction');
+  assert.equal(input.value, '');
+  input.value = '230000';
+  input.dispatchEvent(new Event('input'));
+  const { payload: operation } = await preview();
+  assert.deepEqual(operation.host_settings, { threshold_compaction: { host: hostProfile.host, tokens: 230000 } });
+  assert.equal(operation.issue_choices, undefined);
+  assert.deepEqual(operation.set, {});
 });
 
 test('threshold input travels in the copied operation as host_settings, never as a config answer', async () => {
