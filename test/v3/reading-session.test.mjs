@@ -342,7 +342,14 @@ async function nextReadingAction(session) {
 test('generates distinct authorized tasks and bounded checkpoint slots from the input identities', () => {
   const input = { role_artifacts: ['a', 'b', 'c', 'd', 'e', 'f'] };
   const result = buildReadingSessionTasks({ runId: 'run1', scientificInput: input, sourceLanguage: 'en', checkpointCount: 4 });
-  assert.deepEqual(Object.values(result.scienceTasks).map(task => task.artifact_id), input.role_artifacts);
+  assert.deepEqual(Object.entries(result.scienceTasks).map(([key, task]) => [key, task.role, task.artifact_id]), [
+    ['evidence', 'evidence', 'a'],
+    ['methods', 'methods', 'b'],
+    ['results', 'results', 'c'],
+    ['interpretation', 'interpretation', 'd'],
+    ['scientific-reading', 'scientific-reading', 'e'],
+    ['integration', 'integration', 'f'],
+  ]);
   assert.equal(result.taskBindings.en.role, 'english-writer');
   assert.equal(result.taskBindings['zh-CN'].role, 'translation');
   assert.equal(result.taskBindings.presentation.role, 'reading-editor');
@@ -1157,6 +1164,7 @@ test('rejects missing identities, unbounded checkpoints and conflicting task ove
   const scientificInput = { role_artifacts: ['a', 'b', 'c', 'd', 'e', 'f'] };
   assert.throws(() => buildReadingSessionTasks({ runId: 'run', scientificInput, sourceLanguage: 'en' }), /CHECKPOINT_COUNT/);
   assert.throws(() => buildReadingSessionTasks({ runId: 'run', scientificInput: { role_artifacts: ['a'] }, sourceLanguage: 'en', checkpointCount: 1 }), /SCIENCE_IDENTITIES/);
+  assert.throws(() => buildReadingSessionTasks({ runId: 'run', scientificInput: { role_artifacts: ['a', 'b', 'c', 'd', 'e', 'e'] }, sourceLanguage: 'en', checkpointCount: 1 }), /SCIENCE_IDENTITIES/);
   assert.throws(() => buildReadingSessionTasks({ runId: 'run', scientificInput, sourceLanguage: 'en', checkpointCount: 1, taskOverrides: { 'zh-CN': { role: 'chinese-writer' } } }), /TASK_OVERRIDE/);
 });
 

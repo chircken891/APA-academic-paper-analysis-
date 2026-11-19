@@ -9,6 +9,7 @@ import { inspectManagedNote, mergeManagedNote } from './phase22-managed-markdown
 import { readCommittedGeneration, assertActiveGeneration, assertIndexGeneration, phase22GenerationPaths } from './phase22-active-version.mjs';
 import { readCurrentVaultContent } from './current-vault-content.mjs';
 import { buildBilingualIndex } from './phase22-search.mjs';
+import { registeredResearchMapPaths } from './reading-first-index.mjs';
 import { createPhase22ContractValidator } from './phase22-contract-loader.mjs';
 import { readRegisteredTopicDependency, validateSourceChangeEvent, validateTopicEventResolutions, assertTopicCandidatePending } from './topic-library.mjs';
 
@@ -59,13 +60,43 @@ const toolBindings = (currentContentPolicy = false) => ['./writing-project.mjs',
   ...(currentContentPolicy ? ['./current-vault-content.mjs'] : [])]
   .map(path => binding(fileURLToPath(new URL(path, import.meta.url))));
 const stamp = rows => rows.map(({ bytes, ...row }) => ({ ...row, observed_sha256: sha(bytes) }));
+const isHash = value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value);
+const targetStamp = ({ path, kind, byte_sha256, before_sha256 }) => ({ path, kind, byte_sha256, before_sha256 });
+function readTopicRebase({ topicRebase, candidate, topic, currentGeneration, target, scientificReviewHash }) {
+  const { candidate_fingerprint, original_generation, current_generation, approval_record } = topicRebase;
+  if (!same(Object.keys(topicRebase).sort(), ['approval_record', 'candidate_fingerprint', 'current_generation', 'original_generation'])
+    || !topic?.topic_id || candidate_fingerprint !== hash(candidate) || original_generation !== candidate.expected_generation_id
+    || current_generation !== currentGeneration || original_generation === current_generation
+    || !approval_record || !same(Object.keys(approval_record).sort(), ['path', 'sha256'])
+    || approval_record.path !== join(dirname(candidate.topic_path), 'publication', 'user-confirmation.json') || !isHash(approval_record.sha256)) {
+    fail('P24_REBASE_APPROVAL_INVALID');
+  }
+  const receiptBinding = binding(approval_record.path);
+  const bytes = readFileSync(receiptBinding.path);
+  if (receiptBinding.sha256 !== approval_record.sha256 || sha(bytes) !== receiptBinding.sha256) fail('P24_REBASE_APPROVAL_CHANGED');
+  let receipt;
+  try { receipt = JSON.parse(bytes); } catch { fail('P24_REBASE_APPROVAL_INVALID'); }
+  const { plan_hashes: original, review_hashes: review, inventory } = receipt ?? {};
+  if (typeof receipt?.user_reply !== 'string' || !receipt.user_reply.trim() || receipt.original_generation !== original_generation
+    || receipt.topic_id !== topic.topic_id || receipt.revision !== topic.revision
+    || original?.scientific_review_hash !== scientificReviewHash || review?.scientific_review_hash !== scientificReviewHash
+    || !isHash(original.review_hash) || original.review_hash !== review.review_bundle_hash
+    || !isHash(original.review_output_inventory_hash) || original.review_output_inventory_hash !== review.output_inventory_hash
+    || !isHash(original.output_inventory_hash) || !Array.isArray(inventory) || inventory.some(row => !row || typeof row.path !== 'string')) {
+    fail('P24_REBASE_APPROVAL_INVALID');
+  }
+  const approvedTargets = inventory.filter(row => !['active', 'index', 'manifest', 'commit'].includes(row.kind));
+  if (!same(approvedTargets, [targetStamp(target)])) fail('P24_REBASE_TARGET_CHANGED', { path: target.path });
+  return { receiptBinding, proof: { candidate_fingerprint, original_generation, current_generation, approval_record: clone(approval_record),
+    original_review_hash: original.review_hash, original_output_hash: original.output_inventory_hash, target: targetStamp(target) } };
+}
 function freeze(value) {
   if (value && typeof value === 'object' && !(value instanceof Uint8Array) && !Object.isFrozen(value)) { Object.values(value).forEach(freeze); Object.freeze(value); }
   return value;
 }
 
 async function build({ options, base, preimages, restored = false }) {
-  const { vaultRoot: root, candidate } = options;
+  const { vaultRoot: root, candidate, topicRebase } = options;
   if (!checkCandidate(candidate)) fail('P24_CANDIDATE_INVALID', { errors: checkCandidate.errors });
   assertTopicCandidatePending(candidate);
   const sourceChange = candidate.operation === 'source-change';
@@ -87,7 +118,9 @@ async function build({ options, base, preimages, restored = false }) {
   const run = options.operationId ?? candidate.operation_id;
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/.test(run ?? '')) fail('P24_OPERATION_INVALID');
   if (run !== candidate.operation_id || (!sourceChange && topic.revision === 1 && (topic.project_id ?? topic.topic_id) !== (topic.project_id ? 'project-' : 'topic-') + hash(run).slice(7, 31))) fail('P24_OPERATION_INVALID');
-  if (candidate.expected_generation_id !== undefined && candidate.expected_generation_id !== base.generation.generation_id) fail('P24_GENERATION_CHANGED');
+  if (topicRebase !== undefined && (!topicRebase || typeof topicRebase !== 'object' || restored || sourceChange || topic?.project_id
+    || topicRebase.current_generation !== base.generation.generation_id)) fail('P24_REBASE_APPROVAL_INVALID');
+  if (!topicRebase && candidate.expected_generation_id !== undefined && candidate.expected_generation_id !== base.generation.generation_id) fail('P24_GENERATION_CHANGED');
   if (!sourceChange && (!Array.isArray(topic.dependencies) || !topic.dependencies.length)) fail('P24_ADOPTED_SOURCES_REQUIRED');
   if (sourceChange) {
     if (!restored) await validateSourceChangeEvent({ vaultRoot: root, snapshot: base.snapshot, event: candidate.event });
@@ -135,6 +168,10 @@ async function build({ options, base, preimages, restored = false }) {
     files.set(path, bytes); output.push(row); return row;
   }
   const row = sourceChange ? null : add(path, 'topic', merged.bytes, { language: topic.language, managed_hash: merged.managedHash, before_managed_hash: previous?.managed_hash ?? null });
+  const scientificReviewHash = hash({ topic, candidate: sourceBindings, ...(sourceChange ? { event: candidate.event } : { adopted_sources: topic.dependencies }) });
+  const rebased = topicRebase ? readTopicRebase({ topicRebase, candidate, topic, currentGeneration: base.generation.generation_id,
+    target: row, scientificReviewHash }) : null;
+  if (rebased) sourceBindings.push(rebased.receiptBinding);
   const active = { ...clone(base.generation), generation_id: generation,
     ...(sourceChange ? { source_events: [...(base.generation.source_events ?? []), candidate.event] }
       : { topics: [...(base.generation.topics ?? []).filter(t => (t.project_id ?? t.topic_id) !== (topic.project_id ?? topic.topic_id)), { ...topic, path }] }),
@@ -149,7 +186,6 @@ async function build({ options, base, preimages, restored = false }) {
   const dependencies = [...base.files].filter(([p]) => p !== path && !(base.currentContentPolicy && p.startsWith('Wiki/')))
     .map(([path, bytes]) => ({ path, byte_sha256: sha(bytes), byte_length: bytes.length }));
   const tools = toolBindings(base.currentContentPolicy);
-  const scientificReviewHash = hash({ topic, candidate: sourceBindings, ...(sourceChange ? { event: candidate.event } : { adopted_sources: topic.dependencies }) });
   const evidenceMode = base.generation.evidence_mode;
   const status = evidenceMode === 'actual' ? 'review_ready' : 'synthetic_prepared';
   const reviewManifest = { schema_version: 'phase22/review-manifest-1.0', profile: topic?.schema_version ?? profile,
@@ -160,7 +196,8 @@ async function build({ options, base, preimages, restored = false }) {
     previews: sourceChange ? [] : [{ language: topic.language, path, byte_sha256: row.byte_sha256, byte_length: row.byte_length, managed_hash: merged.managedHash,
       human_ranges: inspectManagedNote(merged.bytes).humanRanges.map(r => ({ from: r.from, to: r.to, byte_sha256: sha(r.bytes) })) }],
     support_notes: [], assets: [], read_dependencies: dependencies,
-    dependencies: { topic_input: scientificReviewHash, ...(sourceChange ? { source_event: hash(candidate.event) } : { adopted_sources: hash(topic.dependencies) }) }, tools: Object.fromEntries(tools.map(r => [r.path, r.sha256])),
+    dependencies: { topic_input: scientificReviewHash, ...(sourceChange ? { source_event: hash(candidate.event) } : { adopted_sources: hash(topic.dependencies) }),
+      ...(rebased ? { topic_rebase: rebased.proof } : {}) }, tools: Object.fromEntries(tools.map(r => [r.path, r.sha256])),
     index: { path: paths.index, byte_sha256: built.sha256 }, active: { path: paths.active, byte_sha256: sha(jsonBytes(built.generation)) },
     write_set: output.map(({ bytes, ...r }) => r), diagnostics: [],
     provenance_limits: { scientific_review_scope: 'topic-input-fingerprint-only', claim_verification: 'not_performed' } };
@@ -178,12 +215,16 @@ async function build({ options, base, preimages, restored = false }) {
   return { review, source };
 }
 
-export async function prepareTopicPublication({ vaultRoot, candidate, operationId, generation } = {}) {
+export async function prepareTopicPublication({ vaultRoot, candidate, operationId, generation, topicRebase } = {}) {
   const root = resolve(vaultRoot), snapshot = await readCurrentVaultContent({ vaultRoot: root });
   if (!snapshot.ok) fail('P24_COMMITTED_GENERATION_REQUIRED', { errors: snapshot.errors });
+  // Topic indexing carries forward unchanged papers and does not read their editable maps.
+  const currentMaps = candidate?.topic && !candidate.topic.project_id
+    ? registeredResearchMapPaths(snapshot.generation, path => bytesAt(root, path)) : new Set();
   const base = { snapshot, currentContentPolicy: true, generation: clone(snapshot.generation), index: clone(snapshot.index),
-    files: new Map(snapshot.generation.objects.map(o => [o.path, bytesAt(root, o.path)])) };
-  const { review, source } = await build({ options: { vaultRoot: root, candidate, operationId: operationId ?? candidate.operation_id, ...(generation ? { generation } : {}) }, base });
+    files: new Map(snapshot.generation.objects.filter(o => !currentMaps.has(o.path)).map(o => [o.path, bytesAt(root, o.path)])) };
+  const { review, source } = await build({ options: { vaultRoot: root, candidate, operationId: operationId ?? candidate.operation_id,
+    ...(generation ? { generation } : {}), ...(topicRebase !== undefined ? { topicRebase: clone(topicRebase) } : {}) }, base });
   const { dryRunBilingualPublication } = await import('./phase22-publication.mjs');
   const dry = await dryRunBilingualPublication({ vaultRoot: root, run: review.reviewManifest.identity.run_id, review });
   return { ...dry, review, sourceInputs: { topic: { source } } };

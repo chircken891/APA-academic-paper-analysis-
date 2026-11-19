@@ -197,7 +197,7 @@ function checkPaperBytes(paper, language, bytes, generation, presentation) {
 }
 export { checkPaperBytes as verifyIndexPaperBytes };
 
-function readRegular(root, path) {
+export function readRegular(root, path) {
   path = normalizeIndexPath(path);
   const base = realpathSync(resolve(root));
   let cursor = base;

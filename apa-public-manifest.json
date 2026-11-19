@@ -119,7 +119,7 @@
     },
     {
       "path": "config/apa-public-files.json",
-      "sha256": "ceb4dd369c521f50afe282e9eeaf9dbe15d5e72c8bdd996d81eeecb980ecc4a6"
+      "sha256": "61557ab24ed7c7abc1d6110ddd5ae89384ab080369ba5765a0d7d272959eae03"
     },
     {
       "path": "config/environment.json",
@@ -347,7 +347,7 @@
     },
     {
       "path": "scripts/apa-model-policy.mjs",
-      "sha256": "3f002db4f5fdcf5f48de4c7b3035086f30c2c97c292453019fe170a3f634010c"
+      "sha256": "8d2a8908801a1b094e5e88c476a7e6301e08d80a83b8477c5377ee0ea1f61059"
     },
     {
       "path": "scripts/apa-query.mjs",
@@ -363,7 +363,7 @@
     },
     {
       "path": "scripts/lib/apa-config.mjs",
-      "sha256": "9378dfe39346a74e04dd622824ee5ac564127359f5bced97d5321ac3f46de321"
+      "sha256": "0c083b48d9fcf8031fa9eacca12b0b78ce5098839c0e639902ba1cab4dbc1841"
     },
     {
       "path": "scripts/lib/apa-host-achievement.mjs",
@@ -439,7 +439,7 @@
     },
     {
       "path": "scripts/setup/export-public-apa.mjs",
-      "sha256": "41adfe3d7748b08e500145dfb6a02037e94511a6c69767e30cbfbd5f34cc4d37"
+      "sha256": "dd206d3d4eaf64c5ccc4af763542011548b5b8cf26c4be4851e7e307caef1ff4"
     },
     {
       "path": "scripts/setup/install-apa-companion-skills.ps1",
@@ -491,7 +491,7 @@
     },
     {
       "path": "scripts/v3/current-vault-content.mjs",
-      "sha256": "1dc27434e12aecc6e620fe5c830f29e12a18bc82f5af890f3955e0fd3b8caf7c"
+      "sha256": "9f896759d2d931960a9612513a99b963822bab7d032656acf7334d1d6c6f0380"
     },
     {
       "path": "scripts/v3/derived-workbook-evidence.mjs",
@@ -515,7 +515,7 @@
     },
     {
       "path": "scripts/v3/library-map.mjs",
-      "sha256": "a89f738a9b1a028c78ec1b841ec55123eb1f0ad8b9b47b5b13c4819c0e55cded"
+      "sha256": "a5ad01a73ee06767a01862be5e9395d8901a3434432a0ce26b093e45af67ebc7"
     },
     {
       "path": "scripts/v3/library-query.mjs",
@@ -523,7 +523,7 @@
     },
     {
       "path": "scripts/v3/library-synthesis.mjs",
-      "sha256": "c217360dfbe05e70d2210c8082bb43e6ddba48108dadcefc1d24de08588adb42"
+      "sha256": "b3d80cb938d7d69fb10228061d3082870fa7d7381a87fb3a740330fdc3347ef1"
     },
     {
       "path": "scripts/v3/maintenance-publication.mjs",
@@ -595,7 +595,7 @@
     },
     {
       "path": "scripts/v3/phase22-active-version.mjs",
-      "sha256": "1e8504e2b4e3031cd71081b09e4631e350aaea8ec6f0b946bf69425d9f894466"
+      "sha256": "c500748e9f9035b932253ad18dbbd400cfb32a65f1e3619fd84c00b37cebdd03"
     },
     {
       "path": "scripts/v3/phase22-contract-loader.mjs",
@@ -747,7 +747,7 @@
     },
     {
       "path": "scripts/v3/reading-first-runtime.mjs",
-      "sha256": "b9abd4e278baa09d307a21434f7821f01289c4f67132e8de33ce716b0f747e7f"
+      "sha256": "545c0ca96f59e0a6312a23bd58814e908f08b4b46d6a33ffa74a5c931e7573fe"
     },
     {
       "path": "scripts/v3/reading-host-evidence.mjs",
@@ -775,7 +775,7 @@
     },
     {
       "path": "scripts/v3/reading-session-tasks.mjs",
-      "sha256": "b762752651cbed5122e47178b6908aa13cade7e4a7b3acaa6c9c42e36c01c29b"
+      "sha256": "7175c99d08dddc433a262ea23c3a3fac4097f1d75a0b27c48441c81147c16cc9"
     },
     {
       "path": "scripts/v3/reading-session.mjs",
@@ -807,7 +807,7 @@
     },
     {
       "path": "scripts/v3/science-controller.mjs",
-      "sha256": "ac426fe398db2b4cdff81afbd08975d29ea5fb239bbf59bd2e76a61ef4062ae5"
+      "sha256": "d18c0b4078bf27d18c3826ff42f914dc93077e07cb6a76671047d44938e35eb4"
     },
     {
       "path": "scripts/v3/scientific-input-validator.mjs",
@@ -851,7 +851,7 @@
     },
     {
       "path": "scripts/v3/topic-publication.mjs",
-      "sha256": "1a92c947012fcacb30870abc77c7dc491270350b005b2150046b32f83978f288"
+      "sha256": "bdb3353e52c0cab55709b1103b323601022cb11854329a494bdbabd7b69257e9"
     },
     {
       "path": "scripts/v3/whole-paper-adapter.mjs",
@@ -923,7 +923,7 @@
     },
     {
       "path": "test/setup/apa-config-core.test.mjs",
-      "sha256": "41d80713ae98a8a97f0ff4186be4bd50d019d10e9ed04497f64101405d984319"
+      "sha256": "d57351c9d81b5fec82b58bb75cff67c373ab8455a2b0274d0394d566754fe403"
     },
     {
       "path": "test/setup/apa-configuration.test.mjs",
@@ -963,7 +963,7 @@
     },
     {
       "path": "test/setup/public-export.test.mjs",
-      "sha256": "769f71b7c72357f6bab75eb59631f4956b39dc0c82b52c1a111483444af61828"
+      "sha256": "a26fbaaf814f2670e5f96aff7dbdbec61e8f033f706f78bb03b52cc0c99429bf"
     },
     {
       "path": "test/setup/reading-preflight.test.mjs",
@@ -979,7 +979,7 @@
     },
     {
       "path": "test/v3/configured-reading-22.test.mjs",
-      "sha256": "47192f4adc1afd931addad21ac35b10a84db2af1c32c0ec7b81b850f214619b0"
+      "sha256": "e6fa35167df5cde76f2c95a49357a0cb130f565b168102758f0426feff09d2a2"
     },
     {
       "path": "test/v3/configured-reading-candidate-recovery.test.mjs",
@@ -999,7 +999,7 @@
     },
     {
       "path": "test/v3/current-vault-content.test.mjs",
-      "sha256": "8003b65d9a3e4b0e43e0570a2fadf73979da2819ebdc06fa9cbe0604d7553861"
+      "sha256": "68181165f3627306879fbe59ec55af8ce5da11c8aac3577ff67c83ef7bc89a2b"
     },
     {
       "path": "test/v3/default-surface.test.mjs",
@@ -1079,7 +1079,7 @@
     },
     {
       "path": "test/v3/library-synthesis.test.mjs",
-      "sha256": "895e139abe9690ef70c0256488d103eed30bdca7375db75d3b56e636df02af25"
+      "sha256": "f8a50cde0103fecbd68abb30ce9e1fc1b31020cb0c85ad16ccd357a7a31c1d00"
     },
     {
       "path": "test/v3/library-writing-cli.test.mjs",
@@ -1223,7 +1223,7 @@
     },
     {
       "path": "test/v3/reading-first-runtime.test.mjs",
-      "sha256": "c0a5eaeb2cd35fca5759c8ca552f7abb729b4ef8370e89d755dbd58c36b21a89"
+      "sha256": "efe87d38f306525d98dea33bb350ab4ba59e2b06fadc177b603aabbf99d52d47"
     },
     {
       "path": "test/v3/reading-first-source-labels.test.mjs",
@@ -1267,7 +1267,7 @@
     },
     {
       "path": "test/v3/reading-session.test.mjs",
-      "sha256": "e53649504030505666772a9f0bb7d9f2d9039358b2231bd4ccdf988be016f405"
+      "sha256": "4a329fa06f3d0af2a58ee39be34c29d42b6c224559d284a53f91298efc907fc6"
     },
     {
       "path": "test/v3/reading-source-policy.test.mjs",

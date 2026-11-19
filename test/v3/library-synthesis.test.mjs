@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkStructuredClaims, checkIdeas, checkDraft, synthesisPrompt, moduleNumber, validateSynthesisOutput, compactKnowledge, ideaCoverage } from '../../scripts/v3/library-synthesis.mjs';
+import { checkStructuredClaims, checkIdeas, checkDraft, synthesisPrompt, moduleNumber, validateSynthesisOutput, compactKnowledge, ideaCoverage, prepareSynthesisMaterials } from '../../scripts/v3/library-synthesis.mjs';
+import { synthesisMapFromSnapshot } from '../../scripts/v3/library-map.mjs';
 import { appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readingFirstIndexFixture } from './helpers/reading-first-index-fixtures.mjs';
@@ -13,6 +14,31 @@ const a = note('a'), b = note('b');
 const cite = (row, conditions = {}) => ({ paper_id: row.paper_id, path: row.path, anchor: row.anchor, sha256: row.sha256, quote: row.content, claim_origin: 'author', conditions });
 const claim = (overrides = {}) => ({ claim_id: 'claim-1', text: 'Reported benefit.', attribution: '多篇一致', strength: '观察', evidence_type: '直接证据', citations: [cite(a), cite(b)], ...overrides });
 const codes = issues => issues.map(row => row.code);
+
+test('synthesis uses one observed generation and later requests read fresh notes', async t => {
+  const first = await readingFirstIndexFixture(t);
+  await first.save(await first.build());
+  const vaultRoot = first.vaultRoot;
+  const options = { repoRoot: vaultRoot, mode: 'themes', question: 'Study design' };
+  const snapshot = await readCurrentVaultContent({ vaultRoot });
+  const before = await prepareSynthesisMaterials(options);
+
+  const path = first.paper.paths['zh-CN'];
+  await appendFile(join(vaultRoot, path), '\nUpdated study note.\n');
+  await assert.rejects(synthesisMapFromSnapshot(snapshot, options), { code: 'P23_CURRENT_CHANGED' });
+  const afterEdit = await prepareSynthesisMaterials(options);
+  assert.equal(afterEdit.generation_id, before.generation_id);
+  assert.notEqual(afterEdit.source_notes[0].sha256, before.source_notes[0].sha256);
+
+  const editedSnapshot = await readCurrentVaultContent({ vaultRoot });
+  const next = await readingFirstIndexFixture(t, { vaultRoot, suffix: 'b' });
+  await next.save(await next.build());
+  await assert.rejects(synthesisMapFromSnapshot(editedSnapshot, options), { code: 'P22_GENERATION_CHANGED' });
+  const fresh = await prepareSynthesisMaterials(options);
+  assert.equal(fresh.inventory.generation_id, next.generation.generation_id);
+  assert.equal(fresh.knowledge.generation_id, next.generation.generation_id);
+  assert.deepEqual(fresh.source_notes.map(note => note.paper_id), [next.paper.paper_id]);
+});
 
 test('WQ-15a shared methods cannot establish agreement in findings', () => {
   const methods = [note('a', 3), note('b', 3)];

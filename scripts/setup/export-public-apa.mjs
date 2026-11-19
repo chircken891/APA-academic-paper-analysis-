@@ -131,7 +131,10 @@ export async function exportPublicApa({ sourceRoot = repositoryRoot, outputRoot 
     if (privateRootsLower.has(row.path.split('/')[0].toLowerCase()) || row.path.toLowerCase() === 'config/apa.local.json' || files.has(row.path)) throw new Error(`PRIVATE_PATH: ${row.path}`);
     files.set(row.path, await sourceBytes(sourceRoot, row.source));
   }
-  if (files.has('package.json')) files.set('package.json', projectPackage(files.get('package.json'), spec.tests));
+  if (files.has('package.json')) {
+    const tests = Object.hasOwn(spec, 'tests') ? spec.tests : spec.files.filter(path => path.endsWith('.test.mjs'));
+    files.set('package.json', projectPackage(files.get('package.json'), tests));
+  }
   for (const path of spec.directories) safePath(path);
   for (const path of spec.directories) {
     if (![...files.keys(), ...spec.directories].some(entry => entry.startsWith(path + '/'))) files.set(path + '/.gitkeep', Buffer.alloc(0));

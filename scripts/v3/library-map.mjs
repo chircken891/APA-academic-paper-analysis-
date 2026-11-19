@@ -47,8 +47,11 @@ function finish(snapshot, payload, observed) {
     generation_id: snapshot.generation_id, evidence_mode: snapshot.evidence_mode, diagnostics: snapshot.diagnostics, ...payload };
   return { ...result, content_hash: hash(result) };
 }
-async function material({ vaultRoot }) {
-  const snapshot = await readCurrentVaultContent({ vaultRoot });
+async function readMaterial({ vaultRoot }) {
+  return material(await readCurrentVaultContent({ vaultRoot }));
+}
+
+function material(snapshot) {
   if (!snapshot.ok) return { error: { ok: false, status: 'not_ready', generation_id: null, errors: snapshot.errors, content_hash: hash(snapshot.errors) } };
   const observed = new Set(), nodes = [], papers = [];
   for (const registered of snapshot.generation.shared_nodes) {
@@ -97,7 +100,10 @@ async function material({ vaultRoot }) {
 }
 
 export async function libraryInventory(inputs = {}) {
-  const data = await material(inputs);
+  return inventory(await readMaterial(inputs));
+}
+
+function inventory(data) {
   if (data.error) return data.error;
   return finish(data.snapshot, { papers: data.papers, node_count: data.nodes.length }, data.observed);
 }
@@ -137,7 +143,10 @@ function landscape(data, threshold) {
 }
 export async function libraryLandscape({ threshold = 0.1, canvas = false, ...inputs } = {}) {
   if (!Number.isFinite(threshold) || threshold <= 0 || threshold > 1) throw Object.assign(new Error('P23_MAP_THRESHOLD_INVALID'), { code: 'P23_MAP_THRESHOLD_INVALID' });
-  const data = await material(inputs);
+  return landscapeView(await readMaterial(inputs), threshold, canvas);
+}
+
+function landscapeView(data, threshold = 0.1, canvas = false) {
   if (data.error) return data.error;
   const result = landscape(data, threshold);
   if (canvas) result.canvas = libraryMapCanvas(result);
@@ -150,7 +159,10 @@ function resolveNode(nodes, value) {
 }
 export async function libraryDossier({ node: selector, ...inputs } = {}) {
   if (typeof selector !== 'string' || !selector.trim()) throw Object.assign(new Error('P23_MAP_NODE_REQUIRED'), { code: 'P23_MAP_NODE_REQUIRED' });
-  const data = await material(inputs);
+  return dossier(await readMaterial(inputs), selector);
+}
+
+function dossier(data, selector) {
   if (data.error) return data.error;
   const node = resolveNode(data.nodes, selector);
   if (!node) return finish(data.snapshot, { status: 'no_matches', node: null, papers: [] }, data.observed);
@@ -164,10 +176,18 @@ export async function libraryDossier({ node: selector, ...inputs } = {}) {
   }).sort((a, b) => (a.year ?? Infinity) - (b.year ?? Infinity) || sort(a.paper_id, b.paper_id));
   return finish(data.snapshot, { node, papers }, data.observed);
 }
-export async function libraryClues({ from, canvas = false, ...inputs } = {}) {
+function clueValue(from) {
   const value = typeof from === 'string' ? from : from?.value;
   if (typeof value !== 'string' || !value.trim()) throw Object.assign(new Error('P23_MAP_FROM_REQUIRED'), { code: 'P23_MAP_FROM_REQUIRED' });
-  const data = await material(inputs);
+  return value;
+}
+
+export async function libraryClues({ from, canvas = false, vaultRoot } = {}) {
+  const value = clueValue(from);
+  return clues(await readMaterial({ vaultRoot }), { from, value, canvas });
+}
+
+async function clues(data, { from, value, canvas }) {
   if (data.error) return data.error;
   const node = resolveNode(data.nodes, value), needle = normal(value);
   const terms = needle.split(/[^\p{L}\p{N}-]+/u).filter(term => term && !['a', 'an', 'the', 'in', 'of', 'to', 'and', 'or', 'with', 'for', 'is', 'are', 'how', 'what'].includes(term));
@@ -175,7 +195,8 @@ export async function libraryClues({ from, canvas = false, ...inputs } = {}) {
   const matchingNodes = node ? [node] : data.nodes.filter(row => [row.title, ...row.aliases].some(alias => terms.some(term => normal(alias).includes(term))));
   if (!node && !seeds.length && (!from?.kind || from.kind === 'question')) {
     const { queryLibrary } = await import('./library-query.mjs');
-    const recalled = await queryLibrary({ vaultRoot: inputs.vaultRoot, query: value, full: true });
+    const { root: vaultRoot } = assertCurrentVaultContent(data.snapshot);
+    const recalled = await queryLibrary({ vaultRoot, query: value, full: true });
     if (recalled.generation_id && recalled.generation_id !== data.snapshot.generation_id) throw Object.assign(new Error('P24_GENERATION_CHANGED'), { code: 'P24_GENERATION_CHANGED' });
     const ids = new Set((recalled.results ?? []).flatMap(row => row.underlying_papers ?? [row.paper_id]));
     seeds.push(...data.papers.filter(paper => ids.has(paper.paper_id)));
@@ -191,6 +212,17 @@ export async function libraryClues({ from, canvas = false, ...inputs } = {}) {
   if (!relevant.length) result.status = 'no_matches';
   if (canvas) result.canvas = libraryMapCanvas({ papers: relevant, nodes: result.adjacent_nodes });
   return finish(data.snapshot, result, data.observed);
+}
+
+/** Build both views from the snapshot already owned by this synthesis request. */
+export async function synthesisMapFromSnapshot(snapshot, { mode, node, from }) {
+  const data = material(snapshot);
+  const paperInventory = inventory(data);
+  let knowledge;
+  if (mode === 'dossier') knowledge = dossier(data, node);
+  else if (mode === 'clues') knowledge = await clues(data, { from, value: clueValue(from) });
+  else knowledge = landscapeView(data);
+  return { inventory: paperInventory, knowledge };
 }
 
 /** Pure JSON Canvas output; callers choose an authorized temporary or project destination. */

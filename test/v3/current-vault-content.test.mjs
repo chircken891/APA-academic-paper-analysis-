@@ -1,19 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { readingFirstIndexFixture, digest } from './helpers/reading-first-index-fixtures.mjs';
+import { link, readFile, rename, symlink, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { readingFirstIndexFixture, digest, saveReadingFirstPair } from './helpers/reading-first-index-fixtures.mjs';
 import { queryLibrary } from '../../scripts/v3/library-query.mjs';
 import { readCommittedGeneration } from '../../scripts/v3/phase22-active-version.mjs';
+import { readCurrentVaultContent, readCurrentRegisteredBytes } from '../../scripts/v3/current-vault-content.mjs';
 
 test('current registered notes are searchable after a human changes a heading and body', async t => {
   const f = await readingFirstIndexFixture(t);
   await f.save(await f.build());
   const path = f.paper.paths.en;
   const before = await readFile(join(f.vaultRoot, path), 'utf8');
+  assert.equal((await readCommittedGeneration({ vaultRoot: f.vaultRoot })).ok, true);
+  const snapshot = await readCurrentVaultContent({ vaultRoot: f.vaultRoot });
+  assert.deepEqual(readCurrentRegisteredBytes(snapshot, path).bytes, Buffer.from(before));
   const edited = before.replace('## Findings', '## Newly Edited Findings').replace('finalresultneedle', 'manualeditneedle');
   assert.notEqual(edited, before);
   await writeFile(join(f.vaultRoot, path), edited);
+  assert.throws(() => readCurrentRegisteredBytes(snapshot, path), { code: 'P23_CURRENT_CHANGED', details: { path } });
   assert.equal((await readCommittedGeneration({ vaultRoot: f.vaultRoot })).ok, false);
   const found = await queryLibrary({ vaultRoot: f.vaultRoot, query: 'manualeditneedle' });
   assert.equal(found.status, 'matches');
@@ -23,6 +28,45 @@ test('current registered notes are searchable after a human changes a heading an
   assert.ok(hit.sha256.startsWith('sha256:'));
   assert.equal(hit.changed, true);
   assert.equal(await readFile(join(f.vaultRoot, path), 'utf8'), edited);
+});
+
+test('committed and current readers reject malformed registered paths', async t => {
+  const f = await readingFirstIndexFixture(t);
+  const built = await f.build();
+  const path = 'Wiki/sources/../invalid.md';
+  const generation = { ...built.generation, objects: built.generation.objects.map(row => row.path === f.paper.paths.en ? { ...row, path } : row) };
+  await saveReadingFirstPair(f.vaultRoot, generation, built.index);
+  for (const read of [readCommittedGeneration, readCurrentVaultContent]) {
+    const result = await read({ vaultRoot: f.vaultRoot });
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.errors, [{ code: 'P22_INDEX_PATH_INVALID', details: { path } }]);
+  }
+});
+
+test('committed and current readers preserve their diagnostics for linked note paths', async t => {
+  for (const kind of ['multiple hard links', 'directory link']) {
+    await t.test(kind, async subtest => {
+      const f = await readingFirstIndexFixture(subtest);
+      await f.save(await f.build());
+      const path = f.paper.paths.en;
+      const note = join(f.vaultRoot, path);
+      if (kind === 'multiple hard links') {
+        await link(note, join(f.vaultRoot, 'second-link.md'));
+      } else {
+        const directory = dirname(note);
+        const linkedDirectory = join(f.vaultRoot, 'linked-sources');
+        await rename(directory, linkedDirectory);
+        await symlink(linkedDirectory, directory, process.platform === 'win32' ? 'junction' : 'dir');
+      }
+      const committed = await readCommittedGeneration({ vaultRoot: f.vaultRoot });
+      assert.equal(committed.ok, false);
+      assert.deepEqual(committed.errors, [{ code: 'P22_INDEX_FILE_TYPE', details: { path } }]);
+      const current = await readCurrentVaultContent({ vaultRoot: f.vaultRoot });
+      assert.equal(current.ok, true);
+      assert.equal(current.status, 'partial');
+      assert.deepEqual(current.diagnostics.find(row => row.path === path), { code: 'P22_INDEX_FILE_TYPE', path, details: { path } });
+    });
+  }
 });
 
 test('current capture retries a note changing at its observation boundary', async t => {

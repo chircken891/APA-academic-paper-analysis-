@@ -27,7 +27,7 @@ async function fixture(t, files = { 'entry.mjs': 'export const ready = true;\n' 
     await mkdir(join(sourceRoot, path, '..'), { recursive: true });
     await writeFile(join(sourceRoot, path), value);
   }
-  const allowlist = { version: 1, files: Object.keys(files), directories: ['Raw', 'Wiki', 'Figures'], templates: [], tests: [] };
+  const allowlist = { version: 1, files: Object.keys(files), directories: ['Raw', 'Wiki', 'Figures'], templates: [] };
   return { root, sourceRoot, outputRoot: join(root, 'public'), allowlist };
 }
 
@@ -99,15 +99,42 @@ test('public export refuses private backup directory as a directory or template 
   ]) await assert.rejects(exportPublicApa({ ...f, allowlist }), /PRIVATE_PATH/);
 });
 
-test('export package runs only the declared synthetic suites and leaves source package unchanged', async t => {
+test('export package defaults to the allowlisted test files in order and leaves source package unchanged', async t => {
   const original = JSON.stringify({ name: 'synthetic-export', scripts: { test: 'node --test test/**/*.test.mjs', 'test:v3': 'node --test test/v3/*.test.mjs', apa: 'node entry.mjs' } });
-  const f = await fixture(t, { 'package.json': original, 'entry.mjs': 'export {};', 'test/v3/synthetic.test.mjs': 'export {};' });
-  f.allowlist.tests = ['test/v3/synthetic.test.mjs'];
+  const f = await fixture(t, {
+    'package.json': original,
+    'entry.mjs': 'export {};',
+    'test/v3/z.test.mjs': 'export {};',
+    'test/setup/setup.test.mjs': 'export {};',
+    'test/v3/a.test.mjs': 'export {};',
+  });
   await exportPublicApa(f);
   const projected = JSON.parse(await readFile(join(f.outputRoot, 'package.json')));
-  assert.equal(projected.scripts.test, 'node --test test/v3/synthetic.test.mjs');
+  assert.equal(projected.scripts.test, 'node --test test/v3/z.test.mjs test/setup/setup.test.mjs test/v3/a.test.mjs');
+  assert.equal(projected.scripts['test:v3'], 'node --test test/v3/z.test.mjs test/v3/a.test.mjs');
   assert.equal(projected.scripts.apa, 'node entry.mjs');
   assert.equal(await readFile(join(f.sourceRoot, 'package.json'), 'utf8'), original);
+});
+
+test('an explicit test selection retains its order and can be empty', async t => {
+  const f = await fixture(t, {
+    'package.json': '{"scripts":{}}',
+    'test/v3/a.test.mjs': 'export {};',
+    'test/setup/setup.test.mjs': 'export {};',
+    'test/v3/z.test.mjs': 'export {};',
+  });
+  f.allowlist.tests = ['test/v3/z.test.mjs', 'test/v3/a.test.mjs'];
+  await exportPublicApa(f);
+  const selected = JSON.parse(await readFile(join(f.outputRoot, 'package.json')));
+  assert.equal(selected.scripts.test, 'node --test test/v3/z.test.mjs test/v3/a.test.mjs');
+  assert.equal(selected.scripts['test:v3'], 'node --test test/v3/z.test.mjs test/v3/a.test.mjs');
+
+  f.allowlist.tests = [];
+  const emptyRoot = join(f.root, 'public-empty');
+  await exportPublicApa({ ...f, outputRoot: emptyRoot });
+  const empty = JSON.parse(await readFile(join(emptyRoot, 'package.json')));
+  assert.equal(empty.scripts.test, 'node --test ');
+  assert.equal(empty.scripts['test:v3'], 'node --test ');
 });
 
 test('current public export includes query and topic entries with their regression suites without personal answers', async t => {
@@ -182,10 +209,19 @@ test('public Git checkout preserves manifest-bound LF and CRLF bytes with autocr
   assert.equal((await checkPublicApa({ root: checkoutRoot })).ok, true);
 });
 
-test('public allowlist runs every exported test suite', async () => {
+test('public allowlist runs every exported test suite', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'apa-public-tests-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const outputRoot = join(root, 'public');
+  await exportPublicApa({ outputRoot });
   const spec = JSON.parse(await readFile(new URL('../../config/apa-public-files.json', import.meta.url), 'utf8'));
-  const tests = new Set(spec.tests);
-  assert.deepEqual(spec.files.filter(path => path.endsWith('.test.mjs') && !tests.has(path)), []);
+  const manifest = JSON.parse(await readFile(join(outputRoot, 'apa-public-manifest.json'), 'utf8'));
+  const packageJson = JSON.parse(await readFile(join(outputRoot, 'package.json'), 'utf8'));
+  const tests = new Set(manifest.files.filter(row => row.path.endsWith('.test.mjs')).map(row => row.path));
+  const ordered = spec.files.filter(path => tests.has(path));
+  assert.equal(ordered.length, tests.size);
+  assert.deepEqual(packageJson.scripts.test.split(' '), ['node', '--test', ...ordered]);
+  assert.deepEqual(packageJson.scripts['test:v3'].split(' '), ['node', '--test', ...ordered.filter(path => path.startsWith('test/v3/'))]);
 });
 
 test('public export ships the active Editor prompt and omits the retired prompt', async t => {

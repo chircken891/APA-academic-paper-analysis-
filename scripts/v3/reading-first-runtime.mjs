@@ -15,7 +15,7 @@ import { applyReadingFirstKnowledgeContent, draftReadingFirstKnowledgeComparison
 import { readFileSync, realpathSync, lstatSync, mkdirSync, writeFileSync, linkSync, unlinkSync } from 'node:fs';
 import { resolve, relative, isAbsolute, sep, dirname, join } from 'node:path';
 import { fingerprintV3Json } from './semantic-package-validator.mjs';
-import { createApaRoleModelPolicy, validateApaRoleModelPolicy, resolveApaRoleModel, buildHostDispatchArguments, validHostDispatch } from '../apa-model-policy.mjs';
+import { APA_SCIENCE_ROLES as scienceRoles, createApaRoleModelPolicy, validateApaRoleModelPolicy, resolveApaRoleModel, buildHostDispatchArguments, validHostDispatch } from '../apa-model-policy.mjs';
 import { getRunControlForDispatch, readOwnedArtifact, commitOwnedArtifact, createOwnedArtifactBroker } from './owned-artifact-store.mjs';
 import { emitApprovedRunStep, ingestObservedRunStep, INSTRUCTION_PATH_DISPATCH_PROFILE } from './phase21-runner.mjs';
 import { loadRoleReplyContract } from './role-reply-contract.mjs';
@@ -38,7 +38,6 @@ const handoffInputs = new WeakMap(), publicationSources = new WeakMap();
 // A checkout publisher may hold a capability created by a frozen runtime in the same process.
 const publicationOwners = globalThis[Symbol.for('apa.reading-publication-owners.1')] ??= new WeakMap();
 const publicationOwner = Object.freeze({ inspect: inspectReadingFirstPublicationSource, derive: deriveRebasedReadingFirstPublicationSource, previewRebase: previewReadingFirstPublicationRebase });
-const scienceRoles = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'];
 const languages = ['en', 'zh-CN'];
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const copy = value => structuredClone(value);

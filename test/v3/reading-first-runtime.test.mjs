@@ -212,7 +212,7 @@ test('adopted science entries are indexed under their own artifact root', async 
   const otherRoot = await mkdtemp(join(tmpdir(), 'reading-first-adopt-'));
   t.after(() => rm(otherRoot, { recursive: true, force: true }));
   const input = { profile: READING_FIRST_PROFILE, identity: { run_id: 'adopt-index', paper_id: 'synthetic' }, context: 'Reuse saved science', sources: s.handoff.sources, role_artifacts: [],
-    adopted_science: s.handoff.science.map(item => ({ artifact_root: s.root, artifact_id: item.receipt.artifact_id, receipt: item.receipt })) };
+    adopted_science: [...s.handoff.science].reverse().map(item => ({ artifact_root: s.root, artifact_id: item.receipt.artifact_id, receipt: item.receipt })) };
   const tasks = Object.fromEntries(['en', 'zh-CN'].map(key => [key, { task_id: key, task_name: 'adopt_' + key.replaceAll('-', '_').toLowerCase(), owner_actor_id: key, role: key === 'en' ? 'english-writer' : 'chinese-writer', artifact_id: key, artifact_path: 'fresh/' + key + '.json', native_path: 'fresh-native/' + key + '.json', revision: '1' }]));
   const control = createReadingFirstRunControl({ runId: 'adopt-index', presentationRequired: false, scientificInput: input, mainSession: { model: 'gpt-6-astra', reasoning_effort: 'high' }, authorizationId: 'synthetic', deadline: '2099-01-01T00:00:00Z', taskBindings: tasks, handoffProfile: SCIENCE_INDEX_PROFILE });
   const broker = createOwnedArtifactBroker({ control_actor_id: 'controller', artifact_root: otherRoot, authorized_bindings: [], run_controls: [control] });

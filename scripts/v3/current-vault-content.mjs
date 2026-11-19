@@ -1,30 +1,14 @@
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, realpathSync } from 'node:fs';
-import { resolve, relative, sep } from 'node:path';
+import { resolve } from 'node:path';
 import YAML from 'yaml';
 import MarkdownIt from 'markdown-it';
-import { readRegisteredCommit, assertRegisteredCommit, normalizeIndexPath, readRegisteredObject } from './phase22-active-version.mjs';
+import { readRegisteredCommit, assertRegisteredCommit, readRegisteredObject, readRegular } from './phase22-active-version.mjs';
 import { inspectManagedNote } from './phase22-managed-markdown.mjs';
 
 const records = new WeakMap();
 const markdown = new MarkdownIt();
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const fail = (code, details = {}) => { throw Object.assign(new Error(code), { code, details }); };
-
-function readRegular(root, path) {
-  path = normalizeIndexPath(path);
-  const base = realpathSync(resolve(root));
-  let cursor = base;
-  const parts = path.split('/');
-  for (let i = 0; i < parts.length; i++) {
-    cursor = resolve(cursor, parts[i]);
-    const stat = lstatSync(cursor);
-    if (stat.isSymbolicLink() || (i < parts.length - 1 ? !stat.isDirectory() : (!stat.isFile() || stat.nlink !== 1))) fail('P22_INDEX_FILE_TYPE', { path });
-  }
-  const actual = realpathSync(cursor), rel = relative(base, actual);
-  if (rel === '..' || rel.startsWith('..' + sep) || resolve(base, rel) !== actual) fail('P22_INDEX_PATH_ESCAPE', { path });
-  return readFileSync(actual);
-}
 
 function parseNote(bytes, path, generation, index) {
   const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);

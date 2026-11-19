@@ -7,9 +7,11 @@ import { inspectHostCapabilities } from './apa-host-capabilities.mjs';
 import { evaluateReadingPreflight } from './reading-preflight.mjs';
 export { evaluateReadingPreflight } from './reading-preflight.mjs';
 import { deriveSetupIssues } from './apa-setup-issues.mjs';
+import { APA_SCIENCE_ROLES } from '../apa-model-policy.mjs';
+
+export { APA_SCIENCE_ROLES };
 
 export const APA_CONFIG_VERSION = 'apa-local-config-1.0';
-export const APA_SCIENCE_ROLES = Object.freeze(['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration']);
 export const APA_CONFIG_ROLES = Object.freeze(['english-writer', 'chinese-writer', 'translation', 'reading-editor', 'independent-verifier']);
 export const APA_IDEATION_SKILLS = Object.freeze(['brainstorming-research-ideas', 'creative-thinking-for-research']);
 export const APA_WRITING_SKILLS = Object.freeze(['nature-writing', 'nature-polishing', 'nature-shared', 'humanizer', 'humanizer-zh', 'stss', ...APA_IDEATION_SKILLS]);

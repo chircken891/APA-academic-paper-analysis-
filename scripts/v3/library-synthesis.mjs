@@ -114,14 +114,8 @@ export async function prepareSynthesisMaterials({ repoRoot, mode = 'answer', que
     project = { ...structuredClone(writingContext.projectData), question, status: 'unsaved_context', ...(text(writingContext.current_markdown) ? { current_markdown: writingContext.current_markdown } : {}) };
   }
   if (['draft', 'review'].includes(mode) && !project) fail('WQ_PROJECT_CONTEXT_REQUIRED');
-  const map = await import('./library-map.mjs');
-  const options = { vaultRoot: repoRoot };
-  const inventory = await map.libraryInventory(options);
-  let knowledge;
-  if (mode === 'dossier') knowledge = await map.libraryDossier({ ...options, node });
-  else if (mode === 'clues') knowledge = await map.libraryClues({ ...options, from: from ?? question });
-  else knowledge = await map.libraryLandscape(options);
-  if (knowledge.generation_id && knowledge.generation_id !== snapshot.generation_id) fail('P24_GENERATION_CHANGED');
+  const { synthesisMapFromSnapshot } = await import('./library-map.mjs');
+  const { inventory, knowledge } = await synthesisMapFromSnapshot(snapshot, { mode, node, from: from ?? question });
   const relevant = paperIds?.length ? new Set(paperIds) : null;
   const sourceNotes = [];
   for (const paper of snapshot.generation.papers.filter(paper => !relevant || relevant.has(paper.paper_id))) {

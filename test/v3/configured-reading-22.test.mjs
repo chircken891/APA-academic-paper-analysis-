@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { exportPublicApa } from '../../scripts/setup/export-public-apa.mjs';
 import { DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, buildConfiguredReadingInstructions, deriveConfiguredMaxCalls } from '../../scripts/v3/configured-reading.mjs';
 import { evaluateReadingPreflight } from '../../scripts/lib/reading-preflight.mjs';
 
@@ -52,12 +55,20 @@ test('2.2 requires referenced Results tool capabilities', () => {
 });
 
 
-test('public export includes 2.2 execution and verification inputs', () => {
-  const spec = JSON.parse(readFileSync(new URL('../../config/apa-public-files.json', import.meta.url)));
+test('public export includes 2.2 execution and verification inputs', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'apa-public-reading-22-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const outputRoot = join(root, 'public');
+  await exportPublicApa({ outputRoot });
+  const manifest = JSON.parse(await readFile(join(outputRoot, 'apa-public-manifest.json'), 'utf8'));
+  const exported = new Set(manifest.files.map(row => row.path));
+  const packageJson = JSON.parse(await readFile(join(outputRoot, 'package.json'), 'utf8'));
+  const tests = new Set(packageJson.scripts['test:v3'].split(' '));
   const files = ['scripts/lib/reading-resource-tool.py', 'scripts/v3/reading-controller-audit.mjs', 'scripts/v3/reading-host-evidence.mjs', 'scripts/v3/reading-resources.mjs', 'scripts/v3/reading-runtime-binding.mjs', 'scripts/v3/reading-session-cli.mjs', 'prompts/v3/science-configured-2.2.md', 'prompts/v3/reading-configured-2.2.md'];
-  for (const file of files) assert.ok(spec.files.includes(file), file);
+  for (const file of files) assert.ok(exported.has(file), file);
   for (const file of ['test/v3/configured-reading-22.test.mjs','test/v3/reading-resources.test.mjs','test/v3/reading-runtime-binding.test.mjs','test/v3/reading-session-22.test.mjs','test/v3/reading-session-cli-audit.test.mjs']) {
-    assert.ok(spec.files.includes(file), file); assert.ok(spec.tests.includes(file), file);
+    assert.ok(exported.has(file), file);
+    assert.ok(tests.has(file), file);
   }
 });
 

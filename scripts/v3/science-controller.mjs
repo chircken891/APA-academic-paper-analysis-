@@ -10,9 +10,8 @@ import { compactionEnabled, compactionReminder } from './reading-compaction.mjs'
 import { normalizeHostReceipt, validateHostReceiptEvidence } from './reading-host-evidence.mjs';
 import { validateReadingResources } from './reading-resources.mjs';
 import { normalizeReadingFirstMap } from './reading-first-obsidian.mjs';
-import { extractHostTaskHandle } from '../apa-model-policy.mjs';
+import { APA_SCIENCE_ROLES as roles, extractHostTaskHandle } from '../apa-model-policy.mjs';
 
-const roles = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'];
 const dependencies = { evidence: [], methods: ['evidence'], results: ['evidence'], interpretation: ['evidence', 'methods', 'results'], 'scientific-reading': ['evidence', 'methods', 'results', 'interpretation'], integration: ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading'] };
 const controllers = new WeakMap();
 const copy = value => structuredClone(value);

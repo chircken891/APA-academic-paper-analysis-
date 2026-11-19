@@ -1,6 +1,6 @@
 import { isAbsolute, normalize, win32 } from 'node:path';
+import { APA_SCIENCE_ROLES } from '../apa-model-policy.mjs';
 
-const scienceRoles = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'];
 const nonempty = value => typeof value === 'string' && Boolean(value.trim());
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 
@@ -9,13 +9,13 @@ export function buildReadingSessionTasks({ runId, scientificInput, sourceLanguag
   if (instructionProfile !== 'configured-reading-2.2') fail('READING_BINDING_RETIRED');
   if (!/^[a-zA-Z0-9_-]+$/.test(runId ?? '') || !['en', 'zh-CN'].includes(sourceLanguage) || !nonempty(controllerActorId)) fail('READING_SESSION_INPUT_INVALID');
   const ids = scientificInput?.role_artifacts;
-  if (!Array.isArray(ids) || ids.length !== 6 || ids.some(id => !nonempty(id)) || new Set(ids).size !== ids.length) fail('READING_SESSION_SCIENCE_IDENTITIES');
+  if (!Array.isArray(ids) || ids.length !== APA_SCIENCE_ROLES.length || ids.some(id => !nonempty(id)) || new Set(ids).size !== ids.length) fail('READING_SESSION_SCIENCE_IDENTITIES');
   if (!Number.isSafeInteger(checkpointCount) || checkpointCount < 1) fail('READING_SESSION_CHECKPOINT_COUNT');
   const task = (key, role, artifactId, category) => ({ task_id: key, task_name: ('task_' + key).replace(/[^a-z0-9_]/gi, '_').toLowerCase(), owner_actor_id: key, role, artifact_id: artifactId,
     artifact_path: `${category}/${key}.json`, native_path: `native/${key}.json`, instruction_path: `instructions/${key}.txt`, revision: '1' });
   if (!['writer', 'reading-editor'].includes(presentationMode) || typeof includeRepairs !== 'boolean') fail('READING_SESSION_INPUT_INVALID');
-  if (Object.keys(scienceTaskOverrides).some(key => !scienceRoles.includes(key))) fail('READING_SESSION_TASK_OVERRIDE');
-  const scienceTasks = Object.fromEntries(scienceRoles.map((role, i) => {
+  if (Object.keys(scienceTaskOverrides).some(key => !APA_SCIENCE_ROLES.includes(key))) fail('READING_SESSION_TASK_OVERRIDE');
+  const scienceTasks = Object.fromEntries(APA_SCIENCE_ROLES.map((role, i) => {
     const override = scienceTaskOverrides[role] ?? {};
     if (!override || typeof override !== 'object' || Array.isArray(override) || override.role !== undefined && override.role !== role || override.artifact_id !== undefined && override.artifact_id !== ids[i]) fail('READING_SESSION_TASK_OVERRIDE');
     return [role, { ...task(role, role, ids[i], 'science'), ...override }];

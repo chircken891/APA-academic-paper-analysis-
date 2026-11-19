@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import * as api from '../../scripts/lib/apa-config.mjs';
+import * as modelPolicy from '../../scripts/apa-model-policy.mjs';
 import { buildConfiguredReadingInstructions } from '../../scripts/v3/configured-reading.mjs';
 import { spawnSync } from 'node:child_process';
 
@@ -24,6 +25,13 @@ function completeReadingConfig() {
     writing_skills: Object.fromEntries(api.APA_WRITING_SKILLS.map(key => [key, { enabled: false }])),
   };
 }
+
+test('the configuration API re-exports the frozen science role order from model policy', () => {
+  assert.strictEqual(api.APA_SCIENCE_ROLES, modelPolicy.APA_SCIENCE_ROLES);
+  assert.deepEqual(api.APA_SCIENCE_ROLES, ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration']);
+  assert.equal(Object.isFrozen(api.APA_SCIENCE_ROLES), true);
+  assert.deepEqual(modelPolicy.APA_CONFIGURED_ROLES, [...api.APA_SCIENCE_ROLES, ...api.APA_CONFIG_ROLES]);
+});
 
 test('enabled ideation guidance is excluded from both reading languages and frozen guide metadata', t => {
   const repoRoot = temporary(t);

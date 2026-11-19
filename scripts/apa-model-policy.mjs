@@ -13,7 +13,8 @@ const validMainSession = value => value && typeof value === 'object' && !Array.i
   && ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(value.reasoning_effort);
 
 export const APA_CONFIGURED_MODEL_POLICY_VERSION = 'apa-configured-role-model-policy-1.0';
-export const APA_CONFIGURED_ROLES = Object.freeze(['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration', 'english-writer', 'chinese-writer', 'translation', 'reading-editor', 'independent-verifier']);
+export const APA_SCIENCE_ROLES = Object.freeze(['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration']);
+export const APA_CONFIGURED_ROLES = Object.freeze([...APA_SCIENCE_ROLES, 'english-writer', 'chinese-writer', 'translation', 'reading-editor', 'independent-verifier']);
 // A configured model may omit reasoning_effort when its host has no such parameter.
 const validConfiguredModelPair = value => !!(value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).every(key => key === 'model' || key === 'reasoning_effort') && typeof value.model === 'string' && value.model.trim()
