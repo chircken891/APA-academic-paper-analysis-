@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { gzipSync, gunzipSync } from 'node:zlib';
+import { assertReadingSourceOutputPath, READ_ONLY_SOURCE_ACCESS } from './reading-source-policy.mjs';
 import { listReadingRuntimeSnapshotReferences, readReadingRuntimeSnapshotReference,
   releaseReadingRuntimeSnapshotReference, validateReadingRuntimeSnapshotManifest,
   verifyReadingRuntimeSnapshot, withReadingRuntimeSnapshotLock } from './reading-runtime-snapshot.mjs';
@@ -197,12 +198,27 @@ function sourceBoundary(ctx, path, kind) {
   return null;
 }
 
+function readOnlyCleanupSources(data) {
+  const setup = data?.prepared?.runControl?.reading_first_binding?.configured_setup;
+  return setup?.source_access === READ_ONLY_SOURCE_ACCESS ? setup.source_locations : null;
+}
+
+function assertCleanupOutput(ctx, row) {
+  if (!ctx.readOnlySources) return;
+  assertReadingSourceOutputPath(row.path, ctx.readOnlySources, { vaultRoot: ctx.repoRoot });
+  if (row.kind !== 'directory' && (/\.pdf$/i.test(row.path)
+    || row.sha256 !== undefined && ctx.readOnlySources.some(source => source.sha256 === row.sha256))) {
+    fail('RF_READ_ONLY_SOURCE_OUTPUT_CONFLICT', { path: row.path });
+  }
+}
+
 /** Register outputs at the point their producer creates them. Directories confer no ownership on unlisted files. */
 export async function registerReadingRuntimeCleanupFiles({ files = [], directories = [], ...options } = {}) {
   const ctx = await bindRun(options);
   const ref = readReadingRuntimeSnapshotReference(ctx);
   if (!ref || ref.run_root !== ctx.runRoot) return { status: 'unregistered-runtime' };
   if (await readReadingRuntimeTerminal(ctx)) fail('READING_RUNTIME_TERMINAL_ALREADY_RECORDED');
+  ctx.readOnlySources = readOnlyCleanupSources((await readCleanupController(ctx))?.data);
   const records = [];
   for (const row of [...files, ...directories.map(path => ({ path, kind: 'directory' }))]) {
     if (!isAbsolute(row.path ?? '') || !['host', 'historical', 'temporary', 'directory'].includes(row.kind)) {
@@ -210,11 +226,13 @@ export async function registerReadingRuntimeCleanupFiles({ files = [], directori
     }
     const path = resolve(row.path), boundary = sourceBoundary(ctx, path, row.kind);
     if (!boundary) continue;
+    assertCleanupOutput(ctx, { ...row, path });
     const type = row.kind === 'directory' ? 'directory' : 'file';
     const observed = pathState(boundary, path, type);
     if (!observed) fail('READING_RUNTIME_CLEANUP_REGISTRATION', { path });
     const bytes = type === 'directory' ? null : await readFile(path);
     const record = { path, kind: row.kind, ...(bytes ? { sha256: sha(bytes), byte_length: bytes.length } : {}) };
+    assertCleanupOutput(ctx, record);
     if (row.sha256 !== undefined && row.sha256 !== record.sha256
       || row.byte_length !== undefined && row.byte_length !== record.byte_length) fail('READING_RUNTIME_CLEANUP_BYTES_CHANGED', { path });
     records.push({ record, boundary, type, observed });
@@ -252,6 +270,7 @@ async function ownedRows(ctx) {
       || row.kind !== 'directory' && (!hashValue(row.sha256) || !Number.isSafeInteger(row.byte_length) || row.byte_length < 0)) {
       fail('READING_RUNTIME_CLEANUP_REGISTRATION', { path: join(base, name) });
     }
+    assertCleanupOutput(ctx, row);
     rows.push(row);
   }
   return rows;
@@ -340,9 +359,9 @@ async function ownedTree(ctx, directory, filePaths, directories, retained) {
   }
 }
 
-async function archiveControllerEvidence(ctx) {
+async function readCleanupController(ctx) {
   const statePath = join(ctx.runRoot, 'control', 'science-state.json');
-  if (!await inspectPath(ctx.runRoot, statePath, 'file')) return [];
+  if (!await inspectPath(ctx.runRoot, statePath, 'file')) return null;
   const { fingerprintV3Json } = await import('./semantic-package-validator.mjs');
   const bytes = await readFile(statePath);
   const { schema_version, data, fingerprint } = JSON.parse(bytes);
@@ -352,6 +371,12 @@ async function archiveControllerEvidence(ctx) {
     || control?.run_id !== ctx.runId || data.prepared.paths?.runRoot !== ctx.runRoot || !nonempty(actor)) {
     fail('READING_RUNTIME_HOST_RECORD_INVALID', { path: statePath });
   }
+  return { statePath, bytes, data, actor };
+}
+
+async function archiveControllerEvidence(ctx, controller) {
+  if (!controller) return [];
+  const { statePath, bytes, data, actor } = controller;
   const archives = [await archive(ctx, statePath, bytes, 'science-host-record')];
   const checkpoints = data.brokerConfig.authorized_bindings.filter(row => row.run_id === ctx.runId && row.actor_id === actor
     && row.role === 'control' && /^\d+$/.test(row.revision) && row.artifact_path === `control/reading-checkpoint-${row.revision}.json`)
@@ -374,8 +399,8 @@ async function archiveControllerEvidence(ctx) {
   return archives;
 }
 
-async function planFiles(ctx, manifests) {
-  const archives = await archiveControllerEvidence(ctx);
+async function planFiles(ctx, manifests, controller) {
+  const archives = await archiveControllerEvidence(ctx, controller);
   const retained = [], files = [], directories = new Set();
   const rows = await ownedRows(ctx);
   const known = rows.filter(row => row.kind !== 'directory').map(row => row.path);
@@ -417,6 +442,7 @@ async function removeSnapshotTree(root, directory, known) {
     const row = known.get(path);
     if (entry.isDirectory() && [...known.keys()].some(file => inside(path, file))) await removeSnapshotTree(root, path, known);
     else if (inside(root, path) && entry.isFile() && row && verifiedBytes(await readFile(path), row)) {
+      if ((await lstat(path)).nlink !== 1) fail('READING_RUNTIME_CLEANUP_PATH', { path });
       await chmod(path, 0o600);
       await unlink(path);
     }
@@ -537,6 +563,7 @@ function retireTarget(ctx, protection, target, observed) {
   if (observed.legacy_retired) return 'missing';
   const current = pathState(ctx.repoRoot, path, kind);
   if (!current) return 'missing';
+  if (type === 'file') assertCleanupOutput(ctx, target.row);
   if (type === 'directory') {
     // Child claims change the parent timestamps. Only move the same, empty directory.
     if (current.identity !== observed.identity) return 'bytes-changed';
@@ -604,6 +631,7 @@ async function deleteRetired(ctx, plan, { base, targets }, claim) {
       const current = pathState(ctx.repoRoot, retired, kind);
       if (current) {
         if (current.identity !== claim.observations[index].identity) fail('READING_RUNTIME_CLEANUP_RECORD_CONFLICT', { path: retired });
+        if (ctx.readOnlySources) assertReadingSourceOutputPath(retired, ctx.readOnlySources, { vaultRoot: ctx.repoRoot, tree: type === 'snapshot' });
         if (type === 'snapshot') {
           const known = new Map(manifest.files.map(row => [join(retired, row.path), row]));
           await removeSnapshotTree(retired, retired, known);
@@ -635,12 +663,14 @@ async function finishCleanup(ctx, manifest, terminal, ref) {
   const resultPath = join(ctx.runRoot, RESULT_FILE), planPath = join(ctx.runRoot, PLAN_FILE);
   const previous = await readRecord(ctx.runRoot, resultPath);
   if (previous) return previous;
+  const controller = await readCleanupController(ctx);
+  ctx.readOnlySources = readOnlyCleanupSources(controller?.data);
   let plan = await readRecord(ctx.runRoot, planPath);
   if (!plan) {
     if (!ref) fail('READING_RUNTIME_SNAPSHOT_REFERENCE_REQUIRED');
     const manifests = referenceManifests(ref);
     for (const item of manifests) verifyReadingRuntimeSnapshot({ manifest: item, repoRoot: ctx.repoRoot, runRoot: ctx.runRoot });
-    plan = { profile: PROFILE, run_id: ctx.runId, manifests, ...await planFiles(ctx, manifests) };
+    plan = { profile: PROFILE, run_id: ctx.runId, manifests, ...await planFiles(ctx, manifests, controller) };
     await writeImmutable(planPath, json(plan));
   } else if (plan.profile !== PROFILE || plan.run_id !== ctx.runId || plan.manifests?.[0]?.fingerprint !== manifest.fingerprint) {
     fail('READING_RUNTIME_CLEANUP_RECORD_CONFLICT', { path: planPath });

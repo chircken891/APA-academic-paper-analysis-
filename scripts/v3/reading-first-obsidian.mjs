@@ -2,11 +2,13 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import YAML from 'yaml';
 import { validateReadingFirstEditor } from './reading-first-editor.mjs';
-import { buildResearchMapCanvas, serializeResearchMapCanvas, researchMapCanvasSection } from './research-map-canvas.mjs';
+import { METHODS_READING_EDITOR_PROFILE } from './reading-first-editor-contract.mjs';
+import { METHODS_FIRST_READING_PROFILE } from '../lib/reading-profiles.mjs';
+import { buildResearchMapCanvas, normalizeResearchMapStepLinks, serializeResearchMapCanvas, researchMapCanvasSection } from './research-map-canvas.mjs';
 import { fingerprintV3Json } from './semantic-package-validator.mjs';
 import { registerReaderTargets } from './phase221-targets.mjs';
 import { mergeManagedNote } from './phase22-managed-markdown.mjs';
-import { applyReadingFirstKnowledgeContent, draftReadingFirstKnowledgeComparisons, matchReadingFirstKnowledgeIdentity,
+import { applyReadingFirstKnowledgeContent, collectSharedKnowledgeApplications, draftReadingFirstKnowledgeComparisons, matchReadingFirstKnowledgeIdentity,
   registeredKnowledgeReference, renderSharedKnowledge, sharedKnowledgeKind } from './reading-first-knowledge.mjs';
 
 const languages = ['en', 'zh-CN'];
@@ -22,6 +24,7 @@ const FIXED_MODULE_LABELS = Object.freeze({
   limitations: { en: 'Limitations', 'zh-CN': '局限' },
   conclusion: { en: 'Conclusions and implications', 'zh-CN': '结论与实践含义' },
 });
+const METHODS_FIRST_MODULE_LABEL = { en: 'Research process and methods', 'zh-CN': '研究过程与方法' };
 const local = (value, language) => typeof value === 'string' ? value : value?.[language];
 const visualPage = visual => visual.locator?.kind === 'pdf-page' ? visual.locator.page : visual.page;
 const label = value => String(value).replace(/[\[\]\r\n]/g, ' ');
@@ -54,37 +57,49 @@ function document({ language, paperId, title, alternate, source, reading, resour
 }
 
 /** Normalizes and checks the research map; shared by Integrator acceptance and rendering. */
-export function normalizeReadingFirstMap(declaredMap = { steps: [], findings: [], relations: [] }, sectionIds) {
+export function normalizeReadingFirstMap(declaredMap = { steps: [], findings: [], relations: [] }, sectionIds, { methodsFirst = false } = {}) {
+  if (!declaredMap || typeof declaredMap !== 'object' || Array.isArray(declaredMap)
+    || ['steps', 'findings', 'relations'].some(key => declaredMap[key] != null && !Array.isArray(declaredMap[key]))
+    || (methodsFirst && !Array.isArray(declaredMap.steps))
+    || declaredMap.relations?.some(relation => !relation || typeof relation !== 'object')) fail('RF_OBSIDIAN_MAP_INVALID');
   // Accepted handoffs may label research-map edges `from`/`to` (older Integrator output); normalize to the documented keys without changing nodes, edges or wording.
   const map = { ...declaredMap, steps: declaredMap.steps ?? [], findings: declaredMap.findings ?? [], relations: (declaredMap.relations ?? []).map(relation => ({
     ...relation,
     ...(relation.step_id === undefined && relation.from !== undefined ? { step_id: relation.from } : {}),
     ...(relation.finding_id === undefined && relation.to !== undefined ? { finding_id: relation.to } : {}),
   })) };
-  if (![map.steps, map.findings, map.relations].every(Array.isArray)) fail('RF_OBSIDIAN_MAP_INVALID');
   const nodes = [...map.steps, ...map.findings];
+  if (nodes.some(node => !node || typeof node !== 'object')) fail('RF_OBSIDIAN_MAP_INVALID');
   if (new Set(nodes.map(node => node.id)).size !== nodes.length) fail('RF_OBSIDIAN_MAP_INVALID');
   for (const node of nodes) {
     if (typeof node.id !== 'string' || !/^[a-z][a-z0-9-]*$/i.test(node.id)) fail('RF_OBSIDIAN_ID_INVALID');
+    if (methodsFirst && typeof node.label === 'string') fail('RF_OBSIDIAN_TEXT_REQUIRED');
     localized(node.label); if (sectionIds && !sectionIds.has(node.section_id)) fail('RF_OBSIDIAN_MAP_INVALID');
   }
   for (const relation of map.relations) if (!map.steps.some(node => node.id === relation.step_id) || !map.findings.some(node => node.id === relation.finding_id)) fail('RF_OBSIDIAN_MAP_INVALID');
+  const stepLinks = normalizeResearchMapStepLinks(map, { required: methodsFirst });
+  if (stepLinks) map.step_links = stepLinks;
   return map;
 }
 
 /** Pure candidate rendering. Paths are vault relative; assets are copied by the caller. */
-export function renderReadingFirstObsidian({ identity, views, presentation, targetRegistry, existingTargets = [], knowledgeRegistry = [], readingEditor, noteLayout, sourceLanguage } = {}) {
+export function renderReadingFirstObsidian({ identity, views, presentation, targetRegistry, existingTargets = [], knowledgeRegistry = [], readingEditor, expandedMethodIndex = false, stagedResearchMap = false, noteLayout, sourceLanguage, instructionProfile } = {}) {
   if (!presentation || presentation.schema_version !== 'reading-first-obsidian-1.0' || !Array.isArray(views) || views.length !== 2 || languages.some(language => views.filter(view => view.language === language).length !== 1)) fail('RF_OBSIDIAN_INPUT_INVALID');
   const p = applyReadingFirstKnowledgeContent({ presentation, views });
   const sharedKnowledge = p.knowledge_layout === 'shared-bilingual-1.0';
   if (p.knowledge_layout && !sharedKnowledge) fail('RF_OBSIDIAN_KNOWLEDGE_LAYOUT_INVALID');
-  const editor = readingEditor === undefined ? undefined : validateReadingFirstEditor({ editor: readingEditor, views, presentation });
+  const editor = readingEditor === undefined ? undefined : validateReadingFirstEditor({ editor: readingEditor, views, presentation, expandedMethodIndex, stagedResearchMap });
+  const methodsEditor = editor?.schema_version === METHODS_READING_EDITOR_PROFILE;
+  const methodsFirst = methodsEditor || instructionProfile === METHODS_FIRST_READING_PROFILE;
+  // Retain the original layout when replaying older 1.5 metadata without principles.
+  const expandedMethods = methodsEditor && editor.languages.en.methods.some(method => method.explanation !== undefined);
+  const numbered = Boolean(editor) || methodsFirst;
   // Editor 1.1: three heading levels, folded catalogues/captions, figure notes beside figures and a staged map.
-  const canvasMap = editor?.schema_version === 'reading-editor-1.4';
-  const compact = ['reading-editor-1.1', 'reading-editor-1.2', 'reading-editor-1.3', 'reading-editor-1.4'].includes(editor?.schema_version);
-  const fold = !['reading-editor-1.3', 'reading-editor-1.4'].includes(editor?.schema_version);
+  const canvasMap = methodsEditor || editor?.schema_version === 'reading-editor-1.4';
+  const compact = canvasMap || ['reading-editor-1.1', 'reading-editor-1.2', 'reading-editor-1.3'].includes(editor?.schema_version);
+  const fold = !methodsFirst && !canvasMap && editor?.schema_version !== 'reading-editor-1.3';
   const writerLayout = p.layout === 'writer-modules-1.0';
-  if (editor && !writerLayout) fail('RF_OBSIDIAN_EDITOR_LAYOUT_INVALID');
+  if (numbered && (!writerLayout || methodsFirst && editor && !methodsEditor)) fail('RF_OBSIDIAN_EDITOR_LAYOUT_INVALID');
   if (p.layout && !writerLayout) fail('RF_OBSIDIAN_LAYOUT_INVALID');
   const modules = p.modules ?? [];
   if (writerLayout) {
@@ -182,8 +197,10 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
       : (language === 'en' ? `Original p. ${visualPage(visual)}` : `原文第${visualPage(visual)}页`);
   }
   const visualSourceHref = (target, visual) => href(target, visualSources.get(visual.id)) + (visual.locator?.kind === 'docx-figure' ? '' : '#page=' + visualPage(visual));
-  const map = normalizeReadingFirstMap(p.map ?? undefined, new Set(byId.keys())), nodes = [...map.steps, ...map.findings];
+  const map = normalizeReadingFirstMap(p.map ?? undefined, new Set(byId.keys()), { methodsFirst });
+  const nodes = [...map.steps, ...map.findings];
   const supportNotes = [], knowledgeProposals = [], knowledgeMergeCandidates = [], destinations = new Map(), identityMatches = new Map();
+  const applicationSectionsById = new Map();
   const definitionIndexes = new Map();
   for (const item of knowledge) {
     requireId(item.id); localized(item.title);
@@ -194,7 +211,10 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
       if (item.source_kind === 'paper-fact') continue;
       const identityMatch = matchReadingFirstKnowledgeIdentity({ item, knowledgeRegistry, vaultPath });
       identityMatches.set(item.id, identityMatch);
-      const result = renderSharedKnowledge({ item, knowledgeRegistry, identityMatch, paperTargets: registry.paper_targets, paperId: identity.paper_id, paperTitle: p.bibliography.title, vaultPath, href });
+      const applicationSections = methodsFirst ? collectSharedKnowledgeApplications({ item, views, presentation: p, editor, expandedMethodIndex }) : undefined;
+      applicationSectionsById.set(item.id, applicationSections);
+      const result = renderSharedKnowledge({ item, knowledgeRegistry, identityMatch, paperTargets: registry.paper_targets,
+        paperId: identity.paper_id, paperTitle: p.bibliography.title, vaultPath, href, applicationSections });
       supportNotes.push(result.note);
       if (result.proposal) knowledgeProposals.push(result.proposal);
       knowledgeMergeCandidates.push(...draftReadingFirstKnowledgeComparisons({ item, knowledgeRegistry, match: identityMatch, target: result.note.path, indexes: definitionIndexes }));
@@ -227,7 +247,9 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
       if (!destination) fail('RF_OBSIDIAN_REFERENCE_INVALID');
       return md(text, href(target, destination) + '#' + encodeMarkdownComponent(language === 'en' ? 'English' : '中文'));
     });
-    supportNotes[index] = renderSharedKnowledge({ item, knowledgeRegistry, identityMatch: identityMatches.get(item.id), paperTargets: registry.paper_targets, paperId: identity.paper_id, paperTitle: p.bibliography.title, vaultPath, href, resolveReferences }).note;
+    supportNotes[index] = renderSharedKnowledge({ item, knowledgeRegistry, identityMatch: identityMatches.get(item.id),
+      paperTargets: registry.paper_targets, paperId: identity.paper_id, paperTitle: p.bibliography.title,
+      vaultPath, href, resolveReferences, applicationSections: applicationSectionsById.get(item.id) }).note;
   }
   for (const note of sharedKnowledge ? [] : supportNotes) {
     const otherLanguage = languages.find(language => language !== note.language);
@@ -241,20 +263,32 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     const en = language === 'en', target = registry.paper_targets[language], view = views.find(value => value.language === language), alternate = registry.paper_targets[languages.find(value => value !== language)];
     const edits = editor?.languages[language];
     const headingHref = heading => '#' + encodeMarkdownComponent(heading).replace(/%2F/g, '/');
-    const moduleHeadings = new Map(modules.map((module, index) => [module.id, `${index + 1}. ${local(compact ? FIXED_MODULE_LABELS[module.id] : module.label, language)}`]));
+    const moduleHeadings = new Map(modules.map((module, index) => {
+      const title = methodsFirst && module.id === 'methods' ? METHODS_FIRST_MODULE_LABEL : (compact || methodsFirst ? FIXED_MODULE_LABELS[module.id] : module.label);
+      return [module.id, `${index + 1}. ${local(title, language)}`];
+    }));
     const mapHeading = en ? '2.1 Research map' : '2.1 研究导图';
-    const inventoryHeading = en ? '3.1 Methods and concepts at a glance' : '3.1 方法与概念索引';
+    const hasResearchMap = (nodes.length > 0 || canvasMap) && (!compact || canvasMap);
+    const designOverview = methodsFirst ? view.sections.find(section => section.module_id === 'design') : undefined;
+    const methodSections = view.sections.filter(section => section.module_id === 'methods');
+    const hasMethodIndex = Boolean(edits?.methods.length);
+    const indexBeforeMethods = !methodsFirst || expandedMethods;
+    const inventoryHeading = !indexBeforeMethods
+      ? `3.${methodSections.length + 1} ${en ? 'Method index' : '方法索引'}`
+      : en ? '3.1 Methods and concepts at a glance' : '3.1 方法与概念索引';
     const overviewHeading = en ? 'Reading overview' : '阅读提要';
     const sectionHeadings = new Map();
+    if (designOverview) sectionHeadings.set(designOverview.id, moduleHeadings.get('design'));
     for (const module of modules) {
-      const offset = (module.id === 'design' && (nodes.length || canvasMap) && (!compact || canvasMap) || module.id === 'methods') ? 1 : 0;
-      view.sections.filter(section => section.module_id === module.id).forEach((section, index) => sectionHeadings.set(section.id, `${modules.indexOf(module) + 1}.${index + 1 + offset} ${section.heading}`));
+      const offset = module.id === 'design' && hasResearchMap || module.id === 'methods' && indexBeforeMethods ? 1 : 0;
+      view.sections.filter(section => section.module_id === module.id && section !== designOverview)
+        .forEach((section, index) => sectionHeadings.set(section.id, `${modules.indexOf(module) + 1}.${index + 1 + offset} ${section.heading}`));
     }
     const methodHeading = (method, index) => `3.1.${index + 1} ${method.title}`;
     const subheadingTitle = (section, item, edit) => `${sectionHeadings.get(section.id).split(' ')[0]}.${edit.subheadings.filter(heading => heading.before_paragraph <= item.before_paragraph).length} ${item.heading}`;
     const visualHeadings = new Map(visuals.map(visual => [visual.id, visual.locator?.kind === 'docx-figure' ? `${local(visual.label, language)} · ${visualSourcePage(visual, language)}` : `${local(visual.label, language)} · ${en ? 'Source p.' : '原文页'} ${visualPage(visual)}`]));
     const visualLink = id => editor && !compact ? headingHref(visualHeadings.get(id)) : '#^rf-visual-' + id;
-    const sectionHref = id => editor ? headingHref(sectionHeadings.get(id)) : `#^${anchor(id)}`;
+    const sectionHref = id => numbered ? headingHref(sectionHeadings.get(id)) : `#^${anchor(id)}`;
     const sectionLink = (id, text) => md(text, sectionHref(id));
     const sectionLinks = ids => ids.map(id => sectionLink(id, view.sections.find(section => section.id === id).heading)).join(' · ');
     const knowledgeHref = id => {
@@ -275,9 +309,14 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
         const destination = knowledgeHref(id);
         return md(sharedKnowledge ? local(knowledge.find(item => item.id === id).title, language) : en ? 'Shared explanation' : '通用解释', destination);
       });
+      if (methodsFirst && !expandedMethods) {
+        const [first, ...others] = method.section_ids;
+        return `- ${sectionLink(first, method.title)} · ${resolveReferences(method.application)}${[...others.map(id => sectionLink(id, sectionHeadings.get(id))), ...links].map(link => ' · ' + link).join('')}\n`;
+      }
       const body = `**${en ? 'Principle' : '原理'}**${en ? ': ' : '：'}${resolveReferences(method.explanation)}\n\n**${en ? 'Use in this study' : '本文中的作用'}**${en ? ': ' : '：'}${resolveReferences(method.application)}\n\n${sectionLinks(method.section_ids)}${links.length ? ' · ' + links.join(' · ') : ''}`;
-      return compact ? callout('info', label(method.title), body, true) : `#### ${methodHeading(method, index)}\n\n${body}\n\n`;
-    }).join('');
+      const title = expandedMethods ? `${index + 1}. ${label(method.title)}` : label(method.title);
+      return compact ? callout('info', title, body, true) : `#### ${methodHeading(method, index)}\n\n${body}\n\n`;
+    }).join('') + (indexBeforeMethods ? '' : '\n');
     const resolveReferences = text => text.replace(/\[([^\]\n]+)\]\((apa-[^)]+)\)/g, (_, text, reference) => {
       let destination;
       const source = /^apa-source:([a-z][a-z0-9-]*)#page=([1-9][0-9]*)$/.exec(reference);
@@ -293,13 +332,18 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     let source = `# ${local(bibliography.title, language)}\n\n${bibliography.citation ?? `${bibliography.first_author} (${bibliography.year})`}\n\n${md(en ? 'Original paper' : '原文', href(target, p.source_pdf))} · ${md(en ? '中文' : 'English', href(target, alternate))}\n\n`;
     if (bibliography.doi) source += `DOI: ${md(bibliography.doi, `https://doi.org/${encodeURI(bibliography.doi)}`)}\n\n`;
     let contents = writerLayout ? modules.flatMap(module => [`- ${md(local(module.label, language), '#' + encodeURIComponent(local(module.label, language)))}`, ...view.sections.filter(section => section.module_id === module.id).map(section => `  - ${sectionLink(section.id, section.heading)}`), ...(module.id === 'design' && nodes.length ? [`  - ${md(en ? 'Research map' : '研究导图', '#' + encodeURIComponent(en ? 'Research map' : '研究导图'))}`] : [])]) : view.sections.map((section, index) => `- ${sectionLink(sections.find(value => value.indices[language] === index).id, section.heading)}`);
-    if (editor) {
-      source += `## ${overviewHeading}\n\n` + callout('abstract', en ? 'Key findings and interpretation' : '核心发现与解读', edits.overview.map(item => `- ${resolveReferences(item.text)} ${sectionLinks(item.section_ids)}`).join('\n'));
-      contents = [`- **${md(overviewHeading, headingHref(overviewHeading))}**`, ...modules.flatMap(module => [
+    if (numbered) {
+      if (editor) {
+        const overviewTitle = methodsFirst ? (en ? 'Study approach and main findings' : '研究路线与主要发现') : (en ? 'Key findings and interpretation' : '核心发现与解读');
+        const overview = edits.overview.map(item => `${methodsFirst ? '' : '- '}${resolveReferences(item.text)} ${sectionLinks(item.section_ids)}`).join('\n');
+        source += `## ${overviewHeading}\n\n` + callout('abstract', overviewTitle, overview);
+      }
+      contents = [...(editor ? [`- **${md(overviewHeading, headingHref(overviewHeading))}**`] : []), ...modules.flatMap(module => [
         `- **${md(moduleHeadings.get(module.id), headingHref(moduleHeadings.get(module.id)))}**`,
-        ...(module.id === 'design' && (nodes.length || canvasMap) && (!compact || canvasMap) ? [`  - ${md(mapHeading, headingHref(mapHeading))}`] : []),
-        ...(module.id === 'methods' ? [`  - ${md(inventoryHeading, headingHref(inventoryHeading))}`] : []),
-        ...view.sections.filter(section => section.module_id === module.id).map(section => `  - ${sectionLink(section.id, sectionHeadings.get(section.id))}`),
+        ...(module.id === 'design' && hasResearchMap ? [`  - ${md(mapHeading, headingHref(mapHeading))}`] : []),
+        ...(module.id === 'methods' && hasMethodIndex && indexBeforeMethods ? [`  - ${md(inventoryHeading, headingHref(inventoryHeading))}`] : []),
+        ...view.sections.filter(section => section.module_id === module.id && section !== designOverview).map(section => `  - ${sectionLink(section.id, sectionHeadings.get(section.id))}`),
+        ...(module.id === 'methods' && hasMethodIndex && !indexBeforeMethods ? [`  - ${md(inventoryHeading, headingHref(inventoryHeading))}`] : []),
       ])];
     }
     if (writerLayout) for (const heading of [en ? 'Figures and tables' : '图表导航', en ? 'Personal Notes' : '个人笔记']) contents.push(`- ${md(heading, '#' + encodeURIComponent(heading))}`);
@@ -312,7 +356,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
         argument: editor.argument, primaryFindingIds: editor.primary_finding_ids, language, notePath: target, sectionTitles: sectionHeadings }));
       generatedAssets.push({ kind: 'research-map-canvas', language, path: canvasPath, content,
         sha256: 'sha256:' + createHash('sha256').update(content).digest('hex'), byte_length: Buffer.byteLength(content) });
-      researchMap = `### ${mapHeading}\n\n` + researchMapCanvasSection({ canvasPath, language }) + '\n\n';
+      researchMap = `### ${mapHeading}\n\n` + researchMapCanvasSection({ canvasPath, language, methodsFirst, staged: Boolean(editor.argument?.stage_map) }) + '\n\n';
     } else if (compact && nodes.length) {
       // Left-to-right stages keep wide maps readable; only editor-selected nodes and their own edges are drawn.
       const selected = editor.map.nodes, ids = new Set(selected.map(node => node.id)), drawn = new Set(), mermaidId = id => id.replaceAll('-', '_');
@@ -339,8 +383,11 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
           + omitted.map(node => sectionLink(node.section_id, local(node.label, language))).join(' · ') + '\n\n';
       }
     } else if (nodes.length) {
-      researchMap += `${writerLayout ? '###' : '##'} ${editor ? mapHeading : en ? 'Research map' : '研究导图'}\n\n\`\`\`mermaid\nflowchart TD\n`;
+      researchMap += `${writerLayout ? '###' : '##'} ${numbered ? mapHeading : en ? 'Research map' : '研究导图'}\n\n\`\`\`mermaid\nflowchart TD\n`;
       for (const node of nodes) researchMap += `  ${node.id.replaceAll('-', '_')}["${local(node.label, language).replace(/["\r\n<>]/g, ' ')}"]\n`;
+      if (methodsFirst) for (const link of map.step_links ?? []) {
+        researchMap += `  ${link.from_step_id.replaceAll('-', '_')} -->|"${local(link.label, language).replace(/["\r\n<>|]/g, ' ')}"| ${link.to_step_id.replaceAll('-', '_')}\n`;
+      }
       for (const relation of map.relations) researchMap += `  ${relation.step_id.replaceAll('-', '_')} --> ${relation.finding_id.replaceAll('-', '_')}\n`;
       researchMap += '```\n\n' + nodes.map(node => `- ${sectionLink(node.section_id, local(node.label, language))}`).join('\n') + '\n\n';
     }
@@ -349,12 +396,14 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
       const spec = sections.find(value => value.indices[language] === index);
       if (writerLayout && (index === 0 || view.sections[index - 1].module_id !== section.module_id)) {
         const module = modules.find(item => item.id === section.module_id);
-        reading += `## ${editor ? moduleHeadings.get(module.id) : local(module.label, language)}\n\n`;
-        if (editor && module.id === 'methods') reading += methodInventory();
-        if (module.id === 'design' && (!compact || canvasMap)) reading += researchMap;
+        reading += `## ${numbered ? moduleHeadings.get(module.id) : local(module.label, language)}\n\n`;
+        if (hasMethodIndex && module.id === 'methods' && indexBeforeMethods) reading += methodInventory();
+        if (module.id === 'design' && (!compact || canvasMap) && !designOverview) reading += researchMap;
       }
       if (!writerLayout && spec.id === (map.steps[0]?.section_id ?? nodes[0]?.section_id)) reading += researchMap;
-      reading += `${writerLayout ? '###' : '##'} ${editor ? sectionHeadings.get(section.id) : section.heading}\n\n`;
+      if (section !== designOverview) {
+        reading += `${writerLayout ? '###' : '##'} ${numbered ? sectionHeadings.get(section.id) : section.heading}\n\n`;
+      }
       const edit = edits?.sections.find(item => item.section_id === section.id);
       if (edit?.takeaway) reading += callout('summary', en ? 'Key point' : '要点', resolveReferences(edit.takeaway));
       const notes = new Map((compact ? edits.visuals : []).flatMap(item => (item.notes ?? []).filter(note => note.section_id === section.id).map(note => [note.paragraph_index, item.id])));
@@ -408,6 +457,8 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
         return step.section_id === spec.id ? [finding] : finding.section_id === spec.id ? [step] : [];
       });
       if (related.length) reading += `${en ? 'Study links' : '研究关联'}: ` + [...new Map(related.map(node => [node.id, node])).values()].map(node => sectionLink(node.section_id, local(node.label, language))).join(' · ') + '\n\n';
+      if (section === designOverview) reading += researchMap;
+      if (!indexBeforeMethods && hasMethodIndex && section.id === methodSections.at(-1)?.id) reading += methodInventory();
     });
     const resources = `## ${en ? 'Figures and tables' : '图表导航'}\n\n` + visuals.map(visual => `- ${md(local(visual.label, language), visualLink(visual.id))}`).join('\n') + '\n';
     const bytes = Buffer.from(document({ language, paperId: identity.paper_id, title: local(bibliography.title, language), alternate, source, reading, resources }));

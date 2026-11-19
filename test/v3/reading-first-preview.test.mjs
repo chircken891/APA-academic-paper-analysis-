@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, readFile, rm, writeFile, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile, access, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -204,4 +204,48 @@ test('candidate inspection reports changed, missing and additional files indepen
   assert.equal(report.status,'failed');
   assert.deepEqual(report.consistency,{status:'failed',modified:[note],missing:['.apa-v3/presentation.json'],extra:['added.txt']});
   assert.equal(report.links.status,'passed');
+});
+
+test('preview references registered historical PDFs in place and rejects an unregistered substitute', async t => {
+  const input = await fixture(t), vaultRoot = path.dirname(input.outputRoot);
+  const prior = await readingFirstIndexFixture(t, { vaultRoot });
+  const historicalPdf = prior.files.find(row => row.path.endsWith('.pdf'));
+  const support = prior.files.find(row => row.kind === 'support');
+  support.bytes = Buffer.concat([support.bytes, Buffer.from(`\n[Historical page](../../${historicalPdf.path}#page=3)\n\n[[${path.basename(historicalPdf.path)}#page=4|Next page]]\n`)]);
+  prior.generation.objects.find(row => row.path === support.path).sha256 = 'sha256:' + digest(support.bytes);
+  await prior.save(await prior.build());
+  input.knowledgeRegistry = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot });
+  input.historicalKnowledge = { vaultRoot };
+  input.views[0].sections[0].paragraphs.push(`[[${support.path}#English|Older method]]`);
+  const original = input.resources[0];
+  const vaultPath = 'Clippings/论文 (主文).pdf', absolute = path.join(vaultRoot, vaultPath);
+  await mkdir(path.dirname(absolute));
+  await writeFile(absolute, await readFile(original.source_path));
+  const { dev, ino, mtimeNs } = await stat(absolute, { bigint: true });
+  original.source_path = absolute;
+  original.path = input.presentation.source_pdf = vaultPath;
+  original.sha256 = 'sha256:' + original.sha256;
+  input.readOnlySources = { vaultRoot, locations: [{ path: absolute, vault_path: vaultPath, sha256: original.sha256,
+    byte_length: original.byte_length, file_identity: { dev: String(dev), ino: String(ino), mtime_ns: String(mtimeNs) } }] };
+
+  const result = await exportReadingFirstPreview(input);
+  assert.ok(result.files.every(file => !file.endsWith('.pdf')));
+  assert.deepEqual(result.manifest.source_dependencies.map(row => row.path), [vaultPath, historicalPdf.path]);
+  const historicalNote = await readFile(path.join(result.outputRoot, support.path), 'utf8');
+  assert.ok(historicalNote.includes(`[[${historicalPdf.path}#page=3|Historical page]]`));
+  assert.ok(historicalNote.includes(`[[${historicalPdf.path}#page=4|Next page]]`));
+  assert.equal((await inspectReadingFirstCandidate(result)).status, 'passed');
+
+  const other = 'Clippings/unregistered.pdf', unrelated = Buffer.from('%PDF-1.7 unrelated original');
+  await writeFile(path.join(vaultRoot, other), unrelated);
+  const manifest = structuredClone(result.manifest);
+  manifest.source_dependencies.push({ path: other, byte_length: unrelated.length, sha256: 'sha256:' + digest(unrelated) });
+  const bytes = Buffer.from(JSON.stringify(manifest)), manifestPath = '.apa-v3/presentation.json';
+  await writeFile(path.join(result.outputRoot, manifestPath), bytes);
+  const inventory = result.inventory.map(row => row.path === manifestPath
+    ? { path: row.path, sha256: digest(bytes), byte_length: bytes.length } : row);
+  const checked = await inspectReadingFirstCandidate({ ...result, inventory });
+  assert.equal(checked.consistency.status, 'passed');
+  assert.equal(checked.links.code, 'RF_KNOWLEDGE_REGISTRY_ASSET_UNREGISTERED');
+  assert.equal(checked.links.details.path, other);
 });

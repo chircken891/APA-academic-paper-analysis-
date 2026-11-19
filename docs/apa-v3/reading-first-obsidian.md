@@ -6,7 +6,7 @@
 
 `renderReadingFirstNotes({controller,targetRegistry,existingTargets,knowledgeRegistry})`（`scripts/v3/reading-first-runtime.mjs`）从运行状态渲染完整呈现。`knowledgeRegistry` 提供只读知识节点身份/别名匹配，不能授权写正式节点。完成整体审查后，按[最新阅读结果的 V3 发布](reading-first-publication.md)准备完整文件清单，经精确哈希批准后复用既有事务；正式索引与图谱读取已提交代次。
 
-纯渲染入口 `renderReadingFirstObsidian({identity,views,presentation,targetRegistry,existingTargets,knowledgeRegistry})` 不写文件。它返回双语 `notes`、`supportNotes`、已有知识的 `knowledgeProposals`、资源路径及登记表。采用 Editor 1.4 时，结果另带渲染的 Canvas 文件，供候选写入、预览和发布校验。
+纯渲染入口 `renderReadingFirstObsidian({identity,views,presentation,targetRegistry,existingTargets,knowledgeRegistry,instructionProfile})` 不写文件。它返回双语 `notes`、`supportNotes`、已有知识的 `knowledgeProposals`、资源路径及登记表。采用 Editor 1.4 或 1.5 时，结果另带渲染的 Canvas 文件，供候选写入、预览和发布校验。
 
 ## Writer 与呈现接口
 
@@ -14,26 +14,32 @@
 
 新功能性交付建议在新控制绑定中显式设 `presentationMode:'reading-editor'`。顺序为科学整合 → 原文语言 Writer → Translation → 一次双语 Reading Editor → 渲染 → 原有一次整体审查（旧 source-first 绑定为首先写作语言的 Writer → 另一语言 Writer）。Writer 保留完整讲解和资源落点；Reading Editor 为这些真实 accepted views 添加呈现信息，不改写科学段落，不增加科学核对或润色调用。
 
-原文稿与译稿接收后调用 `createReadingFirstPresentationRequest({controller})`。请求包含 `views`、原 `view_receipts`、登记的 `presentation`、`output_schema`（`reading-editor-1.4`）；局部修订附 `issues`。按既有真实 host/native/owned 流程接收编辑输出后再渲染。编辑角色使用本次冻结的角色模型及推理强度，配置为follow-main时才采用冻结主会话设置。新模式控制器允许后续调用上限4–8次，并不自动授予这些调用：原文Writer、Translation、Editor、整体审查共4次；原文稿与译稿修正、Editor更新和一次局部复核还需4次。若授权包含完整修复链，须在冻结前预留8次，并把先行科学调用计入独立总上限。具体授权可更小，复用已接收原文稿与译稿的窗口无需重跑Writer与Translation。恢复不重置额度。
+原文稿与译稿接收后调用 `createReadingFirstPresentationRequest({controller})`。请求包含 `views`、原 `view_receipts`、登记的 `presentation`、`output_schema`（与绑定一致的 `reading-editor-1.4` 或 `reading-editor-1.5`）；局部修订附 `issues`。按既有真实 host/native/owned 流程接收编辑输出后再渲染。编辑角色使用本次冻结的角色模型及推理强度，配置为follow-main时才采用冻结主会话设置。新模式控制器允许后续调用上限4–8次，并不自动授予这些调用：原文Writer、Translation、Editor、整体审查共4次；原文稿与译稿修正、Editor更新和一次局部复核还需4次。若授权包含完整修复链，须在冻结前预留8次，并把先行科学调用计入独立总上限。具体授权可更小，复用已接收原文稿与译稿的窗口无需重跑Writer与Translation。恢复不重置额度。
 
-编辑输出绑定 `readingFirstViewsFingerprint(views)`。字段和校验见 [编辑接口](../../scripts/v3/reading-first-editor.mjs) 和 [Reading Editor 1.4 提示](../../prompts/v3/reading-editor-1.4.md)。
+编辑输出绑定 `readingFirstViewsFingerprint(views)`。字段和校验见 [编辑接口](../../scripts/v3/reading-first-editor.mjs) 及对应版本的提示。 [Reading Editor 1.4](../../prompts/v3/reading-editor-1.4.md) · [Reading Editor 1.5](../../prompts/v3/reading-editor-1.5.md)
 
 - `languages[language].overview`：重点及实际 `section_ids`，让读者先看到研究主线和关键限制。
 - `sections`：按稳定 `section_id` 添加可选 `takeaway`、原段落精确引文 `emphasis` 和按 `before_paragraph` 放置的 `subheadings`。强调仅落在未加粗的纯文本，不进入公式、链接或代码，不交叠。渲染器负责编号和锚点。
-- `methods`：独立逐项列出方法、测量与必要概念，包含 `id,title,explanation,application,section_ids` 和登记过的 `knowledge_ids` 数组；兼容旧 `knowledge_id`。所给登记节点覆盖该操作时须关联，只有本文特有的操作才使用空 `knowledge_ids`；非空关联须属于登记目录，两语每项的知识身份集合（含空集合）一致。原理与本文应用分别充分说明，不只提一嘴。
+- 1.4 的 `methods`：独立逐项列出方法、测量与必要概念，包含 `id,title,explanation,application,section_ids` 和登记过的 `knowledge_ids` 数组；兼容旧 `knowledge_id`。所给登记节点覆盖该操作时须关联，只有本文特有的操作才使用空 `knowledge_ids`；非空关联须属于登记目录，两语每项的知识身份集合（含空集合）一致。原理与本文应用分别充分说明，不只提一嘴。
 
-Reading Editor 1.4 另提供图表呈现和导图论证。
+2.3 的第三章固定为“研究过程与方法”（Research process and methods），由 Writer 按论文任务组织正文。每个方法在正文首次出现时交代本文操作和必要原理。1.5 的新成稿采用 `methods:[{id,title,explanation,application,section_ids,knowledge_ids?}]`。两语的每条记录均填写 `explanation` 概括原理，`application` 概括本文中的作用。`section_ids` 按正文顺序指向实际讲解的小节，可覆盖第二章的设计、第三章的操作和第四章的结果判读。一项方法可以同时链接操作与结果，图型也可从第四章开始索引。两语共用方法顺序、对应小节与登记知识身份，论文专用方法可以只指向正文。索引按首次使用顺序编号并展开于“3.1 方法与概念索引”或“3.1 Methods and concepts at a glance”，附相关正文及已有知识节点的链接。第三章的方法正文随后从 3.2 开始编号。确无研究程序的文章可在第三章说明论述范围和依据，方法索引留空，正文从 3.1 开始。已冻结的 1.5 编辑结果按原输入恢复，两语条目均无 `explanation` 时沿用原章末索引。
+
+两个 Editor 版本都提供图表呈现和导图论证。
 
 - `languages[language].visuals:[{id,title?,notes?:[{section_id,paragraph_index}]}]`：图表的简短显示标题（含原编号）以及读图说明段落。说明段落须是该图放置小节中的非首段且没有小标题，渲染时移到图片之后，不改写文字。
-- `argument` 含研究问题、4 到 8 个论点、分支、固定词表中的有向关系和结论。论点包含两语论点句、证据摘要、限制、小节 ID、分支 ID 和发现 ID。每项已登记发现恰好分配给一个论点，论点关系无环且每个论点位于问题到结论的路径上。可用 `primary_finding_ids` 标记重点发现。编辑根据已接受正文填写，沿用一次整体审查。
+- `argument` 含研究问题、论点、分支、固定词表中的有向关系和结论。1.4 要求 4 到 8 个论点。1.5 依据原文保留最多 8 个论点，无独立论点的短文可以从问题直接连到结论。论点包含两语论点句、证据摘要、限制、小节 ID、分支 ID 和发现 ID。每项已登记发现恰好分配给一个论点，论点关系无环且每个论点位于问题到结论的路径上。可用 `primary_finding_ids` 标记重点发现。编辑根据已接受正文填写，沿用一次整体审查。
 
-模块大标题固定为“摘要 / 研究问题与设计 / 方法、概念与测量 / 主要发现 / 讨论 / 局限 / 结论与实践含义”（英文 Abstract / Research question and design / Methods, concepts and measurement / Findings / Discussion / Limitations / Conclusions and implications）。论文特定措辞放在小节标题。正文采用模块和小节两级编号，含文档标题共三级。编辑小标题为段首加粗短语。目录、方法条目和原图注直接展开。图表的“标题 · 原文页”行承载 `^rf-visual-<id>` 锚点，后接图型、图片、读图说明和原图注。
+2.2 的模块大标题固定为“摘要 / 研究问题与设计 / 方法、概念与测量 / 主要发现 / 讨论 / 局限 / 结论与实践含义”（英文 Abstract / Research question and design / Methods, concepts and measurement / Findings / Discussion / Limitations / Conclusions and implications）。论文特定措辞放在小节标题。正文采用模块和小节两级编号，含文档标题共三级。编辑小标题为段首加粗短语。目录、方法条目和原图注直接展开。图表的“标题 · 原文页”行承载 `^rf-visual-<id>` 锚点，后接图型、图片、读图说明和原图注。
 
-每种语言生成一份 JSON Canvas，路径为 `Figures/<run_id>/research-map.zh-CN.canvas` 或 `Figures/<run_id>/research-map.en.canvas`。研究问题和读图说明在顶部，步骤、发现和论点分三列，结论在底部。全部登记步骤、发现和步骤到发现的关系进入导图，重点发现有独立标记。画布中的卡片链接到同语言笔记的实际小节。
+每种语言生成一份 JSON Canvas，路径为 `Figures/<run_id>/research-map.zh-CN.canvas` 或 `Figures/<run_id>/research-map.en.canvas`。新建的 2.3 Editor 运行冻结阶段式导图，预览和发布重建共用同一份模板。2.2 的历史绑定保留全篇的步骤、发现和论点三列。两种画布都收录全部登记步骤、发现及其证据关系，正文链接指向相应语言的小节。已有运行按冻结绑定重建。
 
-笔记在“2.1 研究导图”或“2.1 Research map”小节给出读图说明、只读嵌入和完整 Canvas 链接。Better Embedded Canvas 为嵌入提供只读平移与缩放，完整画布链接可单独使用。预览检查两份 Canvas 和内部小节链接。发布时按展示资产登记路径、当时观察到的字节数与 SHA-256；已登记 Canvas 后续读取当前 JSON，用户调整布局或 Obsidian 省略默认边属性不触发重新批准。导图刷新以当前文件为底稿，ID 未变节点保留 x、y、width、height，新增节点使用自动布局。默认图谱继续读取已登记笔记。
+2.3 的 Editor 根据已接受的两语正文填写 `argument.stage_map`。在 `stages` 中指定各阶段解决的问题、使用的步骤与得出的判断，在 `step_text` 和 `finding_text` 中分别说明作者怎样操作、直接观察到什么。每条 `transitions` 记录相连阶段及双语交接说明，例如前一阶段确定的阈值怎样用于另一队列，或前一结果留下的疑问怎样由下一次比较检验。
 
-新运行的指令版本仍为 `configured-reading-2.2`，展示版本为 `reading-editor-1.4`。Editor 请求从两语视图移除已单独提供的知识正文，每份只传一次。首次整体审查的 Editor 输出及收据作为修订基线；Verifier 的 `repair_scope` 指定章节、知识、图表或导图字段。无法定位或越界的修订保存真实拒绝结果并结束为 `completed_with_limits`。
+渲染器读取[研究导图模板](../../Templates/apa-v3/研究导图模板.canvas)，从研究问题进入各阶段。阶段内横向连起操作、发现与判断，卡片按本语言文字估算所需高度。前后依赖的阶段纵向展开，并行阶段各占一列，汇合处保留各分支的输入。完整刷新阶段式画布时须提供对应的阶段数据；已登记的步骤移交也随刷新保留。
+
+笔记在“2.1 研究导图”或“2.1 Research map”小节给出读图说明、只读嵌入和完整 Canvas 链接。2.3 先在第二章标题下展示设计概述及其资源，概述保留块锚点并使用章节标题作为导航入口。随后放 2.1 导图，剩余设计小节从 2.2 起。无图时，其余设计小节从 2.1 起。Better Embedded Canvas 为嵌入提供只读平移与缩放，完整画布链接可单独使用。预览检查两份 Canvas 和内部小节链接。发布时按展示资产登记路径、当时观察到的字节数与 SHA-256；已登记 Canvas 后续读取当前 JSON，用户调整布局或 Obsidian 省略默认边属性不触发重新批准。导图刷新以当前文件为底稿，ID 未变节点保留 x、y、width、height，新增节点使用自动布局。默认图谱继续读取已登记笔记。
+
+新建阅读默认冻结 `configured-reading-2.3`，选用 Editor 时冻结 `reading-editor-1.5`。已有 2.2／1.4 绑定使用其原提示与呈现合同。纯渲染新绑定时传入其 `instructionProfile`，未启用 Editor 仍由 Writer 完成方法正文。Editor 请求从两语视图移除已单独提供的知识正文，每份只传一次。首次整体审查的 Editor 输出及收据作为修订基线；Verifier 的 `repair_scope` 指定章节、知识、图表或导图字段。无法定位或越界的修订保存真实拒绝结果并结束为 `completed_with_limits`。
 
 Nature/Humanizer 用于专业、自然的表达，不限制有效的重点加粗、编号、分层目录、简表、列表或 callout。读者可先浏览重点再读连续解释，不能只把原文按顺序复述。重要条件、结果与局限保持直接可见。
 
@@ -46,6 +52,10 @@ Nature/Humanizer 用于专业、自然的表达，不限制有效的重点加粗
 - `visuals`：`id,kind,label,caption,path,page`；kind 为 figure/table/formula，新运行的 path 必须位于冻结的 `Figures/<run_id>/`，且目录下只有一层文件名。未冻结 `figures_dir` 的旧绑定沿用原路径校验。page 是从1起的 PDF 物理页。图型用 `chart_types:[{knowledge_id,label:{en,'zh-CN'},panel?}]` 关联共享方法节点，复合图按子图标注：原图注列出的每个字母面板都须出现在某项 `panel` 中（可写范围如 `b–d`），只有不含数据的面板可省略；含数据的图或表至少一项。多页表分别登记并保留表头、续表及脚注；历史字段 section_id/after_paragraph 维持旧合同，新布局由 Writer 返回落点。
 - `knowledge`：`id,kind,canonical_key,title,aliases,paragraphs,source_kind`；kind 为 method/concept，source_kind 为 method-background/paper-fact。标题和段落分语言提供。只有通用 method-background 形成共享候选或既有节点增补；本文应用、实际参数和限制留在论文。新布局由 Writer 返回落点，历史 placements 保持兼容。
 - `map`：steps/findings 各含 `id,label,section_id`，relations 为 `{step_id,finding_id}`。使用有科学依据的实际关系，不按序号强配；正文提供设计与发现的双向链接。Integrator 验收时校验该导图：节点 id 唯一、含标签、`section_id` 在目录中，relations 为连接 step 与 finding 端点的 `{step_id,finding_id}`（旧 `{from,to}` 作别名接受）；不通过为 `SCIENCE_CONTENT_INVALID`，退回 Integrator，而非到最终渲染才失败。采纳模式的 `scientificInput.presentation` 同样校验。
+
+2.3 的 Integrator 输出另含根级 `method_steps:[{step_id,purpose,input,operation,key_choices,output,next_use,sources,limitation?}]`。逐个对应 `presentation.map.steps` 中已有 ID。保留没有独立主要发现的中间步骤。每步说明已知做法，`key_choices` 为字符串数组，重要材料缺口写在 `limitation`。`sources:[{source_id,locator}]` 引用登记来源，`locator` 采用 `{kind:'pdf-page',page:N}`、`{kind:'docx-paragraph',paragraph:N}` 或 `{kind:'docx-figure',figure:'S1',paragraph:N}`。终点的 `next_use` 可以说明结果支持的判断。
+
+2.3 的 `map.step_links:[{from_step_id,to_step_id,label:{en,'zh-CN'}}]` 表示步骤间实际传递的数据、材料或规则。没有可确认的关系时提交空数组；历史无字段地图仍按原语义读取。每条关系两端都要指向登记步骤，标签有两种语言。有来源依据的迭代回边可以保留，论点无环校验仍只用于论证。
 
 Writer 输出：
 
@@ -80,9 +90,11 @@ Writer 输出：
 
 新绑定显式使用 `presentation.knowledge_layout:'shared-bilingual-1.0'`。每项独立方法、指标、概念或图型只生成一个双语 Markdown 文件；新文件默认使用中文规范名称（如 `Wiki/methods/直接年龄标化.md`），不带论文标识、哈希或语言后缀。两语论文链接同一文件的相应语言章节。标题及别名保存两语名称、缩写，稳定身份与语言无关；既有登记路径保持不变。历史布局不自动转换。
 
-知识内容可用 `sections:{en:[{heading,paragraphs}], 'zh-CN':[{heading,paragraphs}]}` 组织，原 `paragraphs` 保持兼容。按知识需要讲清定义、原理、公式及符号、教学示例、适用条件、局限和常见混淆；不要求每项机械套齐全部栏目。教学示例必须明确标识。公式、来源和论文应用链接在同一文件中共用，论文的实际设置、结果和局限不得成为通用定义。公共资料只解释方法，不能证明本文实际使用的参数。
+知识内容可用 `sections:{en:[{heading,paragraphs}], 'zh-CN':[{heading,paragraphs}]}` 组织，原 `paragraphs` 保持兼容。按知识需要讲清通用原理、操作步骤、公式与符号、适用条件和解释边界。需要演算时，使用明确标识的独立教学示例。作者实际用的输入、操作、参数、比较条件、结果及局限在论文笔记中详写。知识页按篇索引应用，链接直接落到相应语言的论文小节。
 
 Writer 可通过其正常 view 的 `knowledge_content:[{id,paragraphs,sections?}]` 提交自己语言的节点内容；新共享布局请求要求覆盖所有已登记知识 ID。ID 不得重复或新建，段落非空；只覆盖自身语言，公用来源、公式和身份保持原目录。接收前校验，阅读呈现编辑请求及最终渲染消费合并后的目录。旧布局不消费该扩展。
+
+2.3 的 `knowledge_content[].application_section_ids` 可提供实际讲到这项知识的正文小节，两种语言的 ID 一致。新版 1.5 Editor 的方法条目、正文知识链接和知识或图表放置也可定位应用。生成的索引链接落到各语笔记中的稳定块锚点 `#^rf-<id>`。新建 2.3 固定 `expanded_method_index:true`。Reading Editor 接收新稿时校验每个索引条目的原理字段。未启用 Editor 时，共享页也能从已接受的正文、知识链接和图表位置生成应用索引。缺少新版标记和小节定位的历史回执沿用原呈现。
 
 中断后的显式获批续接可通过 `adopted_views` 复用已接受的原文语言 Writer 回执，并可同时带上另一语言的 Translation 回执（`role:'translation'`；旧 source-first 绑定为另一语言 Writer 回执）。Translation 回执只能与原文语言 Writer 视图一同采纳，并对照原文稿校验（译文镜像与完整性）。只有原文语言稿时仅触发缺失的 Translation；两份齐备时直接进入呈现编辑；Reading Editor 的结果不可采纳。原运行和失败调用保留，新窗口单独绑定；不能把复用视为新写作，也不能通过恢复重置额度。
 
@@ -90,7 +102,7 @@ Writer 可通过其正常 view 的 `knowledge_content:[{id,paragraphs,sections?}
 
 Methods 提供通用知识，Results 识别图型、子图和裁切区域，Integrator 合并身份并组织本文应用，原文语言 Writer 与 Translation 在既有任务内提供相应语言内容及受影响论文段落，Reading Editor 负责呈现。遇到缺口按原定向补缺接口交回内容所有者，不由编辑补造。允许的权威方法资料检索仍受本次来源范围和预算约束。
 
-先由名称和别名发现候选，Methods 与 Integrator 比较定义、方法实质、适用条件和边界，确认稳定身份后再形成同一节点的增补候选；保留人工内容、原来源及不同论文的应用链接，避免重复定义。已有共享节点的 `KNOWLEDGE_STATE.item` 保留原 paragraphs/sections/sources/formulas，新论文内容存为按 paper_id 区分的 `paper_additions`；同一论文后续增补替换自己的增补段，来源按 URL 合并。该接口不授权改写基干定义、撤销旧来源或覆盖人工区；这类冲突须单独处理，不能伪装成增补。来源说明只限定其实际支持的新内容，不因本次未重复检索而否定旧来源。本轮预览只生成已有节点的合并候选，不写正式库；历史双语候选保留，新入口不再指向重复节点。图型节点沿用 `Wiki/methods/`，其他概念沿用既有分类，不建立平行目录。
+先由名称和别名发现候选，Methods 与 Integrator 比较定义、方法实质、适用条件和边界，确认稳定身份后再形成同一节点的增补候选；保留人工内容、原来源及不同论文的应用链接，避免重复定义。已有共享节点的 `KNOWLEDGE_STATE.item` 保留原 paragraphs/sections/sources/formulas。对通用知识确有帮助的增补按 paper_id 存入 `paper_additions`，同篇论文后续增补替换自己的增补段，来源按 URL 合并。2.3 的论文应用索引链接实际正文，节点增补正文写可复用的操作、条件、算例或判断规则。该接口不授权改写基干定义、撤销旧来源或覆盖人工区；这类冲突须单独处理，不能伪装成增补。来源说明只限定其实际支持的新内容，不因本次未重复检索而否定旧来源。本轮预览只生成已有节点的合并候选，不写正式库；历史双语候选保留，新入口不再指向重复节点。图型节点沿用 `Wiki/methods/`，其他概念沿用既有分类，不建立平行目录。
 
 节点登记表由 `readCommittedReadingFirstKnowledgeRegistry({vaultRoot,policy})` 读取登记的 `shared_nodes`（传入 `binding` 时策略与库根取自该绑定的冻结值），不扫描未登记的 Wiki 文件。新配置化绑定使用 `current-shared-nodes-1.0`：校验提交配对及登记身份，消费共享节点当前正文，实际复用路径与内容指纹进入候选依赖。用户编辑的正文保留，本篇增补接在当前内容上；无关节点编辑不阻塞候选。实际依赖在生成期间变化时，用已接受的原稿刷新受影响候选，不重新派发科学角色。查询和图谱读取当前登记内容，历史严格校验仍服务于原交付证据。
 
@@ -102,7 +114,9 @@ Methods 提供通用知识，Results 识别图型、子图和裁切区域，Inte
 
 验证两语指向同一文件、页内语言定位、已有节点复用、跨论文增补和人工区域保护，并检查图型关联及裁切完整性。主要发现段落须写明承载各结论的面板（如“图 3b–d”/“Fig. 3b–d”），经 `apa-visual:` 链接到图。整体审查请求附带确定性的 `annotation_check`（`scripts/v3/reading-annotation-check.mjs`），列出缺图型行、图型未覆盖的面板、主要发现未引用面板的多面板图，以及名称命中登记节点却未挂链的方法/概念条目；Verifier 逐项确认，影响主结论或关键设计时按 Writer（引用）、Editor（挂链）、science（图型）定责，其余记为一般问题。已发布笔记可用 `node scripts/v3/reading-annotation-check.mjs --root <库根>` 只读检查。程序链接检查与实际 Obsidian 阅读验收分别记录，仍仅一次整体审查、最多一次局部复核。
 
-`exportReadingFirstPreview({outputRoot,identity,views,presentation,targetRegistry,knowledgeRegistry,resources})` 导出新候选目录，拒绝覆盖已有目录。资源可为 `{path,source_path,sha256,byte_length}` 或本次候选文本 `{path,content}`；所有输出 path 为库内相对路径。先检查来源字节、输出冲突、图片/链接和块锚点，再写出。`.apa-v3/presentation.json` 保留清单、建议增补和明确的未验收状态。
+2.3 同轮检查 `method_application`。Verifier 先用实际候选复述处理对象、操作、条件及输出与去向，再核对来源。记入 `key_nodes` 的 `location`、`finding`、`step_ids`、`section_ids`、`source_refs` 指向实际步骤、正文和录入的来源位置。核查本文用法引用本次科学输入登记的论文或已取得的补充材料，方法背景用于解释原理。方法足以还原时记为 `checked`。重要操作或条件存在错误或遗漏时记为 `material_issue`，并定位实质问题及责任方。材料不足以核对核心做法时记为 `unavailable`，说明已知做法和受限判断。确无相关方法且未登记实际研究步骤的文体可用 `not_applicable`，同时写出 `article_type`、`rationale` 及支撑这一判断的正文和来源。
+
+`exportReadingFirstPreview({outputRoot,identity,views,presentation,targetRegistry,knowledgeRegistry,resources})` 导出新候选目录，拒绝覆盖已有目录。资源可为 `{path,source_path,sha256,byte_length}` 或本次候选文本 `{path,content}`；所有输出 path 为库内相对路径。新配置化运行从冻结的 `source_access: 'read-only-original-1.0'` 和 `source_locations` 传入 `readOnlySources`。主文与补充 PDF 列在预览清单的 `source_dependencies` 中，双语预览链接指向本库原件并保留页码。候选目录只保存实际输出。早期自包含候选按原清单读取。先检查来源字节、输出冲突、图片链接和块锚点，再写出。`.apa-v3/presentation.json` 保留清单、建议增补和明确的未验收状态。
 
 新策略的配置化预览从已校验登记表复制实际引用的历史知识正文，递归补齐历史知识依赖及所需已登记资源，并校验本地链接和锚点；旧论文入口使用标明正文未打包及正式库路径的导航页。清单记录历史资源的代次、路径与哈希并标记不可发布；这些内容供预览参考，不作为论文发布资源。未登记或校验失败的依赖明确报错。
 

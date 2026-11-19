@@ -3,15 +3,16 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { exportPublicApa } from '../../scripts/setup/export-public-apa.mjs';
 import { DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, buildConfiguredReadingInstructions, deriveConfiguredMaxCalls } from '../../scripts/v3/configured-reading.mjs';
 import { evaluateReadingPreflight } from '../../scripts/lib/reading-preflight.mjs';
+import { METHODS_FIRST_READING_PROFILE } from '../../scripts/lib/reading-profiles.mjs';
 
-test('2.2 default freezes new prompt and derives bounded budget', () => {
-  assert.equal(DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, 'configured-reading-2.2');
+test('2.3 default freezes new prompt and derives bounded budget', () => {
+  assert.equal(DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, METHODS_FIRST_READING_PROFILE);
   const pack = buildConfiguredReadingInstructions();
-  assert.equal(pack.instruction_profile, 'configured-reading-2.2');
+  assert.equal(pack.instruction_profile, METHODS_FIRST_READING_PROFILE);
   assert.equal(pack.frozen_support.science_index.metadata.profile, 'science-index-1.0');
   assert.equal(pack.frozen_support.role_reply.metadata.profile, 'role-reply-1.0');
   assert.match(pack.frozen_support.role_reply.content, /\S/);
@@ -26,8 +27,29 @@ test('2.2 default freezes new prompt and derives bounded budget', () => {
   assert.throws(() => deriveConfiguredMaxCalls({ maxTotalCalls: 9, presentationMode: 'reading-editor' }), /BUDGET/);
 });
 
-test('2.2 requires referenced Results tool capabilities', () => {
-  const base = { inspection: {validation:{complete:true},dependencies:[{key:'parser.python',path:process.execPath,status:'available'}]}, instructionProfile:'configured-reading-2.2' };
+test('2.3 freezes its own science, reading and Editor prompt bytes', async () => {
+  const pack = buildConfiguredReadingInstructions({}, { instructionProfile: METHODS_FIRST_READING_PROFILE });
+  assert.equal(pack.instruction_profile, METHODS_FIRST_READING_PROFILE);
+  assert.deepEqual(pack.prompt_files.map(row => basename(row.path)), [
+    'science-configured-2.3.md', 'reading-configured-2.3.md', 'reading-editor-1.5.md',
+  ]);
+  for (const row of pack.prompt_files) {
+    const bytes = await readFile(row.path);
+    assert.equal(row.byte_length, bytes.length);
+    assert.equal(row.sha256, 'sha256:' + createHash('sha256').update(bytes).digest('hex'));
+  }
+  assert.ok(pack.science_sections.Integrator);
+  assert.match(pack.science_sections['Common scientific contract'], /A shared node lists paper applications as links to the specific explanatory sections/);
+  assert.match(pack.sections['Common data contract'], /include `application_section_ids` for every shared `method-background` entry even when Editor is disabled/);
+  assert.match(pack.sections.Translation, /Copy `knowledge_content\[\]\.application_section_ids` unchanged/);
+  assert.match(pack.sections['Overall Verifier'], /verify that 3\.1 shows the expanded numbered Methods and concepts index/);
+  assert.match(pack.sections['Reading Editor'], /methods: \[\{id, title, explanation, application,/);
+  assert.match(pack.sections['Reading Editor'], /first substantive use across the paper body/);
+});
+
+for (const instructionProfile of ['configured-reading-2.2', METHODS_FIRST_READING_PROFILE])
+test(instructionProfile + ' requires referenced Results tool capabilities', () => {
+  const base = { inspection: {validation:{complete:true},dependencies:[{key:'parser.python',path:process.execPath,status:'available'}]}, instructionProfile };
   let checks = evaluateReadingPreflight(base).checks;
   assert.equal(checks.find(x => x.id === 'results_python').status, 'unknown');
   const evidence = { results_tools: { python:{status:'pass',path:process.execPath,source:'observed',reference:'probe',method:'probe execution',observation:'available'}, libraries:{status:'pass',names:['fitz'],source:'tool-declaration',reference:'tool',method:'inspect declaration',observation:'fitz declared'}, visual_read:{status:'pass',source:'observed',reference:'probe',method:'probe execution',observation:'available'}, file_read:{status:'pass',source:'observed',reference:'probe',method:'probe execution',observation:'available'} } };
@@ -55,7 +77,7 @@ test('2.2 requires referenced Results tool capabilities', () => {
 });
 
 
-test('public export includes 2.2 execution and verification inputs', async t => {
+test('public export includes both configured prompt packs and execution and verification inputs', async t => {
   const root = await mkdtemp(join(tmpdir(), 'apa-public-reading-22-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const outputRoot = join(root, 'public');
@@ -64,7 +86,10 @@ test('public export includes 2.2 execution and verification inputs', async t => 
   const exported = new Set(manifest.files.map(row => row.path));
   const packageJson = JSON.parse(await readFile(join(outputRoot, 'package.json'), 'utf8'));
   const tests = new Set(packageJson.scripts['test:v3'].split(' '));
-  const files = ['scripts/lib/reading-resource-tool.py', 'scripts/v3/reading-controller-audit.mjs', 'scripts/v3/reading-host-evidence.mjs', 'scripts/v3/reading-resources.mjs', 'scripts/v3/reading-runtime-binding.mjs', 'scripts/v3/reading-session-cli.mjs', 'prompts/v3/science-configured-2.2.md', 'prompts/v3/reading-configured-2.2.md'];
+  const files = ['scripts/lib/reading-resource-tool.py', 'scripts/lib/reading-profiles.mjs', 'scripts/v3/reading-controller-audit.mjs',
+    'scripts/v3/reading-host-evidence.mjs', 'scripts/v3/reading-resources.mjs', 'scripts/v3/reading-runtime-binding.mjs',
+    'scripts/v3/reading-session-cli.mjs', 'prompts/v3/science-configured-2.2.md', 'prompts/v3/reading-configured-2.2.md',
+    'prompts/v3/science-configured-2.3.md', 'prompts/v3/reading-configured-2.3.md', 'prompts/v3/reading-editor-1.5.md'];
   for (const file of files) assert.ok(exported.has(file), file);
   for (const file of ['test/v3/configured-reading-22.test.mjs','test/v3/reading-resources.test.mjs','test/v3/reading-runtime-binding.test.mjs','test/v3/reading-session-22.test.mjs','test/v3/reading-session-cli-audit.test.mjs']) {
     assert.ok(exported.has(file), file);
@@ -74,7 +99,7 @@ test('public export includes 2.2 execution and verification inputs', async t => 
 
 
 test('2.2 assigns scientific merging to Integrator and continues translation', () => {
-  const pack = buildConfiguredReadingInstructions();
+  const pack = buildConfiguredReadingInstructions({}, { instructionProfile: 'configured-reading-2.2' });
   const translation = pack.sections.Translation;
   assert.match(translation, /Continue processing all remaining segments in the same execution/);
   assert.doesNotMatch(translation, /completion in one call is not guaranteed/);

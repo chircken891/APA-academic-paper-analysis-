@@ -16,12 +16,14 @@ import { createOwnedArtifactBroker, commitOwnedArtifact, readOwnedArtifact } fro
 import { readingFirstViewsFingerprint } from '../../scripts/v3/reading-first-editor.mjs';
 import { buildReadingSessionTasks } from '../../scripts/v3/reading-session-tasks.mjs';
 import { createReadingSession, resumeReadingSession, nextReadingAction as nextAction, recordReadingEvent } from '../../scripts/v3/reading-session.mjs';
-import { reviewedReadingFirstFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
+import { reviewedReadingFirstFixture, syntheticThresholdStages } from './helpers/reading-first-publication-source-fixtures.mjs';
 import { applyReadingFirstFixture, readingFirstPublicationFixture } from './helpers/reading-first-publication-fixtures.mjs';
 import { applyBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
 import { publishReadingFirstCandidate } from '../../scripts/v3/reading-first-publish.mjs';
+import { prepareReadingFirstPublication } from '../../scripts/v3/reading-first-publication.mjs';
 import { readingFirstIndexFixture } from './helpers/reading-first-index-fixtures.mjs';
 import { writeTranslationProgress } from '../../scripts/v3/reading-translation-progress.mjs';
+import { createFrozenReading22 } from './helpers/frozen-configured-reading.mjs';
 
 const continuationCapability = () => ({ status: 'detected', method: 'ContinueTask target prompt', scope: 'current-session',
   evidence: [{ source: 'tool-schema', reference: 'synthetic ContinueTask schema' }], limitations: [],
@@ -46,13 +48,14 @@ const configuredSessionTemplate = async t => {
 };
 
 // 2.2 Results register a resource manifest and Integration hands off the matching visuals.
-async function scienceOutputs(f, catalog, runId = 'run') {
+async function scienceOutputs(f, catalog, runId = 'run', supplementPath) {
   const runRoot = join(f.root, 'runs', runId), resourceRoot = join(runRoot, 'resources', 'results'), source = f.options.scientificInput.sources[0];
   await mkdir(resourceRoot, { recursive: true }); await mkdir(join(runRoot, 'native'), { recursive: true });
   const image = Buffer.from('synthetic figure'), imagePath = join(resourceRoot, 'figure.png'); await writeFile(imagePath, image);
   const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
   const presentation = catalog ? structuredClone(catalog) : { visuals: [] };
   presentation.sources = [{ id: source.id, path: 'Clippings/paper.pdf', kind: 'main' }];
+  if (supplementPath) presentation.sources.push({ id: 'supplement', path: supplementPath, kind: 'supplementary' });
   presentation.visuals = presentation.visuals.map(visual => ({ ...visual, source_id: source.id, locator: { kind: 'pdf-page', page: 1 } }));
   const rows = presentation.visuals.map(visual => ({ id: visual.id, path: visual.path, source_id: source.id, source_path: imagePath, sha256: sha(image), byte_length: image.length, parent: source, locator: visual.locator }));
   const manifest = Buffer.from(JSON.stringify({ version: 'reading-resources-1.0', resources: rows }));
@@ -61,10 +64,11 @@ async function scienceOutputs(f, catalog, runId = 'run') {
   return (role, extra = {}) => ({ role, text: 'synthetic', ...(role === 'results' ? { resource_manifest: ref } : role === 'integration' ? { presentation, visual_handoff: { resource_manifest: ref } } : {}), ...extra });
 }
 
-test('2.2 continuation is budgeted before dispatch, emitted once and reconciled after recovery', async t => {
+for (const instructionProfile of ['configured-reading-2.2', 'configured-reading-2.3'])
+test(instructionProfile + ' continuation is budgeted before dispatch, emitted once and reconciled after recovery', async t => {
   const f = await configuredFixture(t);
   f.profile.capabilities = { task_continuation: continuationCapability() };
-  let session = await createReadingSession(f.options);
+  let session = await (instructionProfile === 'configured-reading-2.2' ? createFrozenReading22 : createReadingSession)({ ...f.options, instructionProfile });
   const first = await nextAction(session);
   await recordReadingEvent(session, { kind: 'host_observation', action_id: first.action_id, observation: observe(first, 'original-task') });
   const intent = { kind: 'continuation-intent', action_id: first.action_id, execution_id: 'continue-1', message: 'Finish the original evidence output.' };
@@ -96,14 +100,58 @@ test('unsupported continuation spends no budget and retired bindings are refused
   assert.equal(result.code, 'HOST_CONTINUATION_UNKNOWN');
   assert.equal((await nextAction(session)).summary.budget.occupied, 1);
   const old = await configuredFixture(t);
-  for (const instructionProfile of ['configured-reading-2.0', 'configured-reading-2.1']) await assert.rejects(() => createReadingSession({ ...old.options, instructionProfile }), /READING_BINDING_RETIRED/);
+  for (const instructionProfile of ['configured-reading-2.0', 'configured-reading-2.1', 'configured-reading-2.2']) await assert.rejects(() => createReadingSession({ ...old.options, instructionProfile }), /READING_BINDING_RETIRED/);
 });
 
-for (const retries of [1,2]) test('translation continuation preserves completed fragments and projects '+retries+' observed calls',async t=>{
+for (const { instructionProfile, retries } of [
+  { instructionProfile: 'configured-reading-2.2', retries: 1 },
+  { instructionProfile: 'configured-reading-2.2', retries: 2 },
+  { instructionProfile: 'configured-reading-2.3', retries: 1 },
+]) test(instructionProfile + ' translation continuation preserves completed fragments and projects '+retries+' observed calls',async t=>{
   const f = await configuredFixture(t), template = await configuredSessionTemplate(t);
   f.profile.capabilities = { task_continuation: continuationCapability() };
-  let session = await createReadingSession({ ...f.options, maxTotalCalls:14 });
-  const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
+  const methodsFirst = instructionProfile === 'configured-reading-2.3';
+  const supplementPath = methodsFirst ? 'Clippings/补充 材料 (附录).pdf' : undefined;
+  const source = { source_id: 'paper', locator: { kind: 'pdf-page', page: 1 } };
+  const methodSteps = [
+    { step_id: 'design-step', purpose: 'Select a screening threshold.',
+      input: 'Validation scores and reference labels.', operation: 'Choose a threshold in each fold and average the results.',
+      key_choices: ['Fix the target specificity before studying test scores.'], output: 'One fixed threshold.',
+      next_use: 'Apply the threshold on held-out scores.', sources: [source] },
+    { step_id: 'external-validation', purpose: 'Test the fixed rule on different data.',
+      input: 'The fixed threshold, held-out scores and reference labels.',
+      operation: 'Apply the fixed threshold and compare predictions with the reference labels.',
+      key_choices: ['Leave the cutoff unchanged.'], output: 'Test specificity.',
+      next_use: 'Compare test specificity with the validation target.', sources: [source] },
+  ];
+  if (methodsFirst) {
+    const supplement = Buffer.from('%PDF-1.7 synthetic supplement');
+    const path = join(f.root, supplementPath);
+    await writeFile(path, supplement);
+    f.options.scientificInput.sources.push({ id: 'supplement', path,
+      sha256: 'sha256:' + createHash('sha256').update(supplement).digest('hex'), byte_length: supplement.length });
+    const { map, modules } = template.presentationCatalog;
+    const external = { id: 'external-test', label: { en: 'External validation', 'zh-CN': '外部验证' } };
+    map.steps[0].section_id = 'methods';
+    map.steps.push({ id: 'external-validation', section_id: external.id, label: external.label });
+    map.step_links = [{ from_step_id: 'design-step', to_step_id: 'external-validation',
+      label: { en: 'Fixed screening threshold', 'zh-CN': '固定筛查阈值' } }];
+    map.relations = [{ step_id: 'external-validation', finding_id: 'main-finding' }];
+    template.presentationCatalog.sections = [...modules, external];
+    for (const view of template.views) {
+      const en = view.language === 'en', at = view.sections.findIndex(section => section.id === 'methods');
+      view.sections[at].heading = en ? 'Threshold selection' : '筛查阈值选择';
+      view.sections[at].paragraphs = [en
+        ? 'Choose the threshold for the target specificity in each validation fold and average the thresholds.'
+        : '在每个验证折中选择达到目标特异度的阈值，再对这些阈值取平均。'];
+      view.sections.splice(at + 1, 0, { id: external.id, module_id: 'methods', heading: external.label[view.language],
+        paragraphs: [en ? 'Apply the fixed threshold to held-out scores and assess specificity against reference labels. [Supplement](apa-source:supplement#page=2).'
+          : '将固定阈值用于留出的评分，并对照参考标签计算特异度。见[补充材料](apa-source:supplement#page=2)。'] });
+    }
+  }
+  const create = methodsFirst ? createReadingSession : createFrozenReading22;
+  let session = await create({ ...f.options, maxTotalCalls: 14 });
+  const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog, 'run', supplementPath);
   const accept = async (action, path, value) => {
     const observation = observe(action);
     await recordReadingEvent(session, { kind: 'host_observation', action_id: action.action_id, observation });
@@ -112,9 +160,15 @@ for (const retries of [1,2]) test('translation continuation preserves completed 
   };
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session);
-    await accept(action, action.role, content(action.role));
+    await accept(action, action.role, content(action.role, methodsFirst && action.role === 'integration' ? { method_steps: methodSteps } : {}));
   }
-  await accept(await nextReadingAction(session), 'en', template.views[0]);
+  const writer = await nextReadingAction(session);
+  if (methodsFirst) {
+    const instruction = await readFile(writer.arguments.prompt, 'utf8');
+    const packet = JSON.parse(instruction.split('\n\n').at(-1));
+    assert.deepEqual(packet.handoff.science.find(row => row.receipt.role === 'integration').content.method_steps, methodSteps);
+  }
+  await accept(writer, 'en', template.views[0]);
   const translation = await nextReadingAction(session), original = observe(translation);
   await recordReadingEvent(session, { kind: 'host_observation', action_id: translation.action_id, observation: original });
   const science = JSON.parse(await readFile(join(runRoot, 'control', 'science-state.json'), 'utf8'));
@@ -159,6 +213,75 @@ for (const retries of [1,2]) test('translation continuation preserves completed 
     })});
   }
   await recordReadingEvent(session,{kind:'result',action_id:translation.action_id,observation:original});
+  if (methodsFirst) {
+    const editor = await nextReadingAction(session);
+    assert.equal(editor.summary.task.id, 'presentation', JSON.stringify(editor));
+    assert.equal(editor.summary.budget.continuations, retries);
+    const edited = structuredClone(template.editor);
+    edited.schema_version = 'reading-editor-1.5';
+    edited.views_fingerprint = readingFirstViewsFingerprint(template.views);
+    edited.argument.stage_map = syntheticThresholdStages(edited.argument, template.presentationCatalog.map);
+    const editorInstruction = await readFile(editor.arguments.prompt, 'utf8');
+    assert.equal(JSON.parse(editorInstruction.split('\n\n').at(-1)).staged_research_map, true);
+    for (const [language, view] of Object.entries(edited.languages)) {
+      view.methods = [
+        { id: 'threshold', title: language === 'en' ? 'Threshold selection' : '筛查阈值选择',
+          explanation: language === 'en' ? 'A threshold converts a score to a binary decision.' : '阈值把连续评分转换为二元判定。',
+          application: language === 'en' ? 'Pick a fixed threshold from the validation folds.' : '在验证折中确定固定阈值。',
+          section_ids: ['methods'], knowledge_ids: ['method'] },
+        { id: 'external-validation', title: language === 'en' ? 'External validation' : '外部验证',
+          explanation: language === 'en' ? 'An independent cohort tests how a fixed rule transfers.' : '独立队列检验既定判定规则在另一组人群中的表现。',
+          application: language === 'en' ? 'Measure specificity at the fixed threshold.' : '测量固定阈值下的特异度。',
+          section_ids: ['external-test'] },
+      ];
+    }
+    await accept(editor, 'presentation', edited);
+    await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
+    const review = structuredClone(template.review);
+    review.key_nodes.push({ kind: 'method_application', status: 'checked', location: 'methods',
+      finding: 'The validation-fold thresholds are averaged, then applied to held-out scores to measure test specificity.',
+      step_ids: methodSteps.map(step => step.step_id), section_ids: ['methods', 'external-test'], source_refs: [source] });
+    await accept(await nextReadingAction(session), 'review', review);
+    const done = await nextReadingAction(session);
+    assert.equal(done.status, 'reading_complete');
+    const inspected = await inspectReadingFirstPublicationSource(done.publication_source);
+    const originalResources = inspected.presentation.sources.map(({ id, path }) => {
+      const { path: source_path, sha256, byte_length } = f.options.scientificInput.sources.find(row => row.id === id);
+      return { path, source_path, sha256, byte_length };
+    });
+    const prepared = await prepareReadingFirstPublication({ source: done.publication_source, vaultRoot: f.root,
+      evidenceMode: 'synthetic', resources: [
+        ...originalResources,
+        ...inspected.results_resource_manifest.resources.map(({ path, source_path, sha256, byte_length }) => ({ path, source_path, sha256, byte_length })),
+      ] });
+    assert.equal(prepared.status, 'dry_run');
+    assert.equal(prepared.business_writes, 0);
+    assert.deepEqual(prepared.plan.read_dependencies.filter(row => /\.pdf$/i.test(row.path)).map(row => row.path).sort(),
+      [inspected.presentation.source_pdf, supplementPath].sort());
+    assert.ok(prepared.plan.inventory.every(row => !/\.pdf$/i.test(row.path)));
+    const { output_root: candidateRoot, status: candidateStatus } = await recordReadingEvent(session, { kind: 'inspect-candidate' });
+    assert.equal(candidateStatus, 'passed');
+    for (const note of inspected.candidate.notes) {
+      const sourceLinks = await readFile(join(candidateRoot, note.path), 'utf8');
+      assert.ok(sourceLinks.includes('[[' + inspected.presentation.source_pdf + '|'));
+      assert.ok(sourceLinks.includes('[[' + supplementPath + '#page=2|'));
+      assert.match(note.content, /\.pdf#page=2\)/);
+      assert.doesNotMatch(note.content, /\[\[Clippings\//);
+    }
+    const canvases = inspected.candidate.generated_assets.filter(asset => asset.path.endsWith('.canvas'));
+    assert.equal(canvases.length, 2);
+    assert.match(canvases.find(asset => asset.language === 'en').content, /Carry the fixed threshold/);
+    assert.match(canvases.find(asset => asset.language === 'zh-CN').content, /将固定阈值带入留出队列/);
+    for (const file of ['scripts/v3/research-map-stages.mjs', 'Templates/apa-v3/研究导图模板.canvas']) {
+      assert.ok(inspected.recipe.execution_runtime.files.some(row => row.path === file), file);
+      assert.ok(inspected.tool_bindings.some(row => row.path.replaceAll('\\', '/').endsWith('/' + file)), file);
+    }
+    const restored = await readingRuntime.restoreReadingFirstPublicationSource(inspected.recipe);
+    const rebuilt = await inspectReadingFirstPublicationSource(restored);
+    assert.deepEqual(rebuilt.candidate.generated_assets, inspected.candidate.generated_assets);
+    assert.equal(inspected.recipe.checkpoint.state.executionLedger.filter(row => row.kind === 'continuation').length, retries);
+    return;
+  }
   await accept(await nextReadingAction(session),'presentation',template.editor);
   await recordReadingEvent(session,{kind:'render-assets',renderOptions:{}});
   const issue={severity:'material',kind:'scientific_limitation',detail:'Clarify findings.',repair_owner:'writer',
@@ -175,7 +298,7 @@ async function startSyntheticDrafting(t, { codex = false } = {}) {
   const capability = continuationCapability();
   if (codex) Object.assign(capability.continuation, { tool: 'collaboration.followup_task', instruction_argument: 'message' });
   f.profile.capabilities = { task_continuation: capability };
-  const session = await createReadingSession(f.options);
+  const session = await createFrozenReading22(f.options);
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const resultEvent = (action, observation = observe(action)) => ({ kind: 'result', action_id: action.action_id, observation });
   const accept = async (currentSession, action, path, value) => {
@@ -387,13 +510,13 @@ async function configuredFixture(t, { systemTemp = false, codex = false, host = 
   if (codex) evidence.fresh_context = { source: 'tool-schema', reference: 'test schema', ...dispatch.fresh_context };
   const observedTool = { status: 'pass', source: 'tool-declaration', reference: 'synthetic', method: 'synthetic declaration', observation: 'declared available' };
   evidence.results_tools = { python: { ...observedTool, path: join(bin, process.platform === 'win32' ? 'python.exe' : 'python') }, libraries: { ...observedTool, names: ['fitz'] }, visual_read: observedTool, file_read: observedTool };
-  return { root, profile, evidence, options: { repoRoot: root, runId: 'run', scientificInput, sourceLanguage: 'en', instructionProfile: 'configured-reading-2.2', authorizationId: 'test', deadline: '2099-01-01T00:00:00Z', maxCalls: 8, maxTotalCalls: 14, sessionContext: { model: 'm', effort: 'high' }, hostProfile: profile, evidence, includeRepairs: true } };
+  return { root, profile, evidence, options: { repoRoot: root, runId: 'run', scientificInput, sourceLanguage: 'en', authorizationId: 'test', deadline: '2099-01-01T00:00:00Z', maxCalls: 8, maxTotalCalls: 14, sessionContext: { model: 'm', effort: 'high' }, hostProfile: profile, evidence, includeRepairs: true } };
 }
 
 test('Codex migration resumes at Results, preserves the original evidence and charges the stopped execution', async t => {
   const f = await configuredFixture(t, { systemTemp: true, host: 'claude-code' });
   f.profile.capabilities = { task_continuation: continuationCapability() };
-  const source = await createReadingSession(f.options), oldRoot = join(f.root, 'runs', 'run');
+  const source = await createFrozenReading22(f.options), oldRoot = join(f.root, 'runs', 'run');
   const statePath = root => join(root, 'control', 'science-state.json');
   const accept = async (session, root, action, value, handle) => {
     const observation = observe(action, handle);
@@ -445,6 +568,7 @@ test('Codex migration resumes at Results, preserves the original evidence and ch
       assert.equal(action.summary.budget.remaining_total, 9);
       assert.equal(action.summary.budget.continuations, 1);
       const state = JSON.parse(await readFile(statePath(newRoot), 'utf8')).data;
+      assert.equal(state.prepared.runControl.reading_first_binding.configured_setup.instruction_profile, 'configured-reading-2.2');
       assert.deepEqual(state.entries.evidence.receipt, old.data.entries.evidence.receipt);
       assert.deepEqual(state.entries.methods.receipt, old.data.entries.methods.receipt);
       assert.notEqual(action.action_id, stopped.action_id);
@@ -466,7 +590,7 @@ test('session summary exposes source matches from preparation and after recovery
   await mkdir(join(raw, 'possible'), { recursive: true });
   await copyFile(f.options.scientificInput.sources[0].path, join(raw, 'same-bytes.pdf'));
   await writeFile(join(raw, 'possible', 'paper.pdf'), 'different source bytes');
-  const session = await createReadingSession(f.options);
+  const session = await createFrozenReading22(f.options);
   const first = (await nextReadingAction(session)).summary;
   const resumed = await resumeReadingSession({ runRoot: join(f.root, 'runs', 'run') });
   const recovered = (await nextReadingAction(resumed)).summary;
@@ -481,7 +605,7 @@ test('session summary exposes source matches from preparation and after recovery
 
 test('science intent survives recovery and is never automatically dispatched twice', async t => {
   const f = await configuredFixture(t);
-  let session = await createReadingSession(f.options);
+  let session = await createFrozenReading22(f.options);
   const first = await nextReadingAction(session);
   assert.equal(first.action, 'dispatch');
   assert.equal(first.role, 'evidence');
@@ -507,7 +631,7 @@ test('science intent survives recovery and is never automatically dispatched twi
 test('resumed preflight uses the frozen host and verifies the current main session', async t => {
   const f = await configuredFixture(t);
   const wrongSession = { ...f.profile, session: { model: 'other', reasoning_effort: 'high' } };
-  let session = await createReadingSession({ ...f.options, hostProfile: wrongSession });
+  let session = await createFrozenReading22({ ...f.options, hostProfile: wrongSession });
   assert.equal((await nextReadingAction(session)).kind, 'runtime-evidence');
   assert.equal((await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence })).status, 'pass');
   assert.equal((await nextReadingAction(session)).action, 'dispatch');
@@ -529,7 +653,7 @@ test('synthetic host runs both drafts, editor, candidate and review through the 
     runId: 'run_' + 'c'.repeat(32), paperId: 'pap_' + 'c'.repeat(32) });
   assert.equal((await applyBilingualPublication(applyReadingFirstFixture(earlier))).status, 'committed');
   const template = await configuredSessionTemplate(t);
-  let session = await createReadingSession(f.options);
+  let session = await createFrozenReading22(f.options);
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, nativePath, value) => {
     const observation = observe(action);
@@ -622,7 +746,7 @@ test('synthetic host runs both drafts, editor, candidate and review through the 
 
 test('synthetic science completes in dependency order and restores the pending writer', async t => {
   const f = await configuredFixture(t);
-  let session = await createReadingSession(f.options);
+  let session = await createFrozenReading22(f.options);
   const content = await scienceOutputs(f), seen = [];
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session);
@@ -646,7 +770,7 @@ test('synthetic science completes in dependency order and restores the pending w
 
 test('accepted result with failed checkpoint remains recoverable without redispatch', async t => {
   const f = await configuredFixture(t), template = await configuredSessionTemplate(t);
-  let session = await createReadingSession(f.options);
+  let session = await createFrozenReading22(f.options);
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session), observation = observe(action);
@@ -673,7 +797,7 @@ test('accepted result with failed checkpoint remains recoverable without redispa
 
 test('stage reminders pause once per boundary and record nothing', async t => {
   const f = await configuredFixture(t);
-  const session = await createReadingSession(f.options);
+  const session = await createFrozenReading22(f.options);
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f);
   const statePath = join(runRoot, 'control', 'science-state.json');
   assert.deepEqual(JSON.parse(await readFile(statePath, 'utf8')).data.prepared.runControl.reading_first_binding.compaction_policy, { profile: 'boundary-reminders-2.0' });
@@ -701,7 +825,7 @@ test('stage reminders pause once per boundary and record nothing', async t => {
 });
 
 test('control slot exhaustion blocks dispatch without changing the model-call budget', async t => {
-  const f = await configuredFixture(t), session = await createReadingSession({ ...f.options, maxControlCheckpoints: 4 });
+  const f = await configuredFixture(t), session = await createFrozenReading22({ ...f.options, maxControlCheckpoints: 4 });
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f);
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session);
@@ -717,7 +841,7 @@ test('control slot exhaustion blocks dispatch without changing the model-call bu
 
 test('material editor issue receives one bounded repair and a second candidate', async t => {
   const f = await configuredFixture(t), template = await configuredSessionTemplate(t);
-  let session = await createReadingSession(f.options);
+  let session = await createFrozenReading22(f.options);
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, path, value) => {
     const observation = observe(action);
@@ -766,7 +890,7 @@ for (const scenario of ['wording','scientific','scientific-short','retain','numb
     template.views[0].sections.find(row=>row.id==='findings').paragraphs[0]=evidenceText;
     template.editor.views_fingerprint=readingFirstViewsFingerprint(template.views);
   }
-  let session = await createReadingSession(scenario==='retain' ? {...f.options,includeRepairs:false} : scenario==='scientific-short' ? {...f.options,maxCalls:5,maxTotalCalls:11} : f.options);
+  let session = await createFrozenReading22(scenario==='retain' ? {...f.options,includeRepairs:false} : scenario==='scientific-short' ? {...f.options,maxCalls:5,maxTotalCalls:11} : f.options);
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, path, value) => {
     const observation = observe(action);
@@ -876,7 +1000,7 @@ for (const scenario of ['wording','scientific','scientific-short','retain','numb
 test('explicit additional execution budget resumes the first scoped Writer repair', async t => {
   const f = await configuredFixture(t), template = await configuredSessionTemplate(t);
   f.profile.capabilities = { task_continuation: continuationCapability() };
-  let session = await createReadingSession(f.options);
+  let session = await createFrozenReading22(f.options);
   const runRoot = join(f.root, 'runs', 'run'), science = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, key, value) => {
     assert.equal(action.action, 'dispatch');
@@ -962,7 +1086,7 @@ test('explicit additional execution budget resumes the first scoped Writer repai
 test('explicit original-page chart repair continues an unbound Results gap under the original budget', async t => {
   const f = await configuredFixture(t, { systemTemp: true }), template = await configuredSessionTemplate(t);
   const runRoot = join(f.root, 'runs', 'run');
-  let session = await createReadingSession({ ...f.options, includeRepairs: true, maxCalls: 8, maxTotalCalls: 16 });
+  let session = await createFrozenReading22({ ...f.options, includeRepairs: true, maxCalls: 8, maxTotalCalls: 16 });
   const content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (file, value, action = null) => {
     action ??= await nextReadingAction(session);
@@ -1042,7 +1166,7 @@ for (const scenario of ['controller','verifier','missing-science','explicit-id']
   const verifier=scenario==='verifier', missingScience=scenario==='missing-science', explicit=scenario==='explicit-id';
   const f = await configuredFixture(t), template = await configuredSessionTemplate(t);
   if (verifier) f.profile.capabilities={task_continuation:continuationCapability()};
-  let session = await createReadingSession(missingScience ? {...f.options,includeRepairs:false,enrichmentPolicy:{sources:[],allow_targeted_methods:true}} : f.options);
+  let session = await createFrozenReading22(missingScience ? {...f.options,includeRepairs:false,enrichmentPolicy:{sources:[],allow_targeted_methods:true}} : f.options);
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, path, value) => {
     const observation = observe(action);
@@ -1102,7 +1226,7 @@ for (const scenario of ['controller','verifier','missing-science','explicit-id']
 
 for (const extended of [false,true]) test('renderer repairs compare against their latest reviewed candidate: '+extended, async t => {
   const f = await configuredFixture(t), template = await configuredSessionTemplate(t);
-  const session = await createReadingSession(f.options), runRoot = join(f.root, 'runs', 'run');
+  const session = await createFrozenReading22(f.options), runRoot = join(f.root, 'runs', 'run');
   const content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, path, value) => {
     const observation = observe(action);
@@ -1187,7 +1311,7 @@ test('predeclares independent enrichment tasks only for the selected policy and 
 
 test('session freezes selected enrichment policy and profile', async t => {
   const f = await configuredFixture(t), policy = { sources: [], allow_targeted_methods: true };
-  const session = await createReadingSession({ ...f.options, enrichmentPolicy: policy });
+  const session = await createFrozenReading22({ ...f.options, enrichmentPolicy: policy });
   assert.equal((await nextReadingAction(session)).role, 'evidence');
   const state = JSON.parse(await readFile(join(f.root, 'runs', 'run', 'control', 'science-state.json'), 'utf8'));
   const binding = state.data.prepared.runControl.reading_first_binding;
@@ -1198,7 +1322,7 @@ test('session freezes selected enrichment policy and profile', async t => {
 test('initial enrichment preserves the observed task across source snapshot recovery', async t => {
   const f = await configuredFixture(t), runRoot = join(f.root, 'runs', 'run');
   const gap = { id: 'design', question: 'What allocation was used?', impact: 'Changes interpretation', severity: 'material', owner_role: 'evidence', source_kind: 'cited_method', source_ids: [], target_sections: ['Study'] };
-  let session = await createReadingSession({ ...f.options, enrichmentPolicy: { sources: [], allow_targeted_methods: true } });
+  let session = await createFrozenReading22({ ...f.options, enrichmentPolicy: { sources: [], allow_targeted_methods: true } });
   const content = await scienceOutputs(f);
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session), observation = observe(action);
@@ -1235,7 +1359,7 @@ test('initial enrichment preserves the observed task across source snapshot reco
 for (const total of [10, 11]) test(`initial enrichment reserves the full chain at total budget ${total}`, async t => {
   const f = await configuredFixture(t), runRoot = join(f.root, 'runs', 'run');
   const gap = { id: 'design', question: 'What allocation was used?', impact: 'Changes interpretation', severity: 'material', owner_role: 'evidence', source_kind: 'original_page', source_ids: [], target_sections: ['Study'] };
-  const session = await createReadingSession({ ...f.options, maxCalls: 4, maxTotalCalls: total, enrichmentPolicy: { sources: [], allow_targeted_methods: true } });
+  const session = await createFrozenReading22({ ...f.options, maxCalls: 4, maxTotalCalls: total, enrichmentPolicy: { sources: [], allow_targeted_methods: true } });
   const content = await scienceOutputs(f);
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session), observation = observe(action);
@@ -1257,7 +1381,7 @@ for (const scenario of [{ sourceLanguage: 'en' }, { sourceLanguage: 'zh-CN' }, {
   }
   if (chartTypeCorrection || blockedRecovery) template.presentationCatalog.visuals[0].chart_types = [{ knowledge_id: 'method', label: { en: 'Intervals', 'zh-CN': '区间图' }, panel: 'b,d,e' }];
   if (blockedRecovery) f.profile.capabilities = { task_continuation: continuationCapability() };
-  let session = await createReadingSession({ ...f.options, sourceLanguage, includeRepairs: !noRepairs, maxTotalCalls: shortBudget ? 14 : 15, enrichmentPolicy: { sources: [], allow_targeted_methods: true } });
+  let session = await createFrozenReading22({ ...f.options, sourceLanguage, includeRepairs: !noRepairs, maxTotalCalls: shortBudget ? 14 : 15, enrichmentPolicy: { sources: [], allow_targeted_methods: true } });
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (action, path, value) => {
     assert.equal(action.action, 'dispatch');
@@ -1489,7 +1613,7 @@ test('empty enrichment policy preserves exact requests and instructions without 
   const f = await configuredFixture(t), template = await configuredSessionTemplate(t);
   const runRoot = join(f.root, 'runs', 'run');
   const run = async withPolicy => {
-    const session = await createReadingSession({ ...f.options, ...(withPolicy ? { enrichmentPolicy: { sources: [], allow_targeted_methods: true } } : {}) });
+    const session = await createFrozenReading22({ ...f.options, ...(withPolicy ? { enrichmentPolicy: { sources: [], allow_targeted_methods: true } } : {}) });
     const content = await scienceOutputs(f, template.presentationCatalog);
     const accept = async (action, path, value) => {
       const observation = observe(action);

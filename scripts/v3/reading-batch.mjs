@@ -4,12 +4,13 @@ import { lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectApaConfig, resolveApaConfig } from '../lib/apa-config.mjs';
+import { DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, configuredReadingProfile } from '../lib/reading-profiles.mjs';
 import { deriveConfiguredMaxCalls } from './configured-reading.mjs';
 import { assertReadingFirstRegisteredSourcesCurrent } from './reading-first-publication.mjs';
 import { readReadingFirstPublicationQueue } from './reading-first-publication-queue.mjs';
 import { withReadingRuntimeConsumer } from './reading-runtime-cleanup.mjs';
 import { copyReadingRuntimeSnapshotBinding, prepareReadingRuntimeSnapshot } from './reading-runtime-snapshot.mjs';
-import { prepareReadingSources, readRegisteredSourceMatchMetadata } from './reading-source-policy.mjs';
+import { assertReadingSourceOutputPath, prepareReadingSources, READ_ONLY_SOURCE_ACCESS, readRegisteredSourceMatchMetadata } from './reading-source-policy.mjs';
 import { BATCH_RUN_FILE, batchRecordHash, projectBatchCheckpoint, readBatchCheckpoint, readBatchJson, replaceBatchJson } from './reading-batch-summary.mjs';
 
 const CODE_ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)));
@@ -47,7 +48,9 @@ async function batchLocation(root, batchId, create = false) {
 }
 
 function budgetOptions(paper, defaults, presentationMode) {
-  const { authorizationId, maxTotalCalls, maxCalls, includeRepairs, sessionContext, enrichmentPolicy } = { ...defaults, ...paper };
+  const { authorizationId, maxTotalCalls, maxCalls, includeRepairs, sessionContext, enrichmentPolicy,
+    instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE } = { ...defaults, ...paper };
+  configuredReadingProfile(instructionProfile, { creating: true });
   const cap = presentationMode === 'reading-editor' ? 8 : 6;
   const min = presentationMode === 'reading-editor' ? 4 : 3;
   const count = maxCalls ?? deriveConfiguredMaxCalls({ maxTotalCalls, presentationMode });
@@ -58,7 +61,7 @@ function budgetOptions(paper, defaults, presentationMode) {
     || sessionContext.reasoning_effort !== undefined && sessionContext.effort !== undefined && sessionContext.reasoning_effort !== sessionContext.effort) {
     fail('READING_BATCH_SESSION_CONTEXT_INVALID');
   }
-  return { authorizationId, maxCalls: count, maxTotalCalls, includeRepairs: includeRepairs === true,
+  return { authorizationId, maxCalls: count, maxTotalCalls, includeRepairs: includeRepairs === true, instructionProfile,
     sessionContext: { model: sessionContext.model, ...(effort === undefined ? {} : { reasoning_effort: effort }) },
     ...(enrichmentPolicy === undefined ? {} : { enrichmentPolicy }) };
 }
@@ -110,7 +113,7 @@ function rejectDuplicates(rows, registered, metadata) {
 
 function startupPrompt(marker, cli) {
   return [
-    '请在独立会话继续此篇已批准的 APA 阅读。读取准备记录中的来源路径、SHA-256、预算和模型身份。',
+    '请在独立会话继续此篇已批准的 APA 阅读。读取准备记录中的来源路径、SHA-256、预算、模型身份及已选指令版本。',
     '按原单篇流程核对来源与本宿主能力，依据原文确定语言，再用已批准的来源准备解析证据和 scientificInput。',
     '如宿主限流，保留会话、原检查点及宿主回传，按宿主允许的时间从原动作恢复。未知派发结果先核对原调用。',
     '准备完成后调用冻结代码中的 reading-session CLI create，传入冻结参数、实际宿主证据和科学输入。',
@@ -164,18 +167,20 @@ export async function prepareReadingBatch({ vaultRoot, batchId = 'batch-' + rand
     const item = result.papers[index];
     try {
       if (row.error) throw row.error;
+      const prepared = prepareReadingSources({ repoRoot: root, scientificInput: { sources: sources.map(
+        (source, index) => index === 0 ? { ...source, doi: input.doi, title: input.title } : source) }, sourceMatchMetadata: metadata });
+      assertReadingSourceOutputPath(runRoot, prepared.source_locations, { tree: true, vaultRoot: root });
       await mkdir(runsRoot, { recursive: true });
       await directory(runsRoot);
       await mkdir(runRoot);
-      const prepared = prepareReadingSources({ repoRoot: root, scientificInput: { sources: sources.map(
-        (source, index) => index === 0 ? { ...source, doi: input.doi, title: input.title } : source) }, sourceMatchMetadata: metadata });
       const marker = await withReadingRuntimeConsumer({ repoRoot: root, runId, runRoot }, () => {
         let marker;
         const reference = captured => {
           marker = { schema_version: 'reading-batch-run-1.0', vault_root: root, batch_id: batchId,
             run_id: runId, run_root: runRoot, snapshot_hash: captured.snapshot_hash, snapshot_fingerprint: captured.fingerprint,
             configuration_fingerprint: inspection.fingerprint, options,
-            sources: prepared.scientificInput.sources, ...(input.paperId ? { paper_id: input.paperId } : {}) };
+            sources: prepared.scientificInput.sources, source_access: READ_ONLY_SOURCE_ACCESS, source_locations: prepared.source_locations,
+            ...(input.paperId ? { paper_id: input.paperId } : {}) };
           const bytes = batchRecord(marker);
           writeFileSync(join(runRoot, BATCH_RUN_FILE), bytes, { flag: 'wx' });
           return { batchRunSha256: batchRecordHash(bytes) };

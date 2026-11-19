@@ -1,17 +1,18 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
-import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { closeSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { assertRegisteredCommit, PHASE22_COMMIT_PATH, readRegisteredCommit } from './phase22-active-version.mjs';
 
 export const CLIPPINGS_SOURCE_POLICY = 'clippings-originals-1.0';
+export const READ_ONLY_SOURCE_ACCESS = 'read-only-original-1.0';
 
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
-const fail = (code, details) => { throw Object.assign(new Error(code), { code, details }); };
+const fail = (code, details, message = code) => { throw Object.assign(new Error(message), { code, details }); };
 const document = path => /\.(?:pdf|docx)$/i.test(path);
 const forwardSlashes = path => path.split(sep).join('/');
 
-function statIfPresent(path) {
-  try { return lstatSync(path); }
+function statIfPresent(path, options) {
+  try { return lstatSync(path, options); }
   catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error; return null; }
 }
 
@@ -40,6 +41,68 @@ function libraryPath(root, path, folder) {
 function fileStat(path) {
   const stat = statIfPresent(path);
   return stat?.isFile() && !stat.isSymbolicLink() && realpathSync(path) === path ? stat : null;
+}
+
+const fileIdentity = stat => ({ dev: String(stat.dev), ino: String(stat.ino), mtime_ns: String(stat.mtimeNs) });
+const sameIdentity = (left, right) => left?.dev === right.dev && left?.ino === right.ino;
+const sameVersion = (stat, identity) => sameIdentity(identity, fileIdentity(stat)) && identity.mtime_ns === String(stat.mtimeNs);
+
+/** Read and verify the exact file frozen at preparation. The descriptor cannot write to the original. */
+export function assertReadingSourceUnchanged(source) {
+  const { path, file_identity: expected, sha256, byte_length } = source;
+  const changed = () => fail('READING_FIRST_SOURCE_CHANGED', { path }, 'READING_FIRST_SOURCE_CHANGED: ' + path);
+  function check(stat) {
+    if (!stat?.isFile() || !expected || !sameVersion(stat, expected) || stat.size !== BigInt(byte_length)) changed();
+  }
+  let fd;
+  try {
+    check(statIfPresent(path, { bigint: true }));
+    if (realpathSync(path) !== path) changed();
+    fd = openSync(path, 'r');
+    check(fstatSync(fd, { bigint: true }));
+    const bytes = readFileSync(fd);
+    check(fstatSync(fd, { bigint: true }));
+    check(statIfPresent(path, { bigint: true }));
+    if (sha(bytes) !== sha256 || bytes.length !== byte_length || realpathSync(path) !== path) changed();
+    return bytes;
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') changed();
+    throw error;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+function containsPath(parent, path) {
+  const part = relative(parent, path);
+  return part !== '..' && !part.startsWith('..' + sep) && !isAbsolute(part);
+}
+
+/** Check destinations before writing, moving, or removing a file or tree. */
+export function assertReadingSourceOutputPath(outputPath, sources, { tree = false, vaultRoot } = {}) {
+  const path = resolve(outputPath);
+  const protectedPaths = [...new Set(sources.flatMap(source => [source.path, source.original_path]).filter(Boolean))];
+  if (vaultRoot) protectedPaths.push(join(realpathSync(vaultRoot), 'Clippings'));
+  const conflict = target => fail('RF_READ_ONLY_SOURCE_OUTPUT_CONFLICT', { path: target });
+  if (protectedPaths.some(source => containsPath(source, path) || tree && containsPath(path, source))) conflict(path);
+  const identities = sources.map(source => source.file_identity).filter(Boolean);
+  for (const source of protectedPaths) {
+    const existing = statIfPresent(source, { bigint: true });
+    if (existing?.isFile()) identities.push(fileIdentity(existing));
+  }
+  function inspect(target) {
+    const stat = statIfPresent(target, { bigint: true });
+    if (stat?.isSymbolicLink() || stat?.isFile() && identities.some(identity => sameIdentity(identity, fileIdentity(stat)))) conflict(target);
+    return stat;
+  }
+  const root = parse(path).root;
+  for (let ancestor = dirname(path); ancestor !== root; ancestor = dirname(ancestor)) inspect(ancestor);
+  function inspectTarget(target) {
+    if (inspect(target)?.isDirectory() && tree) {
+      for (const name of readdirSync(target)) inspectTarget(join(target, name));
+    }
+  }
+  inspectTarget(path);
 }
 
 function documentInventory(root, folder) {
@@ -114,7 +177,7 @@ function sourceTitles(source) {
 export async function readRegisteredSourceMatchMetadata({ vaultRoot, registered } = {}) {
   const root = realpathSync(vaultRoot);
   const sources = [], rawSources = [];
-  if (!registered && !statIfPresent(join(root, PHASE22_COMMIT_PATH))) return { sources, rawSources };
+  if (!registered && !statIfPresent(join(root, PHASE22_COMMIT_PATH))) return { sources, rawSources, originals: [] };
   const snapshot = registered ?? await readRegisteredCommit({ vaultRoot: root });
   if (!snapshot.ok) fail('RF_SOURCE_MATCH_REGISTRATION_INVALID', { errors: snapshot.errors });
   if (assertRegisteredCommit(snapshot).root !== root) fail('RF_SOURCE_MATCH_REGISTRATION_INVALID', { vaultRoot });
@@ -137,7 +200,8 @@ export async function readRegisteredSourceMatchMetadata({ vaultRoot, registered 
     if (libraryPath(root, sourcePath, 'Clippings')) sources.push(row);
   }
   assertRegisteredCommit(snapshot);
-  return { sources, rawSources };
+  const originals = snapshot.generation.objects.filter(object => object.kind === 'asset' && libraryPath(root, object.path, 'Clippings') !== null);
+  return { sources, rawSources, originals };
 }
 
 function addSourceMetadata(root, folder, files, sources, planned = false) {
@@ -244,24 +308,66 @@ function rewriteSourcePaths(presentation, locations) {
   }
 }
 
-/** Copy only external originals and bind the new reading to their actual Clippings paths. */
-export function prepareReadingSources({ repoRoot, scientificInput, sourceMatchMetadata = {} } = {}) {
+function selectReadOnlyOriginal(root, originalPath, source, originals) {
+  const target = join(root, 'Clippings', basename(originalPath));
+  if (libraryPath(root, target, 'Clippings') === null) fail('RF_CLIPPINGS_SOURCE_PATH_INVALID', { path: target });
+  if (assertIdenticalTarget(target, source)) return realpathSync(target);
+  const matches = [...new Set(originals.filter(row => row.sha256 === source.sha256 && document(row.path)
+    && extname(row.path).toLowerCase() === extname(originalPath).toLowerCase()
+    && (row.byte_length === undefined || row.byte_length === source.byte_length))
+    .map(row => libraryPath(root, row.path, 'Clippings')).filter(Boolean))]
+    .filter(path => fileStat(join(root, path)) && sha(readFileSync(join(root, path))) === source.sha256);
+  if (matches.length === 1) return join(root, matches[0]);
+  fail('RF_CLIPPINGS_ORIGINAL_REQUIRED', { source_path: originalPath, target_path: target, ...(matches.length ? { registered_candidates: matches } : {}) },
+    'RF_CLIPPINGS_ORIGINAL_REQUIRED: ' + originalPath + ' -> ' + target);
+}
+
+/** Bind originals in place. The copy behavior is retained for explicitly admitted historical preparations. */
+export function prepareReadingSources({ repoRoot, scientificInput, sourceMatchMetadata = {}, sourceAccess = READ_ONLY_SOURCE_ACCESS, frozenLocations } = {}) {
   const root = realpathSync(repoRoot);
   const sources = scientificInput?.sources;
   if (!Array.isArray(sources) || !sources.length || new Set(sources.map(source => source?.id)).size !== sources.length) {
     fail('RF_CLIPPINGS_SOURCES_REQUIRED');
   }
   physicalDirectory(join(root, 'Clippings'));
+  const readOnly = sourceAccess === READ_ONLY_SOURCE_ACCESS;
+  if (!readOnly && sourceAccess !== null) fail('RF_CLIPPINGS_SOURCE_ACCESS_INVALID');
+  if (frozenLocations !== undefined && (!readOnly || !Array.isArray(frozenLocations) || frozenLocations.length !== sources.length)) {
+    fail('RF_CLIPPINGS_SOURCE_ACCESS_INVALID');
+  }
   const copies = new Map();
-  const source_locations = sources.map(source => {
+  const source_locations = sources.map((source, index) => {
     if (typeof source?.id !== 'string' || !source.id || typeof source.path !== 'string' || !isAbsolute(source.path) || !document(source.path)) {
       fail('RF_CLIPPINGS_SOURCE_PATH_INVALID', { path: source?.path });
     }
-    const original_path = resolve(source.path), path = realpathSync(original_path);
-    if (!fileStat(path)) fail('RF_CLIPPINGS_SOURCE_PATH_INVALID', { path });
-    const bytes = readFileSync(path);
-    if (sha(bytes) !== source.sha256 || bytes.length !== source.byte_length) fail('READING_FIRST_SOURCE_CHANGED', { path: original_path });
-    const target = libraryPath(root, path, 'Clippings') === null ? join(root, 'Clippings', basename(original_path)) : path;
+    const original_path = resolve(source.path);
+    if (frozenLocations) {
+      const frozen = frozenLocations[index];
+      if (frozen?.source_id !== source.id || frozen.path !== original_path || frozen.sha256 !== source.sha256
+        || frozen.byte_length !== source.byte_length || libraryPath(root, frozen.path, 'Clippings') !== frozen.vault_path) {
+        fail('READING_FIRST_SOURCE_CHANGED', { path: original_path });
+      }
+      assertReadingSourceUnchanged(frozen);
+      return { ...frozen };
+    }
+    const path = realpathSync(original_path);
+    const local = libraryPath(root, path, 'Clippings') !== null;
+    let bytes;
+    if (!readOnly || !local) {
+      if (!fileStat(path)) fail('RF_CLIPPINGS_SOURCE_PATH_INVALID', { path });
+      bytes = readFileSync(path);
+      if (sha(bytes) !== source.sha256 || bytes.length !== source.byte_length) fail('READING_FIRST_SOURCE_CHANGED', { path: original_path });
+    }
+    if (readOnly) {
+      const destination = local ? path : selectReadOnlyOriginal(root, original_path, source, sourceMatchMetadata.originals ?? sourceMatchMetadata.sources ?? []);
+      const stat = statIfPresent(destination, { bigint: true });
+      if (!stat?.isFile() || realpathSync(destination) !== destination) fail('RF_CLIPPINGS_SOURCE_PATH_INVALID', { path: destination });
+      const location = { source_id: source.id, original_path, path: destination, vault_path: libraryPath(root, destination, 'Clippings'),
+        sha256: source.sha256, byte_length: source.byte_length, file_identity: fileIdentity(stat) };
+      assertReadingSourceUnchanged(location);
+      return location;
+    }
+    const target = local ? path : join(root, 'Clippings', basename(original_path));
     const vault_path = libraryPath(root, target, 'Clippings');
     if (vault_path === null) fail('RF_CLIPPINGS_SOURCE_PATH_INVALID', { path: target });
     let destination = target;
@@ -278,8 +384,10 @@ export function prepareReadingSources({ repoRoot, scientificInput, sourceMatchMe
   for (const { target, source, bytes } of copies.values()) copyOriginal(root, target, source, bytes);
   input.sources.forEach((source, index) => {
     const location = source_locations[index];
-    location.path = realpathSync(location.path);
-    location.vault_path = libraryPath(root, location.path, 'Clippings');
+    if (!readOnly) {
+      location.path = realpathSync(location.path);
+      location.vault_path = libraryPath(root, location.path, 'Clippings');
+    }
     source.path = location.path;
   });
   if (input.presentation) rewriteSourcePaths(input.presentation, source_locations);

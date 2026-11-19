@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { bindPublishedKnowledgeReferences, draftReadingFirstKnowledgeComparisons, matchReadingFirstKnowledgeIdentity,
+import { applyReadingFirstKnowledgeContent, assertSharedKnowledgeApplicationMirror, bindPublishedKnowledgeReferences, collectSharedKnowledgeApplications, draftReadingFirstKnowledgeComparisons, matchReadingFirstKnowledgeIdentity,
   registeredKnowledgeReference, renderSharedKnowledge } from '../../scripts/v3/reading-first-knowledge.mjs';
+import { reviewedReadingFirstFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
 
 const item = { id: 'pie', kind: 'method', canonical_key: 'method:pie', title: { 'zh-CN': '饼图', en: 'Pie chart' }, source_kind: 'method-background', paragraphs: { 'zh-CN': ['中文'], en: ['English'] } };
 const prior = { paper_id: 'bray', title: 'Bray 2024', targets: { 'zh-CN': 'Wiki/sources/Bray.zh-CN.md', en: 'Wiki/sources/Bray.en.md' } };
@@ -73,6 +74,76 @@ test('preserves a prior paper relocated visible target in the candidate and hidd
   assert.match(content, /\[Bray 2024 · 中文\]\(\.\.\/translations\/Bray\.zh-CN\.md\)/);
   assert.ok(content.startsWith(before));
   assert.ok(content.endsWith(after));
+});
+
+test('collects shared application sections from bilingual writer declarations and expanded editor inputs', () => {
+  const presentation = { knowledge_layout: 'shared-bilingual-1.0', knowledge: [item],
+    visuals: [{ id: 'figure', chart_types: [{ knowledge_id: item.id }] }] };
+  const applications = ['practice', 'figure-result'];
+  const views = Object.entries(item.paragraphs).map(([language, paragraphs]) => ({
+    language,
+    sections: [
+      { id: 'practice', heading: language === 'en' ? 'Measure composition' : '测量组成', paragraphs: ['Example.'] },
+      { id: 'figure-result', heading: language === 'en' ? 'Display composition' : '呈现组成', paragraphs: ['Figure description.'] },
+      { id: 'other', heading: 'Unrelated', paragraphs: ['Unrelated discussion.'] },
+    ],
+    knowledge_content: [{ id: item.id, paragraphs, application_section_ids: applications.slice() }],
+    placements: { knowledge: [{ id: item.id, section_id: 'practice' }], visuals: [{ id: 'figure', section_id: 'figure-result' }] },
+  }));
+  const expected = [
+    { id: 'practice', headings: { 'zh-CN': '测量组成', en: 'Measure composition' } },
+    { id: 'figure-result', headings: { 'zh-CN': '呈现组成', en: 'Display composition' } },
+  ];
+  const withKnowledge = applyReadingFirstKnowledgeContent({ presentation, views });
+  assert.deepEqual(withKnowledge.knowledge[0], item);
+  assert.doesNotThrow(() => assertSharedKnowledgeApplicationMirror(...views));
+  assert.deepEqual(collectSharedKnowledgeApplications({ item, presentation, views }), expected);
+  views[0].knowledge_content[0].application_section_ids.reverse();
+  assert.throws(() => assertSharedKnowledgeApplicationMirror(...views), { code: 'RF_OBSIDIAN_KNOWLEDGE_APPLICATION_INVALID' });
+  assert.throws(() => collectSharedKnowledgeApplications({ item, presentation, views }), { code: 'RF_OBSIDIAN_KNOWLEDGE_APPLICATION_INVALID' });
+  for (const view of views) view.knowledge_content[0].application_section_ids = ['other'];
+  assert.throws(() => applyReadingFirstKnowledgeContent({ presentation, views: views.slice(0, 1) }), { code: 'RF_OBSIDIAN_KNOWLEDGE_APPLICATION_INVALID' });
+  assert.throws(() => collectSharedKnowledgeApplications({ item, presentation, views }), { code: 'RF_OBSIDIAN_KNOWLEDGE_APPLICATION_INVALID' });
+
+  for (const view of views) delete view.knowledge_content[0].application_section_ids;
+  assert.equal(collectSharedKnowledgeApplications({ item, presentation, views }), undefined);
+  const editor = { languages: Object.fromEntries(views.map(({ language }) => [language, {
+    methods: [{ knowledge_ids: [item.id], section_ids: ['practice'], explanation: 'Reusable explanation.' }],
+  }])) };
+  for (const view of views) view.placements.knowledge = [];
+  assert.deepEqual(collectSharedKnowledgeApplications({ item, presentation, views, editor }), expected);
+});
+
+test('renders localized section links and preserves them across publication, relocation and later reuse', () => {
+  const applicationSections = [
+    { id: 'practice', headings: { 'zh-CN': '测量组成', en: 'Measure composition' } },
+    { id: 'figure-result', headings: { 'zh-CN': '呈现组成', en: 'Display composition' } },
+  ];
+  const options = { item, knowledgeRegistry: [], paperTargets: prior.targets, paperId: prior.paper_id, paperTitle: prior.title,
+    vaultPath: value => value, href };
+  const content = renderSharedKnowledge({ ...options, applicationSections }).note.content;
+  assert.match(content, /\[Bray 2024 · 中文 · 测量组成\]\(\.\.\/sources\/Bray\.zh-CN\.md#\^rf-practice\)/);
+  assert.match(content, /\[Bray 2024 · English · Display composition\]\(\.\.\/sources\/Bray\.en\.md#\^rf-figure-result\)/);
+  const published = bindPublishedKnowledgeReferences(content, { paperId: prior.paper_id, registeredPapers: new Set([prior.paper_id]) }).content;
+  const relocated = published.replaceAll('../sources/Bray.zh-CN.md', '../translations/Bray.zh-CN.md');
+  const knowledgeRegistry = [{ id: item.id, path: 'Wiki/methods/饼图.md', content: relocated + after, current_content: true }];
+  const later = renderSharedKnowledge({ ...options, knowledgeRegistry, paperTargets: currentTargets, paperId: 'new', paperTitle: 'New paper',
+    applicationSections }).note.content;
+  assert.match(later, /\[Bray 2024 · 中文 · 测量组成\]\(\.\.\/translations\/Bray\.zh-CN\.md#\^rf-practice\)/);
+  assert.match(later, /\[New paper · 中文 · 呈现组成\]\(\.\.\/translations\/New\.zh-CN\.md#\^rf-figure-result\)/);
+  assert.ok(later.endsWith(after));
+  const history = JSON.parse(Buffer.from(/<!-- KNOWLEDGE_STATE ([A-Za-z0-9+/=]+) -->/.exec(later)[1], 'base64')).applications[0];
+  assert.deepEqual(history.sections, applicationSections);
+  assert.equal(history.targets['zh-CN'], 'Wiki/translations/Bray.zh-CN.md');
+});
+
+test('2.3 Translation cannot invent application sections absent from the accepted Writer view', async t => {
+  await assert.rejects(reviewedReadingFirstFixture(t, {
+    methodsFirst: true,
+    transformTranslation(view) {
+      return { ...view, knowledge_content: [{ id: 'method', paragraphs: ['可复用的方法说明。'], application_section_ids: ['methods'] }] };
+    },
+  }), { code: 'RF_OBSIDIAN_KNOWLEDGE_APPLICATION_INVALID' });
 });
 
 test('resolves only appended references when preserving a current shared note', () => {

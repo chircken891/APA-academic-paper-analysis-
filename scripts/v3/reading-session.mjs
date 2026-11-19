@@ -7,15 +7,16 @@ import { inspectApaConfig, checkHostProfile, evaluateReadingPreflight } from '..
 import { prepareConfiguredReading, getConfiguredReadingDispatchArguments, materializeConfiguredReadingCandidate, DEFAULT_CONFIGURED_INSTRUCTION_PROFILE } from './configured-reading.mjs';
 import { resolveHostContinuation } from '../lib/apa-host-capabilities.mjs';
 import { buildReadingActionSummary } from './reading-action-summary.mjs';
-import { assertBatchRunOptions, readBatchRun, writeBatchCheckpoint } from './reading-batch-summary.mjs';
+import { readBatchRun, writeBatchCheckpoint } from './reading-batch-summary.mjs';
 import { readCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
 import { assertReadingFirstRegisteredSourcesCurrent } from './reading-first-publication.mjs';
 import { readingFirstUsedMethodSources } from './reading-first-runtime.mjs';
-import { readRegisteredSourceMatchMetadata } from './reading-source-policy.mjs';
+import { assertReadingSourceOutputPath, assertReadingSourceUnchanged, READ_ONLY_SOURCE_ACCESS, readRegisteredSourceMatchMetadata } from './reading-source-policy.mjs';
 import { checkTranslationProgress, evaluateTranslationContinuation } from './reading-translation-progress.mjs';
 import { getScienceBudgetSummary, getSciencePendingContinuations, getScienceContinuation, reserveScienceContinuation, markScienceContinuationDispatched, recordScienceContinuationReceipt, recordScienceComputerControlObservation, getScienceComputerControlReport } from './science-controller.mjs';
 import { assertReadingBindingCurrent, getReadingBudgetSummary, getReadingPendingContinuations, reserveReadingContinuation, markReadingContinuationDispatched, recordReadingContinuationReceipt } from './reading-first-runtime.mjs';
 import { buildReadingSessionTasks } from './reading-session-tasks.mjs';
+import { resolveReadingSessionContinuation } from './reading-session-continuation.mjs';
 import { ingestObservedRunStep } from './phase21-runner.mjs';
 import { compactionEnabled } from './reading-compaction.mjs';
 import { validateHostReceiptEvidence, normalizeHostReceipt } from './reading-host-evidence.mjs';
@@ -25,7 +26,7 @@ import { closeReadingRuntimeRun, cleanupReadingRuntimeRun, readReadingRuntimeTer
 import { prepareReadingSessionExecution, readReadingSessionExecution, retryReadingSessionCleanup } from './reading-session-cli.mjs';
 import { createOwnedArtifactBroker, commitOwnedArtifact, readOwnedArtifact } from './owned-artifact-store.mjs';
 import { recoverReadingFirstRejectedEditor, authorizeReadingFirstContinuation, inspectReadingFirstContinuation, annotateReadingFirstReviewScope, inspectReadingFirstSavedCandidate, registerReadingFirstUserRevision, finalizeReadingFirstUserRevision, retainReviewedReadingFirstCandidate, recordReadingFirstKnowledgeIdentityResolution, recordReadingFirstResourceRepair, getReadingFirstRenderedResources } from './reading-first-runtime.mjs';
-import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, getScienceRequest, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, createScienceHandoff, getScienceCompactionReminder, prepareScienceHostMigration } from './science-controller.mjs';
+import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, getScienceRequest, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, createScienceHandoff, getScienceCompactionReminder } from './science-controller.mjs';
 import { fingerprintReadingFirst, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, getReadingFirstPendingRequests, getReadingFirstState, recordReadingFirstRequestEvent, getReadingFirstRequestEvents, acceptReadingFirstResult, createReadingFirstEnrichmentRequests, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstReviewRequest, createReadingFirstRevisionRequests, validateReadingFirstRenderRepair, getReadingCompactionReminder, captureReadingFirstPublicationSource } from './reading-first-runtime.mjs';
 
 const sessions = new WeakMap();
@@ -63,6 +64,7 @@ const resumableResultCodes = new Set([
   'READING_FIRST_VIEW_LAYOUT_INVALID',
   'READING_FIRST_ENRICHMENT_CONSUMPTION_REQUIRED',
   'RF_OBSIDIAN_KNOWLEDGE_CONTENT_INVALID',
+  'RF_OBSIDIAN_KNOWLEDGE_APPLICATION_INVALID',
   'READING_FIRST_REVIEW_INVALID',
 ]);
 const capability = (state, task) => state.broker.issueCapability({ runId: state.prepared.runControl.run_id, actorId: task.owner_actor_id, role: task.role, artifactPath: task.artifact_path, revision: task.revision });
@@ -70,6 +72,10 @@ const controlPath = root => join(root, 'control', 'science-state.json');
 const runtimeLocation = state => ({ repoRoot: state.prepared.runControl.reading_first_binding.configured_setup.knowledge_registry.vault_root,
   runId: state.prepared.runControl.run_id, runRoot: state.prepared.paths.runRoot });
 const runtimeInspection = state => inspectReadingRuntime({ manifest: state.runtimeBinding, ...(snapshotBinding(state.runtimeBinding) ? runtimeLocation(state) : {}) });
+const readOnlySessionSources = state => {
+  const setup = state.prepared.runControl.reading_first_binding.configured_setup;
+  return setup?.source_access === READ_ONLY_SOURCE_ACCESS ? setup.source_locations : null;
+};
 const approvalCheckpoint = (approval, runId) => approval.checkpoint_fingerprints?.[runId] ?? approval.checkpoint_fingerprint;
 
 function delegateSession(session, api, execution) {
@@ -77,9 +83,24 @@ function delegateSession(session, api, execution) {
   return session;
 }
 
+export function assertReadingSessionOutputPath(session, path, bytes) {
+  const delegated = delegatedSessions.get(session);
+  if (delegated) return delegated.api.assertReadingSessionOutputPath?.(session, path, bytes);
+  const state = stateOf(session), sources = readOnlySessionSources(state);
+  if (!sources) return;
+  assertReadingSourceOutputPath(path, sources, { vaultRoot: runtimeLocation(state).repoRoot });
+  if (bytes && (bytes.subarray(0, 5).equals(Buffer.from('%PDF-'))
+    || sources.some(source => source.byte_length === bytes.length
+      && source.sha256 === 'sha256:' + createHash('sha256').update(bytes).digest('hex')))) {
+    fail('RF_READ_ONLY_SOURCE_OUTPUT_CONFLICT');
+  }
+}
+
 function withSessionConsumer(state, work) {
   if (!snapshotBinding(state.runtimeBinding)) return work();
   const location = runtimeLocation(state);
+  const readOnlySources = readOnlySessionSources(state);
+  if (readOnlySources) assertReadingSourceOutputPath(location.runRoot, readOnlySources, { tree: true, vaultRoot: location.repoRoot });
   const guarded = async () => {
     if (await readReadingRuntimeTerminal(location)) fail('READING_SESSION_TERMINATED');
     const reference = readReadingRuntimeSnapshotReference(location);
@@ -299,7 +320,9 @@ export async function createReadingSession(options = {}, execution) {
   verifyReadingRuntimeSnapshot(execution);
   if (resolve(execution.manifest.repo_root) !== CODE_ROOT) {
     const api = await snapshotApi(execution.manifest);
-    return delegateSession(await api.createReadingSession(options, execution), api, execution);
+    const snapshotOptions = execution.instructionProfile !== undefined && options.instructionProfile === undefined
+      ? { ...options, instructionProfile: execution.instructionProfile } : options;
+    return delegateSession(await api.createReadingSession(snapshotOptions, execution), api, execution);
   }
   const start = async () => {
     if (await readReadingRuntimeTerminal(execution)) fail('READING_SESSION_TERMINATED');
@@ -310,23 +333,18 @@ export async function createReadingSession(options = {}, execution) {
 
 async function createSession(options, execution) {
   const inspection = inspectApaConfig({ repoRoot: options.repoRoot, hostProfile: options.hostProfile });
-  if (options.scienceMigration) {
-    if (['scientificInput', 'sciencePayloads', 'sourceLanguage', 'maxCalls', 'presentationMode', 'includeRepairs', 'enrichmentPolicy', 'scienceTaskOverrides'].some(key => options[key] !== undefined)) fail('SCIENCE_MIGRATION_INPUT_INVALID');
-    const migration = await prepareScienceHostMigration({ ...options, runsPath: inspection.config.paths.runs, host: inspection.config.host });
-    options = { ...options, ...migration };
-  } else if (options.scientificInput?.science_migration !== undefined) fail('SCIENCE_MIGRATION_INPUT_INVALID');
+  const reference = execution && readReadingRuntimeSnapshotReference({ repoRoot: options.repoRoot, runId: options.runId });
+  const continuation = await resolveReadingSessionContinuation({ options, inspection, runRoot: execution?.runRoot, reference, manifest: execution?.manifest });
+  if (continuation) options = continuation.options;
+  const batchRun = continuation?.batchRun;
   const { repoRoot, runId, scientificInput, sourceLanguage, authorizationId, maxCalls, maxTotalCalls, sessionContext, hostProfile, evidence = {}, sciencePayloads = {}, maxControlCheckpoints = 16 + 8 * maxTotalCalls } = options;
   if (![repoRoot, runId, authorizationId].every(text) || !scientificInput || !sessionContext || !Number.isSafeInteger(maxTotalCalls) || !Number.isSafeInteger(maxControlCheckpoints) || maxControlCheckpoints < 4) fail('READING_SESSION_INPUT_INVALID');
-  const reference = execution && readReadingRuntimeSnapshotReference({ repoRoot, runId });
-  const batchRun = execution && readBatchRun(execution.runRoot, runId, reference?.batch_run_sha256);
-  if (batchRun) assertBatchRunOptions(batchRun, options, { manifest: execution.manifest, configurationFingerprint: inspection.fingerprint });
   const presentationMode = inspection.config?.reading?.presentation_mode;
   if (options.presentationMode !== undefined && options.presentationMode !== presentationMode) fail('READING_SESSION_PRESENTATION_CONFLICT');
-  const instructionProfile = options.instructionProfile ?? DEFAULT_CONFIGURED_INSTRUCTION_PROFILE;
-  if (instructionProfile !== DEFAULT_CONFIGURED_INSTRUCTION_PROFILE) fail('READING_BINDING_RETIRED');
-  const tasks = buildReadingSessionTasks({ runId, scientificInput, sourceLanguage, instructionProfile, checkpointCount: maxControlCheckpoints, controllerActorId: options.controllerActorId, taskOverrides: options.taskOverrides, scienceTaskOverrides: options.scienceTaskOverrides, includeRepairs: options.includeRepairs === true, presentationMode, enrichmentPolicy: options.enrichmentPolicy });
+  const { instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE } = options;
+  const tasks = buildReadingSessionTasks({ runId, scientificInput, sourceLanguage, instructionProfile, checkpointCount: maxControlCheckpoints, controllerActorId: options.controllerActorId, taskOverrides: options.taskOverrides, scienceTaskOverrides: options.scienceTaskOverrides, includeRepairs: options.includeRepairs === true, presentationMode, enrichmentPolicy: options.enrichmentPolicy }, continuation?.context);
   const sourceMatchMetadata = await readRegisteredSourceMatchMetadata({ vaultRoot: repoRoot });
-  const prepared = prepareConfiguredReading({ repoRoot, runId, scientificInput, sourceMatchMetadata, sourceLanguage, instructionProfile, authorizationId, maxCalls, maxTotalCalls, priorCalls: 6, sessionContext, hostProfile, taskBindings: tasks.taskBindings, controllerActorId: options.controllerActorId, ...(options.enrichmentPolicy !== undefined ? { enrichmentPolicy: options.enrichmentPolicy, enrichmentSessionProfile: 'reading-session-enrichment-1.0' } : {}) }, execution?.manifest);
+  const prepared = prepareConfiguredReading({ repoRoot, runId, scientificInput, sourceMatchMetadata, sourceLanguage, instructionProfile, authorizationId, maxCalls, maxTotalCalls, priorCalls: 6, sessionContext, hostProfile, taskBindings: tasks.taskBindings, controllerActorId: options.controllerActorId, ...(options.enrichmentPolicy !== undefined ? { enrichmentPolicy: options.enrichmentPolicy, enrichmentSessionProfile: 'reading-session-enrichment-1.0' } : {}) }, execution?.manifest, continuation?.context);
   const configBytes = await readFile(join(repoRoot, 'config', 'apa.local.json'));
   if (createHash('sha256').update(configBytes).digest('hex') !== prepared.configurationFingerprint || !same(JSON.parse(configBytes), inspection.config)) fail('READING_SESSION_CONFIG_CHANGED');
   const actor = prepared.runControl.reading_first_binding.controller_actor_id;
@@ -373,6 +391,8 @@ async function resumeSession({ runRoot, readOnly }, execution) {
   if (checkpoints.length < 4 || checkpoints.some((row, index) => Number(row.revision) !== index + 1 || row.artifact_path !== `control/reading-checkpoint-${index + 1}.json`)) fail('READING_SESSION_STATE_INVALID');
   const broker = createOwnedArtifactBroker(brokerConfig);
   const state = { prepared, runtimeBinding: prepared.runControl.reading_first_binding.configured_setup?.runtime_binding, sessionCheckpoints: sessionBindings(brokerConfig, prepared.runControl.run_id, actor), nextSessionCheckpoint: 0, approvals: [], broker, brokerConfig, tasks, checkpoints, science: null, sciencePayloads: payloads, nextCheckpoint: 3, reading: null, handoff: null, checkpointReceipt: null, preflight: { status: 'unknown', reasons: ['current runtime evidence required'] }, evidence: {}, hostProfile: null, presentation: null, resources: null, needsInitialSessionMatch: true };
+  const readOnlySources = readOnlySessionSources(state);
+  if (readOnlySources) assertReadingSourceOutputPath(root, readOnlySources, { tree: true, vaultRoot: runtimeLocation(state).repoRoot });
   if (state.sessionCheckpoints.length !== checkpoints.length || state.sessionCheckpoints.some((row, index) => Number(row.revision) !== index + 1)) fail('READING_SESSION_STATE_INVALID');
   const reference = execution && readReadingRuntimeSnapshotReference(runtimeLocation(state));
   if (execution && !reference) fail('READING_SESSION_RUNTIME_REFERENCE_CONFLICT');
@@ -536,6 +556,7 @@ export async function nextReadingAction(session) {
   if (delegated) return delegated.api.nextReadingAction(session);
   const state = stateOf(session);
   return sessionQueue(state, () => withSessionConsumer(state, async () => {
+    readOnlySessionSources(state)?.forEach(assertReadingSourceUnchanged);
     const action = await nextSessionAction(session);
     if (!state.science || action.kind === 'runtime-drift' || action.code === 'READING_SESSION_RUNTIME_RESTART_REQUIRED') {
       await saveBatchProgress(state, action);

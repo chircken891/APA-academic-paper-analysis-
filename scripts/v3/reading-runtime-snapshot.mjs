@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 
 const DEFAULT_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const TREES = ['scripts', 'Schema', 'prompts', 'docs/apa-v3'];
-const PATHS = [...TREES, 'package.json'];
+const READING_MAP_TEMPLATE = 'Templates/apa-v3/研究导图模板.canvas';
+const PATHS = [...TREES, 'package.json', READING_MAP_TEMPLATE];
 const SHA256 = /^sha256:[a-f0-9]{64}$/;
 const RUN_ID = /^[a-zA-Z0-9_-]+$/;
 export const READING_RUNTIME_SNAPSHOT_PROFILE = 'reading-runtime-snapshot-1.0';
@@ -63,6 +64,7 @@ function scan(root, snapshot = false) {
     directory(join(root, 'docs'));
     TREES.forEach(walk);
     add('package.json');
+    if (stat(join(root, READING_MAP_TEMPLATE))) add(READING_MAP_TEMPLATE);
   }
   return new Map([...files.keys()].sort().map(path => [path, files.get(path)]));
 }
@@ -155,7 +157,7 @@ export function previewReadingRuntimeSnapshot(options) {
 function validFilePath(path) {
   return typeof path === 'string' && !path.includes('\\') && !path.includes('\0')
     && path.split('/').every(part => part && part !== '.' && part !== '..' && !part.includes(':'))
-    && (path === 'package.json' || TREES.some(tree => path.startsWith(tree + '/')));
+    && (path === 'package.json' || path === READING_MAP_TEMPLATE || TREES.some(tree => path.startsWith(tree + '/')));
 }
 
 function validReceipt(row) {

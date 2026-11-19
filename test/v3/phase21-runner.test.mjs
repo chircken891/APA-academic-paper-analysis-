@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { link, mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -13,6 +13,7 @@ import { createPhase21ContractValidator } from '../../scripts/v3/phase21-contrac
 import { runMineru as publicRunMineru } from '../../scripts/lib/mineru-runner.mjs';
 import { createEvaluationLedger } from '../../scripts/v3/phase21-evaluation-driver.mjs';
 import { createApaRoleModelPolicy } from '../../scripts/apa-model-policy.mjs';
+import { prepareReadingSources } from '../../scripts/v3/reading-source-policy.mjs';
 
 const execFileAsync = promisify(execFile);
 const hash = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -370,6 +371,45 @@ test('packet mismatch rejects source-byte and output-root substitution before ac
   const port = createCurrentMineruBaselinePort({ vaultRoot: root, dependencies: { checkMineruRuntime: async () => ({ ok: true }), runMineru: async () => 'never' } });
   await assert.rejects(() => port.run(packetFor({ sourcePath, sourceBytes: Buffer.from('different'), outputRoot })), /SOURCE_BYTES_MISMATCH/);
   await assert.rejects(() => port.run(packetFor({ sourcePath, sourceBytes: Buffer.from('a'), outputRoot: join(root, '..', 'escaped') })), /OUTPUT_ROOT_OUTSIDE_VAULT/);
+});
+
+test('read-only parsing rejects source aliases and preserves main and supplemental PDF identities', async t => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'phase21-read-only-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'Clippings'));
+  const sourceBytes = Buffer.from('main source');
+  const sourcePath = join(root, 'Clippings', '论文 原件.pdf');
+  const supplementPath = join(root, 'Clippings', '补充 材料.pdf');
+  const supplementBytes = Buffer.from('supplement');
+  await writeFile(sourcePath, sourceBytes);
+  await writeFile(supplementPath, supplementBytes);
+  const scientificInput = { sources: [{ id: 'main', path: sourcePath, sha256: hash(sourceBytes), byte_length: sourceBytes.length },
+    { id: 'supplement', path: supplementPath, sha256: hash(supplementBytes), byte_length: supplementBytes.length }] };
+  const { source_locations: sources } = prepareReadingSources({ repoRoot: root, scientificInput });
+  let invoked = 0;
+  const port = createCurrentMineruBaselinePort({ vaultRoot: root, readOnlySources: sources, dependencies: {
+    checkMineruRuntime: async () => ({ ok: true, version: 'simulated-1.0', configVersion: 'synthetic' }),
+    runMineru: async ({ outputPath, readOnlyInput }) => {
+      invoked++;
+      assert.equal(readOnlyInput, true);
+      await mkdir(outputPath);
+      await writeFile(join(outputPath, 'parsed.json'), '{}');
+      return 'simulated-1.0';
+    },
+  } });
+  const alias = join(root, 'supplement-alias');
+  await link(supplementPath, alias);
+  for (const outputRoot of [sourcePath, alias, join(root, 'Clippings', 'new-output')]) {
+    await assert.rejects(port.run(packetFor({ sourcePath, sourceBytes, outputRoot })), { code: 'RF_READ_ONLY_SOURCE_OUTPUT_CONFLICT' });
+  }
+  assert.equal(invoked, 0);
+  const result = await port.run(packetFor({ sourcePath, sourceBytes, outputRoot: join(root, 'parsed') }));
+  assert.deepEqual(result.output_inventory.map(row => row.path), ['parsed.json']);
+  for (const source of sources) {
+    const after = await stat(source.path, { bigint: true });
+    assert.deepEqual([String(after.dev), String(after.ino), String(after.mtimeNs)], Object.values(source.file_identity));
+    assert.equal(hash(await readFile(source.path)), source.sha256);
+  }
 });
 
 test('current MinerU port rejects version drift and never converts denied egress into a fallback', async t => {

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const LABEL = /^(扩展数据图|补充图|图|表|Extended Data Fig(?:ure)?\.?|Supplementary Fig(?:ure)?\.?|Figure|Fig\.?|Table)\s?(S?\d+)/u;
 const FINDINGS_HEADING = { en: /^## \d+\. (?:Key findings|Findings)\s*$/u, 'zh-CN': /^## \d+\. 主要发现\s*$/u };
+const METHOD_INDEX_HEADING = { en: /^### 3\.1 Methods and concepts at a glance\s*$/u, 'zh-CN': /^### 3\.1 方法与概念索引\s*$/u };
 const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
 
 function expand(first, last) {
@@ -65,9 +66,11 @@ export function parseReadingNote(markdown, language) {
   const lines = markdown.split(/\r?\n/u);
   const visuals = [], cards = [];
   let module = null, findings = [];
+  let inMethodIndex = false;
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
     if (/^## /u.test(line)) module = FINDINGS_HEADING[language].test(line) ? 'findings' : 'other';
+    if (/^#{1,3} /u.test(line)) inMethodIndex = METHOD_INDEX_HEADING[language]?.test(line) ?? false;
     const anchor = /\^rf-visual-([A-Za-z0-9_-]+)\s*$/u.exec(line);
     if (anchor && line.startsWith('**')) {
       const label = /^\*\*(.+?)\*\*/u.exec(line)?.[1] ?? '';
@@ -93,7 +96,9 @@ export function parseReadingNote(markdown, language) {
     if (card) {
       let linked = false;
       for (let next = index + 1; next < lines.length && lines[next].startsWith('>'); next++) if (/\]\(\.\.\/(?:methods|concepts)\//u.test(lines[next])) linked = true;
-      cards.push({ title: card[1].trim(), line: index + 1, linked });
+      const title = card[1].trim();
+      const indexedTitle = inMethodIndex ? /^[1-9]\d*\. (.+)$/u.exec(title)?.[1] : undefined;
+      cards.push({ title, line: index + 1, linked, ...(indexedTitle ? { indexedTitle } : {}) });
       continue;
     }
     if (module === 'findings' && !line.startsWith('>') && !/^\*\*(?:图型|Chart type)\*\*/u.test(line) && !line.startsWith('![')) findings.push(line);
@@ -118,10 +123,14 @@ export function loadRegisteredNodes({ vaultRoot, generation }) {
   return nodes;
 }
 
-function nodeCandidates(title, nodes) {
-  const key = normalize(title);
+function nodeCandidates(title, nodes, indexedTitle) {
+  const key = normalize(indexedTitle ?? title);
   if (!key) return [];
-  const exact = nodes.filter(node => node.names.some(name => normalize(name) === key));
+  const rawKey = indexedTitle ? normalize(title) : key;
+  const exact = nodes.filter(node => node.names.some(name => {
+    const nameKey = normalize(name);
+    return nameKey === key || nameKey === rawKey;
+  }));
   if (exact.length) return exact.map(node => ({ path: node.path, match: 'exact' }));
   return nodes.filter(node => node.names.some(name => { const other = normalize(name); return other.length >= 4 && (key.includes(other) || other.includes(key) && key.length >= 4); }))
     .map(node => ({ path: node.path, match: 'contains' }));
@@ -154,7 +163,7 @@ export function checkReadingNote(markdown, { language, nodes = [] } = {}) {
   }
   for (const card of cards) {
     if (card.linked) continue;
-    const candidates = nodeCandidates(card.title, nodes);
+    const candidates = nodeCandidates(card.title, nodes, card.indexedTitle);
     if (candidates.length) report.unlinked_cards.push({ title: card.title, line: card.line, candidates });
   }
   return report;

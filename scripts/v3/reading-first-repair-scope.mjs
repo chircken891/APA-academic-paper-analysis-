@@ -1,4 +1,5 @@
 import { fingerprintV3Json } from './semantic-package-validator.mjs';
+import { METHODS_READING_EDITOR_PROFILE } from './reading-first-editor-contract.mjs';
 
 const fail = code => { throw Object.assign(new Error(code), {code}); };
 const keys = ['section_ids','knowledge_ids','visual_ids','editor_fields'];
@@ -25,23 +26,33 @@ export function validateRepairScopes(review, views, presentation) {
 }
 
 export function assertEditorRepairScope(base, revised, review, presentation) {
-  const methods = new Set((presentation?.knowledge ?? []).filter(row=>row.type==='method' || row.kind==='method').map(row=>row.id));
-  const newMethodLinks = new Map();
+  const methodsFirst = base.schema_version === METHODS_READING_EDITOR_PROFILE;
+  const catalogue = presentation?.knowledge ?? [];
+  const methods = new Set(catalogue.filter(row => row.type === 'method' || row.kind === 'method').map(row => row.id));
+  const sharedNodes = new Set(catalogue.filter(row => row.source_kind !== 'paper-fact'
+    && ['method', 'concept'].includes(row.kind ?? row.type)).map(row => row.id));
+  const inventoryLinks = { en: new Map(), 'zh-CN': new Map() };
   const links = row => [...new Set([...(row.knowledge_id===undefined ? [] : [row.knowledge_id]),...(row.knowledge_ids ?? [])])].sort();
   const materialIssues=review.issues.filter(issue=>issue.severity==='material');
   const scopes=materialIssues.map(issue=>issue.repair_scope);
-  const inventorySections=materialIssues
+  const inventoryScopes=materialIssues
     .filter(issue=>issue.kind==='method-inventory' && issue.repair_owner==='editor' && issue.repair_scope.status==='located')
-    .map(issue=>new Set(issue.repair_scope.section_ids));
+    .map(issue=>issue.repair_scope);
   const ids=key=>new Set(scopes.flatMap(scope=>scope[key]));
   const sections=ids('section_ids'), knowledge=ids('knowledge_ids'), visuals=ids('visual_ids');
+  const scopesForEntry = item => {
+    const references = item.section_ids ?? [];
+    return inventoryScopes.filter(scope => references.length && references.every(id => scope.section_ids.includes(id)));
+  };
+  const hasScopedLinks = (linked, candidates) => linked.every(id => sharedNodes.has(id)
+    && candidates.some(scope => scope.knowledge_ids.includes(id)));
   const inScope=(item, kind) => kind==='sections' ? sections.has(item.section_id)
     : kind==='visuals' ? visuals.has(item.id) || (item.notes ?? []).some(note=>sections.has(note.section_id))
     : (item.section_ids ?? []).some(id=>sections.has(id)) || knowledge.has(item.knowledge_id) || (item.knowledge_ids ?? []).some(id=>knowledge.has(id));
   const left=structuredClone(base), right=structuredClone(revised);
   delete left.views_fingerprint; delete right.views_fingerprint;
   if (ids('editor_fields').has('map')) {
-    const fields = base.schema_version === 'reading-editor-1.4' ? ['argument', 'primary_finding_ids'] : ['map'];
+    const fields = ['reading-editor-1.4', 'reading-editor-1.5'].includes(base.schema_version) ? ['argument', 'primary_finding_ids'] : ['map'];
     for (const field of fields) {
       delete left[field];
       delete right[field];
@@ -66,16 +77,17 @@ export function assertEditorRepairScope(base, revised, review, presentation) {
       const existing=new Set(before.map(item=>item.id));
       if (new Set(after.map(item=>item.id)).size!==after.length) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
       for (const item of after.filter(item=>!existing.has(item.id))) {
-        const references=item.section_ids ?? [];
-        const linked=links(item);
-        if (linked.some(id=>!methods.has(id))) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
-        if (linked.length || newMethodLinks.has(item.id)) {
-          const existingLinks=newMethodLinks.get(item.id);
-          if (language==='zh-CN' && JSON.stringify(existingLinks)!==JSON.stringify(linked)) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
-          newMethodLinks.set(item.id,linked);
+        const entryScopes = scopesForEntry(item);
+        if (!entryScopes.length) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
+        const linked = links(item);
+        if (linked.length) {
+          // An inventory-only issue could already insert a linked method with a section-only scope.
+          const sectionOnlyMethod = linked.every(id => methods.has(id))
+            && (!methodsFirst || (entryScopes.some(scope => !scope.knowledge_ids.length)
+              && linked.every(id => sharedNodes.has(id) && !knowledge.has(id))));
+          if (!sectionOnlyMethod && !(methodsFirst && hasScopedLinks(linked, entryScopes))) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
+          inventoryLinks[language].set(item.id, linked);
         }
-        if (!references.length
-          || !inventorySections.some(scope=>references.every(id=>scope.has(id)))) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
       }
       // Existing entries still go through the checks for identity, order and out-of-scope edits.
       after=right.languages[language][kind]=after.filter(item=>existing.has(item.id));
@@ -85,7 +97,17 @@ export function assertEditorRepairScope(base, revised, review, presentation) {
       const a=before[i], b=after[i], identity=kind==='sections'?'section_id':kind==='methods'||kind==='visuals'?'id':null;
       if (identity && a[identity]!==b[identity]) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
       if (!inScope(a,kind)) continue;
-      for (const key of ['section_ids','knowledge_id','knowledge_ids']) if (JSON.stringify(a[key])!==JSON.stringify(b[key])) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
+      for (const key of ['section_ids','knowledge_id']) if (JSON.stringify(a[key])!==JSON.stringify(b[key])) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
+      if (JSON.stringify(a.knowledge_ids) !== JSON.stringify(b.knowledge_ids)) {
+        if (kind !== 'methods' || !methodsFirst || !Array.isArray(b.knowledge_ids)) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
+        const originalLinks = a.knowledge_ids ?? [];
+        const added = b.knowledge_ids.filter(id => !originalLinks.includes(id));
+        const retained = b.knowledge_ids.filter(id => originalLinks.includes(id));
+        if (!added.length || new Set(added).size !== added.length
+          || JSON.stringify(retained) !== JSON.stringify(originalLinks)
+          || !hasScopedLinks(added, scopesForEntry(a))) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
+        inventoryLinks[language].set(a.id, links(b));
+      }
       if (kind==='visuals') {
         const outside=rows=>(rows ?? []).filter(row=>!sections.has(row.section_id));
         if (JSON.stringify(outside(a.notes))!==JSON.stringify(outside(b.notes))) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
@@ -93,6 +115,7 @@ export function assertEditorRepairScope(base, revised, review, presentation) {
       before[i]=null; after[i]=null;
     }
   }
-  for (const [id] of newMethodLinks) if (!(revised.languages['zh-CN'].methods ?? []).some(row=>row.id===id)) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
+  const linkedEntries = language => [...inventoryLinks[language]].sort(([leftId], [rightId]) => leftId.localeCompare(rightId));
+  if (fingerprintV3Json(linkedEntries('en')) !== fingerprintV3Json(linkedEntries('zh-CN'))) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
   if (fingerprintV3Json(left)!==fingerprintV3Json(right)) fail('READING_FIRST_REPAIR_SCOPE_EXCEEDED');
 }

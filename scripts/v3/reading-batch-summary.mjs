@@ -60,10 +60,15 @@ export function assertBatchRunOptions(marker, options, { manifest, configuration
     maxTotalCalls: options.maxTotalCalls, includeRepairs: options.includeRepairs === true,
     sessionContext: { model: session?.model, ...(effort === undefined ? {} : { reasoning_effort: effort }) },
     ...(options.enrichmentPolicy === undefined ? {} : { enrichmentPolicy: options.enrichmentPolicy }) };
+  // Existing batch records without this field were created under 2.2.
+  const { instructionProfile: frozenProfile = 'configured-reading-2.2', ...frozenOptions } = marker.options ?? {};
+  const { instructionProfile = frozenProfile } = options;
   if (marker.vault_root !== options.repoRoot || marker.snapshot_fingerprint !== manifest?.fingerprint
-    || marker.configuration_fingerprint !== configurationFingerprint || !isDeepStrictEqual(received, marker.options)
+    || marker.configuration_fingerprint !== configurationFingerprint || instructionProfile !== frozenProfile
+    || !isDeepStrictEqual(received, frozenOptions)
     || !isDeepStrictEqual(sourceIdentity(options.scientificInput?.sources), sourceIdentity(marker.sources))
     || marker.paper_id && marker.paper_id !== options.scientificInput?.identity?.paper_id) fail('READING_BATCH_RUN_OPTIONS_CHANGED');
+  return frozenProfile;
 }
 
 export function projectBatchCheckpoint({ runId, stage, status, action, kind, code, task, budget, checkpoint } = {}) {

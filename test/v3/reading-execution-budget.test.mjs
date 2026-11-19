@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reserveExecution, markExecutionDispatched, recordExecutionReceipt, validateExecutionLedger, executionBudgetSummary } from '../../scripts/v3/reading-execution-budget.mjs';
+import { reserveExecution, markExecutionDispatched, recordExecutionReceipt, validateExecutionLedger, executionBudgetSummary, usesExecutionLedger } from '../../scripts/v3/reading-execution-budget.mjs';
+
+test('both configured 2.2 and 2.3 use the same execution ledger', () => {
+  for (const instruction_profile of ['configured-reading-2.2', 'configured-reading-2.3'])
+    assert.equal(usesExecutionLedger({ configured_setup: { instruction_profile } }), true);
+  assert.equal(usesExecutionLedger({ configured_setup: { instruction_profile: 'configured-reading-2.1' } }), false);
+  assert.equal(usesExecutionLedger({}), false);
+});
 test('reservations count once, reject conflicts and retain unknown outcomes', () => {
   const ledger = [], request = { execution_id:'one', task_id:'task', action_id:'action', handle:'agent', tool:'host.resume', arguments:{x:1}, kind:'continuation' };
   reserveExecution(ledger, request, 2); reserveExecution(ledger, request, 2);

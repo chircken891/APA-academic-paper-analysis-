@@ -19,6 +19,7 @@ import { prepareReadingRuntimeSnapshot, readReadingRuntimeSnapshotReference, reg
 import { writeTranslationProgress } from '../../scripts/v3/reading-translation-progress.mjs';
 import { executionBudgetSummary } from '../../scripts/v3/reading-execution-budget.mjs';
 import { createReadingSession, resumeReadingSession, nextReadingAction, recordReadingEvent } from '../../scripts/v3/reading-session.mjs';
+import { createFrozenReading22, enableFrozenReading22 } from './helpers/frozen-configured-reading.mjs';
 
 async function configuredFixture(t, { systemTemp = false, tempBase } = {}) {
   // The copied runtime resolves the checkout's installed packages through its parent tree.
@@ -48,13 +49,14 @@ async function configuredFixture(t, { systemTemp = false, tempBase } = {}) {
 
 test('the 1.4 presentation binding preserves 2.2 session preparation, budget and stage reminders', async t => {
   const f = await configuredFixture(t, { systemTemp: true });
-  const session = await createReadingSession({ ...f.options, instructionProfile: 'configured-reading-2.2' });
+  const session = await createFrozenReading22({ ...f.options });
   const root = join(f.root, 'runs', 'run');
   const readState = async () => JSON.parse(await readFile(join(root, 'control', 'science-state.json'), 'utf8')).data;
   const initial = await readState();
   const binding = initial.prepared.runControl.reading_first_binding;
   assert.equal(binding.configured_setup.instruction_profile, 'configured-reading-2.2');
   assert.equal(binding.configured_setup.dispatch_message_profile, 'instruction-path-1.0');
+  assert.equal(binding.configured_setup.source_access, undefined);
   assert.deepEqual([binding.prior_calls, binding.max_calls, binding.max_total_calls], [6, 8, 14]);
   assert.deepEqual(Object.values(binding.task_bindings).map(task => [task.task_id, task.role, task.artifact_path]), [
     ['en', 'english-writer', 'reading/en.json'], ['en-r2', 'english-writer', 'reading/en-r2.json'],
@@ -104,7 +106,7 @@ test('the 1.4 presentation binding preserves 2.2 session preparation, budget and
 });
 
 test('2.2 rejects receipt without verified host evidence and blocks untrusted assets', async t => {
-  const f = await configuredFixture(t), session = await createReadingSession({ ...f.options, instructionProfile: 'configured-reading-2.2' });
+  const f = await configuredFixture(t), session = await createFrozenReading22({ ...f.options });
   const action = await nextReadingAction(session);
   assert.equal(action.action, 'dispatch');
   const observation = { action_id: action.action_id, run_id: action.run_id, input_fingerprint: action.input_fingerprint, port: action.port,
@@ -115,7 +117,7 @@ test('2.2 rejects receipt without verified host evidence and blocks untrusted as
 });
 
 test('2.2 persists render parameters and reloads them across resume', async t => {
-  const f = await configuredFixture(t); let session = await createReadingSession({ ...f.options, instructionProfile: 'configured-reading-2.2' });
+  const f = await configuredFixture(t); let session = await createFrozenReading22({ ...f.options });
   await recordReadingEvent(session, { kind: 'render-assets', renderOptions: { existingTargets: ['one'] } });
   const root = join(f.root, 'runs', 'run');
   const saved = JSON.parse(await readFile(join(root, 'control', 'session-state-1.json'), 'utf8'));
@@ -209,6 +211,7 @@ test('runtime drift suspends dispatch and recovery requires an exact checkpoint 
   const configuredSource = await readFile(configuredPath, 'utf8');
   await writeFile(configuredPath, configuredSource.replace('import { inspectReadingRuntime }', 'import { captureReadingRuntime, inspectReadingRuntime }')
     .replace('runtimeBinding ?? prepareReadingRuntimeSnapshot({ repoRoot, codeRoot: CODE_ROOT, runRoot: paths.runRoot, runId: options.runId })', 'runtimeBinding ?? captureReadingRuntime()'));
+  await enableFrozenReading22(runtime);
   const api = await import(pathToFileURL(join(runtime, 'scripts/v3/reading-session.mjs')).href);
   let session = await api.createReadingSession({ ...f.options, instructionProfile: 'configured-reading-2.2' });
   const first = await api.nextReadingAction(session); assert.equal(first.action, 'dispatch');
@@ -331,7 +334,7 @@ test('interrupted rebind preserves only the registered unreceipted metadata byte
 for (const repairResources of [false, true]) test(`2.2 retains Results resources${repairResources ? ' with a scoped renderer repair' : ''} across recovery`, async t => {
   const f = await configuredFixture(t, { systemTemp: true }), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.4' } });
   f.profile.capabilities = { task_continuation: { status: 'detected', method: 'ContinueTask target prompt', scope: 'current-session', evidence: [{ source: 'tool-schema', reference: 'synthetic schema' }], limitations: [], continuation: { tool: 'ContinueTask', handle_argument: 'target', instruction_argument: 'prompt', same_context: true, original_host_accessible: true } } };
-  let session = await createReadingSession({ ...f.options, instructionProfile: 'configured-reading-2.2', maxTotalCalls: 22 });
+  let session = await createFrozenReading22({ ...f.options, maxTotalCalls: 22 });
   const root = join(f.root, 'runs', 'run'), resourceRoot = join(root, 'resources', 'results');
   await mkdir(resourceRoot, { recursive: true }); await mkdir(join(root, 'native'), { recursive: true });
   const imagePath = join(resourceRoot, 'figure.png'), image = Buffer.from('synthetic figure'); await writeFile(imagePath, image);
@@ -572,7 +575,7 @@ for (const repairResources of [false, true]) test(`2.2 retains Results resources
 
 test('2.2 preflight blocks dispatch without Results tool evidence and saves observed checks', async t => {
   const f = await configuredFixture(t), noTools = { ...f.evidence }; delete noTools.results_tools;
-  const session = await createReadingSession({ ...f.options, instructionProfile: 'configured-reading-2.2', evidence: noTools });
+  const session = await createFrozenReading22({ ...f.options, evidence: noTools });
   assert.equal((await nextReadingAction(session)).kind, 'runtime-evidence');
   await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
   const seal = JSON.parse(await readFile(join(f.root, 'runs', 'run', 'control', 'reading-checkpoint-2.json'), 'utf8'));

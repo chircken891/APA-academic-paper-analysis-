@@ -34,7 +34,7 @@ await recordReadingEvent(session, {
 
 **执行与记录**
 
-新 `configured-reading-2.2` 保留六科学角色、单原文语言 Writer、Translation、可选 Editor、一次整体审查和最多一次局部复核；模型、用户选定的写作指导及压缩边界沿原冻结合同。未提供 `maxCalls` 时按 `min(8, maxTotalCalls - 6)`（启用 Editor）或 `min(6, maxTotalCalls - 6)`（普通模式）推导并冻结；低于编辑模式 4 或普通模式 3 时拒绝。
+新建单篇和批量阅读默认使用 `configured-reading-2.3`，启用 Editor 时同时冻结 `reading-editor-1.5`。2.2 只用于读取和恢复已绑定的记录。新阅读沿用六科学角色、单原文语言 Writer、Translation、可选 Editor、一次整体审查和最多一次局部复核；模型、用户选定的写作指导及压缩边界沿原冻结合同。未提供 `maxCalls` 时按 `min(8, maxTotalCalls - 6)`（启用 Editor）或 `min(6, maxTotalCalls - 6)`（普通模式）推导并冻结；低于编辑模式 4 或普通模式 3 时拒绝。
 
 `maxCalls` 限制任务数量，补缺任务不计入阅读任务数量；`maxTotalCalls` 计入全部首次派发与原句柄续接的实际执行，并预留后续步骤所需额度。`host_update`、查询和等待不计入执行次数。`prior_calls=6` 保留科学任务基线，科学续接次数另账传递。
 
@@ -164,7 +164,7 @@ await recordReadingEvent(session, {
 });
 ```
 
-两个指纹必须对应当前已保存的终态检查点及其 `state.rejection`。2.2 直接核对持久化执行账本，禁止传入 `host_calls_used`，并须在原总预算内为局部复核留有额度。事件需要本次用户明确批准，配置或剩余额度不能代替授权。恢复不会调用模型；它在新 owned 检查点的 `state.repairRecoveries` 追加批准、原检查点、原拒收及新的验证结果。原终态、请求事件、拒收回执和调用计数保留。同一批准重复提交保持幂等，发生冲突或字节变化时拒绝。
+两个指纹必须对应当前已保存的终态检查点及其 `state.rejection`。2.2 和 2.3 直接核对持久化执行账本，禁止传入 `host_calls_used`，并须在原总预算内为局部复核留有额度。事件需要本次用户明确批准，配置或剩余额度不能代替授权。恢复不会调用模型；它在新 owned 检查点的 `state.repairRecoveries` 追加批准、原检查点、原拒收及新的验证结果。原终态、请求事件、拒收回执和调用计数保留。同一批准重复提交保持幂等，发生冲突或字节变化时拒绝。
 
 范围校验允许插入审查 `visual_ids` 明确批准的新图旁条目；新增条目的 notes 仅可引用该审查的 `section_ids`，既有条目和相对顺序继续按原规则校验。其余列表和范围外内容保持。恢复成功后重新物化第二版候选，再使用既有的一次局部复核；原模型、来源、额度和发布权限保持原合同。
 
@@ -188,18 +188,18 @@ await recordReadingEvent(session, {
 
 用户指定并经主会话对照原文确认的单点事实更正，可以使用发布入口的 `user_corrections` 零调用路径。每项记录候选路径、唯一匹配的 before／after、原文位置和用户原话，两语分别列出；在批准清单展示后随同一事务写入，原审查记录保持不变。该路径限于数值、符号、系数、单位或方向词；段落论证与导图、导航结构修改仍按上述责任角色修订和局部复核处理。受限完成状态本身不授予发布资格，仍使用正式追加额度和复核续接入口。
 
-新建角色、修订和补缺任务冻结 `dispatch_message_profile:'instruction-path-1.0'`，派发消息仅为指令文件路径。观察时对消息去除首尾空白后与冻结路径完全比较，其他结构化参数逐项保持一致；控制器在观察和接收结果时各核验一次指令文件指纹。`configured-reading-2.2` 指令包版本继续沿用。没有该行为字段的旧绑定按原消息协议校验；原句柄续接没有新独立指令文件，仍使用既有冻结续接消息及进度合同。
+新建角色、修订和补缺任务冻结 `dispatch_message_profile:'instruction-path-1.0'`，派发消息仅为指令文件路径。观察时对消息去除首尾空白后与冻结路径完全比较，其他结构化参数逐项保持一致；控制器在观察和接收结果时各核验一次指令文件指纹。指令包随本次绑定版本冻结。没有该行为字段的旧绑定按原消息协议校验；原句柄续接没有新独立指令文件，仍使用既有冻结续接消息及进度合同。
 
 ## 命令行会话与回执
 
-`npm run apa:session -- create --input <JSON文件> --export-dir <目录>` 创建会话；`next`、`resume` 和 `event` 使用 `--run-root <运行目录>` 恢复，`event` 用 `--input <JSON文件>` 读取事件。`--input -` 可从标准输入读取。`create`、`next` 和 `resume` 必须提供 `--export-dir`，在打开会话前检查；返回派发动作时，完整动作按身份写入该目录，已有同名内容冲突会报错。
+`npm run apa:session -- create --input <JSON文件> --export-dir <目录>` 创建会话；`next`、`resume` 和 `event` 使用 `--run-root <运行目录>` 恢复，`event` 用 `--input <JSON文件>` 读取事件。新建时可省略 `instructionProfile`，也可在输入顶层显式提供 `"instructionProfile":"configured-reading-2.3"`。`--input -` 可从标准输入读取。`create`、`next` 和 `resume` 必须提供 `--export-dir`，在打开会话前检查；返回派发动作时，完整动作按身份写入该目录，已有同名内容冲突会报错。
 
 记录真实宿主返回时，`event --raw-result <文件> --export-dir <目录>` 保存原始字节并形成宿主回执；`--raw-result -` 从标准输入读取原始返回，此时事件须从文件提供。对于转录证据可使用 `--source <文件>`，记录其路径与指纹，不能同时使用 `--raw-result`。缺失或未观测的容量信息保持未知。`npm run apa:controller:audit -- <日志路径> <线程ID>` 按线程检查 Controller 工具调用，并返回覆盖程度与可识别事件；审计输出不能代替宿主回执。
 
 
 ## Results 资源交接
 
-2.2 为 Results 预登记 `resources/results` 输出目录及 `science/results-resources.json` 受控资源清单。Results 使用已选择的 Python 调用 `scripts/lib/reading-resource-tool.py`，通过标准输入指定来源、输出目录和项目；PDF 使用物理页及可选点坐标裁剪，DOCX 指定原始 media、图号和段落位置。按来源分别生成后，Results 合并返回的 `reading-resources-1.0` 项并写入指定 native 清单。每项保留源文件与生成文件的路径、指纹、长度和定位；图像判读与裁剪结果检查由 Results 负责。Results 的科学输出包含 `resource_manifest`，其中 `path` 使用派发提供的 `owned_manifest_path`，并附 `resources_root`、清单原始字节的 `sha256` 和 `byte_length`。Integrator 将该对象原样写入 `visual_handoff.resource_manifest`，`presentation.visuals` 的 `id`、`path`、`source_id`、`locator` 须与清单一致。Controller 接收清单并验证身份、来源和产物，再交接后续步骤。采用已有科学产物时，在首次派发 Writer 前按原 Integrator 的运行目录和运行 ID 核验资源路径、清单回执、源定位和图片字节。检查点恢复及发布准备会重新核验。
+2.2 和 2.3 为 Results 预登记 `resources/results` 输出目录及 `science/results-resources.json` 受控资源清单。Results 使用已选择的 Python 调用 `scripts/lib/reading-resource-tool.py`，通过标准输入指定来源、输出目录和项目；PDF 使用物理页及可选点坐标裁剪，DOCX 指定原始 media、图号和段落位置。按来源分别生成后，Results 合并返回的 `reading-resources-1.0` 项并写入指定 native 清单。每项保留源文件与生成文件的路径、指纹、长度和定位；图像判读与裁剪结果检查由 Results 负责。Results 的科学输出包含 `resource_manifest`，其中 `path` 使用派发提供的 `owned_manifest_path`，并附 `resources_root`、清单原始字节的 `sha256` 和 `byte_length`。Integrator 将该对象原样写入 `visual_handoff.resource_manifest`，`presentation.visuals` 的 `id`、`path`、`source_id`、`locator` 须与清单一致。Controller 接收清单并验证身份、来源和产物，再交接后续步骤。采用已有科学产物时，在首次派发 Writer 前按原 Integrator 的运行目录和运行 ID 核验资源路径、清单回执、源定位和图片字节。检查点恢复及发布准备会重新核验。
 
 
 **多篇批次准备与状态**
@@ -212,7 +212,7 @@ node scripts/v3/reading-batch-cli.mjs prepare --root <绝对库根> --batch <批
 node scripts/v3/reading-batch-cli.mjs status --root <绝对库根> --batch <批次ID>
 ```
 
-清单使用 `schema_version: 'reading-batch-request-1.0'`、可选 `batchId`、`defaults` 与 `papers`。`defaults` 保存实际批准的 `authorizationId`、`maxTotalCalls`、可选 `maxCalls`、`sessionContext: {model, effort}`、`includeRepairs` 与 `enrichmentPolicy`；每个 `papers` 条目含 `pdf`，可含 `supplements`、`doi`、`title`、`paperId`、`runId` 及各自的授权项覆盖。`--options` 文件直接保存 `defaults` 对象。额度和模型必须来自本次批准，文档和现有配置不代替执行授权。
+清单使用 `schema_version: 'reading-batch-request-1.0'`、可选 `batchId`、`defaults` 与 `papers`。`defaults` 保存实际批准的 `authorizationId`、`maxTotalCalls`、可选 `maxCalls`、`sessionContext: {model, effort}`、`includeRepairs`、`enrichmentPolicy` 与可选的 `instructionProfile`；每个 `papers` 条目含 `pdf`，可含 `supplements`、`doi`、`title`、`paperId`、`runId` 及各自的授权项覆盖。`--options` 文件直接保存 `defaults` 对象。新批次省略 `instructionProfile` 时，每篇在准备时冻结 2.3。已准备的批次按各篇已冻结的版本启动，省略版本时从原批次标记读取。额度和模型必须来自本次批准，文档和现有配置不代替执行授权。
 
 批次登记位于 `.runtime/apa-reading-batches/`，每个运行根保存 `reading-batch-run.json` 和会话持续更新的 `reading-batch-checkpoint.json`。会话创建核对原快照、配置指纹、来源和批准参数，拒绝参数漂移。准备结果逐篇为 `prepared` 或 `preparation_failed`；查重命中或已登记来源漂移在整批写入前拒绝，其他单篇失败独立报告。
 
@@ -232,9 +232,9 @@ node scripts/v3/reading-batch-cli.mjs status --root <绝对库根> --batch <批�
 
 **旧绑定的运行时漂移检查**
 
-2.2 绑定冻结运行时文件、Schema 和提示的指纹。`inspectReadingRuntime({manifest})` 对照当前文件并列出变化路径及前后 SHA-256；运行时变化须先审阅具体差异和相关测试结果。`validateRuntimeRepairApproval` 校验批准对象：`authorization_id`、`run_id`、`checkpoint_fingerprint`、`previous_runtime_fingerprint`、`current_runtime_fingerprint`、`changed_files` 和 `test_evidence`，其中 `changed_files` 按路径排序，逐项包含 `path`、`old_sha256`、`new_sha256`，增删一侧为 `null`；`test_evidence` 为非空数组，逐项包含 `path`、`sha256` 和 `byte_length`。批准对象只接受列出的字段，测试证据路径可相对于冻结仓库根目录或使用绝对路径。校验会回读文件及证据，确认批准范围仍对应当前运行与检查点。批准不会改写原绑定或扩大原任务预算。 `nextReadingAction` 发现变化时返回 `kind:runtime-drift`、差异清单和当前 `checkpoint_fingerprint`。用户审阅精确变更及测试证据并明确批准后，使用 `recordReadingEvent(session, {kind:'runtime-repair-approval', approval})` 记录；成功返回 `recorded` 与新运行时指纹。会话将批准链写入独立受控检查点，恢复时读取批准链；未通过校验返回 `READING_SESSION_APPROVAL_INVALID`。
+2.2 和 2.3 绑定冻结运行时文件、Schema 和提示的指纹。`inspectReadingRuntime({manifest})` 对照当前文件并列出变化路径及前后 SHA-256；运行时变化须先审阅具体差异和相关测试结果。`validateRuntimeRepairApproval` 校验批准对象：`authorization_id`、`run_id`、`checkpoint_fingerprint`、`previous_runtime_fingerprint`、`current_runtime_fingerprint`、`changed_files` 和 `test_evidence`，其中 `changed_files` 按路径排序，逐项包含 `path`、`old_sha256`、`new_sha256`，增删一侧为 `null`；`test_evidence` 为非空数组，逐项包含 `path`、`sha256` 和 `byte_length`。批准对象只接受列出的字段，测试证据路径可相对于冻结仓库根目录或使用绝对路径。校验会回读文件及证据，确认批准范围仍对应当前运行与检查点。批准不会改写原绑定或扩大原任务预算。 `nextReadingAction` 发现变化时返回 `kind:runtime-drift`、差异清单和当前 `checkpoint_fingerprint`。用户审阅精确变更及测试证据并明确批准后，使用 `recordReadingEvent(session, {kind:'runtime-repair-approval', approval})` 记录；成功返回 `recorded` 与新运行时指纹。会话将批准链写入独立受控检查点，恢复时读取批准链；未通过校验返回 `READING_SESSION_APPROVAL_INVALID`。
 
-批准涉及 JavaScript 执行文件时，返回 `READING_SESSION_RUNTIME_RESTART_REQUIRED`，须在新进程恢复后继续，确保使用获批代码。2.2 的 `sections`、`science_sections` 和 `frozen_support` 保存原始指令内容；`frozen_support` 包括科学索引说明和角色回执规则。批准磁盘提示文件变化后，同一运行继续使用这些已冻结内容，原请求和原绑定保持。
+批准涉及 JavaScript 执行文件时，返回 `READING_SESSION_RUNTIME_RESTART_REQUIRED`，须在新进程恢复后继续，确保使用获批代码。2.2 和 2.3 的 `sections`、`science_sections` 和 `frozen_support` 保存原始指令内容；`frozen_support` 包括科学索引说明和角色回执规则。批准磁盘提示文件变化后，同一运行继续使用这些已冻结内容，原请求和原绑定保持。
 
 Results 清单接收前会保存原宿主观察、科学输出和清单的精确字节。若清单已写入、回执尚未写入时中断，恢复将依据持久记录重新核验来源、图片和清单字节，再补齐受控回执；文件变化会阻断接收。
 

@@ -7,12 +7,14 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { createReadingFirstRunControl } from '../../scripts/v3/reading-first-runtime.mjs';
 import { createApaRoleModelPolicy } from '../../scripts/apa-model-policy.mjs';
+import { configuredEditorProfile } from '../../scripts/lib/reading-profiles.mjs';
+import { assertMethodsFirstScience } from '../../scripts/v3/methods-first-handoff.mjs';
 import { buildConfiguredReadingInstructions } from '../../scripts/v3/configured-reading.mjs';
 import { createScienceController, restoreScienceController, prepareScienceRequests, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, getScienceRequest, getScienceState, getScienceBudgetSummary, reserveScienceContinuation, markScienceContinuationDispatched, recordScienceContinuationReceipt } from '../../scripts/v3/science-controller.mjs';
 
 const roles = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'];
 const hash = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
-async function fixture({ python, figuresDir, host } = {}) {
+async function fixture({ python, figuresDir, host, instructionProfile = 'configured-reading-2.2' } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'science-22-'));
   await mkdir(join(root, 'native'));
   const source = Buffer.from('source'), prompt = Buffer.from('prompt');
@@ -23,8 +25,8 @@ async function fixture({ python, figuresDir, host } = {}) {
   const scientificInput = { profile: 'reading-first-1.0', identity: { paper_id: 'synthetic', run_id: 'run' }, sources: [{ id: 'paper', path: join(root, 'paper.pdf'), sha256: hash(source), byte_length: source.length }], context: 'synthetic', role_artifacts: roles };
   const mainSession = { model: 'gpt-6-astra', reasoning_effort: 'high' };
   const manifestTask = { task_id: 'results-resources', artifact_id: 'results-resources', artifact_path: 'science/results-resources.json', native_path: 'native/results-resources.json', revision: '1', owner_actor_id: 'results', role: 'results' };
-  const config = { schema_version: 'apa-configured-reading-1.0', config_fingerprint: hash(Buffer.from('config')), paths: { runRoot: root }, role_model_policy: createApaRoleModelPolicy(mainSession), ...buildConfiguredReadingInstructions({}), instruction_profile: 'configured-reading-2.2', prompt_files: [{ path: join(root, 'prompt.md'), sha256: hash(prompt), byte_length: prompt.length }], results_resources: { output_root: 'resources/results', manifest_task: manifestTask, ...(python ? { python } : {}), ...(figuresDir ? { figures_dir: figuresDir } : {}) } };
-  const runControl = createReadingFirstRunControl({ runId: 'run', scientificInput, mainSession, configuredSetup: config, authorizationId: 'synthetic', deadline: '2099-01-01T00:00:00Z', taskBindings: downstream, writingMode: 'source-first', maxCalls: 6, priorCalls: 6, maxTotalCalls: 12, host });
+  const config = { schema_version: 'apa-configured-reading-1.0', config_fingerprint: hash(Buffer.from('config')), paths: { runRoot: root }, role_model_policy: createApaRoleModelPolicy(mainSession), ...buildConfiguredReadingInstructions({}, { instructionProfile }), prompt_files: [{ path: join(root, 'prompt.md'), sha256: hash(prompt), byte_length: prompt.length }], results_resources: { output_root: 'resources/results', manifest_task: manifestTask, ...(python ? { python } : {}), ...(figuresDir ? { figures_dir: figuresDir } : {}) } };
+  const runControl = createReadingFirstRunControl({ runId: 'run', scientificInput, mainSession, configuredSetup: config, authorizationId: 'synthetic', deadline: '2099-01-01T00:00:00Z', taskBindings: downstream, writingMode: 'source-first', presentationProfile: configuredEditorProfile(instructionProfile), maxCalls: 6, priorCalls: 6, maxTotalCalls: 12, host });
   const prepared = { runControl, scientificInput, configurationFingerprint: config.config_fingerprint, paths: { runRoot: root } };
   const authorized_bindings = [...Object.values(tasks), ...Object.values(downstream), manifestTask].map(task => ({ run_id: 'run', actor_id: task.owner_actor_id, role: task.role, artifact_path: task.artifact_path, revision: task.revision }));
   return { root, options: { prepared, tasks, brokerConfig: { control_actor_id: 'controller', artifact_root: root, authorized_bindings, run_controls: [runControl] }, statePath: join(root, 'state.json') } };
@@ -138,8 +140,18 @@ test('2.2 Results manifest uses its assigned figure directory and passes to Inte
   await assert.rejects(() => restoreScienceController(f.options));
 });
 
-test('2.2 Integrator research map is checked at acceptance and legacy from/to edges are normalized', async () => {
-  const f = await fixture(), controller = await createScienceController(f.options);
+test('2.2 Integrator research map is checked at acceptance and legacy from/to edges are normalized', () => checkMapAcceptance(false));
+test('2.3 Integrator accepts input and output details for a source-bound intermediate step', () => checkMapAcceptance(true));
+test('2.3 handoff can represent a paper with no applicable method workflow', () => {
+  const value = { method_steps: [], presentation: { sections: [{ id: 'analysis' }], map: {
+    steps: [], findings: [], relations: [], step_links: [],
+  } } };
+  assert.equal(assertMethodsFirstScience(value, [{ id: 'paper', path: 'paper.pdf' }]), value);
+});
+
+async function checkMapAcceptance(methodsFirst) {
+  const f = await fixture({ instructionProfile: methodsFirst ? 'configured-reading-2.3' : 'configured-reading-2.2' });
+  const controller = await createScienceController(f.options);
   const root = f.root, images = join(root, 'resources', 'results'); await mkdir(images, { recursive: true });
   const image = Buffer.from('image'); await writeFile(join(images, 'figure.png'), image);
   const source = f.options.prepared.scientificInput.sources[0];
@@ -147,8 +159,28 @@ test('2.2 Integrator research map is checked at acceptance and legacy from/to ed
   const manifestBytes = Buffer.from(JSON.stringify(manifest)); await writeFile(join(root, 'native/results-resources.json'), manifestBytes);
   const ref = { path: join(root, 'science/results-resources.json'), resources_root: images, sha256: hash(manifestBytes), byte_length: manifestBytes.length };
   const label = text => ({ en: text, 'zh-CN': text });
-  const presentation = relations => ({ visuals: [{ id: 'fig-1', path: manifest.resources[0].path, source_id: 'paper', locator: manifest.resources[0].locator }], sections: [{ id: 'design' }, { id: 'findings' }],
-    map: { steps: [{ id: 'S1', label: label('Step'), section_id: 'design' }], findings: [{ id: 'F-01', label: label('Finding'), section_id: 'findings' }], relations } });
+  const presentation = {
+    visuals: [{ id: 'fig-1', path: manifest.resources[0].path, source_id: 'paper', locator: manifest.resources[0].locator }],
+    sections: [{ id: 'design' }, { id: 'methods' }, { id: 'findings' }],
+    map: {
+      steps: [{ id: 'S1', label: label('Compare outcomes'), section_id: methodsFirst ? 'methods' : 'design' }],
+      findings: [{ id: 'F-01', label: label('Finding'), section_id: 'findings' }],
+      relations: [{ id: 'R1', from: 'S1', to: 'F-01' }],
+    },
+  };
+  const value = { role: 'integration', visual_handoff: { resource_manifest: ref }, presentation };
+  if (methodsFirst) {
+    // Eligibility selection supplies records to the comparison without asserting its own finding.
+    presentation.map.steps.unshift({ id: 'selection', label: label('Apply eligibility criteria'), section_id: 'methods' });
+    presentation.map.step_links = [{ from_step_id: 'selection', to_step_id: 'S1', label: label('Eligible records') }];
+    const sources = [{ source_id: 'paper', locator: { kind: 'pdf-page', page: 1 } }];
+    value.method_steps = [
+      { step_id: 'selection', purpose: 'Define the study population', input: 'Clinical records', operation: 'Exclude records outside the observation period',
+        key_choices: ['One record per participant'], output: 'Eligible records', next_use: 'Input to the outcome comparison', sources },
+      { step_id: 'S1', purpose: 'Estimate the outcome contrast', input: 'Eligible records', operation: 'Compare the outcome between groups',
+        key_choices: [], output: 'Group contrast', next_use: 'Result used to interpret the association', sources },
+    ];
+  }
   for (let batch = 0; batch < 5; batch++) {
     for (const { role, request } of await prepareScienceRequests({ controller })) {
       await recordScienceDispatchIntent({ controller, role });
@@ -157,15 +189,31 @@ test('2.2 Integrator research map is checked at acceptance and legacy from/to ed
       await recordScienceHostObservation({ controller, role, observation: { action_id: step.action_id, run_id: 'run', input_fingerprint: step.input_fingerprint, port: 'current-collaboration', tool_call: { name: step.action, arguments: step.arguments }, raw_result_text: raw, evidence: { kind: 'raw', capture: 'direct', sha256: hash(Buffer.from(raw)).slice(7), source_reference: evidencePath } } });
       const native = join(root, f.options.tasks[role].native_path);
       if (role === 'integration') {
-        await writeFile(native, JSON.stringify({ role, visual_handoff: { resource_manifest: ref }, presentation: presentation([{ id: 'R1', from: 'F-01', to: 'S1' }]) }));
+        const invalidMap = structuredClone(value);
+        if (methodsFirst) invalidMap.presentation.map.step_links[0].to_step_id = 'F-01';
+        else invalidMap.presentation.map.relations[0] = { id: 'R1', from: 'F-01', to: 'S1' };
+        await writeFile(native, JSON.stringify(invalidMap));
         await assert.rejects(() => acceptScienceResult({ controller, role }), error => error.code === 'SCIENCE_CONTENT_INVALID' && error.details?.field === 'presentation.map');
-        await writeFile(native, JSON.stringify({ role, visual_handoff: { resource_manifest: ref }, presentation: presentation([{ id: 'R1', from: 'S1', to: 'F-01' }]) }));
+        if (methodsFirst) {
+          const incomplete = structuredClone(value);
+          incomplete.method_steps.shift();
+          await writeFile(native, JSON.stringify(incomplete));
+          await assert.rejects(() => acceptScienceResult({ controller, role }), error => error.code === 'SCIENCE_CONTENT_INVALID'
+            && error.details?.field === 'method_steps' && error.details.missing_step_ids.includes('selection'));
+          const unsupported = structuredClone(value);
+          unsupported.method_steps[0].sources[0].source_id = 'unregistered';
+          await writeFile(native, JSON.stringify(unsupported));
+          await assert.rejects(() => acceptScienceResult({ controller, role }), error => error.code === 'SCIENCE_CONTENT_INVALID'
+            && error.details?.field === 'method_steps' && error.details.step_id === 'selection');
+        }
+        await writeFile(native, JSON.stringify(value));
       } else await writeFile(native, JSON.stringify(role === 'results' ? { role, resource_manifest: ref } : { role }));
       await acceptScienceResult({ controller, role });
     }
   }
   assert.equal(getScienceState(controller).accepted_results, 6);
-});
+  if (methodsFirst) assert.deepEqual(JSON.parse(await readFile(join(root, f.options.tasks.integration.artifact_path))).method_steps, value.method_steps);
+}
 
 test('2.2 science request retains frozen prompt sections after prompt file changes', async () => {
   const f = await fixture(); await createScienceController(f.options);

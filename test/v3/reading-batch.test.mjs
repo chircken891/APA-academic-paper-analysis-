@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,7 @@ import { writeBatchCheckpoint } from '../../scripts/v3/reading-batch-summary.mjs
 import { captureReadingFirstPublicationSource, createReadingFirstRunControl } from '../../scripts/v3/reading-first-runtime.mjs';
 import { publishReadingFirstCandidate } from '../../scripts/v3/reading-first-publish.mjs';
 import { reviewedReadingFirstFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
+import { copyFrozenReading22 } from './helpers/frozen-configured-reading.mjs';
 
 const CODE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const dispatch = { tool: 'Agent', model_argument: 'model', effort_argument: 'effort', instruction_argument: 'prompt',
@@ -42,7 +43,8 @@ async function fixture(t) {
     host: { name: 'test-host', dispatch },
   };
   await writeFile(join(root, 'config', 'apa.local.json'), JSON.stringify(config));
-  const paths = [join(root, 'Clippings', 'one.pdf'), join(root, 'two.pdf')];
+  const paths = [join(root, 'Clippings', 'one.pdf'), join(root, 'Clippings', '两篇', '第二 篇.pdf')];
+  await mkdir(dirname(paths[1]));
   await writeFile(paths[0], 'synthetic one');
   await writeFile(paths[1], 'synthetic two');
   return { root, paths, input: { batchId: 'batch-1', defaults: { authorizationId: 'user-approval', maxTotalCalls: 14,
@@ -60,11 +62,19 @@ test('batch refuses duplicate bytes before preparing any run', async t => {
 
 test('batch prepares separate run roots with one code snapshot and bounded body-free status', async t => {
   const { root, paths, input } = await fixture(t);
+  const initialSource = await stat(paths[1], { bigint: true });
   const batch = await prepareReadingBatch({ vaultRoot: root, ...input, pdfPaths: paths });
   assert.equal(batch.papers.length, 2);
   assert.notEqual(batch.papers[0].run_root, batch.papers[1].run_root);
   assert.ok(batch.papers.every(row => row.snapshot_hash === batch.snapshot_hash));
-  assert.equal(await readFile(join(root, 'Clippings', 'two.pdf'), 'utf8'), 'synthetic two');
+  assert.deepEqual(batch.papers.map(row => row.source_paths), paths.map(path => [path]));
+  const second = JSON.parse(await readFile(join(batch.papers[1].run_root, 'reading-batch-run.json')));
+  assert.equal(second.source_access, 'read-only-original-1.0');
+  assert.deepEqual(second.source_locations[0].file_identity,
+    { dev: String(initialSource.dev), ino: String(initialSource.ino), mtime_ns: String(initialSource.mtimeNs) });
+  const finalSource = await stat(paths[1], { bigint: true });
+  assert.deepEqual([finalSource.dev, finalSource.ino, finalSource.size, finalSource.mtimeNs],
+    [initialSource.dev, initialSource.ino, initialSource.size, initialSource.mtimeNs]);
   assert.ok(batch.papers.every(row => row.startup_prompt.includes(row.run_id)));
   for (const row of batch.papers) {
     const control = join(row.run_root, 'control');
@@ -101,6 +111,20 @@ test('a source unavailable for one paper leaves other runs ready', async t => {
   assert.equal(result.papers[1].status, 'prepared');
   const status = await readReadingBatchStatus({ vaultRoot: root, batchId: input.batchId });
   assert.deepEqual(status.papers.map(row => row.status), ['preparation_failed', 'prepared']);
+});
+
+test('batch reports an external PDF needing user placement and creates no source copy', async t => {
+  const { root, paths, input } = await fixture(t);
+  const external = join(root, '库外 原件.pdf');
+  await writeFile(external, 'external PDF');
+  const result = await prepareReadingBatch({ vaultRoot: root, ...input, pdfPaths: [external, paths[1]] });
+  const [unplaced, prepared] = result.papers;
+  assert.equal(unplaced.status, 'preparation_failed');
+  assert.equal(unplaced.error.code, 'RF_CLIPPINGS_ORIGINAL_REQUIRED');
+  assert.equal(prepared.status, 'prepared');
+  assert.equal(await readFile(external, 'utf8'), 'external PDF');
+  await assert.rejects(stat(join(root, 'Clippings', '库外 原件.pdf')), { code: 'ENOENT' });
+  await assert.rejects(stat(unplaced.run_root), { code: 'ENOENT' });
 });
 
 test('batch checks the committed source fingerprint and reports moved Clippings originals before writing', async t => {
@@ -142,24 +166,30 @@ test('batch checks the committed source fingerprint and reports moved Clippings 
   await assert.rejects(readFile(join(root, '.runtime', 'apa-reading-batches', input.batchId + '.json')), { code: 'ENOENT' });
 });
 
-test('batch CLI freezes the session against checkout and parameter changes and updates the short checkpoint', async t => {
+for (const historic of [false, true]) test(`batch CLI freezes the ${historic ? '2.2 batch' : '2.3 default'} against checkout and parameter changes`, async t => {
   const { root, paths, input } = await fixture(t);
   const checkout = join(root, 'checkout');
   const dependencyRoot = resolve(CODE_ROOT, 'node_modules');
   await mkdir(join(checkout, 'docs'), { recursive: true });
-  for (const path of ['scripts', 'Schema', 'prompts', 'docs/apa-v3', 'package.json']) {
+  for (const path of ['scripts', 'Schema', 'prompts', 'docs/apa-v3', 'Templates/apa-v3', 'package.json']) {
     await cp(join(CODE_ROOT, path), join(checkout, path), { recursive: true });
   }
   await symlink(dependencyRoot, join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
-  const cli = (script, ...args) => JSON.parse(execFileSync(process.execPath, [join(checkout, 'scripts', 'v3', script), ...args],
+  const execCli = (base, script, ...args) => JSON.parse(execFileSync(process.execPath, [join(base, 'scripts', 'v3', script), ...args],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
+  const cli = (...args) => execCli(checkout, ...args);
   const manifest = join(root, 'batch-input.json');
-  await writeFile(manifest, JSON.stringify({ schema_version: 'reading-batch-request-1.0', ...input, papers: [{ pdf: paths[0] },
-    { pdf: paths[1], maxTotalCalls: 10 }] }));
-  const batch = cli('reading-batch-cli.mjs', 'prepare', '--root', root, '--manifest', manifest);
+  const expectedProfile = historic ? 'configured-reading-2.2' : 'configured-reading-2.3';
+  const preparer = historic ? await copyFrozenReading22(join(root, 'legacy-checkout')) : checkout;
+  await writeFile(manifest, JSON.stringify({ schema_version: 'reading-batch-request-1.0', ...input,
+    papers: [{ pdf: paths[0] }, { pdf: paths[1], maxTotalCalls: 10 }] }));
+  const batch = execCli(preparer, 'reading-batch-cli.mjs', 'prepare', '--root', root, '--manifest', manifest);
   assert.deepEqual(batch.papers.map(row => row.budget.max_total_calls), [14, 10]);
   const first = batch.papers[0];
   const frozen = JSON.parse(await readFile(join(first.run_root, 'reading-batch-run.json')));
+  assert.equal(frozen.options.instructionProfile, expectedProfile);
+  const defaultRun = JSON.parse(await readFile(join(batch.papers[1].run_root, 'reading-batch-run.json')));
+  assert.equal(defaultRun.options.instructionProfile, expectedProfile);
   const configuration = JSON.parse(await readFile(join(root, 'config', 'apa.local.json')));
   const hostProfile = { schema_version: 'apa-host-profile-1.0', host: 'test-host', detected_at: '2026-11-08T00:00:00Z',
     session: { model: 'test-model', reasoning_effort: 'high' }, models: [{ model: 'test-model', reasoning_efforts: ['high'] }],
@@ -181,7 +211,10 @@ test('batch CLI freezes the session against checkout and parameter changes and u
   const create = () => cli('reading-session-cli.mjs', 'create', '--input', createPath, '--export-dir', exportDir);
   await writeFile(createPath, JSON.stringify({ ...sessionInput, maxCalls: 4 }));
   assert.throws(create, error => error.stderr.includes('READING_BATCH_RUN_OPTIONS_CHANGED'));
-  await writeFile(createPath, JSON.stringify(sessionInput));
+  await writeFile(createPath, JSON.stringify({ ...sessionInput, instructionProfile: historic ? 'configured-reading-2.3' : 'configured-reading-2.2' }));
+  assert.throws(create, error => error.stderr.includes('READING_BATCH_RUN_OPTIONS_CHANGED'));
+  const { instructionProfile: omitted, ...inheritedInput } = sessionInput;
+  await writeFile(createPath, JSON.stringify(inheritedInput));
   const action = create();
   assert.equal(action.action, 'dispatch', action.preflight?.reasons.join(', '));
   const getStatus = () => JSON.parse(execFileSync(process.execPath, [
@@ -209,5 +242,20 @@ test('batch CLI freezes the session against checkout and parameter changes and u
   const science = JSON.parse(await readFile(join(first.run_root, 'control', 'science-state.json')));
   const binding = science.data.prepared.runControl.reading_first_binding;
   assert.equal(binding.source_language, 'zh-CN');
+  assert.equal(binding.configured_setup.instruction_profile, expectedProfile);
+  assert.equal(binding.presentation_profile, historic ? 'reading-editor-1.4' : 'reading-editor-1.5');
+  if (historic) assert.equal(binding.configured_setup.source_access, undefined);
+  else {
+    assert.equal(binding.configured_setup.source_access, 'read-only-original-1.0');
+    assert.deepEqual(binding.configured_setup.source_locations, frozen.source_locations);
+    const source = await stat(frozen.sources[0].path);
+    await utimes(frozen.sources[0].path, source.atime, new Date(source.mtimeMs + 3000));
+    assert.throws(() => cli('reading-session-cli.mjs', 'next', '--run-root', first.run_root, '--export-dir', exportDir),
+      error => error.stderr.includes('READING_FIRST_SOURCE_CHANGED'));
+  }
+  const sciencePrompt = historic ? 'science-configured-2.2.md' : 'science-configured-2.3.md';
+  const snapshot = binding.configured_setup.runtime_binding;
+  assert.ok(snapshot.files.some(row => row.path === 'prompts/v3/' + sciencePrompt));
+  assert.equal(binding.configured_setup.prompt_files[0].path, join(snapshot.repo_root, 'prompts', 'v3', sciencePrompt));
   assert.equal(binding.configured_setup.runtime_binding.fingerprint, frozen.snapshot_fingerprint);
 });

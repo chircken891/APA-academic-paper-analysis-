@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createReadingFirstRunControl } from '../../scripts/v3/reading-first-runtime.mjs';
 import { validateRepairScopes, assertEditorRepairScope } from '../../scripts/v3/reading-first-repair-scope.mjs';
 import { reviewedReadingFirstFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
-import { acceptReadingFirstResult, createReadingFirstPresentationRequest, readingFirstEditorPresentation, getReadingFirstState, snapshotReadingFirstRuntime, restoreReadingFirstRuntime, recordReadingFirstRequestEvent, getReadingFirstRequestEvents, getReadingFirstPendingRequests } from '../../scripts/v3/reading-first-runtime.mjs';
+import { checkReadingNote } from '../../scripts/v3/reading-annotation-check.mjs';
+import { acceptReadingFirstResult, createReadingFirstPresentationRequest, createReadingFirstReviewRequest, renderReadingFirstNotes, readingFirstEditorPresentation, getReadingFirstState, snapshotReadingFirstRuntime, restoreReadingFirstRuntime, recordReadingFirstRequestEvent, getReadingFirstRequestEvents, getReadingFirstPendingRequests } from '../../scripts/v3/reading-first-runtime.mjs';
 import { commitOwnedArtifact } from '../../scripts/v3/owned-artifact-store.mjs';
 import { readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
@@ -69,7 +70,7 @@ test('an unresolved verifier scope records the real output while repair waits fo
 });
 
 test('configured material review without repair owner retains its receipt and waits for routing', async t => {
-  const configured=buildConfiguredReadingInstructions({});
+  const configured=buildConfiguredReadingInstructions({}, { instructionProfile: 'configured-reading-2.2' });
   const issue={severity:'material',kind:'layout',detail:'An ownership decision is missing.',repair_scope:{status:'located',section_ids:['findings'],knowledge_ids:[],visual_ids:[],editor_fields:[]}};
   const review={overall:{complete:true,coherent:true,bilingual_consistent:true},key_nodes:[],issues:[issue],scope:'overall'};
   const s=await reviewedReadingFirstFixture(t,{translationLanguage:null,controlOptions:{presentationProfile:'reading-editor-1.4'},review,createRunControl:args=>createReadingFirstRunControl({...args,maxTotalCalls:20,configuredSetup:{...configured,paths:{runRoot:dirname(args.scientificInput.sources[0].path)}}})});
@@ -115,8 +116,38 @@ test('scope validates actual identifiers and confines editor changes', () => {
   assert.throws(()=>assertEditorRepairScope(base,expanded,review),/SCOPE_EXCEEDED/);
 });
 
-test('unconfigured editor guidance is the complete 1.4 contract', () => {
-  assert.equal(readingEditorInstructions(),readFileSync(new URL('../../prompts/v3/reading-editor-1.4.md',import.meta.url),'utf8').trim());
+test('unconfigured editor guidance defaults to the complete 1.5 contract and preserves explicit 1.4 loading', () => {
+  assert.equal(readingEditorInstructions(),readFileSync(new URL('../../prompts/v3/reading-editor-1.5.md',import.meta.url),'utf8').trim());
+  assert.equal(readingEditorInstructions('reading-editor-1.4'),readFileSync(new URL('../../prompts/v3/reading-editor-1.4.md',import.meta.url),'utf8').trim());
+});
+
+test('the 2.3 review detects a bilingual method link gap and the scoped Editor output repairs both rendered cards', async t => {
+  const names = ['Fold-based threshold', '逐折定阈值'];
+  const f = await reviewedReadingFirstFixture(t, { methodsFirst: true, completeReview: false, knowledgeAliases: names });
+  const languages = ['en', 'zh-CN'];
+  const { annotation_check: annotations } = JSON.parse(f.reviewRequest.emittedStep.arguments.message.split('\n\n').at(-1));
+  for (const [index, language] of languages.entries()) {
+    const [{ title, line, candidates }] = annotations[language].unlinked_cards;
+    assert.equal(title, '1. ' + names[index]);
+    assert.match(f.candidate.notes.find(note => note.language === language).content.split('\n')[line - 1], /^> \[!info\] 1\. /);
+    assert.deepEqual(candidates, [{ path: 'method', match: 'exact' }]);
+  }
+  const issue = { severity: 'material', kind: 'method-inventory', repair_owner: 'editor',
+    detail: 'Link the registered threshold method from both index entries.', affected_languages: languages,
+    repair_scope: { status: 'located', section_ids: ['methods', 'held-out-test'], knowledge_ids: ['method'], visual_ids: [], editor_fields: [] } };
+  assert.equal((await f.complete(f.reviewRequest, { ...f.review, issues: [issue] })).status, 'revision_required');
+  const revised = structuredClone(f.editor);
+  for (const language of languages) revised.languages[language].methods[0].knowledge_ids = ['method'];
+  const edit = createReadingFirstPresentationRequest({ controller: f.controller });
+  assert.equal((await f.complete(edit, revised)).status, 'pending_review');
+  const presentation = renderReadingFirstNotes({ controller: f.controller, ...f.renderOptions });
+  for (const note of presentation.notes) {
+    const report = checkReadingNote(note.content, { language: note.language, nodes: [{ path: 'method', names }] });
+    assert.deepEqual(report.unlinked_cards, []);
+  }
+  const local = createReadingFirstReviewRequest({ controller: f.controller, presentation });
+  assert.equal(local.review_scope, 'local');
+  assert.equal((await f.complete(local, f.review)).status, 'reading_complete');
 });
 
 test('request events and original request bytes survive restoration', async t => {
@@ -166,7 +197,7 @@ test('unresolved review uses the normal owned checkpoint path', async t => {
 });
 
 test('configured runs use their already assembled editor section once', async t => {
-  const configured=buildConfiguredReadingInstructions({});
+  const configured=buildConfiguredReadingInstructions({}, { instructionProfile: 'configured-reading-2.2' });
   const s=await reviewedReadingFirstFixture(t,{translationLanguage:null,controlOptions:{presentationProfile:'reading-editor-1.4'},createRunControl:args=>createReadingFirstRunControl({...args,maxTotalCalls:20,configuredSetup:{...configured,paths:{runRoot:dirname(args.scientificInput.sources[0].path)}}})});
   const entry=snapshotReadingFirstRuntime(s.controller).state.request_entries.find(row=>row.key==='presentation');
   const message=entry.request.emittedStep.arguments.message, section=configured.sections['Reading Editor'];

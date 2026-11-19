@@ -26,31 +26,38 @@ async function verifyBootstrapFiles(manifest, repoRoot) {
   }
 }
 
-export async function prepareReadingSessionExecution({ repoRoot, runId, instructionProfile, authorizationId, scientificInput, scienceMigration, sessionContext, maxTotalCalls, maxControlCheckpoints = 16 + 8 * maxTotalCalls, hostProfile } = {}) {
-  if (typeof repoRoot !== 'string' || !repoRoot.trim() || !/^[a-zA-Z0-9_-]+$/.test(runId ?? '') || typeof authorizationId !== 'string' || !authorizationId.trim()
+export async function prepareReadingSessionExecution(options = {}) {
+  const { repoRoot: selectedRoot, runId, instructionProfile, authorizationId, scientificInput, scienceMigration, sessionContext, maxTotalCalls, maxControlCheckpoints = 16 + 8 * maxTotalCalls, hostProfile } = options;
+  if (typeof selectedRoot !== 'string' || !selectedRoot.trim() || !/^[a-zA-Z0-9_-]+$/.test(runId ?? '') || typeof authorizationId !== 'string' || !authorizationId.trim()
     || (!scientificInput && !scienceMigration) || !sessionContext || !Number.isSafeInteger(maxTotalCalls) || !Number.isSafeInteger(maxControlCheckpoints) || maxControlCheckpoints < 4) fail('READING_SESSION_INPUT_INVALID');
-  if (instructionProfile !== undefined && instructionProfile !== 'configured-reading-2.2') fail('READING_BINDING_RETIRED');
+  const { DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, configuredReadingProfile } = await import('../lib/reading-profiles.mjs');
+  const selected = instructionProfile === undefined ? DEFAULT_CONFIGURED_INSTRUCTION_PROFILE : instructionProfile;
   const { inspectApaConfig } = await import('../lib/apa-config.mjs');
-  const { readBatchRun } = await import('./reading-batch-summary.mjs');
+  const { resolveReadingSessionContinuation } = await import('./reading-session-continuation.mjs');
   const { prepareReadingRuntimeSnapshot, readReadingRuntimeSnapshotReference } = await import('./reading-runtime-snapshot.mjs');
   const { readReadingRuntimeTerminal, withReadingRuntimeConsumer } = await import('./reading-runtime-cleanup.mjs');
-  repoRoot = resolve(repoRoot);
+  const repoRoot = resolve(selectedRoot);
+  const existing = readReadingRuntimeSnapshotReference({ repoRoot, runId });
+  if (!existing?.batch_run_sha256 && !scienceMigration) configuredReadingProfile(selected, { creating: true });
   const inspection = inspectApaConfig({ repoRoot, hostProfile });
   if (!inspection.exists) fail('APA_LOCAL_CONFIG_REQUIRED');
   if (!inspection.validation.complete) fail('APA_CONFIG_INCOMPLETE');
-  if (scienceMigration) {
-    const { prepareScienceHostMigration } = await import('./science-controller.mjs');
-    await prepareScienceHostMigration({ repoRoot, runsPath: inspection.config.paths.runs, runId, authorizationId, scienceMigration, maxTotalCalls, host: inspection.config.host });
-  }
   const runRoot = resolve(repoRoot, inspection.config.paths.runs, runId);
+  if (!existing && !scienceMigration) {
+    const { assertReadingSourceOutputPath } = await import('./reading-source-policy.mjs');
+    const sources = Array.isArray(scientificInput.sources)
+      ? scientificInput.sources.filter(source => typeof source?.path === 'string' && isAbsolute(source.path)) : [];
+    assertReadingSourceOutputPath(runRoot, sources, { tree: true, vaultRoot: repoRoot });
+  }
   await mkdir(runRoot, { recursive: true });
   return withReadingRuntimeConsumer({ repoRoot, runId, runRoot }, async () => {
     if (await readReadingRuntimeTerminal({ repoRoot, runId, runRoot })) fail('READING_SESSION_TERMINATED');
     const reference = readReadingRuntimeSnapshotReference({ repoRoot, runId });
-    readBatchRun(runRoot, runId, reference?.batch_run_sha256);
     if (reference && resolve(reference.run_root) !== runRoot) fail('READING_SESSION_RUNTIME_REFERENCE_CONFLICT');
+    const continuation = await resolveReadingSessionContinuation({ options: { ...options, repoRoot }, inspection, runRoot, reference });
+    if (!continuation) configuredReadingProfile(selected, { creating: true });
     const manifest = reference?.manifest ?? prepareReadingRuntimeSnapshot({ repoRoot, codeRoot: CODE_ROOT, runRoot, runId, reference: {} });
-    return { repoRoot, runId, runRoot, manifest };
+    return { repoRoot, runId, runRoot, manifest, ...(continuation ? { instructionProfile: continuation.options.instructionProfile } : {}) };
   });
 }
 
@@ -149,7 +156,9 @@ async function run() {
       verifyReadingRuntimeSnapshot(execution);
     }
     if (resolve(execution.manifest.repo_root) !== CODE_ROOT) {
-      await launchSnapshot({ execution, command, options, bytes });
+      const snapshotInput = execution.instructionProfile !== undefined && input.instructionProfile === undefined
+        ? Buffer.from(JSON.stringify({ ...input, instructionProfile: execution.instructionProfile })) : bytes;
+      await launchSnapshot({ execution, command, options, bytes: snapshotInput });
       return;
     }
   }
@@ -199,12 +208,13 @@ async function launchSnapshot({ execution, command, options, bytes }) {
 async function executeCommand({ command, options, input, execution, inspection }) {
   const { readReadingRuntimeTerminal, registerReadingRuntimeCleanupFiles } = execution ? await import('./reading-runtime-cleanup.mjs') : {};
   if (execution && await readReadingRuntimeTerminal(execution)) fail('READING_SESSION_TERMINATED');
-  const { createReadingSession, resumeReadingSession, nextReadingAction, recordReadingEvent } = await import('./reading-session.mjs');
+  const { assertReadingSessionOutputPath, createReadingSession, resumeReadingSession, nextReadingAction, recordReadingEvent } = await import('./reading-session.mjs');
   const { capturedHostEvidence, normalizeHostReceipt } = await import('./reading-host-evidence.mjs');
   const executionContext = execution && { ...execution, consumerHeld: true };
   let session;
   if (command === 'create') session=await createReadingSession(input, executionContext);
   else session=await resumeReadingSession({runRoot:options['run-root'],readOnly:inspection}, executionContext);
+  if (!inspection && options['export-dir']) assertReadingSessionOutputPath(session, options['export-dir']);
   const registerHostFile = path => execution && registerReadingRuntimeCleanupFiles({ ...execution, files: [{ path, kind: 'host' }] });
   if (options['runtime-input']) {
     const runtimeEvent = JSON.parse((await inputBytes(options['runtime-input'])).toString('utf8'));
@@ -221,6 +231,7 @@ async function executeCommand({ command, options, input, execution, inspection }
       if (!options['export-dir'] || options['raw-result'] === '-' && (!options.input || options.input === '-')) throw new Error('READING_CLI_EVIDENCE_INPUT_INVALID');
       const bytes=await inputBytes(options['raw-result']), body=bytes.toString('utf8');
       if (!Buffer.from(body,'utf8').equals(bytes)) throw new Error('READING_CLI_UTF8_INVALID');
+      assertReadingSessionOutputPath(session, options['export-dir'], bytes);
       await mkdir(options['export-dir'],{recursive:true});
       const path=join(resolve(options['export-dir']),`host-result-${execution ? execution.runId + '-' : ''}${hash(bytes)}.txt`); await immutableWrite(path,bytes);
       await registerHostFile(path);

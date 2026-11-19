@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
-import { chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, cp, link, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -79,6 +79,37 @@ test('another live run keeps its shared snapshot and shared temporary file', asy
   const final = await closeReadingRuntimeRun({ ...second, terminal });
   assert.equal(final.snapshot_status, 'removed');
   await assert.rejects(readFile(shared), { code: 'ENOENT' });
+});
+
+test('read-only cleanup refuses PDF copies and aliases while reclaiming generated preview files', async t => {
+  const { closeReadingRuntimeRun, registerReadingRuntimeCleanupFiles } = await import('../../scripts/v3/reading-runtime-cleanup.mjs');
+  const { fingerprintV3Json } = await import('../../scripts/v3/semantic-package-validator.mjs');
+  const { put, run } = await fixture(t);
+  const current = await run('read-only-run');
+  const originalPath = await put('Clippings/只读 原件.pdf', '%PDF-1.7\nsynthetic');
+  const alias = join(current.runRoot, 'looks-like-host.json');
+  await link(originalPath, alias);
+  const copy = await put('.tmp/read-only/staged-copy.pdf', await readFile(originalPath));
+  const original = await stat(originalPath, { bigint: true });
+  const location = { path: originalPath, file_identity: { dev: String(original.dev), ino: String(original.ino), mtime_ns: String(original.mtimeNs) } };
+  const data = { prepared: { paths: { runRoot: current.runRoot }, runControl: { run_id: current.runId,
+    reading_first_binding: { controller_actor_id: 'controller', configured_setup: {
+      source_access: 'read-only-original-1.0', source_locations: [location],
+    } } } }, brokerConfig: { authorized_bindings: [] } };
+  await put('Eval/apa-v3/runs/read-only-run/control/science-state.json', JSON.stringify({
+    schema_version: 'science-controller-state-1.0', data, fingerprint: fingerprintV3Json(data),
+  }));
+  for (const row of [{ path: alias, kind: 'host' }, { path: copy, kind: 'historical' }]) {
+    await assert.rejects(registerReadingRuntimeCleanupFiles({ ...current, files: [row] }), { code: 'RF_READ_ONLY_SOURCE_OUTPUT_CONFLICT' });
+  }
+  const preview = await put('.tmp/read-only/preview.md', 'preview');
+  await registerReadingRuntimeCleanupFiles({ ...current, files: [{ path: preview, kind: 'historical' }], directories: [dirname(preview)] });
+  const result = await closeReadingRuntimeRun({ ...current, terminal });
+  assert.deepEqual(result.removed, ['.tmp/read-only/preview.md']);
+  assert.ok(!result.archives.some(row => row.original_path === '.tmp/read-only/staged-copy.pdf'));
+  assert.deepEqual(await readFile(originalPath), await readFile(copy));
+  const final = await stat(originalPath, { bigint: true });
+  assert.deepEqual([final.dev, final.ino, final.size, final.mtimeNs], [original.dev, original.ino, original.size, original.mtimeNs]);
 });
 
 test('cleanup waits for an active consumer and requires a durable terminal decision', async t => {

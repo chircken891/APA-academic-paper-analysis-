@@ -171,7 +171,7 @@ export async function withShortMineruRuntime(vaultRoot, operation, runtimeHome) 
   }
 }
 
-export async function runMineru({ vaultRoot, sourcePath, outputPath, signal, runtimeHome, python, configPath, resolveCommand = mineruCommand, runChild = runManagedProcess, readVersion = mineruPackageVersion, readExecutableVersion = mineruExecutableVersion } = {}) {
+export async function runMineru({ vaultRoot, sourcePath, outputPath, signal, runtimeHome, python, configPath, readOnlyInput = false, resolveCommand = mineruCommand, runChild = runManagedProcess, readVersion = mineruPackageVersion, readExecutableVersion = mineruExecutableVersion } = {}) {
   return withShortMineruRuntime(vaultRoot, async runtimeRoot => {
     // An explicit interpreter must not bypass the runtime's Unicode-safe alias.
     // Rebase only paths within this runtime; keep external selections unchanged.
@@ -190,13 +190,16 @@ export async function runMineru({ vaultRoot, sourcePath, outputPath, signal, run
     delete env.MINERU_TABLE_ENABLE;
     env.MINERU_HOME = runtimeRoot;
     env.MINERU_CONFIG = configPath ?? process.env.MINERU_CONFIG ?? join(runtimeRoot, 'config.yaml');
-    await withShortMineruInput(sourcePath, async stagedSource => {
+    const parse = inputPath => {
       const script = fileURLToPath(new URL('./mineru-parse.py', import.meta.url));
-      const arguments_ = [script, stagedSource, outputPath, '--tier', 'standard', '--pages', 'all'];
-      await withMineruSlot(vaultRoot, signal, (childSignal, onSpawn) => runChild(command.python, arguments_, {
+      const arguments_ = [script, inputPath, outputPath, '--tier', 'standard', '--pages', 'all'];
+      if (readOnlyInput) arguments_.push('--read-only-input');
+      return withMineruSlot(vaultRoot, signal, (childSignal, onSpawn) => runChild(command.python, arguments_, {
         cwd: vaultRoot, signal: childSignal, env, onSpawn,
       }));
-    });
+    };
+    if (readOnlyInput) await parse(sourcePath);
+    else await withShortMineruInput(sourcePath, parse);
     return parserVersion;
   }, runtimeHome);
 }

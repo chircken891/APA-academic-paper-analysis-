@@ -78,6 +78,93 @@ const card = (nodes, text) => {
   return matches[0];
 };
 
+function stagedInputs(language) {
+  const input = inputs(language);
+  const names = [bilingual('Prepare samples', '准备样本'), bilingual('Test uptake', '检验摄取'), bilingual('Test growth', '检验生长'), bilingual('Compare settings', '比较模型条件')];
+  const entry = bilingual('Use the admitted samples in this comparison.', '将登记样本用于本项比较。');
+  input.argument.stage_map = {
+    stages: names.map((title, index) => ({ id: `stage-${index + 1}`, title, entry, step_ids: [`step-${index + 1}`], claim_ids: [`claim-${index + 1}`] })),
+    transitions: [
+      { from: 'stage-1', to: 'stage-2', label: bilingual('Carry assay samples into uptake tests.', '用实验样本检验摄取。') },
+      { from: 'stage-1', to: 'stage-3', label: bilingual('Carry treated samples into growth tests.', '用处理后的样本检验生长。') },
+      { from: 'stage-2', to: 'stage-4', label: bilingual('Compare uptake responses across models.', '比较不同模型的摄取反应。') },
+      { from: 'stage-3', to: 'stage-4', label: bilingual('Check whether the growth response generalizes.', '检验生长反应能否推广。') },
+    ],
+    step_text: Object.fromEntries(input.map.steps.map(step => [step.id, bilingual('Use this step to prepare or test an identified sample.', '用这一步准备或检验已确定的样本。')])),
+    finding_text: Object.fromEntries(input.map.findings.map(finding => [finding.id, bilingual('Compare the observed values under the assigned conditions.', '比较不同条件下的实际观测值。')])),
+  };
+  input.map.step_links = [{ from_step_id: 'step-1', to_step_id: 'step-2', label: bilingual('Labeled samples', '有标记的样本') }];
+  input.argument.claims.push({ ...input.argument.claims[0], id: 'claim-5', title: bilingual('Recheck growth conditions', '复核生长条件'), finding_ids: [] });
+  input.argument.stage_map.stages[0].claim_ids.push('claim-5');
+  input.argument.relations.find(row => row.from === 'claim-1' && row.to === 'claim-3').from = 'claim-5';
+  input.argument.relations.push({ from: 'claim-1', to: 'claim-5', label: '结果对照' }, { from: 'claim-3', to: 'claim-4', label: '结果对照' });
+  return input;
+}
+
+for (const language of ['en', 'zh-CN']) {
+  test(`lays out connected parallel stages and their convergence in ${language}`, async () => {
+    const { buildResearchMapCanvas, isResearchMapStepEdge, isStagedResearchMap, researchMapCanvasSection } = await implementation();
+    const input = stagedInputs(language);
+    const canvas = buildResearchMapCanvas(input);
+    assert.deepEqual(canvas, buildResearchMapCanvas(structuredClone(input)));
+    assert.equal(isStagedResearchMap(canvas), true);
+    assert.equal(isStagedResearchMap(buildResearchMapCanvas(inputs(language))), false);
+    const { nodes, edges } = canvas;
+    const frames = nodes.filter(node => node.type === 'group');
+    assert.equal(frames[1].y, frames[2].y);
+    assert.ok(frames[0].y < frames[1].y && frames[1].y < frames[3].y);
+    const science = nodes.filter(node => node.type === 'text');
+    for (const [i, a] of science.entries()) for (const b of science.slice(i + 1)) {
+      assert.ok(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y, `${a.id} versus ${b.id}`);
+    }
+    const follow = (start, from, to) => {
+      const seen = new Set([start]), todo = [start];
+      while (todo.length) {
+        const id = todo.pop();
+        for (const e of edges) if (e[from] === id && !seen.has(e[to])) {
+          seen.add(e[to]);
+          todo.push(e[to]);
+        }
+      }
+      return seen;
+    };
+    assert.equal(follow(card(nodes, input.argument.question.text[language]).id, 'fromNode', 'toNode').size, science.length);
+    assert.equal(follow(card(nodes, input.argument.conclusion.text[language]).id, 'toNode', 'fromNode').size, science.length);
+    for (const stage of input.argument.stage_map.stages) assert.ok(frames.some(node => node.label === stage.title[language]));
+    for (const transition of input.argument.stage_map.transitions) card(nodes, transition.label[language]);
+    for (const node of [...input.map.steps, ...input.map.findings]) {
+      const rendered = card(nodes, node.label[language]);
+      assert.ok(rendered.text.includes(sectionTitles[language][node.section_id]));
+    }
+    for (const relation of input.map.relations) {
+      const step = input.map.steps.find(node => node.id === (relation.step_id ?? relation.from));
+      const finding = input.map.findings.find(node => node.id === (relation.finding_id ?? relation.to));
+      assert.ok(edges.some(e => e.fromNode === card(nodes, step.label[language]).id && e.toNode === card(nodes, finding.label[language]).id));
+    }
+    assert.deepEqual(edges.filter(isResearchMapStepEdge).map(edge => edge.label), [input.map.step_links[0].label[language]]);
+    const [uptake, growth] = input.argument.stage_map.transitions.map(link => card(nodes, link.label[language]));
+    const assertion = card(nodes, input.argument.claims[0].title[language]);
+    const check = card(nodes, input.argument.claims.at(-1).title[language]);
+    const sources = node => edges.filter(edge => edge.toNode === node.id).map(edge => edge.fromNode);
+    assert.deepEqual(sources(uptake), [assertion.id]);
+    assert.deepEqual(sources(growth), [check.id]);
+    assert.ok(sources(check).includes(assertion.id));
+    assert.match(researchMapCanvasSection({ canvasPath: 'Figures/Study.canvas', language, staged: true }), language === 'en' ? /Read down the stages/ : /沿阶段之间/);
+  });
+}
+
+test('renders short arguments with no research stages', async () => {
+  const { buildResearchMapCanvas, isStagedResearchMap } = await implementation();
+  const input = inputs();
+  input.map = { steps: [], findings: [], relations: [] };
+  input.primaryFindingIds = [];
+  Object.assign(input.argument, { claims: [], branches: [], relations: [], stage_map: { stages: [], transitions: [], step_text: {}, finding_text: {} } });
+  const canvas = buildResearchMapCanvas(input);
+  assert.equal(isStagedResearchMap(canvas), true);
+  assert.equal(canvas.nodes.length, 2);
+  assert.equal(canvas.edges.length, 1);
+});
+
 test('repeated builds yield identical JSON bytes and separate paper and language IDs', async () => {
   const { buildResearchMapCanvas, serializeResearchMapCanvas } = await implementation();
   const input = inputs();
@@ -91,6 +178,37 @@ test('repeated builds yield identical JSON bytes and separate paper and language
   assert.equal(ids(first).size, first.nodes.length + first.edges.length);
   assert.equal(ids(first).intersection(ids(buildResearchMapCanvas(inputs('zh-CN')))).size, 0);
   assert.equal(ids(first).intersection(ids(buildResearchMapCanvas({ ...input, paperId: 'other-paper' }))).size, 0);
+});
+
+test('places a supported method sequence with parallel branches, a join and a return edge', async () => {
+  const { buildResearchMapCanvas, isResearchMapStepEdge } = await implementation();
+  const input = inputs();
+  const source = { id: 'sample', label: bilingual('Select samples', '筛选样本'), section_id: 'design' };
+  input.map.steps.push(source);
+  input.map.step_links = [
+    { from_step_id: 'sample', to_step_id: 'step-1', label: bilingual('Eligible samples', '符合条件的样本') },
+    { from_step_id: 'sample', to_step_id: 'step-2', label: bilingual('Matched samples', '匹配样本') },
+    { from_step_id: 'step-1', to_step_id: 'step-3', label: bilingual('Treated samples', '处理后样本') },
+    { from_step_id: 'step-2', to_step_id: 'step-3', label: bilingual('Uptake estimate', '摄取估计') },
+    { from_step_id: 'step-3', to_step_id: 'step-1', label: bilingual('Updated conditions', '更新后的条件') },
+  ];
+  const { nodes, edges } = buildResearchMapCanvas(input);
+  const entry = card(nodes, source.label.en);
+  const [left, right, joined] = stepLabels.slice(0, 3).map(label => card(nodes, label.en));
+  assert.ok(entry.y < left.y && left.y < joined.y);
+  assert.equal(left.y, right.y);
+  assert.ok(left.x + left.width < right.x);
+  assert.equal(edges.filter(isResearchMapStepEdge).length, input.map.step_links.length);
+  assert.ok(edges.some(edge => !isResearchMapStepEdge(edge) && edge.fromNode === left.id && edge.toNode === card(nodes, findings[0].en).id));
+  assert.ok(edges.some(edge => isResearchMapStepEdge(edge) && edge.fromNode === joined.id && edge.toNode === left.id && edge.label === 'Updated conditions'));
+
+  for (const invalid of [
+    { ...input.map.step_links[0], to_step_id: 'finding-1' },
+    { ...input.map.step_links[0], label: { en: 'No translation' } },
+  ]) {
+    const map = { ...input.map, step_links: [invalid] };
+    assert.throws(() => buildResearchMapCanvas({ ...input, map }), { code: 'RF_CANVAS_STEP_LINK_INVALID' });
+  }
 });
 
 for (const language of ['en', 'zh-CN']) {

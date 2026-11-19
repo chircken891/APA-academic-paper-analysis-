@@ -1,8 +1,9 @@
 import { isDeepStrictEqual } from 'node:util';
+import { configuredReadingUsesExecutionLedger } from '../lib/reading-profiles.mjs';
 import { validateHostReceiptEvidence } from './reading-host-evidence.mjs';
 const fail = code => { const error = new Error(code); error.code = code; throw error; };
 const copy = value => structuredClone(value);
-export const usesExecutionLedger = binding => binding?.configured_setup?.instruction_profile === 'configured-reading-2.2';
+export const usesExecutionLedger = binding => configuredReadingUsesExecutionLedger(binding?.configured_setup?.instruction_profile);
 export const countInitialTasks = ledger => ledger.filter(row => row.kind === 'initial' && row.superseded_by_host_migration !== true).length;
 export function validateExecutionLedger(ledger, limit, options = {}) {
   if (!Array.isArray(ledger) || !Number.isSafeInteger(limit) || limit < 0 || ledger.length > limit) fail('EXECUTION_LEDGER_INVALID');

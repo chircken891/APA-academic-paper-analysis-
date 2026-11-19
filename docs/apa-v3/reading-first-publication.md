@@ -32,7 +32,7 @@ const registration = await registerBilingualPublication({
 
 图表也可来自 Integrator 的真实 owned 输出：若其已审查 `visual_resources` 精确登记了图表路径、SHA-256、字节数以及父 PDF 的 `source_id`、`source_path`、`source_sha256`，发布接口会核对这些冻结字段与当前资源、登记 PDF 的对应关系。仅在临时目录找到图片或调用方另给一个哈希仍不足以入库；原候选和原审查不因此改写。
 
-`reading-editor-1.4` 生成的两语研究导图是 `research-map-canvas` 展示资产，分别位于 `Figures/<run_id>/research-map.zh-CN.canvas` 和 `Figures/<run_id>/research-map.en.canvas`。发布入口使用已审视图、登记导图和编辑论证重算画布，要求与候选字节一致。两份文件按路径、字节数与 SHA-256 纳入精确清单、展示清单、对象登记和写后核验，沿渲染产物路径校验。默认图谱的筛选范围继续由已登记笔记决定。
+`reading-editor-1.4` 和 `reading-editor-1.5` 生成的两语研究导图是 `research-map-canvas` 展示资产，分别位于 `Figures/<run_id>/research-map.zh-CN.canvas` 和 `Figures/<run_id>/research-map.en.canvas`。发布入口使用已审视图、登记导图和编辑论证重算画布，要求与候选字节一致。两份文件按路径、字节数与 SHA-256 纳入精确清单、展示清单、对象登记和写后核验，沿渲染产物路径校验。默认图谱的筛选范围继续由已登记笔记决定。
 
 既有 owned Integrator 使用 `resource_handoff.asset_mapping` 时，发布消费者也可直接读取该登记：`target_path` 对应图表目标，`source_path` 为源图片的绝对路径，`source_id`、`source_pdf_sha256` 对应原登记父 PDF，`sha256`、`byte_length` 对应图片字节。接口继续核对唯一匹配、实际源图片路径、父 PDF、候选图目录及字节；原 owned 产物、候选和审查保持原样。顶层 `visual_resources` 已存在时保留原消费路径。
 
@@ -48,7 +48,7 @@ owned Integrator 使用 `visual_handoff.registered_resources` 时，消费者读
 
 已完成阅读运行可以在模型调用窗口关闭后只读准备发布；这不续期模型预算。新注册重载校验 Controller 签名、批准清单、逐文件内容及实际依赖，直接使用已批准输出，不重新构建整套审查或渲染结果。旧格式登记继续沿原读取合同处理；任意手写 JSON 或修改后的 Markdown 不能自行取得发布资格。
 
-会话入口的 `complete` 动作返回已审候选的 `publication_source`，可直接交给上述准备接口。恢复完成态时，先通过原资源重新渲染并核对已有候选与已审指纹。使用外部已审候选接口 `prepareExternalReviewedReadingFirstPublication` 时，Editor 1.4 产物须传入实际冻结的 `readingFirstBinding`。接口及恢复路径核对输入、Editor 版本和提示文件；历史版本按原合同读取。
+会话入口的 `complete` 动作返回已审候选的 `publication_source`，可直接交给上述准备接口。恢复完成态时，先通过原资源重新渲染并核对已有候选与已审指纹。使用外部已审候选接口 `prepareExternalReviewedReadingFirstPublication` 时，Editor 1.4、1.5 产物均须传入实际冻结的 `readingFirstBinding`。2.3 根据已审两语正文、研究步骤与原始来源复核 `method_application`，并比对审查回执内容。接口及恢复路径核对输入、Editor 版本和提示文件；历史版本按原合同读取。
 
 ## 并行阅读的共享节点变基
 
@@ -127,7 +127,36 @@ node scripts/v3/bilingual.mjs maintenance-apply --vault-root <vault-root> --run 
 | `relocate` | `papers` 为 `{paperId, sourceLanguage}` 数组。`assetMappings` 为 `{old_path, new_path, sha256, byte_length, source_id?}` 数组。可用 `assetRetirements` 指定退出登记的 `{path, sha256, byte_length}`，或用 `restoreAssetRetirements` 列出恢复登记的路径。 |
 | `merge` | `merges` 为 `{keep_path, remove_paths, aliases?, anchors?, expected_inputs?}` 数组。`anchors` 按被合并页路径给出旧锚点到留存页锚点的映射。`expected_inputs` 为 `{path, sha256, byte_length}` 数组，可固定所选页面版本。 |
 | `compensate` | `transactionId` 为原合并事务 ID。原合并已被后续代次替代时，`trustAnchor` 使用原控制器提供并单独保存的公钥信任锚。路径迁移的反向操作沿用 `relocate` 及明确的反向映射。 |
-| `map-refresh` | `papers` 为 `{paperId, map, argument, primaryFindingIds, sectionTitles, noteWordingEdits?}` 数组。`map` 来自已登记步骤、发现与关系；`argument` 按 1.4 合同依据已有双语正文整理；`sectionTitles` 按 `en`、`zh-CN` 提供小节 ID 到笔记实际标题的映射。可选的 `noteWordingEdits` 按语言给出 `{before, after}` 完整段落，只用于明确获批的导图展示措辞调整，逐段前后文本随清单核对。 |
+| `map-refresh` | 完整刷新时，`papers` 为 `{paperId, map, argument, primaryFindingIds, sectionTitles, noteWordingEdits?}` 数组。`map` 使用已登记的步骤、发现与关系，`argument` 依双语正文整理问题、论点和结论。`sectionTitles` 按 `en`、`zh-CN` 将小节 ID 映射到实际标题。可选的 `noteWordingEdits` 按语言给出经批准的展示措辞调整，每项 `{before, after}` 均为完整段落。 |
+
+旧式画布可按原论点结构完整刷新。若当前任一语言的画布已有阶段，须提供 `argument.stage_map`，缺失时报告 `P22_MAP_REFRESH_STAGE_MAP_REQUIRED`。若已有步骤间的移交边，还须提供 `map.step_links`，缺失时报告 `P22_MAP_REFRESH_STEP_LINKS_REQUIRED`。阶段间的移交说明上下两个阶段如何衔接，步骤边的标签则写明实际传递的对象。
+
+以下摘自双语验收夹具。假设筛选步骤和分析步骤均已登记，前两项论点属于筛选阶段，其余属于分析阶段，各发现已关联其所属步骤。将以下字段并入该论文的完整刷新输入，再序列化为 `options.json`。
+
+```js
+const bilingual = (en, zh) => ({ en, 'zh-CN': zh });
+const [screening, design] = map.steps;
+map.step_links = [{
+  from_step_id: screening.id, to_step_id: design.id,
+  label: bilingual('Eligible records', '合格记录'),
+}];
+argument.stage_map = {
+  stages: [
+    { id: 'screening', title: bilingual('Evidence selection', '证据筛选'),
+      entry: bilingual('Select records under the documented criteria.', '按既定标准选择记录。'),
+      step_ids: [screening.id], claim_ids: argument.claims.slice(0, 2).map(row => row.id) },
+    { id: 'testing', title: bilingual('Analysis of selected evidence', '入选证据的分析'),
+      entry: bilingual('Carry eligible records forward for analysis.', '把合格记录交给后续分析。'),
+      step_ids: [design.id], claim_ids: argument.claims.slice(2).map(row => row.id) },
+  ],
+  transitions: [{ from: 'screening', to: 'testing',
+    label: bilingual('The eligible records enter the analysis.', '合格记录进入分析。') }],
+  step_text: Object.fromEntries(map.steps.map(row => [row.id, row.label])),
+  finding_text: Object.fromEntries(map.findings.map(row => [row.id, row.label])),
+};
+```
+
+若仅调整单一语言画布的节点位置或尺寸，该论文条目使用 `{paperId, canvasLayout: {language, before_sha256, nodes}}`。哈希取自当前画布，每个节点提供已有的 `id` 和目标 `x, y, width, height`。这一入口按前像校验并只更新所列节点的几何属性。
 
 导图维护在获批双语笔记的模块 2 开头放置“2.1 研究导图”或“2.1 Research map”，并在论文原 `run_id` 的 Figures 目录新增两份画布。旧稿的导图附在研究设计概览后时，设计小节顺延编号，同步本篇目录、局部链接和 Canvas 标题目标；已有独立导图小节的旧稿保留原编号。事务同时更新展示清单、托管区哈希、对象登记和索引，保留科学正文及人工区。写后核对当前代次和两份画布指纹，再检查索引与图谱。历史论文沿现有材料制作导图，无需续接阅读。
 
@@ -173,7 +202,7 @@ node scripts/v3/bilingual.mjs publish --vault-root <vault-root> --run <run> --ru
 
 **来源位置与副本处理**
 
-新配置冻结 `configured_setup.source_policy:'clippings-originals-1.0'`，科学来源保存 `Clippings/` 原件的绝对路径，笔记与清单使用库内相对路径。目录外输入在准备阶段复制到 `Clippings/`，保留原文件名；同名不同字节时停止并报告冲突。配置保存本身不复制文献。已有冻结记录保持原路径和指纹。
+新运行绑定 `Clippings/` 内的论文原件与补充材料，预览和发布按路径、字节数和 SHA-256 核对。PDF 作为只读依赖，笔记引用原件和页码。目录外输入先匹配已有原件；缺少匹配时，请用户将原件放入 `Clippings/` 并提供路径。同名异文时报告冲突。已有冻结记录沿用各自绑定。
 
 新运行准备和每次发布检查 `Raw/` 与 `Clippings/` 的同文献线索。同字节匹配可用于确定性改指本篇链接，并绑定路径、SHA-256 和字节数；原已审科学正文及回执保持原样。只有 DOI、题名或文件名相近而字节不同的结果保留为待确认提示。其他已提交论文的引用改指先准备独立迁移清单，经批准的事务执行；旧 Raw 副本单列清理候选，发布入口不删除文件。
 

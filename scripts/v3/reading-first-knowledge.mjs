@@ -78,7 +78,12 @@ export function applyReadingFirstKnowledgeContent({ presentation, views }) {
     const ids = new Set();
     for (const entry of view.knowledge_content) {
       const item = result.knowledge?.find(item => item.id === entry.id);
-      if (!item || ids.has(entry.id) || Object.keys(entry).some(key => !['id', 'paragraphs', 'sections'].includes(key)) || !Array.isArray(entry.paragraphs) || !entry.paragraphs.length || entry.paragraphs.some(value => !text(value))) fail('RF_OBSIDIAN_KNOWLEDGE_CONTENT_INVALID');
+      if (!item || ids.has(entry.id) || Object.keys(entry).some(key => !['id', 'paragraphs', 'sections', 'application_section_ids'].includes(key)) || !Array.isArray(entry.paragraphs) || !entry.paragraphs.length || entry.paragraphs.some(value => !text(value))) fail('RF_OBSIDIAN_KNOWLEDGE_CONTENT_INVALID');
+      if (entry.application_section_ids !== undefined) {
+        if (item.source_kind !== 'method-background') fail('RF_OBSIDIAN_KNOWLEDGE_CONTENT_INVALID');
+        assertApplicationSectionIds(item.id, entry.application_section_ids, view.sections.map(section => section.id),
+          knowledgeUsedSections(item.id, view, presentation));
+      }
       ids.add(entry.id);
       item.paragraphs[view.language] = structuredClone(entry.paragraphs);
       if (entry.sections !== undefined) {
@@ -88,6 +93,54 @@ export function applyReadingFirstKnowledgeContent({ presentation, views }) {
     }
   }
   return result;
+}
+
+function knowledgeUsedSections(id, view, presentation, editor) {
+  const visualIds = new Set((presentation.visuals ?? []).filter(visual => visual.chart_types?.some(type => type.knowledge_id === id)).map(visual => visual.id));
+  return new Set([
+    ...(editor?.languages[view.language].methods ?? []).filter(method => method.knowledge_id === id || method.knowledge_ids?.includes(id)).flatMap(method => method.section_ids),
+    ...(view.placements?.knowledge ?? []).filter(placement => placement.id === id).map(placement => placement.section_id),
+    ...(view.placements?.visuals ?? []).filter(placement => visualIds.has(placement.id)).map(placement => placement.section_id),
+    ...view.sections.filter(section => section.paragraphs.some(paragraph => paragraph.includes(`](apa-knowledge:${id})`))).map(section => section.id),
+  ]);
+}
+
+function failApplication(knowledgeId) {
+  throw Object.assign(new Error('RF_OBSIDIAN_KNOWLEDGE_APPLICATION_INVALID'), {
+    code: 'RF_OBSIDIAN_KNOWLEDGE_APPLICATION_INVALID',
+    ...(knowledgeId ? { knowledge_id: knowledgeId } : {}),
+  });
+}
+
+function assertApplicationSectionIds(knowledgeId, sections, sectionOrder, used) {
+  if (!Array.isArray(sections) || !sections.length
+    || sections.some((id, index) => !used.has(id) || !sectionOrder.includes(id)
+      || index > 0 && sectionOrder.indexOf(id) <= sectionOrder.indexOf(sections[index - 1]))) failApplication(knowledgeId);
+}
+
+export function assertSharedKnowledgeApplicationMirror(source, translation) {
+  const applications = view => (Array.isArray(view.knowledge_content) ? view.knowledge_content : [])
+    .filter(item => item?.application_section_ids !== undefined)
+    .map(item => [item.id, item.application_section_ids])
+    .sort(([a], [b]) => String(a).localeCompare(String(b)));
+  if (JSON.stringify(applications(source)) !== JSON.stringify(applications(translation))) failApplication();
+}
+
+/** Use accepted paper content to locate application details, without importing that content into a shared page. */
+export function collectSharedKnowledgeApplications({ item, views, presentation, editor, expandedMethodIndex = false }) {
+  const declarations = views.map(view => view.knowledge_content?.find(entry => entry.id === item.id)?.application_section_ids);
+  const hasDeclaration = declarations.some(value => value !== undefined);
+  const expandedEditor = views.some(view => editor?.languages[view.language].methods.some(method => text(method.explanation)));
+  if (!expandedMethodIndex && !hasDeclaration && !expandedEditor) return undefined;
+  const sectionOrder = views[0].sections.map(section => section.id);
+  const usedSections = new Set(views.flatMap(view => [...knowledgeUsedSections(item.id, view, presentation, editor)]));
+  const sections = hasDeclaration ? declarations[0] : sectionOrder.filter(id => usedSections.has(id));
+  if (hasDeclaration && declarations.some(value => JSON.stringify(value) !== JSON.stringify(sections))) failApplication(item.id);
+  assertApplicationSectionIds(item.id, sections, sectionOrder, usedSections);
+  return sections.map(id => ({
+    id,
+    headings: Object.fromEntries(views.map(view => [view.language, view.sections.find(section => section.id === id).heading])),
+  }));
 }
 
 const names = value => typeof value === 'string' ? [value] : Object.values(value ?? {});
@@ -135,6 +188,22 @@ const applicationLabel = (application, language) => {
   return name ? `${name.replace(/[\[\]\r\n]/g, ' ')} · ${language === 'en' ? 'English' : '中文'}` : language === 'en' ? 'Paper application (English)' : '本文中的应用（中文）';
 };
 
+function applicationEntries(application, language) {
+  const name = applicationLabel(application, language);
+  if (!application.sections?.length) return [{ label: name, fragment: '' }];
+  return application.sections.map(section => ({
+    label: `${name} · ${section.headings[language].replace(/[\[\]\r\n]/g, ' ')}`,
+    fragment: `#^rf-${section.id}`,
+  }));
+}
+
+function renderApplicationLinks(application, target, href) {
+  return languages.flatMap(language => applicationEntries(application, language).map(({ label, fragment }) => {
+    const destination = application.targets?.[language];
+    return destination ? `- [${label}](${href(target, destination)}${fragment})` : '- ' + label;
+  }));
+}
+
 // Relocation can update visible links without rewriting the historical state.
 function priorVisibleTargets(region, target, applications) {
   const tokens = markdown.parse(region, {});
@@ -152,11 +221,17 @@ function priorVisibleTargets(region, target, applications) {
       if (close < 0) continue;
       const label = children.slice(j + 1, close).map(child => child.content).join('');
       const destination = children[j].attrGet('href');
-      if (!destination || /^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(destination) || /[?#]/.test(destination)) continue;
-      let decoded;
-      try { decoded = decodeURIComponent(destination); } catch { continue; }
+      if (!destination || /^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(destination) || /[?]/.test(destination)) continue;
+      const [file, encodedBlock, extra] = destination.split('#');
+      if (!file || extra !== undefined) continue;
+      let decoded, block;
+      try {
+        decoded = decodeURIComponent(file);
+        block = encodedBlock === undefined ? undefined : decodeURIComponent(encodedBlock);
+      } catch { continue; }
+      if (block !== undefined && !/^\^rf-[a-z][a-z0-9-]*$/.test(block)) continue;
       const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(target), decoded));
-      if (/^Wiki\/(sources|translations)\/[^/]+\.md$/.test(resolved)) links.push({ label, target: resolved });
+      if (/^Wiki\/(sources|translations)\/[^/]+\.md$/.test(resolved)) links.push({ label, fragment: block ? '#' + block : '', target: resolved });
       j = close;
     }
   }
@@ -164,11 +239,14 @@ function priorVisibleTargets(region, target, applications) {
     const targets = { ...application.targets };
     for (const language of languages) {
       const previous = application.targets?.[language];
-      const label = applicationLabel(application, language);
-      const matches = links.filter(link => link.label === label && (!previous || path.posix.basename(link.target) === path.posix.basename(previous)));
-      const owners = applications.filter(row => applicationLabel(row, language) === label
-        && (!previous || path.posix.basename(row.targets?.[language] ?? '') === path.posix.basename(previous)));
-      if (matches.length === 1 && owners.length === 1) targets[language] = matches[0].target;
+      const inferred = applicationEntries(application, language).map(({ label, fragment }) => {
+        const matches = links.filter(link => link.label === label && link.fragment === fragment
+          && (!previous || path.posix.basename(link.target) === path.posix.basename(previous)));
+        const owners = applications.filter(row => (!previous || path.posix.basename(row.targets?.[language] ?? '') === path.posix.basename(previous))
+          && applicationEntries(row, language).some(entry => entry.label === label && entry.fragment === fragment));
+        return matches.length === 1 && owners.length === 1 ? matches[0].target : undefined;
+      });
+      if (inferred[0] && inferred.every(path => path === inferred[0])) targets[language] = inferred[0];
     }
     return { ...application, targets };
   });
@@ -299,7 +377,7 @@ function renderKnowledgeSource(source) {
 }
 
 /** One generic identity produces one bilingual candidate; formal registry bytes are never mutated. */
-export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, paperId, paperTitle, vaultPath, href, resolveReferences = value => value, identityMatch }) {
+export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, paperId, paperTitle, vaultPath, href, resolveReferences = value => value, identityMatch, applicationSections }) {
   const match = identityMatch ?? matchReadingFirstKnowledgeIdentity({ item, knowledgeRegistry, vaultPath });
   const { matches, paths } = match;
   const directory = knowledgeDirectory(item);
@@ -325,7 +403,8 @@ export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, p
     if (!prior?.item || !Array.isArray(prior.applications)) fail('RF_OBSIDIAN_KNOWLEDGE_REGION_INVALID');
   }
   const previousApplications = prior ? priorVisibleTargets(original.slice(from, to), target, prior.applications) : [];
-  const applications = [...new Map([...previousApplications, { paper_id: paperId, targets: paperTargets, title: paperTitle }].map(row => [row.paper_id, row])).values()];
+  const application = { paper_id: paperId, targets: paperTargets, title: paperTitle, ...(applicationSections ? { sections: applicationSections } : {}) };
+  const applications = [...new Map([...previousApplications, application].map(row => [row.paper_id, row])).values()];
   const node = prior ? composeKnowledgeAddition(prior.item, item, paperId, paperTitle) : item;
   const preserveCurrent = from >= 0 && matches.some(row => row.current_content === true);
   let body = ['[中文](#%E4%B8%AD%E6%96%87)', '[English](#English)', ...(node.formulas?.length ? ['[公式 / Formulas](#%E5%85%AC%E5%BC%8F%20/%20Formulas)'] : []), ...(node.sources?.length ? ['[来源 / Sources](#%E6%9D%A5%E6%BA%90%20/%20Sources)'] : [])].join(' · ') + '\n\n';
@@ -349,10 +428,7 @@ export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, p
   for (const source of node.sources ?? []) {
     body += `${renderKnowledgeSource(source)}\n`;
   }
-  body += '\n## 论文应用 / Paper applications\n\n' + applications.flatMap(application => languages.map(language => {
-    const destination = application.targets?.[language], label = applicationLabel(application, language);
-    return destination ? `- [${label}](${href(target, destination)})` : '- ' + label;
-  })).join('\n') + '\n';
+  body += '\n## 论文应用 / Paper applications\n\n' + applications.flatMap(row => renderApplicationLinks(row, target, href)).join('\n') + '\n';
   const state = Buffer.from(JSON.stringify({ item: node, applications })).toString('base64');
   const addition = `${start}\n<!-- KNOWLEDGE_STATE ${state} -->\n${body}${end}\n`;
   let content;
@@ -371,8 +447,7 @@ export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, p
       appended += `\n${renderKnowledgeSource(source)}\n`;
     }
     if (!previousApplications.some(row => row.paper_id === paperId)) {
-      appended += '\n## 论文应用增补 / Additional paper applications\n\n' + languages.map(language =>
-        `- [${applicationLabel({ paper_id: paperId, targets: paperTargets, title: paperTitle }, language)}](${href(target, paperTargets[language])})`).join('\n') + '\n';
+      appended += '\n## 论文应用增补 / Additional paper applications\n\n' + renderApplicationLinks(application, target, href).join('\n') + '\n';
     }
     const updatedRegion = oldRegion.replace(/<!-- KNOWLEDGE_STATE [A-Za-z0-9+/=]+ -->/, `<!-- KNOWLEDGE_STATE ${state} -->`);
     content = original.slice(0, from) + updatedRegion + appended + original.slice(to);

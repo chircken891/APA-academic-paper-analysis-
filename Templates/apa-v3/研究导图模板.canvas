@@ -1,0 +1,331 @@
+{
+  "nodes": [
+    {
+      "id": "group-a",
+      "type": "group",
+      "x": 711,
+      "y": 198,
+      "width": 1353,
+      "height": 374,
+      "color": "#557b80",
+      "label": "共同阶段｜准备后续可用的资料或方法"
+    },
+    {
+      "id": "group-b",
+      "type": "group",
+      "x": -24,
+      "y": 908,
+      "width": 1353,
+      "height": 374,
+      "color": "#467b87",
+      "label": "第一条路线｜回答第一个具体问题"
+    },
+    {
+      "id": "group-c",
+      "type": "group",
+      "x": 1446,
+      "y": 908,
+      "width": 1353,
+      "height": 374,
+      "color": "#886e94",
+      "label": "第二条路线｜检验另一用途或解释"
+    },
+    {
+      "id": "question",
+      "type": "text",
+      "x": 735,
+      "y": -32,
+      "width": 480,
+      "height": 152,
+      "color": "#557b80",
+      "text": "**研究问题与设计理由**\n\n用两句话写清论文要回答什么，以及为什么需要这条研究路线。附正文入口。"
+    },
+    {
+      "id": "stage-a",
+      "type": "text",
+      "x": 735,
+      "y": 220,
+      "width": 420,
+      "height": 137,
+      "color": "#557b80",
+      "text": "**共同准备的任务**\n\n写明整个研究从哪些资料出发，以及为什么先做这一步。"
+    },
+    {
+      "id": "method-a",
+      "type": "text",
+      "x": 735,
+      "y": 397,
+      "width": 395,
+      "height": 151,
+      "text": "**研究步骤**\n\n交代输入、实际操作和关键条件。附方法小节链接。"
+    },
+    {
+      "id": "finding-a",
+      "type": "text",
+      "x": 1185,
+      "y": 397,
+      "width": 395,
+      "height": 151,
+      "text": "**本阶段的结果**\n\n写明产生的数据、模型或估计量。附结果小节链接。"
+    },
+    {
+      "id": "judgment-a",
+      "type": "text",
+      "x": 1635,
+      "y": 397,
+      "width": 405,
+      "height": 151,
+      "text": "**可交给后续的产出**\n\n说明哪项产出可供下一阶段使用，以及它的适用范围。"
+    },
+    {
+      "id": "stage-b",
+      "type": "text",
+      "x": 0,
+      "y": 930,
+      "width": 420,
+      "height": 137,
+      "color": "#467b87",
+      "text": "**引出的第一个问题**\n\n写明这个分支沿用什么，以及接下来要检验什么。"
+    },
+    {
+      "id": "method-b",
+      "type": "text",
+      "x": 0,
+      "y": 1107,
+      "width": 395,
+      "height": 151,
+      "text": "**本分支的比较或操作**\n\n交代处理对象、比较条件和执行步骤。附方法小节链接。"
+    },
+    {
+      "id": "finding-b",
+      "type": "text",
+      "x": 450,
+      "y": 1107,
+      "width": 395,
+      "height": 151,
+      "text": "**本分支实际发现**\n\n写明观察值及其对象、对照和条件。附结果小节链接。"
+    },
+    {
+      "id": "judgment-b",
+      "type": "text",
+      "x": 900,
+      "y": 1107,
+      "width": 405,
+      "height": 151,
+      "text": "**本分支的判断与边界**\n\n说明这项证据支持的判断，以及该判断适用到哪里。"
+    },
+    {
+      "id": "stage-c",
+      "type": "text",
+      "x": 1470,
+      "y": 930,
+      "width": 420,
+      "height": 137,
+      "color": "#886e94",
+      "text": "**引出的另一个问题**\n\n写明何处共用上游产出，何处改用新的对象或检验方式。"
+    },
+    {
+      "id": "method-c",
+      "type": "text",
+      "x": 1470,
+      "y": 1107,
+      "width": 395,
+      "height": 151,
+      "text": "**本分支的检验过程**\n\n交代资料来源、分析规则及这一步如何产生结果。附正文链接。"
+    },
+    {
+      "id": "finding-c",
+      "type": "text",
+      "x": 1920,
+      "y": 1107,
+      "width": 395,
+      "height": 151,
+      "text": "**本分支实际发现**\n\n给出支持判断的主要对照、数值或定性证据及其条件。附正文链接。"
+    },
+    {
+      "id": "judgment-c",
+      "type": "text",
+      "x": 2370,
+      "y": 1107,
+      "width": 405,
+      "height": 151,
+      "text": "**本分支的判断与边界**\n\n说明本证据如何补充或限定前一条路线的判断。"
+    },
+    {
+      "id": "handoff-ab",
+      "type": "text",
+      "x": 0,
+      "y": 675,
+      "width": 458,
+      "height": 152,
+      "color": "#467b87",
+      "text": "**共同阶段 → 第一条路线**\n\n写明下游沿用的数据、模型、参数或判定规则，并交代这些产出在这里作何用途。"
+    },
+    {
+      "id": "handoff-ac",
+      "type": "text",
+      "x": 1470,
+      "y": 675,
+      "width": 458,
+      "height": 152,
+      "color": "#886e94",
+      "text": "**共同阶段 → 第二条路线**\n\n写明另一条路线要检验的新问题，以及它实际沿用了什么。"
+    },
+    {
+      "id": "conclusion",
+      "type": "text",
+      "x": 1132,
+      "y": 1390,
+      "width": 545,
+      "height": 168,
+      "color": "#557b80",
+      "text": "**两条证据如何回答研究问题**\n\n概括每条路线所得判断、各自适用的条件与全篇保留的主要不确定性。附结论小节链接。"
+    }
+  ],
+  "edges": [
+    {
+      "id": "question-to-stage-a",
+      "fromNode": "question",
+      "fromSide": "bottom",
+      "toNode": "stage-a",
+      "toSide": "top",
+      "toEnd": "arrow",
+      "color": "#628b92"
+    },
+    {
+      "id": "stage-a-to-method-a",
+      "fromNode": "stage-a",
+      "fromSide": "bottom",
+      "toNode": "method-a",
+      "toSide": "top",
+      "toEnd": "arrow",
+      "color": "#557b80"
+    },
+    {
+      "id": "method-a-to-finding-a",
+      "fromNode": "method-a",
+      "fromSide": "right",
+      "toNode": "finding-a",
+      "toSide": "left",
+      "toEnd": "arrow",
+      "color": "#557b80"
+    },
+    {
+      "id": "finding-a-to-judgment-a",
+      "fromNode": "finding-a",
+      "fromSide": "right",
+      "toNode": "judgment-a",
+      "toSide": "left",
+      "toEnd": "arrow",
+      "color": "#557b80"
+    },
+    {
+      "id": "stage-b-to-method-b",
+      "fromNode": "stage-b",
+      "fromSide": "bottom",
+      "toNode": "method-b",
+      "toSide": "top",
+      "toEnd": "arrow",
+      "color": "#467b87"
+    },
+    {
+      "id": "method-b-to-finding-b",
+      "fromNode": "method-b",
+      "fromSide": "right",
+      "toNode": "finding-b",
+      "toSide": "left",
+      "toEnd": "arrow",
+      "color": "#467b87"
+    },
+    {
+      "id": "finding-b-to-judgment-b",
+      "fromNode": "finding-b",
+      "fromSide": "right",
+      "toNode": "judgment-b",
+      "toSide": "left",
+      "toEnd": "arrow",
+      "color": "#467b87"
+    },
+    {
+      "id": "stage-c-to-method-c",
+      "fromNode": "stage-c",
+      "fromSide": "bottom",
+      "toNode": "method-c",
+      "toSide": "top",
+      "toEnd": "arrow",
+      "color": "#886e94"
+    },
+    {
+      "id": "method-c-to-finding-c",
+      "fromNode": "method-c",
+      "fromSide": "right",
+      "toNode": "finding-c",
+      "toSide": "left",
+      "toEnd": "arrow",
+      "color": "#886e94"
+    },
+    {
+      "id": "finding-c-to-judgment-c",
+      "fromNode": "finding-c",
+      "fromSide": "right",
+      "toNode": "judgment-c",
+      "toSide": "left",
+      "toEnd": "arrow",
+      "color": "#886e94"
+    },
+    {
+      "id": "judgment-a-to-handoff-ab",
+      "fromNode": "judgment-a",
+      "fromSide": "bottom",
+      "toNode": "handoff-ab",
+      "toSide": "top",
+      "toEnd": "arrow",
+      "color": "#467b87"
+    },
+    {
+      "id": "judgment-a-to-handoff-ac",
+      "fromNode": "judgment-a",
+      "fromSide": "bottom",
+      "toNode": "handoff-ac",
+      "toSide": "top",
+      "toEnd": "arrow",
+      "color": "#886e94"
+    },
+    {
+      "id": "handoff-ab-to-stage-b",
+      "fromNode": "handoff-ab",
+      "fromSide": "bottom",
+      "toNode": "stage-b",
+      "toSide": "top",
+      "toEnd": "arrow",
+      "color": "#467b87"
+    },
+    {
+      "id": "handoff-ac-to-stage-c",
+      "fromNode": "handoff-ac",
+      "fromSide": "bottom",
+      "toNode": "stage-c",
+      "toSide": "top",
+      "toEnd": "arrow",
+      "color": "#886e94"
+    },
+    {
+      "id": "judgment-b-to-conclusion",
+      "fromNode": "judgment-b",
+      "fromSide": "bottom",
+      "toNode": "conclusion",
+      "toSide": "top",
+      "toEnd": "arrow",
+      "color": "#467b87"
+    },
+    {
+      "id": "judgment-c-to-conclusion",
+      "fromNode": "judgment-c",
+      "fromSide": "bottom",
+      "toNode": "conclusion",
+      "toSide": "top",
+      "toEnd": "arrow",
+      "color": "#886e94"
+    }
+  ]
+}

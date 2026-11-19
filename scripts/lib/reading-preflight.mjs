@@ -1,5 +1,6 @@
 import { statSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { configuredReadingRequiresResultsTools } from './reading-profiles.mjs';
 
 // Runtime evidence is supplied by the current host; it is never saved as configuration.
 export function evaluateReadingPreflight({ inspection, hostProfile, evidence = {}, instructionProfile } = {}) {
@@ -40,7 +41,7 @@ export function evaluateReadingPreflight({ inspection, hostProfile, evidence = {
   if (inspection?.host_check?.issues?.some(issue => issue.key !== 'models.query')) models = 'blocked';
   add('models', models, 'model and reasoning effort availability');
   for (const id of ['file_read', 'control_write', 'input']) observed(id, evidence[id]);
-  if (instructionProfile === 'configured-reading-2.2') {
+  if (configuredReadingRequiresResultsTools(instructionProfile)) {
     const tools = evidence.results_tools ?? {};
     const selectedPython = inspection?.dependencies?.find(item => item.key === 'parser.python');
     const pythonMatches = item => {

@@ -15,9 +15,9 @@ import { readCommittedGeneration } from '../../scripts/v3/phase22-active-version
 import { verifyReadingFirstPresentation } from '../../scripts/v3/reading-first-index.mjs';
 
 async function externalFixture(t, modern = false) {
-  const configured=modern === true ? buildConfiguredReadingInstructions({}) : null;
-  const f = await reviewedReadingFirstFixture(t, { omitPresentationAssets: true, visualProvenance: true,
-    ...(modern ? {translationLanguage:null,controlOptions:{presentationProfile:'reading-editor-1.4'}} : {}),
+  const configured=modern === true ? buildConfiguredReadingInstructions({}, { instructionProfile: 'configured-reading-2.2' }) : null;
+  const f = await reviewedReadingFirstFixture(t, { omitPresentationAssets: true, visualProvenance: true, methodsFirst: modern === 'methods-first',
+    ...(modern && modern !== 'methods-first' ? {translationLanguage:null,controlOptions:{presentationProfile:'reading-editor-1.4'}} : {}),
     ...(configured ? {createRunControl:args=>createReadingFirstRunControl({...args,maxTotalCalls:20,configuredSetup:{...configured,paths:{runRoot:dirname(args.scientificInput.sources[0].path)}}})} : {}) });
   const data = await inspectReadingFirstPublicationSource(await captureReadingFirstPublicationSource({ controller: f.controller, presentation: f.candidate }));
   const vaultRoot = join(f.root, 'external-vault'), candidateRoot = join(f.root, 'external-candidate');
@@ -33,6 +33,19 @@ async function externalFixture(t, modern = false) {
     resources: f.resources, callsUsed: data.calls_used, readingFirstBinding: f.binding };
   return { ...f, args, vaultRoot, candidateRoot };
 }
+
+test('methods-first external preparation verifies the owned review and rebuilds the same bilingual candidate', async t => {
+  const f = await externalFixture(t, 'methods-first');
+  const review = structuredClone(f.args.review);
+  review.key_nodes = review.key_nodes.filter(row => row.kind !== 'method_application');
+  await assert.rejects(prepareExternalReviewedReadingFirstPublication({ ...f.args, review }), { code: 'READING_FIRST_PUBLICATION_RECEIPT_CHANGED' });
+  const prepared = await prepareExternalReviewedReadingFirstPublication(f.args);
+  assert.equal(prepared.external_source_recipe.render_inputs.instructionProfile, 'configured-reading-2.3');
+  const restored = await restoreReadingFirstPublicationSource(prepared.external_source_recipe);
+  const data = await inspectReadingFirstPublicationSource(restored);
+  assert.equal(data.candidate.presentation_fingerprint, f.candidate.presentation_fingerprint);
+  assert.ok(data.review.key_nodes.some(node => node.kind === 'method_application' && node.status === 'checked'));
+});
 
 test('modern external preparation retains its frozen prompt dependencies through restore', async t => {
   const f=await externalFixture(t,true);

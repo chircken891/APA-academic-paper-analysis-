@@ -17,6 +17,15 @@ import { ingestObservedRunStep } from '../../scripts/v3/phase21-runner.mjs';
 const roles = ['evidence','methods','results','interpretation','scientific-reading','integration'];
 const sha = b => 'sha256:' + createHash('sha256').update(b).digest('hex');
 
+async function configuredFixtureSource(scientificInput, vaultRoot) {
+  const [source] = scientificInput.sources;
+  const directory = join(vaultRoot, 'Clippings');
+  const path = join(directory, 'paper.pdf');
+  await mkdir(directory, { recursive: true });
+  await writeFile(path, await readFile(source.path));
+  return { ...scientificInput, sources: [{ ...source, path }] };
+}
+
 async function acceptBatch(f, controller) {
   for (const { role, request } of await prepareScienceRequests({ controller })) {
     const args = getConfiguredReadingDispatchArguments({ prepared: f.options.prepared, request });
@@ -76,7 +85,7 @@ async function fixture(t, { context = 'synthetic', compactionPolicy, promptFiles
   const scientificInput = {profile:'reading-first-1.0',identity:{paper_id:'synthetic',run_id:'run'},sources:[{id:'paper',path:join(root,'paper.pdf'),sha256:sha(source),byte_length:source.length}],context,role_artifacts:roles};
   const mainSession={model:'gpt-6-astra',reasoning_effort:'high'};
   const manifestTask={task_id:'results-resources',artifact_id:'results-resources',artifact_path:'science/results-resources.json',native_path:'native/results-resources.json',revision:'1',owner_actor_id:'results',role:'results'};
-  const configuredSetup={schema_version:'apa-configured-reading-1.0',config_fingerprint:sha(Buffer.from('config')),paths:{runRoot:root},role_model_policy:createApaRoleModelPolicy(mainSession),...buildConfiguredReadingInstructions({}),...(promptFiles ? {prompt_files:promptFiles} : {}),results_resources:{output_root:'resources/results',manifest_task:manifestTask}};
+  const configuredSetup={schema_version:'apa-configured-reading-1.0',config_fingerprint:sha(Buffer.from('config')),paths:{runRoot:root},role_model_policy:createApaRoleModelPolicy(mainSession),...buildConfiguredReadingInstructions({}, { instructionProfile: 'configured-reading-2.2' }),...(promptFiles ? {prompt_files:promptFiles} : {}),results_resources:{output_root:'resources/results',manifest_task:manifestTask}};
   const runControl=createReadingFirstRunControl({runId:'run',scientificInput,mainSession,configuredSetup,authorizationId:'synthetic',deadline:'2099-01-01T00:00:00Z',taskBindings:downstream,writingMode:'source-first',maxCalls:6,priorCalls:6,maxTotalCalls:12,compactionPolicy,...(presentationMode ? {presentationMode} : {})});
   const prepared={runControl,scientificInput,configurationFingerprint:sha(Buffer.from('config')),paths:{runRoot:root}};
   const authorized_bindings=[...Object.values(tasks),...Object.values(downstream),manifestTask].map(task=>({run_id:'run',actor_id:task.owner_actor_id,role:task.role,artifact_path:task.artifact_path,revision:task.revision}));
@@ -450,7 +459,8 @@ for (const hostStyle of ['codex','mapped']) test(`configured reading binds and r
   if(hostStyle==='mapped') config.host={name:'claude-code',dispatch:{tool:'Agent',model_argument:'model',effort_argument:'effort',instruction_argument:'prompt',task_name_argument:'description',fresh_context:null}};
   await writeFile(join(configRoot,'config/apa.local.json'),JSON.stringify(config));
   const old=f.options.prepared, binding=old.runControl.reading_first_binding;
-  const prepared=prepareConfiguredReading({repoRoot:configRoot,runId:'run',scientificInput:old.scientificInput,sessionContext:hostStyle==='mapped'?{model:'sonnet'}:{model:'gpt-6-astra',effort:'high'},authorizationId:'synthetic',deadline:binding.deadline,sourceLanguage:'en',taskBindings:{...binding.task_bindings,'zh-CN':{...binding.task_bindings['zh-CN'],role:'translation'}},maxCalls:6,priorCalls:6,maxTotalCalls:12});
+  const scientificInput=await configuredFixtureSource(old.scientificInput,configRoot);
+  const prepared=prepareConfiguredReading({repoRoot:configRoot,runId:'run',scientificInput,sessionContext:hostStyle==='mapped'?{model:'sonnet'}:{model:'gpt-6-astra',effort:'high'},authorizationId:'synthetic',deadline:binding.deadline,sourceLanguage:'en',taskBindings:{...binding.task_bindings,'zh-CN':{...binding.task_bindings['zh-CN'],role:'translation'}},maxCalls:6,priorCalls:6,maxTotalCalls:12});
   const brokerConfig={...f.options.brokerConfig,artifact_root:prepared.paths.runRoot,authorized_bindings:[...f.options.brokerConfig.authorized_bindings],run_controls:[prepared.runControl]};
   const options={...f.options,prepared,brokerConfig,statePath:join(prepared.paths.runRoot,'state.json')};
   const controller=await createScienceController(options); const [{request}]=await prepareScienceRequests({controller});
@@ -541,7 +551,8 @@ test('claude-code science observations keep the agentId from result text across 
     host:{name:'claude-code',dispatch:{tool:'Agent',model_argument:'model',effort_argument:'effort',instruction_argument:'prompt',task_name_argument:'description',fresh_context:null,result_handle:resultHandle}}};
   await writeFile(join(configRoot,'config/apa.local.json'),JSON.stringify(config));
   const old=f.options.prepared, binding=old.runControl.reading_first_binding;
-  const prepared=prepareConfiguredReading({repoRoot:configRoot,runId:'run',scientificInput:old.scientificInput,sessionContext:{model:'sonnet'},authorizationId:'synthetic',deadline:binding.deadline,sourceLanguage:'en',taskBindings:{...binding.task_bindings,'zh-CN':{...binding.task_bindings['zh-CN'],role:'translation'}},maxCalls:6,priorCalls:6,maxTotalCalls:12});
+  const scientificInput=await configuredFixtureSource(old.scientificInput,configRoot);
+  const prepared=prepareConfiguredReading({repoRoot:configRoot,runId:'run',scientificInput,sessionContext:{model:'sonnet'},authorizationId:'synthetic',deadline:binding.deadline,sourceLanguage:'en',taskBindings:{...binding.task_bindings,'zh-CN':{...binding.task_bindings['zh-CN'],role:'translation'}},maxCalls:6,priorCalls:6,maxTotalCalls:12});
   const brokerConfig={...f.options.brokerConfig,artifact_root:prepared.paths.runRoot,authorized_bindings:[...f.options.brokerConfig.authorized_bindings],run_controls:[prepared.runControl]};
   const options={...f.options,prepared,brokerConfig,statePath:join(prepared.paths.runRoot,'state.json')};
   const controller=await createScienceController(options); const [{request}]=await prepareScienceRequests({controller});

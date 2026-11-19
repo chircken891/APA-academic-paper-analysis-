@@ -10,6 +10,7 @@ import { readCommittedGeneration, assertActiveGeneration, assertIndexGeneration,
   readRegisteredCommit, INDEX_READING_FIRST_PROFILE } from './phase22-active-version.mjs';
 import { buildBilingualIndex } from './phase22-search.mjs';
 import { assertReadingFirstPublicationManifest, parseRegisteredResearchMap, registeredResearchMapPaths, verifyReadingFirstPresentation } from './reading-first-index.mjs';
+import { isSupportedConfiguredReadingProfile, isMethodsFirstReadingProfile } from '../lib/reading-profiles.mjs';
 import { captureReadingFirstPublicationSource, createExternalReadingFirstPublicationSource,
   getReadingFirstRuntimePublicationToolBindings, inspectReadingFirstPublicationSource,
   previewReadingFirstPublicationRebase, readingFirstUsedMethodSources, restoreReadingFirstPublicationSource } from './reading-first-runtime.mjs';
@@ -19,7 +20,7 @@ import { createPhase22ContractValidator } from './phase22-contract-loader.mjs';
 import { readOwnedArtifact } from './owned-artifact-store.mjs';
 import { renderReadingFirstObsidian } from './reading-first-obsidian.mjs';
 import { relocateNoteLinks } from './note-relocation.mjs';
-import { findRawSourceMatches, inspectClippingsSourceDrift, readRegisteredSourceMatchMetadata } from './reading-source-policy.mjs';
+import { READ_ONLY_SOURCE_ACCESS, assertReadingSourceOutputPath, assertReadingSourceUnchanged, findRawSourceMatches, inspectClippingsSourceDrift, readRegisteredSourceMatchMetadata } from './reading-source-policy.mjs';
 
 export { deriveRebasedReadingFirstPublicationSource } from './reading-first-runtime.mjs';
 
@@ -315,7 +316,7 @@ function publicationCitation(data, resources, approvals = []) {
   if (!source) fail('RF_PUBLICATION_CITATION_SOURCE_UNREGISTERED');
   // Each visual cites its own source: the registered original, or an approved derived display asset of that source.
   const visuals = catalog.visuals ?? [];
-  const configured22 = data.recipe.binding?.configured_setup?.instruction_profile === 'configured-reading-2.2';
+  const requiresOriginal = isSupportedConfiguredReadingProfile(data.recipe.binding?.configured_setup?.instruction_profile);
   const ids = [...new Set([source.id, ...visuals.map(row => row.source_id ?? source.id),
     ...(canonicalSources(data) ? (catalog.sources ?? []).map(row => row.id) : [])])];
   return { bibliography: clone(catalog.bibliography), sources: ids.map(id => {
@@ -323,7 +324,7 @@ function publicationCitation(data, resources, approvals = []) {
     const path = id === source.id ? catalog.source_pdf : catalog.sources?.find(row => row.id === id)?.path;
     const approved = approvals.find(row => row.scientific_parent?.source_id === id && row.resource?.path === path);
     // Pre-2.2 bindings registered display PDFs as input assets; 2.2 requires the original or an approved derived asset.
-    const registeredAsset = row => id !== source.id && !configured22 && data.presentation_assets.some(asset => resolve(asset.path) === resolve(row.source_path)
+    const registeredAsset = row => id !== source.id && !requiresOriginal && data.presentation_assets.some(asset => resolve(asset.path) === resolve(row.source_path)
       && asset.sha256 === row.sha256 && asset.byte_length === row.byte_length);
     const target = approved ? resources.find(row => row.path === approved.resource.path && row.sha256 === approved.resource.sha256
       && row.byte_length === approved.resource.byte_length && resolve(row.source_path) === resolve(approved.resource.source_path))
@@ -572,6 +573,9 @@ async function buildReview({ source, data, options, base, preimages, projected }
   const corrections = corrected === data.candidate ? null : options.user_corrections;
   const candidate = changed ? applyReadingFirstSourceDerivation({ ...data, candidate: corrected }, derivation) : corrected;
   const root = options.vaultRoot;
+  const setup = data.recipe.binding?.configured_setup;
+  const originals = setup?.source_access === READ_ONLY_SOURCE_ACCESS ? setup.source_locations : undefined;
+  if (originals && resolve(setup.knowledge_registry.vault_root) !== root) fail('RF_PUBLICATION_VAULT_INVALID');
   if (!['actual', 'synthetic'].includes(options.evidenceMode) || !candidate?.notes || candidate.notes.length !== 2) fail('RF_PUBLICATION_INPUT_INVALID');
   const identity = { paper_id: data.identity.paper_id, run_id: data.identity.run_id,
     analysis_revision: data.identity.analysis_revision ?? 'rev_' + hash({ input: data.scientific_input_fingerprint,
@@ -600,6 +604,7 @@ async function buildReview({ source, data, options, base, preimages, projected }
   const output = [], readDependencies = [], files = new Map(base.files), previews = [];
   const written = new Set(), add = (path, kind, bytes, extra = {}) => {
     safePath(path); const key = path.normalize('NFC').toLowerCase();
+    if (originals) assertReadingSourceOutputPath(join(root, path), originals, { vaultRoot: root });
     if (written.has(key)) fail('P22_PUBLICATION_TARGET_COLLISION', { path });
     written.add(key);
     const original = before(path), owned = Buffer.from(bytes);
@@ -681,7 +686,9 @@ async function buildReview({ source, data, options, base, preimages, projected }
     add(path, 'support', bytes, { entity_id: entityId });
   }
   for (const resource of options.resources) {
-    const bytes = readFileSync(resource.source_path), original = before(resource.path);
+    const frozen = originals?.find(row => row.vault_path === resource.path);
+    const bytes = frozen ? assertReadingSourceUnchanged(frozen) : readFileSync(resource.source_path);
+    const original = before(resource.path);
     if (sha(bytes) !== resource.sha256 || bytes.length !== resource.byte_length) fail('RF_PUBLICATION_RESOURCE_CHANGED', { path: resource.path });
     if (original !== null && !original.equals(bytes)) fail('RF_PUBLICATION_RESOURCE_TARGET_CONFLICT', { path: resource.path });
     if (original === null && resource.path.startsWith('Clippings/')) fail('RF_PUBLICATION_CLIPPINGS_ORIGINAL_REQUIRED', { path: resource.path });
@@ -1158,7 +1165,7 @@ export async function prepareExternalReviewedReadingFirstPublication({
     ]),
   ].map(row => [row.path, row])).values()];
   const editorValue = JSON.parse(readFileSync(join(runRoot, readingEditorReceipt.path), 'utf8'));
-  if (['reading-editor-1.3', 'reading-editor-1.4'].includes(editorValue.schema_version) && !readingFirstBinding) fail('RF_PUBLICATION_EXTERNAL_BINDING_REQUIRED');
+  if (['reading-editor-1.3', 'reading-editor-1.4', 'reading-editor-1.5'].includes(editorValue.schema_version) && !readingFirstBinding) fail('RF_PUBLICATION_EXTERNAL_BINDING_REQUIRED');
   if (readingFirstBinding && ((readingFirstBinding.presentation_profile ?? 'reading-editor-1.3') !== editorValue.schema_version
     || readingFirstBinding.input_fingerprint !== hash(scientificInput))) fail('RF_PUBLICATION_EXTERNAL_BINDING_INVALID');
   const renderOptions = rendering ?? { existingTargets: [], knowledgeRegistry: [] };
@@ -1168,11 +1175,13 @@ export async function prepareExternalReviewedReadingFirstPublication({
     if (!artifact || !same(artifact.receipt, receipt)) fail('READING_FIRST_PUBLICATION_RECEIPT_CHANGED');
     return JSON.parse(artifact.bytes.toString('utf8'));
   };
-  const renderInputs = { identity: clone(scientificInput.identity), views: await Promise.all(languages.map(language => ownedValue(viewReceipts[language]))),
+  const profile = readingFirstBinding?.configured_setup?.instruction_profile;
+  if (isMethodsFirstReadingProfile(profile) && !same(await ownedValue(reviewReceipt), review)) fail('READING_FIRST_PUBLICATION_RECEIPT_CHANGED');
+  const renderInputs = { ...(isMethodsFirstReadingProfile(profile) ? { instructionProfile: profile } : {}), identity: clone(scientificInput.identity), views: await Promise.all(languages.map(language => ownedValue(viewReceipts[language]))),
     presentation: clone(presentation), readingEditor: await ownedValue(readingEditorReceipt),
     ...(readingFirstBinding?.note_layout ? { noteLayout: readingFirstBinding.note_layout } : {}),
     ...(readingFirstBinding?.source_language ? { sourceLanguage: readingFirstBinding.source_language } : {}) };
-  const rendered = renderReadingFirstObsidian({ ...renderInputs, ...renderOptions });
+  const rendered = renderReadingFirstObsidian({ ...renderInputs, ...renderOptions, expandedMethodIndex: readingFirstBinding?.configured_setup?.expanded_method_index, stagedResearchMap: readingFirstBinding?.configured_setup?.staged_research_map });
   const { notes, supportNotes, ...renderedRest } = rendered;
   const content = { ...renderedRest, notes: notes.map(({ bytes, ...note }) => ({ ...note, draft_receipt: viewReceipts[note.language] })),
     ...(supportNotes ? { supportNotes: supportNotes.map(({ bytes, ...note }) => note) } : {}) };

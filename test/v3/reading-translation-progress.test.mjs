@@ -74,7 +74,7 @@ test('updated progress preserves prior completed fragments and allows remaining 
 
 test('2.2 refuses missing progress paths and collisions', async () => {
   const {buildReadingSessionTasks} = await import('../../scripts/v3/reading-session-tasks.mjs');
-  const options = {runId:'run',scientificInput:{role_artifacts:['a','b','c','d','e','f']},sourceLanguage:'en',checkpointCount:1,instructionProfile:'configured-reading-2.2'};
+  const options = {runId:'run',scientificInput:{role_artifacts:['a','b','c','d','e','f']},sourceLanguage:'en',checkpointCount:1};
   assert.throws(()=>buildReadingSessionTasks({...options,taskOverrides:{'zh-CN':{progress_path:''}}}),/TASK_CONFLICT/);
   assert.throws(()=>buildReadingSessionTasks({...options,taskOverrides:{'zh-CN':{progress_path:'native/zh-CN.json'}}}),/TASK_CONFLICT/);
 });

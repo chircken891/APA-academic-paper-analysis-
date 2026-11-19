@@ -7,6 +7,7 @@ import { checkMineruRuntime as publicCheckMineruRuntime } from '../lib/mineru-ru
 import { advanceRun as controlledAdvanceRun, resumeRun as controlledResumeRun } from './workflow-orchestrator.mjs';
 import { getRunControlForDispatch } from './owned-artifact-store.mjs';
 import { recordEvidenceCase, validateEvaluationApprovalPacket } from './phase21-evaluation-driver.mjs';
+import { assertReadingSourceOutputPath, assertReadingSourceUnchanged } from './reading-source-policy.mjs';
 import { DEFAULT_APA_REASONING_EFFORT, APA_VERIFIER_ROLES, resolveApaRoleModel, validateApaRoleModelPolicy, hostDispatchArgumentsMatch, validHostDispatch, extractHostTaskHandle } from '../apa-model-policy.mjs';
 
 const READING_FIRST_ROLE_ORDER = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading', 'integration'];
@@ -194,7 +195,7 @@ function observedAgentId(raw, path) {
 
 /** Dependencies are constructor-only local-test seams; packets select no commands or backends.
  * `modelFreeParser` (configured reading only) also accepts `requested_model: null`; the historical default is unchanged. */
-export function createCurrentMineruBaselinePort({ vaultRoot, dependencies = {}, modelFreeParser = false } = {}) {
+export function createCurrentMineruBaselinePort({ vaultRoot, dependencies = {}, modelFreeParser = false, readOnlySources } = {}) {
   if (typeof vaultRoot !== 'string' || !vaultRoot) fail('VAULT_ROOT_REQUIRED');
   const root = resolve(vaultRoot);
   const checkMineruRuntime = dependencies.checkMineruRuntime ?? publicCheckMineruRuntime;
@@ -206,10 +207,18 @@ export function createCurrentMineruBaselinePort({ vaultRoot, dependencies = {}, 
       const approved = validatedPacket(packet, { mineruOnly: true, modelFreeParser });
       const sourcePath = resolve(approved.source.path);
       const outputPath = resolve(approved.allowed_output_root);
+      if (readOnlySources) {
+        const source = readOnlySources.find(row => row.path === sourcePath);
+        if (source?.sha256 !== approved.source.sha256 || source.byte_length !== approved.source.byte_length) fail('SOURCE_BYTES_MISMATCH');
+        assertReadingSourceOutputPath(outputPath, readOnlySources, { tree: true, vaultRoot: root });
+      }
       await assertExistingPathIsNotLink(root, sourcePath, 'SOURCE_PATH_OUTSIDE_VAULT');
       await assertExistingPathIsNotLink(root, outputPath, 'OUTPUT_ROOT_OUTSIDE_VAULT');
-      const sourceBytes = await readFile(sourcePath);
-      if (sourceBytes.length !== approved.source.byte_length || hash(sourceBytes) !== approved.source.sha256) fail('SOURCE_BYTES_MISMATCH');
+      if (readOnlySources) readOnlySources.forEach(assertReadingSourceUnchanged);
+      else {
+        const sourceBytes = await readFile(sourcePath);
+        if (sourceBytes.length !== approved.source.byte_length || hash(sourceBytes) !== approved.source.sha256) fail('SOURCE_BYTES_MISMATCH');
+      }
       try {
         await lstat(outputPath);
         fail('APPROVED_OUTPUT_ROOT_MUST_BE_EMPTY');
@@ -221,10 +230,20 @@ export function createCurrentMineruBaselinePort({ vaultRoot, dependencies = {}, 
       if (!runtime?.ok) fail(`CURRENT_MINERU_RUNTIME_UNAVAILABLE:${runtime?.reason ?? 'unknown'}`);
       if (runtime.version !== approved.backend.version) fail('BACKEND_VERSION_MISMATCH');
       if (runtime.configVersion !== approved.backend.runtime_configuration_version) fail('RUNTIME_CONFIGURATION_VERSION_MISMATCH');
-      const parserVersion = await runMineru({ vaultRoot: root, sourcePath, outputPath, signal, ...selected });
+      let parserVersion;
+      try {
+        parserVersion = await runMineru({ vaultRoot: root, sourcePath, outputPath, signal, ...selected,
+          ...(readOnlySources ? { readOnlyInput: true } : {}) });
+      } finally { readOnlySources?.forEach(assertReadingSourceUnchanged); }
       if (typeof parserVersion !== 'string' || !parserVersion) fail('CURRENT_MINERU_VERSION_UNOBSERVABLE');
       if (parserVersion !== approved.backend.version) fail('PARSER_VERSION_MISMATCH');
       const outputInventory = await inventoryRawFiles(outputPath);
+      if (readOnlySources) {
+        assertReadingSourceOutputPath(outputPath, readOnlySources, { tree: true, vaultRoot: root });
+        if (outputInventory.some(row => /\.pdf$/i.test(row.path) || readOnlySources.some(source => source.sha256 === row.sha256))) {
+          fail('READING_FIRST_PARSE_PDF_OUTPUT_UNEXPECTED');
+        }
+      }
       return Object.freeze({
         port: 'current-mineru', run_id: approved.run_id, parser_version: parserVersion,
         runtime: { version: runtime.version ?? 'unknown', config_version: runtime.configVersion ?? 'unknown' },

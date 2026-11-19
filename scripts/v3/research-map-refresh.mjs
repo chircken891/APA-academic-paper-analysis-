@@ -8,12 +8,13 @@ import { inspectManagedNote } from './phase22-managed-markdown.mjs';
 import { buildBilingualIndex } from './phase22-search.mjs';
 import { validateReadingArgument } from './reading-first-editor.mjs';
 import { assertReadingFirstPublicationManifest, parseRegisteredResearchMap, verifyReadingFirstPaperIdentity, verifyReadingFirstPresentation } from './reading-first-index.mjs';
-import { buildResearchMapCanvas, researchMapCanvasSection, serializeResearchMapCanvas } from './research-map-canvas.mjs';
+import { buildResearchMapCanvas, isResearchMapStepEdge, isStagedResearchMap, normalizeResearchMapStepLinks, researchMapCanvasSection, serializeResearchMapCanvas } from './research-map-canvas.mjs';
 import { fingerprintV3Json as hash } from './semantic-package-validator.mjs';
 
 export const MAP_REFRESH_PROFILE = 'phase22-map-refresh-1.0';
 export const MAP_REFRESH_TOOL_URLS = Object.freeze([
-  './research-map-refresh.mjs', './research-map-canvas.mjs', './reading-first-editor.mjs', './reading-first-index.mjs',
+  './research-map-refresh.mjs', './research-map-canvas.mjs', './research-map-stages.mjs', './reading-first-editor.mjs', './reading-first-index.mjs',
+  '../../Templates/apa-v3/研究导图模板.canvas',
   './phase22-active-version.mjs', './phase22-search.mjs', './phase22-managed-markdown.mjs', './maintenance-publication.mjs',
   './phase22-review.mjs', './phase22-publication.mjs', '../../Schema/phase22/reading-first-publication.schema.json',
   '../../Schema/phase22/review-manifest.schema.json',
@@ -112,6 +113,18 @@ function applyMapWordingEdits(original, binding, { language, path, edits }) {
   return Buffer.concat([original.subarray(0, region.from), Buffer.from(lines.join('')), original.subarray(region.to)]);
 }
 
+function stageGuideEdit(binding, { language, canvasPath, edits, hasStepLinks }) {
+  const reading = binding.regions.find(row => row.id === 'reading').text.replaceAll('\r\n', '\n');
+  const title = language === 'en' ? 'Research map' : '研究导图';
+  for (const methodsFirst of [true, false]) {
+    const prior = researchMapCanvasSection({ canvasPath, language, methodsFirst });
+    if (![`### 2.1 ${title}`, `### ${title}`].some(heading => reading.includes(`\n${heading}\n\n${prior}\n`))) continue;
+    const before = prior.split('\n\n')[0];
+    if (edits.some(edit => edit.before === before)) return;
+    return { before, after: researchMapCanvasSection({ canvasPath, language, methodsFirst: hasStepLinks, staged: true }).split('\n\n')[0] };
+  }
+}
+
 function renumberCompactDesign(reading, { path, inserted }) {
   const lines = reading.split('\n');
   const headings = markdown.parse(reading, {}).filter(token => token.type === 'heading_open');
@@ -134,7 +147,7 @@ function renumberCompactDesign(reading, { path, inserted }) {
   return { reading: lines.join('\n'), titleChanges };
 }
 
-function replaceMap(original, binding, { language, canvasPath, path }) {
+function replaceMap(original, binding, { language, canvasPath, path, methodsFirst, staged }) {
   const region = binding.regions.find(row => row.id === 'reading');
   const text = region.bytes.toString('utf8');
   const fences = [...text.matchAll(/^```mermaid[ \t]*(\r?\n)flowchart (LR|TD)\r?\n[\s\S]*?^```[ \t]*(?:\r?\n|$)/gm)];
@@ -149,7 +162,7 @@ function replaceMap(original, binding, { language, canvasPath, path }) {
   const oldNav = legacy ? /^(?:- \[[^\r\n]*\]\(#[^\r\n]*\)[ \t]*(?:\r?\n|$))+(?:\r?\n)?/u
     : /^(?:Findings not shown in the map:|未画入导图的发现：)[^\r\n]*(?:\r?\n|$)(?:\r?\n)?/u;
   tail = tail.replace(oldNav, '');
-  const section = (researchMapCanvasSection({ canvasPath, language }) + '\n\n').replaceAll('\n', eol);
+  const section = (researchMapCanvasSection({ canvasPath, language, methodsFirst, staged }) + '\n\n').replaceAll('\n', eol);
   if (hasHeading) {
     const after = Buffer.concat([original.subarray(0, region.from), Buffer.from(start + section + tail), original.subarray(region.to)]);
     return { bytes: after, managedHash: inspectManagedNote(after).managedHash, titleChanges: new Map() };
@@ -235,8 +248,22 @@ export async function buildMapRefreshReview({ vaultRoot, runId, generation, pape
     if (!registeredCanvases.length && Object.values(wording).some(rows => rows.length)) {
       fail('P22_MAP_REFRESH_WORDING_INVALID', { paperId, reason: 'registered-map-required' });
     }
+    const priorMaps = new Map(registeredCanvases.map(asset => {
+      const bytes = bytesAt(root, asset.path, true);
+      return [asset.language, { asset, bytes, canvas: parseRegisteredResearchMap(bytes, asset.path) }];
+    }));
+    const staged = Object.hasOwn(argument ?? {}, 'stage_map');
+    if (!staged) {
+      const previous = [...priorMaps.values()].find(row => isStagedResearchMap(row.canvas));
+      if (previous) fail('P22_MAP_REFRESH_STAGE_MAP_REQUIRED', { paperId, language: previous.asset.language, path: previous.asset.path });
+    }
+    const stepLinks = normalizeResearchMapStepLinks(map);
+    if (stepLinks === undefined) {
+      const previous = [...priorMaps.values()].find(row => row.canvas.edges.some(isResearchMapStepEdge));
+      if (previous) fail('P22_MAP_REFRESH_STEP_LINKS_REQUIRED', { paperId, language: previous.asset.language, path: previous.asset.path });
+    }
     const sharedSections = Object.keys(sectionTitles.en).filter(id => Object.hasOwn(sectionTitles['zh-CN'], id));
-    validateReadingArgument({ argument, primaryFindingIds, map, sectionIds: sharedSections });
+    validateReadingArgument({ argument, primaryFindingIds, map, sectionIds: sharedSections, methodsFirst: stepLinks !== undefined, stagedResearchMap: staged });
 
     const notes = {}, presentationAssets = [];
     for (const language of languages) {
@@ -247,14 +274,18 @@ export async function buildMapRefreshReview({ vaultRoot, runId, generation, pape
       for (const { section_id } of [...map.steps, ...map.findings, argument.question, ...argument.claims, argument.conclusion]) {
         if (!headings.has(targets[section_id])) fail('P22_MAP_REFRESH_HEADING_MISSING', { paperId, language, section_id, title: targets[section_id] });
       }
-      const priorAsset = registeredCanvases.find(row => row.language === language);
+      const { asset: priorAsset, bytes: priorCanvas = null, canvas: previousCanvas } = priorMaps.get(language) ?? {};
       const canvasPath = priorAsset?.path ?? `Figures/${paper.run_id}/research-map.${language}.canvas`;
-      const priorCanvas = priorAsset ? bytesAt(root, priorAsset.path, true) : null;
-      const layout = priorAsset ? new Map(parseRegisteredResearchMap(priorCanvas, canvasPath).nodes.map(node => [node.id, node])) : new Map();
-      const edits = wording[language] ?? [];
+      const upgrade = priorAsset && staged && !isStagedResearchMap(previousCanvas);
+      const layout = new Map((previousCanvas?.nodes ?? []).map(node => [node.id, node]));
+      const edits = [...(wording[language] ?? [])];
+      if (upgrade) {
+        const guide = stageGuideEdit(binding, { language, canvasPath, edits, hasStepLinks: !!stepLinks?.length });
+        if (guide) edits.push(guide);
+      }
       const note = priorAsset
         ? { bytes: applyMapWordingEdits(original, binding, { language, path: notePath, edits }), titleChanges: new Map() }
-        : replaceMap(original, binding, { language, canvasPath, path: notePath });
+        : replaceMap(original, binding, { language, canvasPath, path: notePath, methodsFirst: !!stepLinks?.length, staged });
       const { bytes, titleChanges } = note;
       const managedHash = note.managedHash ?? (edits.length ? inspectManagedNote(bytes).managedHash : binding.managedHash);
       wordingEdits.push(...edits.map(edit => ({ paper_id: paperId, language, path: notePath, ...edit })));

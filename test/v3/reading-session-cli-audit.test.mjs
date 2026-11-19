@@ -69,7 +69,7 @@ async function cliFixture(t) {
  const evidence={current_host:{name:profile.host,reference:'test session'},dispatch:{source:'tool-schema',tool:'Agent',reference:'test schema'},fresh_context:{source:'host-docs',reference:'test host docs',blank_context:true},file_read:{status:'pass',reference:'test read'},input:{status:'pass',reference:'test source and parser'}};
  const capability={status:'pass',source:'observed',reference:'synthetic fixture',method:'synthetic probe',observation:'available'};
  evidence.results_tools={python:{...capability,path:join(bin,process.platform==='win32'?'python.exe':'python')},libraries:{...capability,names:['fitz']},file_read:{...capability},visual_read:{...capability}};
- const options={repoRoot:root,runId:'run',scientificInput,sourceLanguage:'en',authorizationId:'test',deadline:'2099-01-01T00:00:00Z',maxCalls:8,maxTotalCalls:14,sessionContext:{model:'m',effort:'high'},hostProfile:profile,evidence,includeRepairs:true,instructionProfile:'configured-reading-2.2'};
+ const options={repoRoot:root,runId:'run',scientificInput,sourceLanguage:'en',authorizationId:'test',deadline:'2099-01-01T00:00:00Z',maxCalls:8,maxTotalCalls:14,sessionContext:{model:'m',effort:'high'},hostProfile:profile,evidence,includeRepairs:true};
  const optionsPath=join(root,'options.json'); await writeFile(optionsPath,JSON.stringify(options));
  const cli=join(process.cwd(),'scripts/v3/reading-session-cli.mjs');
  return { root, run, cli, optionsPath, profile, evidence };

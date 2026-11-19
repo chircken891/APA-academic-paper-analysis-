@@ -10,7 +10,9 @@ import { compactionEnabled, compactionReminder } from './reading-compaction.mjs'
 import { normalizeHostReceipt, validateHostReceiptEvidence } from './reading-host-evidence.mjs';
 import { validateReadingResources } from './reading-resources.mjs';
 import { normalizeReadingFirstMap } from './reading-first-obsidian.mjs';
+import { assertMethodsFirstScience } from './methods-first-handoff.mjs';
 import { APA_SCIENCE_ROLES as roles, extractHostTaskHandle } from '../apa-model-policy.mjs';
+import { isMethodsFirstReadingProfile } from '../lib/reading-profiles.mjs';
 
 const dependencies = { evidence: [], methods: ['evidence'], results: ['evidence'], interpretation: ['evidence', 'methods', 'results'], 'scientific-reading': ['evidence', 'methods', 'results', 'interpretation'], integration: ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading'] };
 const controllers = new WeakMap();
@@ -70,7 +72,7 @@ function claudeStopProof(records, entry) {
     || !(Date.parse(reply.timestamp) >= Date.parse(call.timestamp)) || !(Date.parse(call.timestamp) >= Date.parse(entry.observation.observed_at))) fail('SCIENCE_MIGRATION_STOP_INVALID');
 }
 
-export async function prepareScienceHostMigration({ repoRoot, runsPath, runId, authorizationId, scienceMigration, maxTotalCalls, host }) {
+export async function prepareScienceHostMigration({ repoRoot, runsPath, runId, authorizationId, scienceMigration, maxTotalCalls, host, instructionProfile }) {
   const { sourceRunId, sourceCheckpoint, transcript, stopResultLine, userReply } = scienceMigration;
   if (host?.name !== 'codex' || host.dispatch?.tool !== 'collaboration.spawn_agent' || !/^[a-zA-Z0-9_-]+$/.test(sourceRunId ?? '')
     || runId !== `${sourceRunId}-codex` || typeof userReply !== 'string' || !userReply.trim() || !isAbsolute(transcript ?? '')) fail('SCIENCE_MIGRATION_INPUT_INVALID');
@@ -79,6 +81,8 @@ export async function prepareScienceHostMigration({ repoRoot, runsPath, runId, a
   const path = join(root, 'control', 'science-state.json');
   const { data, fingerprint } = await readState(path);
   const binding = data.prepared.runControl.reading_first_binding;
+  const frozenProfile = binding.configured_setup?.instruction_profile;
+  if (instructionProfile !== undefined && instructionProfile !== frozenProfile) fail('SCIENCE_MIGRATION_INPUT_INVALID');
   if (fingerprint !== sourceCheckpoint || data.prepared.runControl.run_id !== sourceRunId || data.prepared.paths.runRoot !== root
     || binding.configured_setup?.knowledge_registry?.vault_root !== resolve(repoRoot) || binding.host?.name !== 'claude-code'
     || binding.host.dispatch?.tool !== 'Agent' || binding.max_total_calls !== maxTotalCalls || data.handoff || migrationOf(data)
@@ -103,6 +107,7 @@ export async function prepareScienceHostMigration({ repoRoot, runsPath, runId, a
   const sciencePayloads = Object.fromEntries(Object.entries(data.payloads).map(([role, payload]) => [role,
     { ...payload, ...(payload.identity ? { identity: { ...payload.identity, run_id: runId } } : {}) }]));
   return { scientificInput: { ...data.prepared.scientificInput, identity, science_migration }, sciencePayloads,
+    instructionProfile: frozenProfile,
     sourceLanguage: binding.source_language, maxCalls: binding.max_calls, presentationMode: binding.presentation_mode,
     includeRepairs: !!binding.task_bindings['review-r2'], enrichmentPolicy: binding.enrichment_policy };
 }
@@ -549,8 +554,9 @@ export async function acceptScienceResult({ controller, role, instructionHashRec
     const recovered = instructionHashRecovery !== undefined && !entry.instruction_hash_recovery
       ? await checkInstructionHashRecovery(state, entry, task, instructionHashRecovery) : null;
     if (entry.receipt) return copy(entry.receipt);
+    let nativeResult = recovered?.bytes;
     if (role === 'results' || role === 'integration') {
-      const nativeResult = recovered?.bytes ?? await readFile(ownedPath(root,task.native_path));
+      nativeResult ??= await readFile(ownedPath(root, task.native_path));
       const value = JSON.parse(nativeResult.toString('utf8'));
       if (role === 'results') {
         const spec=state.data.prepared.runControl.reading_first_binding.configured_setup.results_resources, mt=spec.manifest_task;
@@ -586,14 +592,16 @@ export async function acceptScienceResult({ controller, role, instructionHashRec
         if (!same(value.visual_handoff?.resource_manifest,handoff.resource_manifest) || !Array.isArray(visuals)
           || visuals.some(visual=>!handoff.resources.some(row=>row.id===visual.id && row.path===visual.path && row.source_id===visual.source_id && same(row.locator,visual.locator)))) fail('SCIENCE_RESOURCE_HANDOFF_INVALID');
         // Check the research map here so a malformed map returns to the Integrator instead of failing at final render.
-        if (value.presentation?.map != null) {
+        if (isMethodsFirstReadingProfile(state.data.prepared.runControl.reading_first_binding.configured_setup.instruction_profile)) {
+          assertMethodsFirstScience(value, state.data.prepared.scientificInput.sources);
+        } else if (value.presentation?.map != null) {
           const sectionIds=Array.isArray(value.presentation.sections) ? new Set(value.presentation.sections.map(section=>section?.id)) : undefined;
           try { normalizeReadingFirstMap(value.presentation.map,sectionIds); } catch (cause) { throw Object.assign(new Error('SCIENCE_CONTENT_INVALID'),{code:'SCIENCE_CONTENT_INVALID',details:{field:'presentation.map',cause:cause.code ?? cause.message}}); }
         }
       }
     }
     if (!entry.content_base64) {
-      const bytes = recovered?.bytes ?? await readFile(ownedPath(root, task.native_path));
+      const bytes = nativeResult ?? await readFile(ownedPath(root, task.native_path));
       const parsed = JSON.parse(bytes.toString('utf8'));
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Object.keys(parsed).length) fail('SCIENCE_CONTENT_INVALID');
       entry.content_base64 = bytes.toString('base64'); entry.content_sha256 = hash(bytes);

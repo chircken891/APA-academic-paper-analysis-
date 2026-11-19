@@ -28,6 +28,116 @@ function canvasInput() {
   return data;
 }
 
+function methodsFirstInput(multiple, expanded = false) {
+  const data = canvasInput();
+  data.instructionProfile = 'configured-reading-2.3';
+  data.readingEditor.schema_version = 'reading-editor-1.5';
+  data.presentation.map.step_links = [];
+  if (expanded) data.presentation.knowledge_layout = 'shared-bilingual-1.0';
+  for (const view of data.views) {
+    const methods = view.sections.find(section => section.id === 'methods');
+    const en = view.language === 'en';
+    methods.heading = en ? 'Select the threshold' : '选择阈值';
+    methods.paragraphs.push(en ? 'The threshold was averaged across the validation folds.' : '研究者对各验证折选出的阈值取平均。');
+    if (multiple) view.sections.splice(view.sections.indexOf(methods) + 1, 0, {
+      id: 'external-test', module_id: 'methods', heading: en ? 'Test the fixed threshold' : '检验固定阈值',
+      paragraphs: [en ? 'The external cohort received the fixed threshold.' : '研究者把固定阈值用于外部队列。'],
+    });
+    data.readingEditor.languages[view.language].methods = [{
+      id: 'threshold', title: en ? 'Fold-wise threshold' : '逐折定阈值',
+      ...(expanded ? { explanation: en ? 'A threshold turns a score into a decision.' : '阈值把评分转为判断。', knowledge_ids: ['rate'] } : {}),
+      application: en ? 'Defines a fixed decision rule.' : '确定固定的判定规则。',
+      section_ids: expanded ? ['design', 'methods', 'findings'] : multiple ? ['methods', 'external-test'] : ['methods'],
+    }];
+    if (multiple) data.readingEditor.languages[view.language].methods.push({
+      id: 'external-test', title: en ? 'External evaluation' : '外部评估',
+      ...(expanded ? { explanation: en ? 'Independent evaluation uses separate observations.' : '独立评估采用另一批观察。' } : {}),
+      application: en ? 'Tests the rule on an independent cohort.' : '在独立队列中检验规则。',
+      section_ids: expanded ? ['external-test', 'findings'] : ['external-test'],
+    });
+  }
+  data.readingEditor.views_fingerprint = readingFirstViewsFingerprint(data.views);
+  return data;
+}
+
+for (const multiple of [false, true]) test(`historical 1.5 links a short index after ${multiple ? 'multiple method sections' : 'one method section'}`, () => {
+  const result = renderReadingFirstObsidian(methodsFirstInput(multiple));
+  assert.equal(result.generated_assets.length, 2);
+  for (const note of result.notes) {
+    const en = note.language === 'en';
+    const heading = en ? '3. Research process and methods' : '3. 研究过程与方法';
+    const first = en ? '3.1 Select the threshold' : '3.1 选择阈值';
+    const index = (multiple ? '3.3 ' : '3.2 ') + (en ? 'Method index' : '方法索引');
+    assert.ok(note.content.includes('## ' + heading + '\n'));
+    assert.ok(note.content.includes('### ' + first + '\n'));
+    const indexStart = note.content.indexOf('### ' + index + '\n');
+    assert.ok(indexStart > note.content.indexOf('### ' + first + '\n'));
+    if (multiple) assert.ok(indexStart > note.content.indexOf(en ? '### 3.2 Test the fixed threshold\n' : '### 3.2 检验固定阈值\n'));
+    assert.ok(note.content.includes(`[${index}](#${encodeURIComponent(index)})`));
+    assert.ok(note.content.slice(indexStart).includes(`(#${encodeURIComponent(first)})`));
+    assert.doesNotMatch(note.content, /\[!\w+\]-|Methods and concepts at a glance|方法与概念索引/);
+  }
+  const files = [...result.notes, ...result.supportNotes,
+    ...result.generated_assets.map(row => ({ path: row.path, bytes: Buffer.from(row.content) })),
+    ...result.assetPaths.filter(path => !path.endsWith('.canvas')).map(path => ({ path, bytes: Buffer.from('resource') }))];
+  assert.equal(validateReadingFirstPreviewFiles(files).status, 'passed');
+});
+
+test('1.5 opens Chapter 3 with expanded bilingual entries and links to the renumbered sections', () => {
+  const result = renderReadingFirstObsidian(methodsFirstInput(true, true));
+  for (const note of result.notes) {
+    const en = note.language === 'en';
+    const index = en ? '3.1 Methods and concepts at a glance' : '3.1 方法与概念索引';
+    const first = en ? '3.2 Select the threshold' : '3.2 选择阈值';
+    const next = en ? '3.3 Test the fixed threshold' : '3.3 检验固定阈值';
+    const start = note.content.indexOf('### ' + index + '\n');
+    const end = note.content.indexOf('### ' + first + '\n');
+    assert.ok(start >= 0 && end > start);
+    assert.ok(note.content.indexOf('### ' + next + '\n') > end);
+    assert.ok(note.content.indexOf(`[${index}](#${encodeURIComponent(index)})`) < note.content.indexOf(`[${first}](#${encodeURIComponent(first)})`));
+    const inventory = note.content.slice(start, end);
+    assert.match(inventory, en ? /> \[!info\] 1\. Fold-wise threshold/ : /> \[!info\] 1\. 逐折定阈值/);
+    assert.match(inventory, en ? /> \*\*Principle\*\*: A threshold turns a score into a decision\./ : /> \*\*原理\*\*：阈值把评分转为判断。/);
+    assert.match(inventory, en ? /> \*\*Use in this study\*\*: Defines a fixed decision rule\./ : /> \*\*本文中的作用\*\*：确定固定的判定规则。/);
+    assert.match(inventory, en ? /> \[!info\] 2\. External evaluation/ : /> \[!info\] 2\. 外部评估/);
+    assert.ok(inventory.includes(`(#${encodeURIComponent(first)})`));
+    assert.ok(inventory.includes(`(#${encodeURIComponent(next)})`));
+    assert.match(inventory, /\.md/);
+    assert.doesNotMatch(inventory, /\[!info\]-/);
+  }
+  assert.equal(result.supportNotes.length, 1);
+  assert.match(result.supportNotes[0].content, /\.en\.md#\^rf-design/);
+  assert.match(result.supportNotes[0].content, /\.zh-CN\.md#\^rf-methods/);
+  assert.match(result.supportNotes[0].content, /\.en\.md#\^rf-findings/);
+  const files = [...result.notes, ...result.supportNotes,
+    ...result.generated_assets.map(row => ({ path: row.path, bytes: Buffer.from(row.content) })),
+    ...result.assetPaths.filter(path => !path.endsWith('.canvas')).map(path => ({ path, bytes: Buffer.from('resource') }))];
+  assert.equal(validateReadingFirstPreviewFiles(files).status, 'passed');
+});
+
+test('methods-first Writer-only rendition keeps full method body and matching navigation', () => {
+  const data = methodsFirstInput(true);
+  delete data.readingEditor;
+  data.presentation.knowledge_layout = 'shared-bilingual-1.0';
+  for (const view of data.views) view.knowledge_content = [{
+    id: 'rate', paragraphs: [view.language === 'en' ? 'A rate relates outcomes to a denominator.' : '率关联结局数和分母。'],
+    application_section_ids: ['methods'],
+  }];
+  const { notes, supportNotes } = renderReadingFirstObsidian(data);
+  for (const note of notes) {
+    const en = note.language === 'en';
+    assert.match(note.content, /^### 3\.1 (Select the threshold|选择阈值)$/m);
+    assert.match(note.content, /^### 3\.2 (Test the fixed threshold|检验固定阈值)$/m);
+    assert.match(note.content, en ? /averaged across the validation folds/ : /各验证折选出的阈值取平均/);
+    assert.doesNotMatch(note.content, /Method index|方法索引/);
+  }
+  assert.match(supportNotes[0].content, /\.en\.md#\^rf-methods/);
+  assert.match(supportNotes[0].content, /\.zh-CN\.md#\^rf-methods/);
+  for (const view of data.views) delete view.knowledge_content[0].application_section_ids;
+  const historical = renderReadingFirstObsidian(data);
+  assert.doesNotMatch(historical.supportNotes[0].content, /#\^rf-methods/);
+});
+
 test('editor 1.4 renders bilingual Canvas assets and a numbered embedded research-map section', () => {
   const result = renderReadingFirstObsidian(canvasInput());
   assert.equal(result.generated_assets.length, 2);

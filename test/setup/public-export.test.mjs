@@ -230,7 +230,7 @@ test('public export ships the active Editor prompt and omits the retired prompt'
   const outputRoot = join(root, 'public');
   await exportPublicApa({ outputRoot });
   const prompts = await readdir(join(outputRoot, 'prompts', 'v3'));
-  assert.ok(prompts.includes('reading-editor-1.4.md'));
+  for (const file of ['reading-editor-1.4.md', 'reading-editor-1.5.md', 'reading-configured-2.3.md', 'science-configured-2.3.md']) assert.ok(prompts.includes(file), file);
   assert.ok(!prompts.includes('reading-editor-1.3.md'));
 });
 

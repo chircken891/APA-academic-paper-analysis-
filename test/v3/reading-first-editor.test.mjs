@@ -118,6 +118,87 @@ const argumentInput = () => ({
   },
 });
 
+const stagedArgumentInput = () => {
+  const input = argumentInput();
+  input.methodsFirst = true;
+  input.stagedResearchMap = true;
+  input.map.steps = ['prepare', 'fit'].map(id => ({ id, section_id: 'design' }));
+  input.map.findings.forEach(finding => { finding.section_id = 'design'; });
+  const stages = [
+    { id: 'model', title: bilingual('Build the model', '建立模型'), step_ids: ['prepare'], claim_ids: ['estimate', 'adjust'] },
+    { id: 'check', title: bilingual('Check the estimates', '检验估计'), step_ids: ['fit'], claim_ids: ['compare', 'uncertainty'] },
+  ].map(stage => ({ ...stage, entry: bilingual('Compare estimates across analytic choices.', '比较不同分析选择下的估计结果。') }));
+  input.argument.stage_map = {
+    stages,
+    transitions: [{ from: 'model', to: 'check', label: bilingual('Carry adjusted estimates into the sensitivity comparison.', '用调整后的估计开展敏感性比较。') }],
+    step_text: Object.fromEntries(input.map.steps.map(({ id }) => [id, bilingual('Fit and adjust the model.', '拟合并调整模型。')])),
+    finding_text: Object.fromEntries(input.map.findings.map(({ id }) => [id, bilingual('The estimates agree within uncertainty.', '估计在不确定性范围内一致。')])),
+  };
+  return input;
+};
+
+test('stage layout accepts a supported phase handoff and unlinked independent phases', () => {
+  const input = stagedArgumentInput();
+  assert.equal(editorApi.validateReadingArgument(input), input.argument);
+  input.argument.stage_map.transitions = [];
+  input.argument.relations[2] = { from: 'question', to: 'compare', label: '提出问题' };
+  input.argument.relations.push({ from: 'adjust', to: 'conclusion', label: '结果整合' });
+  assert.equal(editorApi.validateReadingArgument(input), input.argument);
+});
+
+test('stage layout may link phases by an admitted workflow transfer or evidence link', () => {
+  const input = stagedArgumentInput();
+  input.argument.relations[2] = { from: 'question', to: 'compare', label: '提出问题' };
+  input.argument.relations.push({ from: 'adjust', to: 'conclusion', label: '结果整合' });
+  input.map.step_links = [{ from_step_id: 'prepare', to_step_id: 'fit' }];
+  assert.equal(editorApi.validateReadingArgument(input), input.argument);
+  input.map.step_links = [];
+  input.map.relations = [{ step_id: 'prepare', finding_id: 'f4' }];
+  assert.equal(editorApi.validateReadingArgument(input), input.argument);
+});
+
+test('stage layout preserves a longer dependency through successive handoffs', () => {
+  const input = stagedArgumentInput();
+  const staged = input.argument.stage_map;
+  const check = staged.stages[1];
+  check.claim_ids.pop();
+  staged.stages.push({ ...check, id: 'report', step_ids: [], claim_ids: ['uncertainty'] });
+  staged.transitions.push({ from: 'check', to: 'report', label: bilingual('Carry the comparison into the uncertainty analysis.', '把比较结果带入不确定性分析。') });
+  input.map.relations = [{ step_id: 'prepare', finding_id: 'f5' }];
+  assert.equal(editorApi.validateReadingArgument(input), input.argument);
+});
+
+test('stage layout permits a documented iterative return without requiring a reverse phase arrow', () => {
+  const input = stagedArgumentInput();
+  input.map.step_links = [
+    { from_step_id: 'prepare', to_step_id: 'fit' },
+    { from_step_id: 'fit', to_step_id: 'prepare' },
+  ];
+  assert.equal(editorApi.validateReadingArgument(input), input.argument);
+  input.map.step_links.shift();
+  assert.throws(() => editorApi.validateReadingArgument(input), /ARGUMENT_RELATIONS_INVALID/);
+});
+
+for (const [label, mutate, code] of [
+  ['missing stage data on a new binding', input => { delete input.argument.stage_map; }, 'INVALID'],
+  ['a step placed twice', input => input.argument.stage_map.stages[1].step_ids.push('prepare'), 'INVALID'],
+  ['an omitted claim', input => input.argument.stage_map.stages[1].claim_ids.pop(), 'INVALID'],
+  ['an empty extra stage', input => input.argument.stage_map.stages.push({ ...input.argument.stage_map.stages[0], id: 'extra', step_ids: [], claim_ids: [] }), 'INVALID'],
+  ['an unregistered finding text', input => { input.argument.stage_map.finding_text.fake = bilingual('New result', '新增结果'); }, 'INVALID'],
+  ['an unlinked finding', input => { input.map.findings[0].section_id = 'absent'; }, 'SECTION_INVALID'],
+  ['a missing language', input => { delete input.argument.stage_map.step_text.prepare['zh-CN']; }, 'TEXT_INVALID'],
+  ['a missing handoff between dependent phases', input => { input.argument.stage_map.transitions = []; }, 'RELATIONS_INVALID'],
+  ['a phase handoff without scientific or argument support', input => input.argument.stage_map.transitions[0] = { ...input.argument.stage_map.transitions[0], from: 'check', to: 'model' }, 'RELATIONS_INVALID'],
+  ['a cycle in the phase graph', input => {
+    input.map.step_links = [{ from_step_id: 'fit', to_step_id: 'prepare' }];
+    input.argument.stage_map.transitions.push({ ...input.argument.stage_map.transitions[0], from: 'check', to: 'model' });
+  }, 'CYCLE'],
+]) test(`stage layout rejects ${label}`, () => {
+  const input = stagedArgumentInput();
+  mutate(input);
+  assert.throws(() => editorApi.validateReadingArgument(input), { code: `READING_FIRST_EDITOR_ARGUMENT_${code}` });
+});
+
 test('1.4 binds the argument and principal findings to both accepted views', () => {
   const input = argumentInput();
   const { map: legacyMap, ...priorEditor } = editor();
@@ -134,6 +215,92 @@ test('1.4 binds the argument and principal findings to both accepted views', () 
   zh.overview[0].section_ids = ['abstract'];
   zh.methods[0].section_ids = ['abstract'];
   assert.throws(() => validateReadingFirstEditor({ editor: noOtherSectionReferences, views: missingTranslationSection, presentation }), /ARGUMENT_SECTION_INVALID/);
+});
+
+test('1.5 indexes concrete method sections in mirrored first-use order', () => {
+  const { map, argument, primaryFindingIds } = argumentInput();
+  map.steps.push({ id: 'records', section_id: 'prepare' });
+  const adapted = views.map(view => ({ ...view, sections: [...view.sections,
+    { id: 'prepare', module_id: 'methods', heading: 'Prepare observations', paragraphs: ['One row per patient.'] },
+    { id: 'analyze', module_id: 'methods', heading: 'Estimate differences', paragraphs: ['The model used those rows.'] },
+    { id: 'compare', module_id: 'findings', heading: 'Compare estimates', paragraphs: ['The estimates were compared.'] },
+  ] }));
+  const make = () => {
+    const value = editor();
+    delete value.map;
+    return { ...value, schema_version: 'reading-editor-1.5', argument, primary_finding_ids: primaryFindingIds,
+      views_fingerprint: readingFirstViewsFingerprint(adapted), languages: Object.fromEntries(
+        Object.entries(value.languages).map(([language, view]) => [language, { ...view, methods: [
+          { id: 'aggregation', title: 'Aggregation', explanation: 'Summaries combine records by unit.', application: 'Constructs patient records.', section_ids: ['prepare', 'analyze'] },
+          { id: 'model', title: 'Model', explanation: 'Parameterized models describe associations.', application: 'Estimates differences.', section_ids: ['analyze'], knowledge_ids: ['method'] },
+        ] }])) };
+  };
+  const check = editor => validateReadingFirstEditor({ editor, views: adapted, presentation: { knowledge: [{ id: 'method' }], map } });
+  assert.doesNotThrow(() => check(make()));
+  for (const change of [
+    value => value.languages.en.methods[0].section_ids = ['abstract'],
+    value => value.languages.en.methods[0].section_ids = [],
+    value => value.languages.en.methods[0].section_ids.reverse(),
+    value => value.languages.en.methods.reverse(),
+    value => value.languages.en.methods[0].application = '  ',
+    value => value.languages.en.methods[0].explanation = '  ',
+    value => value.languages.en.methods[0].explanation = 'Line one.\nLine two.',
+    value => value.languages.en.methods[0].explanation = null,
+  ]) {
+    const value = make();
+    change(value);
+    assert.throws(() => check(value), /METHOD_INVALID/);
+  }
+  const differentSection = make();
+  differentSection.languages.en.methods[0].section_ids.pop();
+  assert.throws(() => check(differentSection), /BILINGUAL_METHODS_INVALID/);
+  const differentKnowledge = make();
+  differentKnowledge.languages.en.methods[1].knowledge_ids = [];
+  assert.throws(() => check(differentKnowledge), /BILINGUAL_METHODS_INVALID/);
+  const incompletePrinciple = make();
+  delete incompletePrinciple.languages.en.methods[0].explanation;
+  assert.throws(() => check(incompletePrinciple), /METHOD_INVALID|BILINGUAL_METHODS_INVALID/);
+  const historical = make();
+  for (const view of Object.values(historical.languages)) {
+    for (const method of view.methods) delete method.explanation;
+  }
+  assert.doesNotThrow(() => check(historical));
+  assert.throws(() => validateReadingFirstEditor({ editor: historical, views: adapted,
+    presentation: { knowledge: [{ id: 'method' }], map }, expandedMethodIndex: true }), /METHOD_INVALID/);
+  for (const view of Object.values(historical.languages)) view.methods[0].section_ids.push('compare');
+  assert.throws(() => check(historical), /METHOD_INVALID/);
+  const acrossModules = make();
+  for (const view of Object.values(acrossModules.languages)) {
+    view.methods[0].section_ids.unshift('design');
+    view.methods[1].section_ids.push('compare');
+  }
+  assert.doesNotThrow(() => check(acrossModules));
+  const missingMethod = make();
+  for (const language of ['en', 'zh-CN']) missingMethod.languages[language].methods = [];
+  assert.throws(() => check(missingMethod), /CONTENT_INVALID/);
+});
+
+test('1.5 accommodates a brief argument without inventing methods or claims', () => {
+  const input = argumentInput();
+  input.argument.claims = [];
+  input.argument.branches = [];
+  input.argument.relations = [{ from: 'question', to: 'conclusion', label: '范围限定' }];
+  input.map.findings = [];
+  input.primaryFindingIds = [];
+  const value = editor();
+  delete value.map;
+  value.schema_version = 'reading-editor-1.5';
+  value.argument = input.argument;
+  value.primary_finding_ids = [];
+  for (const language of ['en', 'zh-CN']) value.languages[language].methods = [];
+  assert.equal(validateReadingFirstEditor({ editor: value, views, presentation: { map: input.map } }), value);
+  const staged = { editor: value, views, presentation: { map: input.map }, stagedResearchMap: true };
+  assert.throws(() => validateReadingFirstEditor(staged), /ARGUMENT_INVALID/);
+  input.argument.stage_map = { stages: [], transitions: [], step_text: {}, finding_text: {} };
+  assert.equal(validateReadingFirstEditor(staged), value);
+  assert.throws(() => editorApi.validateReadingArgument(input), /CLAIMS_INVALID/);
+  input.map.findings.push({ id: 'unassigned' });
+  assert.throws(() => validateReadingFirstEditor({ editor: value, views, presentation: { map: input.map } }), /FINDINGS_INVALID/);
 });
 
 for (const [label, change, code] of [

@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { exportPublicApa } from '../../scripts/setup/export-public-apa.mjs';
 import { inspectApaConfig } from '../../scripts/lib/apa-config.mjs';
-import { prepareConfiguredReading as prepareConfiguredReadingVersion,createConfiguredScienceRequest, getConfiguredReadingDispatchArguments, materializeConfiguredReadingCandidate, createConfiguredMineruPort, configuredMineruConfiguration } from '../../scripts/v3/configured-reading.mjs';
+import { createConfiguredScienceRequest, getConfiguredReadingDispatchArguments, materializeConfiguredReadingCandidate, createConfiguredMineruPort, configuredMineruConfiguration, prepareConfiguredReading as prepareCurrentConfiguredReading } from '../../scripts/v3/configured-reading.mjs';
 import { reviewedReadingFirstFixture as reviewedFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
 import { commitOwnedArtifact } from '../../scripts/v3/owned-artifact-store.mjs';
 import { ingestObservedRunStep } from '../../scripts/v3/phase21-runner.mjs';
@@ -15,9 +15,19 @@ import { createReadingFirstRevisionRequests, createReadingFirstPresentationReque
 import { readingFirstPublicationFixture, applyReadingFirstFixture } from './helpers/reading-first-publication-fixtures.mjs';
 import { readingFirstIndexFixture } from './helpers/reading-first-index-fixtures.mjs';
 import { readCommittedReadingFirstKnowledgeRegistry } from '../../scripts/v3/reading-first-knowledge-registry.mjs';
+import { copyFrozenReading22 } from './helpers/frozen-configured-reading.mjs';
 
-// These fixtures adopt science directly under their original execution contract.
-// The 2.2 default and durable science handoff are covered by the version/session suites.
+// These fixtures adopt the older science payload and preserve its original contract.
+let prepareConfiguredReadingVersion;
+test.before(async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'apa-frozen-reading-22-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const checkout = await copyFrozenReading22(directory);
+  const { symlink } = await import('node:fs/promises');
+  await symlink(join(fileURLToPath(new URL('../../', import.meta.url)), 'node_modules'), join(directory, 'node_modules'),
+    process.platform === 'win32' ? 'junction' : 'dir');
+  ({ prepareConfiguredReading: prepareConfiguredReadingVersion } = await import(pathToFileURL(join(checkout, 'scripts/v3/configured-reading.mjs')).href));
+});
 const prepareConfiguredReading = options => prepareConfiguredReadingVersion({ maxTotalCalls: 20, ...options });
 const reviewedReadingFirstFixture = (t, options) => reviewedFixture(t, { instructionFiles: true, ...options });
 const readInstructions = request => readFile(request.instruction_file.path, 'utf8');
@@ -57,30 +67,49 @@ async function configuredRepo(t, enabled = false) {
   return { root, config };
 }
 
-test('new configured reading freezes the Clippings source mapping and retains the submitted input', async t => {
+test('new configured reading freezes the original Clippings source without changing it or the submitted input', async t => {
   const { root } = await configuredRepo(t);
-  const original = join(root, 'paper.pdf');
+  await mkdir(join(root, 'Clippings'));
+  const original = join(root, 'Clippings', 'paper.pdf');
   const bytes = Buffer.from('synthetic source');
   await writeFile(original, bytes);
+  const before = await stat(original, { bigint: true });
   const source = { id: 'paper', path: original, sha256: 'sha256:' + createHash('sha256').update(bytes).digest('hex'), byte_length: bytes.length };
   const scientificInput = { profile: 'reading-first-1.0', identity: { run_id: 'run', paper_id: 'synthetic' },
     context: 'Synthetic evidence', sources: [source], presentation: { source_pdf: 'Raw/legacy.pdf' } };
-  const options = { repoRoot: root, runId: 'run', scientificInput, sourceLanguage: 'en',
+  const options = { repoRoot: root, runId: 'run', scientificInput, sourceLanguage: 'en', maxTotalCalls: 20,
     mainSession: { model: 'gpt-6.1-sol', reasoning_effort: 'low' } };
-  const path = join(root, 'Clippings', 'paper.pdf');
-  assert.throws(() => prepareConfiguredReading(options), /READING_FIRST_CONTROL_INVALID/);
-  await assert.rejects(readFile(path), { code: 'ENOENT' });
-  const prepared = prepareConfiguredReading({ ...options, authorizationId: 'synthetic' });
+  assert.throws(() => prepareCurrentConfiguredReading(options), /READING_FIRST_CONTROL_INVALID/);
+  const prepared = prepareCurrentConfiguredReading({ ...options, authorizationId: 'synthetic' });
   const setup = prepared.runControl.reading_first_binding.configured_setup;
+  assert.equal(setup.instruction_profile, 'configured-reading-2.3');
   assert.equal(setup.source_policy, 'clippings-originals-1.0');
+  assert.equal(setup.source_access, 'read-only-original-1.0');
   assert.deepEqual(setup.source_locations, [
-    { source_id: 'paper', original_path: original, path, vault_path: 'Clippings/paper.pdf', sha256: source.sha256, byte_length: bytes.length },
+    { source_id: 'paper', original_path: original, path: original, vault_path: 'Clippings/paper.pdf', sha256: source.sha256, byte_length: bytes.length,
+      file_identity: { dev: String(before.dev), ino: String(before.ino), mtime_ns: String(before.mtimeNs) } },
   ]);
   assert(Object.isFrozen(setup.source_locations[0]));
-  assert.deepEqual(prepared.scientificInput.sources, [{ ...source, path }]);
+  assert.deepEqual(prepared.scientificInput.sources, [source]);
   assert.equal(prepared.scientificInput.presentation.source_pdf, 'Clippings/paper.pdf');
   assert.equal(scientificInput.presentation.source_pdf, 'Raw/legacy.pdf');
   assert.equal(scientificInput.sources[0].path, original);
+  assert.deepEqual(await readFile(original), bytes);
+  const after = await stat(original, { bigint: true });
+  assert.deepEqual([after.dev, after.ino, after.mtimeNs], [before.dev, before.ino, before.mtimeNs]);
+});
+
+test('new configured reading refuses an unregistered PDF outside Clippings without copying it', async t => {
+  const { root } = await configuredRepo(t);
+  const path = join(root, 'paper.pdf');
+  const bytes = Buffer.from('synthetic PDF outside Clippings');
+  await writeFile(path, bytes);
+  const source = { id: 'paper', path, sha256: 'sha256:' + createHash('sha256').update(bytes).digest('hex'), byte_length: bytes.length };
+  const options = { repoRoot: root, runId: 'run', sourceLanguage: 'en', authorizationId: 'synthetic', maxTotalCalls: 20,
+    mainSession: { model: 'gpt-6.1-sol', reasoning_effort: 'low' },
+    scientificInput: { profile: 'reading-first-1.0', identity: { run_id: 'run', paper_id: 'synthetic' }, context: 'Synthetic evidence', sources: [source] } };
+  assert.throws(() => prepareCurrentConfiguredReading(options), { code: 'RF_CLIPPINGS_ORIGINAL_REQUIRED' });
+  await assert.rejects(readFile(join(root, 'Clippings', 'paper.pdf')), { code: 'ENOENT' });
   assert.deepEqual(await readFile(path), bytes);
 });
 
@@ -293,7 +322,7 @@ test('isolated reply resource drift blocks a new reply contract while a frozen c
   const { root } = await configuredRepo(t);
   let prepared, creationOptions;
   const runId = 'run_' + '5'.repeat(32);
-  const s = await fixture(t, { artifactRoot: join(root, '.tmp/runs', runId), runId, completeReview: false, instructionFiles: true,
+  const s = await fixture(t, { artifactRoot: join(root, '.tmp/runs', runId), clippingsRoot: join(root, 'Clippings'), methodsFirst: true, runId, completeReview: false, instructionFiles: true,
     controlOptions: { maxCalls: 8 }, createRunControl: options => {
       creationOptions = options;
       prepared = configured.prepareConfiguredReading({ ...options, repoRoot: root, maxTotalCalls: 20 });

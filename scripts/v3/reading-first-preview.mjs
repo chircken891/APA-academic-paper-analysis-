@@ -2,18 +2,91 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { renderReadingFirstObsidian } from './reading-first-obsidian.mjs';
-import { inspectCommittedReadingFirstRegistry, readCommittedReadingFirstRegistryResource, assertCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
+import { READ_ONLY_SOURCE_ACCESS, assertReadingSourceOutputPath, assertReadingSourceUnchanged } from './reading-source-policy.mjs';
+import { inspectCommittedReadingFirstRegistry, readCommittedReadingFirstRegistryResource, readCommittedReadingFirstKnowledgeRegistry, assertCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
 
 const fail = (code, details = {}) => { throw Object.assign(new Error(code), { code, details }); };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const collisionKey = value => value.normalize('NFC').toLowerCase();
 const manifestPath = '.apa-v3/presentation.json';
+const pdfPath = value => /\.pdf$/i.test(value);
+const wikiDestination = value => value.replace(/[\[\]]/g, encodeURIComponent);
+const externalLink = value => /^(?:https?:|mailto:|doi:)/i.test(value);
+const markdownLink = /(!?)\[([^\]\n]*)\]\((<[^>\n]+>|[^)\n]+)\)/g;
+const wikiLink = /(!?)\[\[([^\]\n]+)\]\]/g;
+const fence = /^```[^\n]*\n[\s\S]*?^```\s*$/gm;
+export function readingFirstPreviewSourceBinding(setup) {
+  if (setup?.source_access === READ_ONLY_SOURCE_ACCESS) {
+    return { vaultRoot: setup.knowledge_registry?.vault_root, locations: setup.source_locations };
+  }
+}
 function localPath(value) {
   if (typeof value !== 'string' || !value || !value.isWellFormed() || /[\\\x00-\x1f\x7f<>:"|?*#%]/.test(value) || value.startsWith('/') || value.split('/').some(part => !part || part === '.' || part === '..' || /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) fail('RF_PREVIEW_PATH_INVALID', { path: value });
   return value;
 }
 function decoded(value) {
   try { return decodeURIComponent(value); } catch { fail('RF_PREVIEW_LINK_INVALID', { target: value }); }
+}
+function markdownTarget(value) {
+  return value.startsWith('<') ? value.slice(1, -1) : value.replace(/\s+["'][\s\S]*$/, '');
+}
+function linkDestination(source, target) {
+  const fragmentIndex = target.indexOf('#');
+  const location = fragmentIndex < 0 ? target : target.slice(0, fragmentIndex);
+  const fragment = fragmentIndex < 0 ? '' : target.slice(fragmentIndex + 1);
+  const relative = location ? path.posix.normalize(path.posix.join(path.posix.dirname(source), location)) : source;
+  return { location, fragment, relative };
+}
+function previewCanvas(file) {
+  let canvas;
+  try { canvas = JSON.parse(file.bytes.toString('utf8')); } catch { fail('RF_PREVIEW_CANVAS_INVALID', { path: file.path }); }
+  if (!Array.isArray(canvas.nodes) || !Array.isArray(canvas.edges)) fail('RF_PREVIEW_CANVAS_INVALID', { path: file.path });
+  return canvas;
+}
+function previewSourceLinks(file, dependencies, paths) {
+  const wikiPath = (location, relative) => {
+    const candidates = new Set([location, relative].filter(value => paths.has(value)));
+    if (!candidates.size && !location.includes('/')) {
+      for (const target of paths) if (target.endsWith('/' + location)) candidates.add(target);
+    }
+    if (candidates.size === 1) return [...candidates][0];
+  };
+  const rewrite = content => {
+    const rewriteChunk = chunk => chunk
+      .replace(markdownLink, (original, embed, label, href) => {
+        const target = markdownTarget(href).trim();
+        if (externalLink(target)) return original;
+        const { relative } = linkDestination(file.path, decoded(target));
+        if (!dependencies.has(relative)) return original;
+        const fragment = target.includes('#') ? target.slice(target.indexOf('#')) : '';
+        return `${embed}[[${wikiDestination(relative)}${fragment}${label ? '|' + label : ''}]]`;
+      })
+      .replace(wikiLink, (original, embed, link) => {
+        const alias = link.indexOf('|');
+        const target = (alias < 0 ? link : link.slice(0, alias)).trim();
+        if (externalLink(target)) return original;
+        const { location, relative } = linkDestination(file.path, decoded(target));
+        if (!pdfPath(location)) return original;
+        const destination = wikiPath(location, relative);
+        if (!dependencies.has(destination)) return original;
+        const fragment = target.includes('#') ? target.slice(target.indexOf('#')) : '';
+        return `${embed}[[${wikiDestination(destination)}${fragment}${alias >= 0 ? link.slice(alias) : ''}]]`;
+      });
+    let output = '', from = 0;
+    for (const match of content.matchAll(fence)) {
+      output += rewriteChunk(content.slice(from, match.index)) + match[0];
+      from = match.index + match[0].length;
+    }
+    return output + rewriteChunk(content.slice(from));
+  };
+  if (/\.md$/i.test(file.path)) return Buffer.from(rewrite(file.bytes.toString('utf8')));
+  const canvas = previewCanvas(file);
+  let changed = false;
+  for (const node of canvas.nodes.filter(node => node.type === 'text')) {
+    const updated = rewrite(node.text);
+    if (updated !== node.text) { node.text = updated; changed = true; }
+  }
+  return changed ? Buffer.from(JSON.stringify(canvas, null, 2) + '\n') : file.bytes;
 }
 function anchors(content) {
   const blocks = new Set([...content.matchAll(/(?:^|\s)\^([\w-]+)[ \t]*$/gm)].map(match => match[1]));
@@ -28,27 +101,29 @@ function anchors(content) {
 function referencesFor(file) {
   let content = file.bytes.toString('utf8');
   if (/\.canvas$/i.test(file.path)) {
-    let canvas;
-    try { canvas = JSON.parse(content); } catch { fail('RF_PREVIEW_CANVAS_INVALID', { path: file.path }); }
-    if (!Array.isArray(canvas.nodes) || !Array.isArray(canvas.edges)) fail('RF_PREVIEW_CANVAS_INVALID', { path: file.path });
+    const canvas = previewCanvas(file);
     content = canvas.nodes.filter(node => node.type === 'text').map(node => node.text).join('\n');
   }
-  content = content.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, '');
-  const references = [...content.matchAll(/!?\[[^\]\n]*\]\((<[^>\n]+>|[^)\n]+)\)/g)].map(match => ({ target: match[1].startsWith('<') ? match[1].slice(1, -1) : match[1].replace(/\s+["'][\s\S]*$/, ''), wiki: false }));
-  references.push(...[...content.matchAll(/!?\[\[([^\]\n]+)\]\]/g)].map(match => ({ target: match[1].split('|')[0], wiki: true })));
+  content = content.replace(fence, '');
+  const references = [...content.matchAll(markdownLink)].map(match => ({ target: markdownTarget(match[3]), wiki: false }));
+  references.push(...[...content.matchAll(wikiLink)].map(match => ({ target: match[2].split('|')[0], wiki: true })));
   return references;
 }
-export function validateReadingFirstPreviewFiles(files) {
+export function validateReadingFirstPreviewFiles(files, sourcePaths = new Set()) {
   const byPath = new Map(files.map(file => [file.path, file]));
   let links = 0;
   for (const file of files.filter(row => /\.(?:md|canvas)$/i.test(row.path))) {
     for (const reference of referencesFor(file)) {
-      if (/^(?:https?:|mailto:|doi:)/i.test(reference.target)) continue;
+      if (externalLink(reference.target)) continue;
       const target = decoded(reference.target.trim());
       if (!target || target.startsWith('/') || /[\\\x00-\x1f]/.test(target) || /^[a-z][a-z0-9+.-]*:/i.test(target)) fail('RF_PREVIEW_LINK_INVALID', { source: file.path, target });
-      const split = target.indexOf('#');
-      const location = split < 0 ? target : target.slice(0, split), fragment = split < 0 ? '' : target.slice(split + 1);
-      let targetPath = location ? path.posix.normalize(path.posix.join(path.posix.dirname(file.path), location)) : file.path;
+      const { location, fragment, relative } = linkDestination(file.path, target);
+      if (reference.wiki && sourcePaths.has(location)) {
+        if (byPath.has(location) || byPath.has(relative)) fail('RF_PREVIEW_PATH_COLLISION', { path: location });
+        links++;
+        continue;
+      }
+      let targetPath = relative;
       if (reference.wiki && location) {
         const options = [location, `${location}.md`, targetPath, `${targetPath}.md`].filter(value => byPath.has(value));
         if (!options.length && !location.includes('/')) options.push(...files.filter(row => row.path.endsWith('/' + location) || row.path.endsWith('/' + location + '.md')).map(row => row.path));
@@ -67,8 +142,46 @@ export function validateReadingFirstPreviewFiles(files) {
   return { status: 'passed', local_links: links, files: files.length, scientific_review: 'not_run', native_obsidian: 'not_run' };
 }
 
+function boundOriginals(readOnlySources) {
+  const originals = new Map();
+  const { vaultRoot, locations } = readOnlySources;
+  if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot) || !Array.isArray(locations) || !locations.length) fail('RF_PREVIEW_READ_ONLY_SOURCES_INVALID');
+  for (const source of locations) {
+    if (path.resolve(vaultRoot, localPath(source.vault_path)) !== source.path) {
+      fail('RF_PREVIEW_READ_ONLY_SOURCES_INVALID', { path: source.vault_path });
+    }
+    assertReadingSourceUnchanged(source);
+    if (pdfPath(source.vault_path)) originals.set(source.vault_path, {
+      path: source.vault_path, sha256: source.sha256, byte_length: source.byte_length,
+    });
+  }
+  return originals;
+}
+
+async function inspectReadOnlySources(readOnlySources, manifest) {
+  const originals = boundOriginals(readOnlySources);
+  const dependencies = manifest?.source_dependencies;
+  if (!Array.isArray(dependencies) || dependencies.some(row => typeof row?.path !== 'string')
+    || new Set(dependencies.map(item => item.path)).size !== dependencies.length
+    || [...originals].some(([path, row]) => !dependencies.some(item => item.path === path
+      && item.sha256 === row.sha256 && item.byte_length === row.byte_length))) fail('RF_PREVIEW_READ_ONLY_SOURCES_INVALID');
+  const historical = dependencies.filter(row => !originals.has(row.path));
+  if (historical.length) {
+    const { vaultRoot } = readOnlySources;
+    const registry = await readCommittedReadingFirstKnowledgeRegistry({ vaultRoot });
+    for (const row of historical) {
+      if (!pdfPath(localPath(row.path))) fail('RF_PREVIEW_READ_ONLY_SOURCES_INVALID', { path: row.path });
+      const { bytes } = readCommittedReadingFirstRegistryResource({ vaultRoot, registry, path: row.path });
+      if (bytes.length !== row.byte_length || 'sha256:' + digest(bytes) !== row.sha256) {
+        fail('RF_PREVIEW_SOURCE_DEPENDENCY_CHANGED', { path: row.path });
+      }
+    }
+  }
+  return new Set(dependencies.map(item => item.path));
+}
+
 /** Compare one saved render inventory with the current files and validate current links independently. */
-export async function inspectReadingFirstCandidate({outputRoot,inventory}={}) {
+export async function inspectReadingFirstCandidate({outputRoot,inventory,readOnlySources}={}) {
   if (typeof outputRoot!=='string' || !path.isAbsolute(outputRoot) || !Array.isArray(inventory)) fail('RF_PREVIEW_INPUT_INVALID');
   const expected=new Map();
   for (const row of inventory) {
@@ -76,6 +189,7 @@ export async function inspectReadingFirstCandidate({outputRoot,inventory}={}) {
     expected.set(row.path,row);
   }
   const actual=new Map();
+  if (readOnlySources) assertReadingSourceOutputPath(outputRoot, readOnlySources.locations, { tree: true, vaultRoot: readOnlySources.vaultRoot });
   async function walk(directory,prefix='') {
     for (const entry of await readdir(directory,{withFileTypes:true})) {
       const relative=prefix+entry.name, absolute=path.join(directory,entry.name);
@@ -100,25 +214,34 @@ export async function inspectReadingFirstCandidate({outputRoot,inventory}={}) {
   const consistency={status:modified.length || missing.length || extra.length ? 'failed' : 'passed',
     modified:modified.sort(),missing:missing.sort(),extra:extra.sort()};
   let links;
+  let sourcePaths;
   try {
-    links=validateReadingFirstPreviewFiles([...actual].flatMap(([path,bytes])=>bytes ? [{path,bytes}] : []));
+    if (readOnlySources) {
+      const bytes = actual.get(manifestPath);
+      if (!bytes || digest(bytes) !== expected.get(manifestPath)?.sha256) fail('RF_PREVIEW_READ_ONLY_SOURCES_INVALID');
+      sourcePaths = await inspectReadOnlySources(readOnlySources, JSON.parse(bytes));
+    }
+    links=validateReadingFirstPreviewFiles([...actual].flatMap(([path,bytes])=>bytes ? [{path,bytes}] : []), sourcePaths);
   } catch (error) {
-    links={status:'failed',code:error.code,details:error.details};
+    links={status:'failed',code:error.code,details:error.details ?? (error.path ? { path: error.path } : undefined)};
   }
   return {status:consistency.status==='passed' && links.status==='passed' ? 'passed' : 'failed',consistency,links};
 }
 
-/** Export a new self-contained candidate only after all resources and local links pass. */
-export async function exportReadingFirstPreview({ outputRoot, identity, views, presentation, targetRegistry, existingTargets = [], knowledgeRegistry = [], resources = [], readingEditor, historicalKnowledge, noteLayout, sourceLanguage } = {}) {
+/** Export a candidate after validating its local files and any bound vault originals. */
+export async function exportReadingFirstPreview({ outputRoot, identity, views, presentation, targetRegistry, existingTargets = [], knowledgeRegistry = [], resources = [], readingEditor, expandedMethodIndex, stagedResearchMap, historicalKnowledge, noteLayout, sourceLanguage, instructionProfile, readOnlySources } = {}) {
   if (typeof outputRoot !== 'string' || !path.isAbsolute(outputRoot) || !Array.isArray(resources)) fail('RF_PREVIEW_INPUT_INVALID');
   const root = path.resolve(outputRoot);
+  const sourceDependencies = readOnlySources ? boundOriginals(readOnlySources) : new Map();
+  if (readOnlySources) assertReadingSourceOutputPath(root, readOnlySources.locations, { tree: true, vaultRoot: readOnlySources.vaultRoot });
   try { await lstat(root); fail('RF_PREVIEW_OUTPUT_EXISTS', { outputRoot: root }); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const history = historicalKnowledge === undefined ? null : inspectCommittedReadingFirstRegistry({ vaultRoot: historicalKnowledge.vaultRoot, registry: knowledgeRegistry });
-  const rendered = renderReadingFirstObsidian({ identity, views, presentation, targetRegistry, existingTargets, knowledgeRegistry, readingEditor, noteLayout, sourceLanguage });
+  const rendered = renderReadingFirstObsidian({ identity, views, presentation, targetRegistry, existingTargets, knowledgeRegistry, readingEditor, expandedMethodIndex, stagedResearchMap, noteLayout, sourceLanguage, instructionProfile });
   const files = [], paths = new Set();
   function add(relative, bytes, kind) {
     localPath(relative);
     const key = collisionKey(relative);
+    if (readOnlySources && (pdfPath(relative) || bytes.subarray(0, 5).toString('ascii') === '%PDF-')) fail('RF_PREVIEW_PDF_ORIGINAL_REQUIRED', { path: relative });
     if ([collisionKey(manifestPath), ...paths].some(other => key === other || key.startsWith(other + '/') || other.startsWith(key + '/'))) fail('RF_PREVIEW_PATH_COLLISION', { path: relative });
     const resolved = path.resolve(root, ...relative.split('/'));
     if (!resolved.startsWith(root + path.sep)) fail('RF_PREVIEW_PATH_INVALID', { path: relative });
@@ -129,6 +252,14 @@ export async function exportReadingFirstPreview({ outputRoot, identity, views, p
   for (const asset of rendered.generated_assets ?? []) add(asset.path, Buffer.from(asset.content), asset.kind);
   for (const resource of resources) {
     if (history && (knowledgeRegistry.some(row => row.path === resource.path) || history.paper_paths.includes(resource.path))) fail('RF_PREVIEW_HISTORICAL_RESOURCE_CONFLICT', { path: resource.path });
+    if (readOnlySources && (pdfPath(resource.path) || pdfPath(resource.source_path ?? ''))) {
+      const frozen = readOnlySources.locations.find(row => row.vault_path === resource.path);
+      if (!frozen || !sourceDependencies.has(resource.path) || resource.source_path !== frozen.path
+        || resource.sha256 !== frozen.sha256 || resource.byte_length !== frozen.byte_length || resource.content !== undefined) {
+        fail('RF_PREVIEW_PDF_ORIGINAL_REQUIRED', { path: resource.path });
+      }
+      continue;
+    }
     let bytes;
     if (typeof resource?.content === 'string' && resource.source_path === undefined) bytes = Buffer.from(resource.content);
     else if (resource?.content === undefined && typeof resource?.source_path === 'string' && path.isAbsolute(resource.source_path) && /^(?:sha256:)?[a-f0-9]{64}$/i.test(resource.sha256) && Number.isSafeInteger(resource.byte_length) && resource.byte_length >= 0) {
@@ -156,16 +287,16 @@ export async function exportReadingFirstPreview({ outputRoot, identity, views, p
       unavailable.set(destination, fragments);
       return true;
     };
-    const catalog = () => [...new Set([...files.map(row => row.path), ...historical.keys(), ...papers, ...history.asset_paths])];
+    const catalog = () => [...new Set([...files.map(row => row.path), ...sourceDependencies.keys(), ...historical.keys(), ...papers, ...history.asset_paths])];
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (!/\.md$/i.test(file.path) || file.kind === 'historical-navigation') continue;
       for (const reference of referencesFor(file)) {
-        if (/^(?:https?:|mailto:|doi:)/i.test(reference.target)) continue;
-        const target = decoded(reference.target.trim()), split = target.indexOf('#');
-        const location = split < 0 ? target : target.slice(0, split), fragment = split < 0 ? '' : target.slice(split + 1);
+        if (externalLink(reference.target)) continue;
+        const target = decoded(reference.target.trim());
+        const { location, fragment, relative } = linkDestination(file.path, target);
         if (!location) continue;
-        let destination = path.posix.normalize(path.posix.join(path.posix.dirname(file.path), location));
+        let destination = relative;
         if (reference.wiki) {
           const candidates = catalog();
           let options = [location, `${location}.md`, destination, `${destination}.md`].filter(value => candidates.includes(value));
@@ -175,6 +306,7 @@ export async function exportReadingFirstPreview({ outputRoot, identity, views, p
           if (options.length !== 1) fail('RF_PREVIEW_LINK_UNRESOLVED', { source: file.path, target });
           destination = options[0];
         }
+        if (sourceDependencies.has(destination)) continue;
         if (nav.has(destination)) { if (fragment) nav.get(destination).add(fragment); continue; }
         const present = files.find(row => row.path === destination);
         if (present) {
@@ -200,7 +332,13 @@ export async function exportReadingFirstPreview({ outputRoot, identity, views, p
           if (preserveUnavailable(file, reference, destination, fragment)) continue;
           try {
             const asset = readCommittedReadingFirstRegistryResource({ vaultRoot: historicalKnowledge.vaultRoot, registry: knowledgeRegistry, path: destination });
-            add(destination, asset.bytes, 'historical-asset');
+            if (readOnlySources && pdfPath(destination)) {
+              localPath(destination);
+              if (path.resolve(historicalKnowledge.vaultRoot) !== path.resolve(readOnlySources.vaultRoot)) {
+                fail('RF_PREVIEW_READ_ONLY_SOURCES_INVALID', { path: destination });
+              }
+              sourceDependencies.set(destination, { path: destination, sha256: 'sha256:' + digest(asset.bytes), byte_length: asset.bytes.length });
+            } else add(destination, asset.bytes, 'historical-asset');
           } catch (cause) { fail('RF_PREVIEW_HISTORICAL_RESOURCE_UNAVAILABLE', { source: file.path, target, path: destination, cause: cause.code ?? cause.message }); }
         }
       }
@@ -217,13 +355,20 @@ export async function exportReadingFirstPreview({ outputRoot, identity, views, p
     }
     inspectCommittedReadingFirstRegistry({ vaultRoot: historicalKnowledge.vaultRoot, registry: knowledgeRegistry });
   }
-  const validation = validateReadingFirstPreviewFiles(files);
+  if (readOnlySources) {
+    const paths = new Set([...files.map(row => row.path), ...sourceDependencies.keys()]);
+    for (const file of files.filter(row => /\.(?:md|canvas)$/i.test(row.path))) {
+      file.bytes = previewSourceLinks(file, sourceDependencies, paths);
+    }
+  }
+  const validation = validateReadingFirstPreviewFiles(files, new Set(sourceDependencies.keys()));
   const knowledgeDependencies = knowledgeRegistry.filter(row => row.current_content && row.content_sha256
     && files.some(file => file.path === row.path && ['knowledge-candidate', 'historical-reference'].includes(file.kind)))
     .map(row => ({ path: row.path, sha256: row.content_sha256 }));
   if (history && knowledgeDependencies.length) assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: historicalKnowledge.vaultRoot,
     registry: knowledgeRegistry, paths: knowledgeDependencies.map(row => row.path) });
   const manifest = { schema_version: 'reading-first-preview-1.0', paper_id: identity.paper_id, targetRegistry: rendered.targetRegistry, knowledgeProposals: rendered.knowledgeProposals,
+    ...(readOnlySources ? { source_dependencies: [...sourceDependencies.values()] } : {}),
     ...(knowledgeDependencies.length ? { knowledge_dependencies: knowledgeDependencies } : {}),
     ...(rendered.visual_resources ? { visual_resources: rendered.visual_resources } : {}),
     review: { overall: 'pending', native_obsidian: 'not_run' }, validation,
@@ -237,5 +382,5 @@ export async function exportReadingFirstPreview({ outputRoot, identity, views, p
     await mkdir(path.dirname(destination), { recursive: true });
     await writeFile(destination, file.bytes, { flag: 'wx' });
   }
-  return { outputRoot: root, files: outputFiles.map(file=>file.path), inventory:outputFiles.map(file=>({path:file.path,sha256:digest(file.bytes),byte_length:file.bytes.length})), notes: rendered.notes, supportNotes: rendered.supportNotes, knowledgeProposals: rendered.knowledgeProposals, ...(rendered.visual_resources ? { visual_resources: rendered.visual_resources } : {}), targetRegistry: rendered.targetRegistry, manifest, validation };
+  return { outputRoot: root, files: outputFiles.map(file=>file.path), inventory:outputFiles.map(file=>({path:file.path,sha256:digest(file.bytes),byte_length:file.bytes.length})), notes: rendered.notes, supportNotes: rendered.supportNotes, knowledgeProposals: rendered.knowledgeProposals, ...(rendered.visual_resources ? { visual_resources: rendered.visual_resources } : {}), targetRegistry: rendered.targetRegistry, manifest, validation, ...(readOnlySources ? { readOnlySources } : {}) };
 }

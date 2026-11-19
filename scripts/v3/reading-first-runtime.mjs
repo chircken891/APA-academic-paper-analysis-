@@ -1,4 +1,7 @@
-import { inspectReadingFirstCandidate } from './reading-first-preview.mjs';
+import { DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, configuredEditorProfile, isSupportedConfiguredReadingProfile, isMethodsFirstReadingProfile } from '../lib/reading-profiles.mjs';
+import { assertMethodsFirstScience } from './methods-first-handoff.mjs';
+import { checkCriticalReviewNodes } from './reading-first-review-nodes.mjs';
+import { inspectReadingFirstCandidate, readingFirstPreviewSourceBinding } from './reading-first-preview.mjs';
 import { readRegisteredCommit, PHASE22_COMMIT_PATH } from './phase22-active-version.mjs';
 import { normalizeHostReceipt, validateHostReceiptEvidence } from './reading-host-evidence.mjs';
 import { validateReadingResources } from './reading-resources.mjs';
@@ -8,10 +11,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { validateRepairScopes, assertEditorRepairScope, repairScopeCatalog } from './reading-first-repair-scope.mjs';
 import { validateReadingFirstEditor, readingFirstViewsFingerprint } from './reading-first-editor.mjs';
-import { READING_EDITOR_PROFILE, loadReadingEditorContract, readingEditorInstructions, assertReadingEditorContract } from './reading-first-editor-contract.mjs';
+import { LEGACY_READING_EDITOR_PROFILE, loadReadingEditorContract, readingEditorInstructions, assertReadingEditorContract } from './reading-first-editor-contract.mjs';
 import { renderReadingFirstObsidian, normalizeReadingFirstMap } from './reading-first-obsidian.mjs';
 import { computeKnowledgeRebase } from './reading-first-rebase.mjs';
-import { applyReadingFirstKnowledgeContent, draftReadingFirstKnowledgeComparisons, extractOwnKnowledge, matchReadingFirstKnowledgeIdentity } from './reading-first-knowledge.mjs';
+import { applyReadingFirstKnowledgeContent, assertSharedKnowledgeApplicationMirror, draftReadingFirstKnowledgeComparisons, extractOwnKnowledge, matchReadingFirstKnowledgeIdentity } from './reading-first-knowledge.mjs';
 import { readFileSync, realpathSync, lstatSync, mkdirSync, writeFileSync, linkSync, unlinkSync } from 'node:fs';
 import { resolve, relative, isAbsolute, sep, dirname, join } from 'node:path';
 import { fingerprintV3Json } from './semantic-package-validator.mjs';
@@ -29,7 +32,7 @@ export const SCIENCE_INDEX_PROFILE = 'science-index-1.0';
 export const TRANSLATION_PROFILE = 'translation-1.0';
 export const fingerprintReadingFirst = fingerprintV3Json;
 const OWNER_REPAIR_ROUTING = 'owner-routed-1.0';
-export const CONFIGURED_INSTRUCTION_PROFILE = 'configured-reading-2.2';
+export const CONFIGURED_INSTRUCTION_PROFILE = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE;
 export const KNOWLEDGE_REGISTRY_POLICY = 'current-shared-nodes-1.0';
 const externalPublicationRecipeSchema = 'external-reviewed-reading-first-publication-source-1.0';
 const initializedRuns = new WeakMap();
@@ -49,9 +52,9 @@ const freeze = value => { if (value && typeof value === 'object') { Object.value
 export function assertReadingBindingCurrent(binding) {
   const setup = binding?.configured_setup;
   if (binding?.repair_routing !== OWNER_REPAIR_ROUTING
-    || binding.presentation_mode === 'reading-editor' && binding.presentation_profile !== READING_EDITOR_PROFILE
-    || setup && (setup.instruction_profile !== CONFIGURED_INSTRUCTION_PROFILE
-      || setup.dispatch_message_profile !== undefined && setup.dispatch_message_profile !== INSTRUCTION_PATH_DISPATCH_PROFILE
+    || setup && !isSupportedConfiguredReadingProfile(setup.instruction_profile)
+    || binding.presentation_mode === 'reading-editor' && binding.presentation_profile !== (setup ? configuredEditorProfile(setup.instruction_profile) : LEGACY_READING_EDITOR_PROFILE)
+    || setup && (setup.dispatch_message_profile !== undefined && setup.dispatch_message_profile !== INSTRUCTION_PATH_DISPATCH_PROFILE
       || setup.knowledge_registry !== undefined && setup.knowledge_registry?.policy !== KNOWLEDGE_REGISTRY_POLICY)) fail('READING_BINDING_RETIRED');
   return binding;
 }
@@ -63,7 +66,7 @@ export function resolveReadingWorkflowProfile({existingBinding, newRun = false} 
 }
 
 /** Controller proposal factory. Freeze this returned control in the existing broker. */
-export function createReadingFirstRunControl({runId, scientificInput, mainSession, authorizationId, maxCalls = 6, taskBindings, enrichmentPolicy, enrichmentSessionProfile, maxTotalCalls, priorCalls = 0, hostResultAgentIdPath = ['agent_id'], existingBinding, controllerActorId = 'controller', presentationRequired = true, writingMode = 'independent', sourceLanguage = 'en', firstWritingLanguage, presentationMode = 'writer', presentationProfile = READING_EDITOR_PROFILE, noteLayout = 'source-language-1.0', configuredSetup, host, roleReplyContract, handoffProfile, compactionPolicy} = {}) {
+export function createReadingFirstRunControl({runId, scientificInput, mainSession, authorizationId, maxCalls = 6, taskBindings, enrichmentPolicy, enrichmentSessionProfile, maxTotalCalls, priorCalls = 0, hostResultAgentIdPath = ['agent_id'], existingBinding, controllerActorId = 'controller', presentationRequired = true, writingMode = 'independent', sourceLanguage = 'en', firstWritingLanguage, presentationMode = 'writer', presentationProfile, noteLayout = 'source-language-1.0', configuredSetup, host, roleReplyContract, handoffProfile, compactionPolicy} = {}) {
   if (existingBinding !== undefined) fail('READING_FIRST_EXISTING_BINDING_PRESERVED');
   if (compactionPolicy !== undefined && !compactionEnabled({ compaction_policy: { profile: compactionPolicy } })) fail('APA_COMPACTION_POLICY_INVALID');
   loadRoleReplyContract(roleReplyContract);
@@ -72,8 +75,11 @@ export function createReadingFirstRunControl({runId, scientificInput, mainSessio
     || !Number.isInteger(maxCalls) || maxCalls < (presentationMode === 'reading-editor' ? 4 : 3) || maxCalls > (presentationMode === 'reading-editor' ? 8 : 6)) fail('READING_FIRST_CONTROL_INVALID');
   if (!['writer','reading-editor'].includes(presentationMode)) fail('READING_FIRST_PRESENTATION_MODE_INVALID');
   if (['reading-editor-1.0','reading-editor-1.1','reading-editor-1.2','reading-editor-1.3'].includes(presentationProfile)) fail('READING_BINDING_RETIRED');
-  if (presentationProfile !== READING_EDITOR_PROFILE) fail('READING_FIRST_EDITOR_PROFILE_INVALID');
   if (configuredSetup) assertReadingBindingCurrent({repair_routing:OWNER_REPAIR_ROUTING, configured_setup:configuredSetup});
+  // Controls without configured_setup use the original, unversioned Editor pairing.
+  const selectedEditor = configuredSetup ? configuredEditorProfile(configuredSetup.instruction_profile) : LEGACY_READING_EDITOR_PROFILE;
+  if (presentationProfile === undefined) presentationProfile = selectedEditor;
+  if (presentationProfile !== selectedEditor) fail('READING_FIRST_EDITOR_PROFILE_INVALID');
   if (!['source-language-1.0','legacy-flat-1.0'].includes(noteLayout)) fail('READING_FIRST_NOTE_LAYOUT_INVALID');
   if (handoffProfile !== undefined && handoffProfile !== SCIENCE_INDEX_PROFILE) fail('READING_FIRST_HANDOFF_PROFILE_INVALID');
   if (!['independent','source-first','source-translation'].includes(writingMode) || !languages.includes(sourceLanguage) || firstWritingLanguage !== undefined && !languages.includes(firstWritingLanguage)) fail('READING_FIRST_WRITING_MODE_INVALID');
@@ -261,7 +267,12 @@ export async function buildReadingFirstHandoff({run, dispatchContext, artifactRo
   }
   if (scienceRoles.some(role => !roles.has(role))) fail('READING_FIRST_SCIENCE_ROLE_MISSING');
   if (adopted) await verifyReadingFirstResourceManifest({binding,handoff:{science,sources:input.sources},artifactRoot});
-  const presentation = adopted && input.presentation ? input.presentation : science.find(item => item.receipt.role === 'integration')?.content.presentation;
+  const integration = science.find(item => item.receipt.role === 'integration').content;
+  const presentation = adopted && input.presentation ? input.presentation : integration.presentation;
+  if (isMethodsFirstReadingProfile(binding.configured_setup?.instruction_profile)) {
+    assertMethodsFirstScience(integration, input.sources);
+    if (adopted && input.presentation && fingerprintV3Json(input.presentation.map) !== fingerprintV3Json(integration.presentation.map)) fail('READING_FIRST_SCIENCE_RECEIPT_INVALID');
+  }
   if (adopted && input.presentation?.map != null) normalizeReadingFirstMap(input.presentation.map, Array.isArray(input.presentation.sections) ? new Set(input.presentation.sections.map(section => section?.id)) : undefined);
   const adoptedViews = [];
   if (input.adopted_views !== undefined) {
@@ -278,7 +289,7 @@ export async function buildReadingFirstHandoff({run, dispatchContext, artifactRo
     for (const item of adoptedViews.filter(view=>view.receipt.role==='translation')) {
       const source = adoptedViews.find(view=>view !== item && view.receipt.role !== 'translation');
       if (!source || (binding.source_language && source.content.language !== binding.source_language)) fail('READING_FIRST_VIEW_RECEIPT_INVALID');
-      validateTranslationMirror(source.content, item.content);
+      validateTranslationMirror(source.content, item.content, binding);
     }
   }
   const value = {...(adoptedViews.length ? {adopted_views:adoptedViews} : {}), ...(presentation ? {presentation:copy(presentation)} : {}), ...(input.presentation_assets ? {presentation_assets:copy(input.presentation_assets)} : {}), profile:READING_FIRST_PROFILE, identity:input.identity, sources:input.sources, context:input.context, science,
@@ -647,7 +658,7 @@ export function createReadingFirstRequests({handoff, runControl, reuseInitialIns
     if (!text(binding.authorization_id) || !Number.isInteger(binding.max_calls) || binding.max_calls < (binding.presentation_mode === 'reading-editor' ? 4 : 3) || binding.max_calls > (binding.presentation_mode === 'reading-editor' ? 8 : 6)) fail('READING_FIRST_BUDGET_REQUIRED');
     const prompt = binding.configured_setup ? Buffer.alloc(0) : readFileSync(new URL('../../prompts/v3/reading-first-contracts.md', import.meta.url));
     const sections = copy(binding.configured_setup?.sections ?? Object.fromEntries([...prompt.toString('utf8').matchAll(/^## (.+)\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/gm)].map(m => [m[1],m[2].trim()])));
-    if (!binding.configured_setup && binding.presentation_mode === 'reading-editor') sections['Reading Editor'] = readingEditorInstructions();
+    if (!binding.configured_setup && binding.presentation_mode === 'reading-editor') sections['Reading Editor'] = readingEditorInstructions(binding.presentation_profile);
     if (['Common data contract','English Writer','Chinese Writer','Overall Verifier'].some(key => !text(sections[key]))) fail('READING_FIRST_PROMPT_SECTION_REQUIRED');
     const guidePath = fileURLToPath(new URL('../../docs/apa-v3/scientific-writing-modules.md', import.meta.url));
     const guideBytes = !binding.configured_setup && sections['Writer module guidance'] ? readFileSync(guidePath) : null;
@@ -700,9 +711,21 @@ function validateLayoutView(state,value) {
 }
 
 /** A translation keeps the sections and placements of the source draft it was given; only the language changes. */
-function validateTranslationMirror(source, value) {
-  const shape = view => JSON.stringify([view.sections.map(section=>[section.id ?? null, section.module_id ?? null]), ['visuals','knowledge'].map(kind=>(view.placements?.[kind] ?? []).map(item=>[item.id, item.section_id]))]);
+function validateTranslationMirror(source, value, binding) {
+  const methodsFirst = isMethodsFirstReadingProfile(binding.configured_setup?.instruction_profile);
+  const placement = item => methodsFirst ? [item.id, item.section_id, item.after_paragraph] : [item.id, item.section_id];
+  const shape = view => JSON.stringify([view.sections.map(section=>[section.id ?? null, section.module_id ?? null]), ['visuals','knowledge'].map(kind=>(view.placements?.[kind] ?? []).map(placement))]);
   if (shape(value) !== shape(source)) fail('READING_FIRST_VIEW_LAYOUT_INVALID');
+  if (methodsFirst) assertSharedKnowledgeApplicationMirror(source, value);
+}
+
+function criticalReviewChecked(state, review) {
+  const profile = state.binding.configured_setup?.instruction_profile;
+  const context = isMethodsFirstReadingProfile(profile) ? {
+    presentation: effectivePresentation(state), views: languages.map(language => state.views[language].value),
+    sources: state.handoff.sources,
+  } : undefined;
+  return checkCriticalReviewNodes(review, profile, context);
 }
 
 function validateReview(value, binding) {
@@ -792,10 +815,11 @@ export async function acceptReadingFirstResult({controller, request, observation
         assertEditorRepairScope(state.renderRepairBaseEditor,aligned,activeReview(state),effectivePresentation(state));
       }
     } catch (error) { rejection=error.code; }
-    if (!rejection) validateReadingFirstEditor({editor:value,views:languages.map(language=>state.views[language].value),presentation:effectivePresentation(state)});
+    if (!rejection) validateReadingFirstEditor({expandedMethodIndex:state.binding.configured_setup?.expanded_method_index, stagedResearchMap:state.binding.configured_setup?.staged_research_map,editor:value,views:languages.map(language=>state.views[language].value),presentation:effectivePresentation(state)});
   }
-  else if (request.language) { if (pendingUserRevision(state)?.scientific===false) assertUserWriterScope(state,value,request.language); validateView(value,request.language); validateLayoutView(state,value); if (request.task.role === 'translation') validateTranslationMirror(record.payload.source_view,value); validateConsumption(state,value); applyReadingFirstKnowledgeContent({presentation:effectivePresentation(state),views:[value]}); } else {
+  else if (request.language) { if (pendingUserRevision(state)?.scientific===false) assertUserWriterScope(state,value,request.language); validateView(value,request.language); validateLayoutView(state,value); if (request.task.role === 'translation') validateTranslationMirror(record.payload.source_view,value,state.binding); validateConsumption(state,value); applyReadingFirstKnowledgeContent({presentation:effectivePresentation(state),views:[value]}); } else {
     validateReview(value,{...state.binding,configured_setup:undefined});
+    criticalReviewChecked(state, value);
     const reviewed=reviewedNotes(record.payload);
     if (value.issues.some(issue=>issue.severity==='material' && issue.repair_owner==='renderer' && issue.affected_paths.some(path=>!reviewed.has(path)))) fail('READING_FIRST_REVIEW_INVALID');
     if (state.binding.enrichment_policy && state.reviews===1) collectGaps(value.issues.filter(issue=>issue.severity==='material' && issue.scientific_gap).map(issue=>issue.scientific_gap),state.binding);
@@ -907,7 +931,7 @@ function routeReview(state) {
   const canRevise = state.reviews < DEFAULT_REVIEW_ROUNDS && state.requestLog.filter(item=>!['evidence','methods','results'].includes(item.role)).length + repairCalls <= state.binding.max_calls+additionalTaskAllowance(state) && totalUsed(state) + repairCalls <= (executionLimit(state) ?? state.binding.max_calls)
     && plan.affected.every(lang=>state.binding.task_bindings[lang+'-r2']) && state.binding.task_bindings['review-r2'] && (!editorNeeded || state.binding.task_bindings['presentation-r2'])
     && (!plan.editor.length || state.binding.presentation_mode==='reading-editor') && scienceReady;
-  const criticalChecked = !value.key_nodes.some(node=>node.status==='unavailable') && ['main_conclusion','key_design'].every(kind=>value.key_nodes.some(node=>node.kind===kind));
+  const criticalChecked = criticalReviewChecked(state, value);
   if (lateGaps.length && canRevise) {
     state.enrichmentGaps=lateGaps;state.enrichmentRound='late';state.enrichmentReviewCount=state.reviews;
   }
@@ -996,7 +1020,7 @@ export async function recoverReadingFirstRejectedEditor({controller, checkpointR
     || !owned.bytes.equals(bytes) || sha(bytes)!==rejection.sha256 || bytes.length!==rejection.byte_length) fail('READING_FIRST_RECOVERY_RESULT_CHANGED');
   const value=JSON.parse(bytes.toString('utf8'));
   assertEditorRepairScope(state.renderRepairBaseEditor,value,activeReview(state),effectivePresentation(state));
-  validateReadingFirstEditor({editor:value,views:languages.map(language=>state.views[language].value),presentation:effectivePresentation(state)});
+  validateReadingFirstEditor({expandedMethodIndex:state.binding.configured_setup?.expanded_method_index, stagedResearchMap:state.binding.configured_setup?.staged_research_map,editor:value,views:languages.map(language=>state.views[language].value),presentation:effectivePresentation(state)});
   const result=freeze({receipt:copy(owned.receipt),status:'pending_review',recovered:true,publishable:false});
   state.repairRecoveries=[{authorization:copy(authorization),prior_checkpoint:copy(checkpointReceipt),rejection:copy(rejection),result:copy(result)}];
   state.readingEditor={value:freeze(value),receipt:owned.receipt}; state.draftsRevision++; state.status='pending_review';
@@ -1351,10 +1375,14 @@ export function recordReadingFirstCandidateInventory({controller,presentation,ou
   return row;
 }
 
+function inspectBoundCandidate(state, candidate) {
+  return inspectReadingFirstCandidate({ ...candidate, readOnlySources: readingFirstPreviewSourceBinding(state.binding.configured_setup) });
+}
+
 export async function inspectReadingFirstSavedCandidate({controller,revision}={}) {
   const state=stateFor(controller), row=revision===undefined ? state.candidateInventories?.at(-1) : state.candidateInventories?.find(item=>item.revision===revision);
   if (!row) return {status:'unavailable',reason:'READING_FIRST_CANDIDATE_INVENTORY_UNAVAILABLE'};
-  return {...await inspectReadingFirstCandidate(row),revision:row.revision,output_root:row.outputRoot};
+  return {...await inspectBoundCandidate(state, row),revision:row.revision,output_root:row.outputRoot};
 }
 
 export async function registerReadingFirstUserRevision({controller,request}={}) {
@@ -1366,7 +1394,7 @@ export async function registerReadingFirstUserRevision({controller,request}={}) 
     || request.repair_owner==='editor' && state.binding.presentation_mode!=='reading-editor'
     || !Array.isArray(request.target_entries) || !request.target_entries.length) fail('READING_FIRST_USER_REVISION_INVALID');
   const baseline=state.candidateInventories?.at(-1);
-  if (!baseline || (await inspectReadingFirstCandidate(baseline)).status!=='passed') fail('READING_FIRST_USER_REVISION_BASELINE_CHANGED');
+  if (!baseline || (await inspectBoundCandidate(state, baseline)).status!=='passed') fail('READING_FIRST_USER_REVISION_BASELINE_CHANGED');
   const issue={severity:'material',kind:'user-revision',detail:request.request,repair_owner:request.repair_owner,
     repair_scope:copy(request.repair_scope),...(request.affected_paths ? {affected_paths:copy(request.affected_paths)} : {})};
   const views=languages.map(language=>state.views[language].value);
@@ -1481,7 +1509,7 @@ export async function finalizeReadingFirstUserRevision({controller,presentation}
     || candidate.presentation_fingerprint===baseline.presentation_fingerprint
     || !['pending_review','revision_required'].includes(state.status)
     || state.pendingRevisions?.some(key=>!requests.get(state.requestEntries.get(key))?.consumed)) fail('READING_FIRST_USER_REVISION_INVALID');
-  const original=await inspectReadingFirstCandidate(baseline), revised=await inspectReadingFirstCandidate(candidate);
+  const original=await inspectBoundCandidate(state, baseline), revised=await inspectBoundCandidate(state, candidate);
   if (original.status!=='passed' || revised.status!=='passed') fail('READING_FIRST_USER_REVISION_BASELINE_CHANGED');
   const old=new Map(baseline.inventory.map(row=>[row.path,row.sha256]));
   if (user.issue.repair_owner==='renderer') {
@@ -1493,7 +1521,7 @@ export async function finalizeReadingFirstUserRevision({controller,presentation}
       if (fingerprintV3Json(markers(baseline.outputRoot))!==fingerprintV3Json(markers(candidate.outputRoot))) fail('READING_FIRST_USER_REVISION_FACT_CHANGED');
     }
   }
-  if (state.binding.writing_mode==='source-translation') validateTranslationMirror(state.views[state.binding.source_language].value,state.views[languages.find(language=>language!==state.binding.source_language)].value);
+  if (state.binding.writing_mode==='source-translation') validateTranslationMirror(state.views[state.binding.source_language].value,state.views[languages.find(language=>language!==state.binding.source_language)].value,state.binding);
   const taskReceipts=state.observations.filter(row=>state.executionLedger.slice(user.baseline_execution_count).some(call=>call.task_id===row.task_id && call.kind==='initial')).map(row=>row.receipt);
   if (user.issue.repair_owner!=='renderer' && !taskReceipts.length) fail('READING_FIRST_USER_REVISION_INVALID');
   const check={revision_id:user.revision_id,request_fingerprint:fingerprintV3Json(user),review_fingerprint:state.reviewedPresentationFingerprint,
@@ -1536,12 +1564,12 @@ export function renderReadingFirstNotes({controller, targetRegistry, existingTar
   if (state.pendingRevisions?.some(key=>!state.requestEntries.get(key) || !requests.get(state.requestEntries.get(key)).consumed)) fail('READING_FIRST_REVISION_PENDING');
   if (state.binding.presentation_mode === 'reading-editor') {
     if (!state.readingEditor) fail('READING_FIRST_EDITOR_REQUIRED');
-    validateReadingFirstEditor({editor:state.readingEditor.value,views:languages.map(language=>state.views[language].value),presentation:effectivePresentation(state)});
+    validateReadingFirstEditor({expandedMethodIndex:state.binding.configured_setup?.expanded_method_index, stagedResearchMap:state.binding.configured_setup?.staged_research_map,editor:state.readingEditor.value,views:languages.map(language=>state.views[language].value),presentation:effectivePresentation(state)});
   }
   if (state.binding.presentation_required && !state.handoff.presentation) fail('READING_FIRST_PRESENTATION_REQUIRED');
   const output = state.handoff.presentation ? renderReadingFirstObsidian({
     identity:state.handoff.identity, views:languages.map(language=>state.views[language].value),
-    noteLayout:state.binding.note_layout, sourceLanguage:state.binding.source_language,
+    instructionProfile:state.binding.configured_setup?.instruction_profile, expandedMethodIndex:state.binding.configured_setup?.expanded_method_index, stagedResearchMap:state.binding.configured_setup?.staged_research_map, noteLayout:state.binding.note_layout, sourceLanguage:state.binding.source_language,
     presentation:effectivePresentation(state), ...(state.readingEditor ? {readingEditor:state.readingEditor.value} : {}), targetRegistry, existingTargets, knowledgeRegistry,
   }) : {notes:languages.map(language => ({language, content:state.views[language].value.sections.map(section=>'## '+section.heading+'\n\n'+section.paragraphs.join('\n\n')).join('\n\n')}))};
   if (knowledgePolicy !== undefined) {
@@ -1571,7 +1599,7 @@ function validateReviewRequest(state, presentation, renderRepair) {
     // a Writer edit to the same note from counting as a renderer correction.
     const baseline=renderReadingFirstObsidian({identity:state.handoff.identity,views:state.renderRepairBaseViews,presentation:resolvedPresentation(state,state.handoff.presentation),
       ...(state.renderRepairBaseEditor ? {readingEditor:state.renderRepairBaseEditor} : {}),...rendered.rendering,
-      noteLayout:state.binding.note_layout,sourceLanguage:state.binding.source_language});
+      instructionProfile:state.binding.configured_setup?.instruction_profile, expandedMethodIndex:state.binding.configured_setup?.expanded_method_index, stagedResearchMap:state.binding.configured_setup?.staged_research_map, noteLayout:state.binding.note_layout,sourceLanguage:state.binding.source_language});
     const rendererChanges=presentationNotes(baseline, true);
     if (!local || ['completed_with_limits','reading_complete'].includes(state.status) || presentation.presentation_fingerprint===state.reviewedPresentationFingerprint
       || plan.renderer.some(issue=>issue.affected_paths.some(path=>!original.has(path) || !updated.has(path) || !rendererChanges.has(path) || original.get(path)===rendererChanges.get(path)))) fail('READING_FIRST_RENDER_REPAIR_UNAVAILABLE');
@@ -1594,7 +1622,11 @@ export function createReadingFirstReviewRequest({controller, presentation, rende
   const key=repairKey(state,'review'), externalNotes=state.binding.handoff_profile===SCIENCE_INDEX_PROFILE;
   const {supportNotes,...inlinePresentation}=presentation;
   const supportNoteFiles=externalNotes ? (supportNotes ?? []).map(note=>writeSupportNote(state,key,note)) : null;
-  const result=describe(state,key,{presentation:externalNotes ? inlinePresentation : presentation, ...(externalNotes ? {support_note_files:supportNoteFiles} : {}), ...(includeEnrichmentContext(state) ? {enrichment_context:enrichmentContext(state)} : {}), ...(local ? {sources:state.handoff.sources, issues:minorOnly ? minorRenderIssues : activeReview(state).issues.filter(issue=>issue.severity==='material'), prior_overall:state.review.overall, ...(renderRepair ? {revision_scope:minorOnly ? 'Renderer-only correction of the reported minor layout/navigation issues; accepted Writer and Reading Editor outputs are unchanged.' : 'Review the corrected renderer targets and any other material repairs together; a changed target does not itself establish correctness.'} : {})} : {handoff:downstreamHandoff(state)}), ...(local ? {} : {annotation_check:annotationCheck(state, presentation)}), review_scope:local?'local':'overall', key_node_policy:'Main conclusions, key design, and values/formulas/table relations that could change the conclusion only. Ordinary format and unchecked details do not block.'});
+  const methodsFirst = isMethodsFirstReadingProfile(state.binding.configured_setup?.instruction_profile);
+  const keyNodePolicy = methodsFirst
+    ? 'Reconstruct the core method from the rendered accounts, then verify its source. Also check main conclusions, key design and conclusion-changing values.'
+    : 'Main conclusions, key design, and values/formulas/table relations that could change the conclusion only. Ordinary format and unchecked details do not block.';
+  const result=describe(state,key,{...(methodsFirst && local ? {prior_key_nodes:state.review.key_nodes, method_steps:effectivePresentation(state).map.steps} : {}), presentation:externalNotes ? inlinePresentation : presentation, ...(externalNotes ? {support_note_files:supportNoteFiles} : {}), ...(includeEnrichmentContext(state) ? {enrichment_context:enrichmentContext(state)} : {}), ...(local ? {sources:state.handoff.sources, issues:minorOnly ? minorRenderIssues : activeReview(state).issues.filter(issue=>issue.severity==='material'), prior_overall:state.review.overall, ...(renderRepair ? {revision_scope:minorOnly ? 'Renderer-only correction of the reported minor layout/navigation issues; accepted Writer and Reading Editor outputs are unchanged.' : 'Review the corrected renderer targets and any other material repairs together; a changed target does not itself establish correctness.'} : {})} : {handoff:downstreamHandoff(state)}), ...(local ? {} : {annotation_check:annotationCheck(state, presentation)}), review_scope:local?'local':'overall', key_node_policy:keyNodePolicy});
   state.reviews+=1; state.status='reviewing'; return result;
 }
 /** Deterministic annotation gaps on the rendered pages, checked against this paper's knowledge catalogue. */
@@ -1685,7 +1717,7 @@ export function createReadingFirstPresentationRequest({controller} = {}) {
   if (state.readingEditor && !state.rejection && (!state.review || !lastAuthorization(state)?.repair_keys.presentation && (reviewRepairPlan(state.binding,activeReview(state)).affected.length || !reviewRepairPlan(state.binding,activeReview(state)).editor.length))) fail('READING_FIRST_REVISION_PENDING');
   const key=repairKey(state,'presentation');
   const editorIssues=activeReview(state)?.issues.filter(issue=>issue.severity==='material' && issue.repair_owner!=='renderer') ?? [];
-  const result=describe(state,key,{views:languages.map(language=>state.views[language].value),views_fingerprint:readingFirstViewsFingerprint(languages.map(language=>state.views[language].value)),view_receipts:languages.map(language=>state.views[language].receipt),context:state.handoff.context,sources:state.handoff.sources,...(state.handoff.presentation ? {presentation:readingFirstEditorPresentation({presentation:effectivePresentation(state),views:languages.map(language=>state.views[language].value)})} : {}),output_schema:state.binding.presentation_profile,...(state.reviews ? {issues:editorIssues, ...(state.renderRepairBaseEditor ? {prior_editor:state.renderRepairBaseEditor} : {})} : {})});
+  const result=describe(state,key,{views:languages.map(language=>state.views[language].value),views_fingerprint:readingFirstViewsFingerprint(languages.map(language=>state.views[language].value)),view_receipts:languages.map(language=>state.views[language].receipt),context:state.handoff.context,sources:state.handoff.sources,...(state.handoff.presentation ? {presentation:readingFirstEditorPresentation({presentation:effectivePresentation(state),views:languages.map(language=>state.views[language].value)})} : {}),output_schema:state.binding.presentation_profile,...(state.binding.configured_setup?.staged_research_map ? {staged_research_map:true} : {}),...(state.reviews ? {issues:editorIssues, ...(state.renderRepairBaseEditor ? {prior_editor:state.renderRepairBaseEditor} : {})} : {})});
   if (state.reviews) { state.readingEditor=null; state.pendingRevisions=[key]; state.revisionRequests=[result]; }
   state.status='presenting'; return result;
 }
@@ -1757,6 +1789,8 @@ function publicationToolBindings(binding) {
   boundEditorContract(binding);
   const paths=publicationTools.filter(path=>!(configured && path==='../../prompts/v3/reading-first-contracts.md'));
   if (configured || editor) paths.push('./reading-first-repair-scope.mjs');
+  if (isMethodsFirstReadingProfile(binding.configured_setup?.instruction_profile)) paths.push('../lib/reading-profiles.mjs', './methods-first-handoff.mjs', './reading-first-review-nodes.mjs');
+  if (editor && binding.configured_setup?.staged_research_map) paths.push('./research-map-stages.mjs', '../../Templates/apa-v3/研究导图模板.canvas');
   if (usesExecutionLedger(binding)) paths.push('./reading-execution-budget.mjs', './reading-translation-progress.mjs');
   if (editor && !configured) paths.push(`../../prompts/v3/${binding.presentation_profile}.md`);
   const records=paths.map(path=>publicationFileBinding(fileURLToPath(new URL(path,import.meta.url))));
@@ -1786,7 +1820,7 @@ function renderedPublicationContent(state, rendering, rebase = false) {
   assertResolvedKnowledgePaths(state, rendering.knowledgeRegistry, rebase);
   const output=renderReadingFirstObsidian({identity:state.handoff.identity,views:languages.map(language=>state.views[language].value),
     presentation:effectivePresentation(state),...(state.readingEditor ? {readingEditor:state.readingEditor.value} : {}),...rendering,
-    noteLayout:state.binding.note_layout,sourceLanguage:state.binding.source_language});
+    instructionProfile:state.binding.configured_setup?.instruction_profile, expandedMethodIndex:state.binding.configured_setup?.expanded_method_index, stagedResearchMap:state.binding.configured_setup?.staged_research_map, noteLayout:state.binding.note_layout,sourceLanguage:state.binding.source_language});
   const {notes,supportNotes,...rest}=output;
   return {...rest,notes:notes.map(({bytes,...note})=>({...note,draft_receipt:state.views[note.language].receipt})),
     ...(supportNotes ? {supportNotes:supportNotes.map(({bytes,...note})=>note)} : {})};
@@ -1799,7 +1833,7 @@ async function acceptedPublicationArtifacts(state) {
   if (state.status !== 'reading_complete' || !state.handoff.presentation || enrichmentPending(state)) fail('READING_FIRST_PUBLICATION_NOT_READY');
   validateReview(state.review,state.binding);
   if (state.review.issues.some(issue=>issue.severity==='material') || ['complete','coherent','bilingual_consistent'].some(key=>!state.review.overall[key])
-    || state.review.key_nodes.some(node=>node.status==='unavailable') || ['main_conclusion','key_design'].some(kind=>!state.review.key_nodes.some(node=>node.kind===kind))) fail('READING_FIRST_PUBLICATION_NOT_READY');
+    || !criticalReviewChecked(state, state.review)) fail('READING_FIRST_PUBLICATION_NOT_READY');
   if (!languages.every(language=>state.views[language]) || state.binding.presentation_mode==='reading-editor' && !state.readingEditor) fail('READING_FIRST_PUBLICATION_NOT_READY');
   const files=new Map(), add=path=>{const value=publicationFileBinding(path);files.set(value.path,value);};
   const owned=async(root,receipt,value)=>{
@@ -1843,7 +1877,7 @@ async function acceptedPublicationArtifacts(state) {
     await owned(item.artifact_root ?? state.runControl.artifactRoot,item.receipt,item.value);
   }
   if (state.readingEditor) {
-    validateReadingFirstEditor({editor:state.readingEditor.value,views:languages.map(language=>state.views[language].value),presentation:effectivePresentation(state)});
+    validateReadingFirstEditor({expandedMethodIndex:state.binding.configured_setup?.expanded_method_index, stagedResearchMap:state.binding.configured_setup?.staged_research_map,editor:state.readingEditor.value,views:languages.map(language=>state.views[language].value),presentation:effectivePresentation(state)});
     await owned(state.runControl.artifactRoot,state.readingEditor.receipt,state.readingEditor.value);
   }
   const completed=[];
@@ -1890,7 +1924,7 @@ export async function captureReadingFirstPublicationSource({controller,presentat
   if (state.status!=='reading_complete') fail('READING_FIRST_PUBLICATION_NOT_READY');
   current(state);
   const latest=state.candidateInventories?.at(-1);
-  if (latest && (await inspectReadingFirstCandidate(latest)).status!=='passed') fail('READING_FIRST_PUBLICATION_REVIEW_CHANGED');
+  if (latest && (await inspectBoundCandidate(state, latest)).status!=='passed') fail('READING_FIRST_PUBLICATION_REVIEW_CHANGED');
   if (!presentation && latest?.rendering) {
     const rendering=decodePublicationRendering(latest.rendering);
     const content=renderedPublicationContent(state,rendering), fingerprint=fingerprintV3Json(content);
@@ -1928,7 +1962,7 @@ function originalPublicationRecipe(recipe) {
 }
 function externalRenderedContent(recipe, rendering) {
   if (!recipe.render_inputs) fail('RF_REBASE_EXTERNAL_RENDER_INPUTS_REQUIRED');
-  const output=renderReadingFirstObsidian({...recipe.render_inputs,...decodePublicationRendering(rendering)});
+  const output=renderReadingFirstObsidian({...recipe.render_inputs,...decodePublicationRendering(rendering),expandedMethodIndex:recipe.binding?.configured_setup?.expanded_method_index, stagedResearchMap:recipe.binding?.configured_setup?.staged_research_map});
   const {notes,supportNotes,...rest}=output;
   return {...rest,notes:notes.map(({bytes,...note})=>({...note,draft_receipt:recipe.view_receipts[note.language]})),
     ...(supportNotes ? {supportNotes:supportNotes.map(({bytes,...note})=>note)} : {})};
@@ -2059,6 +2093,13 @@ function externalPublicationData(recipe) {
     if (fingerprintV3Json(rendered)!==presentation_fingerprint || fingerprintV3Json(rendered)!==fingerprintV3Json(content)) fail('READING_FIRST_PUBLICATION_CANDIDATE_CHANGED');
   }
   assertReadingBindingCurrent(recipe.binding);
+  if (isMethodsFirstReadingProfile(recipe.binding?.configured_setup?.instruction_profile)) {
+    validateReview(recipe.review, recipe.binding);
+    const inputs = recipe.render_inputs;
+    if (inputs?.instructionProfile !== recipe.binding.configured_setup.instruction_profile || !Array.isArray(inputs.views)
+      || !checkCriticalReviewNodes(recipe.review, inputs.instructionProfile, { presentation: inputs.presentation, views: inputs.views, sources: recipe.scientific_input.sources })
+      || recipe.review.issues.some(issue => issue.severity === 'material') || !['complete','coherent','bilingual_consistent'].every(key=>recipe.review.overall[key])) fail('READING_FIRST_PUBLICATION_NOT_READY');
+  }
   assertPublicationFiles(recipe.source_bindings);
   assertPublicationFiles(recipe.tool_bindings);
   if (recipe.run_root !== undefined) {
@@ -2106,7 +2147,7 @@ export async function inspectReadingFirstPublicationSource(source) {
   assertPublicationFiles(recipe.source_bindings);assertPublicationFiles(recipe.tool_bindings);
   const {resultsResourceManifest}=await acceptedPublicationArtifacts(state);
   const candidate=state.candidateInventories?.at(-1);
-  if (candidate && (await inspectReadingFirstCandidate(candidate)).status!=='passed') fail('READING_FIRST_PUBLICATION_REVIEW_CHANGED');
+  if (candidate && (await inspectBoundCandidate(state, candidate)).status!=='passed') fail('READING_FIRST_PUBLICATION_REVIEW_CHANGED');
   const rebase=verifiedRebase(record,fingerprintV3Json({review:state.review,receipt:record.reviewReceipt,presentation:state.reviewedPresentationFingerprint}));
   return freeze({origin:record.origin,recipe,...(rebase ? {knowledge_rebase:rebase} : {}),candidate:rebase?.candidate ?? recipe.candidate,identity:copy(state.handoff.identity),scientific_input_fingerprint:state.handoff.input_fingerprint,
     review:copy(state.review),reading_review_fingerprint:fingerprintV3Json({review:state.review,receipt:record.reviewReceipt,presentation:state.reviewedPresentationFingerprint}),
@@ -2207,7 +2248,7 @@ export async function restoreReadingFirstRuntime({handoff,runControl,checkpointR
     if(!Number.isInteger(previous.callsUsed)||previous.callsUsed<(binding.prior_calls ?? 0)||previous.callsUsed>restoredCallLimit(previous,binding)||previous.callsUsed-(binding.prior_calls ?? 0)!==previous.request_entries?.length
       || previous.requestLog?.length!==previous.callsUsed-(binding.prior_calls ?? 0) || !Number.isInteger(previous.reviews)||previous.reviews<0||previous.reviews>reviewLimit(previous)) fail('READING_FIRST_CHECKPOINT_INVALID');
     const sections=copy(binding.configured_setup?.sections ?? Object.fromEntries([...prompt.toString('utf8').matchAll(/^## (.+)\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/gm)].map(m=>[m[1],m[2].trim()])));
-    if (!binding.configured_setup && binding.presentation_mode === 'reading-editor') sections['Reading Editor'] = readingEditorInstructions();
+    if (!binding.configured_setup && binding.presentation_mode === 'reading-editor') sections['Reading Editor'] = readingEditorInstructions(binding.presentation_profile);
     const state={enrichmentSources:[],enrichmentRecords:[],enrichmentGaps:[],enrichmentRound:null,...copy(previous),runControl,binding,controlFingerprint:snapshot.control_fingerprint,handoff,promptFingerprint:snapshot.prompt_fingerprint,sections,...(previous.scienceIndexNote ?? captureScienceIndexNote(binding) ? {scienceIndexNote:previous.scienceIndexNote ?? captureScienceIndexNote(binding)} : {}),issued:new Set(),requestEntries:new Map()};
     const controller=Object.freeze({profile:READING_FIRST_PROFILE});states.set(controller,state);
     for(const entry of previous.request_entries){

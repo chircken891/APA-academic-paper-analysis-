@@ -16,7 +16,7 @@ import { buildBilingualIndex } from '../../scripts/v3/phase22-search.mjs';
 import { verifyReadingFirstPaperBytes, verifyReadingFirstPresentation } from '../../scripts/v3/reading-first-index.mjs';
 import { syncCommittedGraph } from '../../scripts/v3/obsidian-graph-sync.mjs';
 import { buildMapRefreshReview } from '../../scripts/v3/research-map-refresh.mjs';
-import { researchMapCanvasSection } from '../../scripts/v3/research-map-canvas.mjs';
+import { isResearchMapStepEdge, isStagedResearchMap, researchMapCanvasSection } from '../../scripts/v3/research-map-canvas.mjs';
 import { isMaintenanceApprovalReply } from '../../scripts/v3/maintenance-publication.mjs';
 
 const script = fileURLToPath(new URL('../../scripts/v3/bilingual.mjs', import.meta.url));
@@ -177,6 +177,110 @@ test('refresh keeps the current geometry of every existing research map node', a
   assert.equal(changed.before_sha256, sha(bytes));
   const kept = JSON.parse(changed.bytes).nodes.find(row => row.id === node.id);
   assert.deepEqual({ x: kept.x, y: kept.y, width: kept.width, height: kept.height }, expected);
+});
+
+test('full map refresh requires existing step links and preserves current node geometry', async t => {
+  const { f, options } = await legacyMapFixture(t), root = f.vaultRoot;
+  const selection = options.papers[0];
+  const step = { id: 'selection', section_id: 'design', label: { en: 'Select eligible records', 'zh-CN': '筛选合格记录' } };
+  selection.map.steps.unshift(step);
+  selection.map.step_links = [{ from_step_id: step.id, to_step_id: selection.map.steps[1].id,
+    label: { en: 'Eligible records', 'zh-CN': '合格记录' } }];
+  await registerLegacyCanvas(root, options);
+  const path = `Figures/${f.runId}/research-map.en.canvas`;
+  const original = await json(join(root, path));
+  const edge = original.edges.find(isResearchMapStepEdge);
+  const node = original.nodes.find(row => row.id === edge.fromNode);
+  assert.match(node.text, /Select eligible records/);
+  node.x += 75;
+  node.y -= 20;
+  // Obsidian may omit default edge properties during a geometry edit.
+  delete edge.toEnd;
+  await writeFile(join(root, path), JSON.stringify(original));
+  const input = { vaultRoot: root, runId: 'refresh-method-flow', generation: 'refresh-method-flow', ...options };
+  const omitted = structuredClone(input);
+  delete omitted.papers[0].map.step_links;
+  await assert.rejects(buildMapRefreshReview(omitted), { code: 'P22_MAP_REFRESH_STEP_LINKS_REQUIRED' });
+  const invalid = structuredClone(input);
+  invalid.papers[0].map.step_links[0].from_step_id = 'unregistered';
+  await assert.rejects(buildMapRefreshReview(invalid), { code: 'RF_CANVAS_STEP_LINK_INVALID' });
+  const refreshed = await buildMapRefreshReview(input);
+  const candidate = JSON.parse(refreshed.outputInventory.find(row => row.path === path).bytes);
+  const current = candidate.nodes.find(row => row.id === node.id);
+  assert.deepEqual(current, node);
+  assert.deepEqual(candidate.edges.find(isResearchMapStepEdge), { ...edge, toEnd: 'arrow' });
+});
+
+test('stage map refresh preserves both language layouts and requires the existing stage data', async t => {
+  const { f, options } = await legacyMapFixture(t), root = f.vaultRoot;
+  await registerLegacyCanvas(root, options);
+  const enCanvas = join(root, `Figures/${f.runId}/research-map.en.canvas`);
+  const enBefore = await json(enCanvas);
+  const movedQuestion = enBefore.nodes.find(node => node.text?.includes('What does the study test?'));
+  movedQuestion.x += 133;
+  movedQuestion.height += 29;
+  await writeFile(enCanvas, JSON.stringify(enBefore));
+  const zhCanvas = `Figures/${f.runId}/research-map.zh-CN.canvas`;
+  const zhNote = join(root, f.candidate.notes.find(row => row.language === 'zh-CN').path);
+  const zhGuide = researchMapCanvasSection({ canvasPath: zhCanvas, language: 'zh-CN' }).split('\n\n')[0];
+  const personalGuide = '先看我标出的临床结局，再看相应方法。';
+  const zhBefore = await readFile(zhNote, 'utf8');
+  assert.ok(zhBefore.includes(zhGuide));
+  await writeFile(zhNote, zhBefore.replace(zhGuide, personalGuide));
+  const selection = options.papers[0], { argument, map } = selection;
+  const bilingual = (en, zh) => ({ en, 'zh-CN': zh });
+  const design = map.steps[0];
+  const screening = { id: 'eligible-records', section_id: 'design', label: bilingual('Select eligible records', '筛选合格记录') };
+  map.steps.unshift(screening);
+  map.step_links = [{ from_step_id: screening.id, to_step_id: design.id, label: bilingual('Eligible records', '合格记录') }];
+  argument.stage_map = {
+    stages: [
+      { id: 'screening', title: bilingual('Evidence selection', '证据筛选'),
+        entry: bilingual('Select records under the documented criteria.', '按既定标准选择记录。'),
+        step_ids: [screening.id], claim_ids: argument.claims.slice(0, 2).map(row => row.id) },
+      { id: 'testing', title: bilingual('Analysis of selected evidence', '入选证据的分析'),
+        entry: bilingual('Carry eligible records forward for analysis.', '把合格记录交给后续分析。'),
+        step_ids: [design.id], claim_ids: argument.claims.slice(2).map(row => row.id) },
+    ],
+    transitions: [{ from: 'screening', to: 'testing', label: bilingual('The eligible records enter the analysis.', '合格记录进入分析。') }],
+    step_text: Object.fromEntries(map.steps.map(row => [row.id, row.label])),
+    finding_text: Object.fromEntries(map.findings.map(row => [row.id, row.label])),
+  };
+  for (const relation of map.relations.slice(0, 2)) relation.step_id = screening.id;
+  const upgrade = await review(root, 'stage-map-upgrade', 'map-refresh', options);
+  assert.equal(apply(root, 'stage-map-upgrade', upgrade.inventory_sha256).status, 'committed');
+  const input = { vaultRoot: root, runId: 'refresh-stages', generation: 'refresh-stages', ...options };
+  for (const language of ['en', 'zh-CN']) {
+    const canvasPath = `Figures/${f.runId}/research-map.${language}.canvas`;
+    const notePath = f.candidate.notes.find(row => row.language === language).path;
+    const note = await readFile(join(root, notePath), 'utf8');
+    if (language === 'en') assert.ok(note.includes(researchMapCanvasSection({ canvasPath, language, staged: true, methodsFirst: true })));
+    else assert.equal(note, zhBefore.replace(zhGuide, personalGuide));
+    const canvas = await json(join(root, canvasPath));
+    assert.ok(isStagedResearchMap(canvas));
+    if (language === 'en') {
+      const question = canvas.nodes.find(row => row.id === movedQuestion.id);
+      for (const key of ['x', 'y', 'width', 'height']) assert.equal(question[key], movedQuestion[key]);
+    }
+    const stepEdge = canvas.edges.find(isResearchMapStepEdge);
+    const moved = canvas.nodes.find(row => row.id === stepEdge.fromNode);
+    moved.x += 101;
+    moved.y -= 16;
+    const bytes = Buffer.from(JSON.stringify(canvas));
+    await writeFile(join(root, canvasPath), bytes);
+    const result = await buildMapRefreshReview(input);
+    const candidate = result.outputInventory.find(row => row.path === canvasPath);
+    assert.equal(candidate.before_sha256, sha(bytes));
+    const regenerated = JSON.parse(candidate.bytes);
+    assert.ok(isStagedResearchMap(regenerated));
+    assert.deepEqual(regenerated.nodes.find(row => row.id === moved.id), moved);
+  }
+  const missing = structuredClone(input);
+  delete missing.papers[0].argument.stage_map;
+  await assert.rejects(buildMapRefreshReview(missing), { code: 'P22_MAP_REFRESH_STAGE_MAP_REQUIRED' });
+  const missingFlow = structuredClone(input);
+  delete missingFlow.papers[0].map.step_links;
+  await assert.rejects(buildMapRefreshReview(missingFlow), { code: 'P22_MAP_REFRESH_STEP_LINKS_REQUIRED' });
 });
 
 test('maintenance can apply a precise geometry change to one language Canvas only', async t => {

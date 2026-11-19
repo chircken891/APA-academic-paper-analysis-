@@ -68,6 +68,33 @@ test('a rendered note reports chart-type, panel-citation and card-link gaps', ()
   assert.deepEqual(report.unlinked_cards.map(row => [row.title, row.candidates[0].match]), [['克隆系统发育树', 'exact']]);
 });
 
+test('the expanded bilingual index matches numbered short titles without changing the report title or line', () => {
+  const path = 'Wiki/methods/PCA.md';
+  const nodes = [{ path, names: ['PCA', '主成分'] }];
+  for (const [language, indexHeading, title] of [
+    ['en', 'Methods and concepts at a glance', 'PCA'],
+    ['zh-CN', '方法与概念索引', '主成分'],
+  ]) {
+    const note = `### 3.1 ${indexHeading}\n\n> [!info] 1. ${title}\n> [Procedure](#3.2)`;
+    const options = { language, nodes };
+    const [row] = checkReadingNote(note, options).unlinked_cards;
+    assert.deepEqual(row, { title: `1. ${title}`, line: 3, candidates: [{ path, match: 'exact' }] });
+    assert.deepEqual(checkReadingNote(note + ` · [${title}](../methods/PCA.md)`, options).unlinked_cards, []);
+    assert.equal(checkReadingNote(note.replace('1. ', ''), options).unlinked_cards[0].candidates[0].match, 'exact');
+    assert.deepEqual(checkReadingNote(note.replace('3.1', '3.2'), options).unlinked_cards, []);
+  }
+});
+
+test('index matching preserves digits that belong to a registered name', () => {
+  const inventory = '### 3.1 Methods and concepts at a glance';
+  const path = 'Wiki/concepts/numbered-name.md';
+  const options = { language: 'en', nodes: [{ path, names: ['1. H', '3D'] }] };
+  for (const title of ['1. H', '2. 1. H', '3. 3D']) {
+    const note = `${inventory}\n\n> [!info] ${title}`;
+    assert.deepEqual(checkReadingNote(note, options).unlinked_cards[0]?.candidates, [{ path, match: 'exact' }]);
+  }
+});
+
 test('English findings citations are matched by figure family', () => {
   const note = `## 4. Findings
 

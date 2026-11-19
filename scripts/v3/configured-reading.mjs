@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync, mkdirSync, writeFileSync, linkSync, unlinkSync, lstatSync, cpSync } from 'node:fs';
+import { constants, copyFileSync, readFileSync, mkdirSync, writeFileSync, linkSync, unlinkSync, lstatSync, cpSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectApaConfig, resolveApaConfig } from '../lib/apa-config.mjs';
+import { configuredReadingProfile, DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, isMethodsFirstReadingProfile } from '../lib/reading-profiles.mjs';
 import { createConfiguredApaRoleModelPolicy, resolveApaRoleModel, buildHostDispatchArguments } from '../apa-model-policy.mjs';
 import { SCIENCE_INDEX_PROFILE, createReadingFirstRunControl, fingerprintReadingFirst, getReadingFirstPresentation, renderReadingFirstNotes, snapshotReadingFirstRuntime, getReadingFirstState, recordReadingFirstCandidateInventory } from './reading-first-runtime.mjs';
-import { exportReadingFirstPreview, inspectReadingFirstCandidate } from './reading-first-preview.mjs';
+import { exportReadingFirstPreview, inspectReadingFirstCandidate, readingFirstPreviewSourceBinding } from './reading-first-preview.mjs';
 import { emitApprovedRunStep, createCurrentMineruBaselinePort, INSTRUCTION_PATH_DISPATCH_PROFILE } from './phase21-runner.mjs';
 import { getRoleReplyContract } from './role-reply-contract.mjs';
 import { readCommittedReadingFirstKnowledgeRegistry, assertCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
@@ -13,9 +14,9 @@ import { matchPlannedReadingFirstKnowledge, readPlannedReadingFirstKnowledge, re
 import { COMPACTION_POLICY } from './reading-compaction.mjs';
 import { inspectReadingRuntime } from './reading-runtime-binding.mjs';
 import { prepareReadingRuntimeSnapshot } from './reading-runtime-snapshot.mjs';
+import { hasReadingSessionContinuation, readingSessionSourcePreparation } from './reading-session-continuation.mjs';
 import { registerReadingRuntimeCleanupFiles } from './reading-runtime-cleanup.mjs';
-import { CLIPPINGS_SOURCE_POLICY, prepareReadingSources } from './reading-source-policy.mjs';
-import { READING_EDITOR_PROFILE } from './reading-first-editor-contract.mjs';
+import { CLIPPINGS_SOURCE_POLICY, READ_ONLY_SOURCE_ACCESS, assertReadingSourceOutputPath, prepareReadingSources } from './reading-source-policy.mjs';
 
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const CODE_ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)));
@@ -23,7 +24,7 @@ const freeze = value => { if (value && typeof value === 'object') { Object.value
 const sectionsOf = bytes => Object.fromEntries([...String(bytes).matchAll(/^## (.+)\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/gm)].map(match => [match[1], match[2].trim()]));
 const scienceSections = { evidence: 'Evidence/Coverage Mapper', methods: 'Design/Methods Specialist', results: 'Results/Visuals Specialist', interpretation: 'Interpretation/Appraisal Specialist', 'scientific-reading': 'Scientific Reading Synthesizer', integration: 'Integrator' };
 
-export const DEFAULT_CONFIGURED_INSTRUCTION_PROFILE = 'configured-reading-2.2';
+export { DEFAULT_CONFIGURED_INSTRUCTION_PROFILE };
 
 function freezeSupportPrompt(name, profile, metadata) {
   const bytes = readFileSync(new URL('../../prompts/v3/' + name, import.meta.url));
@@ -51,8 +52,8 @@ export function deriveConfiguredMaxCalls({ maxTotalCalls, presentationMode } = {
 
 /** Freeze selected guidance into the binding. Disabled skills contribute no optional instructions. */
 export function buildConfiguredReadingInstructions(writingSkills = {}, { instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE } = {}) {
-  if (instructionProfile !== DEFAULT_CONFIGURED_INSTRUCTION_PROFILE) throw Object.assign(new Error('READING_BINDING_RETIRED'), { code: 'READING_BINDING_RETIRED' });
-  const urls = ['science-configured-2.2.md', 'reading-configured-2.2.md', READING_EDITOR_PROFILE + '.md'].map(name => new URL('../../prompts/v3/' + name, import.meta.url));
+  const { sciencePrompt, readingPrompt, editor } = configuredReadingProfile(instructionProfile);
+  const urls = [sciencePrompt, readingPrompt, editor + '.md'].map(name => new URL('../../prompts/v3/' + name, import.meta.url));
   const buffers = urls.map(url => readFileSync(url));
   const sections = sectionsOf(buffers[1]);
   sections['Reading Editor'] = buffers[2].toString('utf8').trim();
@@ -60,14 +61,17 @@ export function buildConfiguredReadingInstructions(writingSkills = {}, { instruc
     .filter(([key]) => key !== (language === 'en' ? 'humanizer-zh' : 'humanizer'))
     .map(([key, guide]) => 'Selected optional writing guidance: ' + key + '\n' + JSON.stringify({ path: guide.path, sha256: sha(Buffer.from(guide.content)) })
       + '\nApply only guidance relevant to this language and the assigned article module, within the existing APA output contract. Do not run skill workflows, commands, extra roles or review loops.\n' + guide.content).join('\n\n')]));
-  return { instruction_profile: instructionProfile, frozen_support: { science_index: freezeSupportPrompt('science-index-1.0.md', SCIENCE_INDEX_PROFILE), role_reply: freezeSupportPrompt('role-reply-1.0.md', 'role-reply-1.0', getRoleReplyContract()) }, prompt_files: urls.map((url, index) => ({ path: fileURLToPath(url), sha256: sha(buffers[index]), byte_length: buffers[index].length })),
+  return { instruction_profile: instructionProfile,
+    ...(isMethodsFirstReadingProfile(instructionProfile) ? { expanded_method_index: true, staged_research_map: true } : {}),
+    frozen_support: { science_index: freezeSupportPrompt('science-index-1.0.md', SCIENCE_INDEX_PROFILE), role_reply: freezeSupportPrompt('role-reply-1.0.md', 'role-reply-1.0', getRoleReplyContract()) }, prompt_files: urls.map((url, index) => ({ path: fileURLToPath(url), sha256: sha(buffers[index]), byte_length: buffers[index].length })),
     sections, science_sections: sectionsOf(buffers[0]), writing_instructions: writingInstructions,
     writing_guides: Object.fromEntries(Object.entries(writingSkills).map(([key, guide]) => [key, { path: guide.path, sha256: sha(Buffer.from(guide.content)), byte_length: Buffer.byteLength(guide.content) }])) };
 }
 
 /** Required entry for NEW configured readings. Reopening a run uses its owned binding, never this factory. */
-export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext, hostProfile, supportedModelPairs, instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, ...options } = {}, runtimeBinding) {
-  if (instructionProfile !== DEFAULT_CONFIGURED_INSTRUCTION_PROFILE) throw Object.assign(new Error('READING_BINDING_RETIRED'), { code: 'READING_BINDING_RETIRED' });
+export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext, hostProfile, supportedModelPairs, instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, ...options } = {}, runtimeBinding, continuation) {
+  const creating = !hasReadingSessionContinuation(continuation, { runId: options.runId, instructionProfile, repoRoot });
+  const { editor } = configuredReadingProfile(instructionProfile, { creating });
   if (sessionContext !== undefined) {
     if (!sessionContext || typeof sessionContext !== 'object' || Array.isArray(sessionContext)
       || sessionContext.effort !== undefined && sessionContext.reasoning_effort !== undefined && sessionContext.effort !== sessionContext.reasoning_effort) throw new Error('APA_CONFIGURED_SESSION_CONTEXT_INVALID');
@@ -108,11 +112,19 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
   // A caller-supplied role for these keys must already be translation; anything else is a conflict, not something to overwrite.
   if (Object.entries(options.taskBindings ?? {}).some(([key, task]) => translationKeys.includes(key) && task?.role !== undefined && task.role !== 'translation')) throw new Error('READING_FIRST_TRANSLATION_ROLE_REQUIRED');
   const taskBindings = options.taskBindings && Object.fromEntries(Object.entries(options.taskBindings).map(([key, task]) => [key, translationKeys.includes(key) ? { ...task, role: 'translation' } : task]));
+  const sourceOptions = readingSessionSourcePreparation(continuation);
+  const sourceAccess = sourceOptions.sourceAccess === undefined ? READ_ONLY_SOURCE_ACCESS : sourceOptions.sourceAccess;
   const { scientificInput, source_locations, raw_source_matches } = prepareReadingSources({
-    repoRoot, scientificInput: options.scientificInput, sourceMatchMetadata: options.sourceMatchMetadata,
+    repoRoot, scientificInput: options.scientificInput, sourceMatchMetadata: options.sourceMatchMetadata, ...sourceOptions, sourceAccess,
   });
   configuredSetup.source_policy = CLIPPINGS_SOURCE_POLICY;
   configuredSetup.source_locations = source_locations;
+  if (sourceAccess === READ_ONLY_SOURCE_ACCESS) {
+    configuredSetup.source_access = sourceAccess;
+    for (const outputPath of Object.values(paths)) {
+      assertReadingSourceOutputPath(outputPath, source_locations, { tree: true, vaultRoot: repoRoot });
+    }
+  }
   if (runtimeBinding && (resolve(runtimeBinding.repo_root) !== CODE_ROOT || inspectReadingRuntime({ manifest: runtimeBinding, repoRoot, runRoot: paths.runRoot }).status !== 'current')) {
     throw new Error('READING_SESSION_RUNTIME_SNAPSHOT_INVALID');
   }
@@ -120,7 +132,7 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
   const runControl = createReadingFirstRunControl({ ...options, scientificInput, ...(derivedMaxCalls === undefined ? {} : { maxCalls: derivedMaxCalls }), ...(taskBindings ? { taskBindings } : {}), ...(loaded.config.host ? { host: loaded.config.host } : {}), mainSession, configuredSetup, writingMode: 'source-translation',
     compactionPolicy: COMPACTION_POLICY,
     roleReplyContract: options.roleReplyContract === undefined ? getRoleReplyContract() : options.roleReplyContract,
-    presentationProfile: READING_EDITOR_PROFILE,
+    presentationProfile: editor,
     firstWritingLanguage: options.sourceLanguage, presentationMode: resolvedConfig.reading.presentation_mode, handoffProfile: SCIENCE_INDEX_PROFILE });
   return freeze({ resolvedConfig, scientificInput, raw_source_matches, configurationFingerprint: loaded.fingerprint, paths, parserOptions, runControl });
 }
@@ -228,7 +240,9 @@ export function configuredMineruConfiguration(prepared) {
 
 /** Parsing calls no model: record `requested_model: null` in the packet; historical formal names remain accepted. */
 export function createConfiguredMineruPort({ prepared, repoRoot, dependencies } = {}) {
-  const port = createCurrentMineruBaselinePort({ vaultRoot: repoRoot, dependencies, modelFreeParser: true });
+  const setup = prepared.runControl?.reading_first_binding.configured_setup;
+  const port = createCurrentMineruBaselinePort({ vaultRoot: repoRoot, dependencies, modelFreeParser: true,
+    readOnlySources: setup?.source_access === READ_ONLY_SOURCE_ACCESS ? setup.source_locations : undefined });
   return Object.freeze({ port: port.port, run(packet, options) {
     if (resolve(packet.allowed_output_root) !== prepared.paths.parseRoot
       || fingerprintReadingFirst(packet.backend?.configuration) !== fingerprintReadingFirst(configuredMineruConfiguration(prepared))) throw new Error('APA_CONFIGURED_PARSER_BINDING_MISMATCH');
@@ -236,14 +250,16 @@ export function createConfiguredMineruPort({ prepared, repoRoot, dependencies } 
   } });
 }
 
-/** Save the same rendered Obsidian candidate through the existing self-contained exporter; grants no publication authority. */
+/** Save and register an Obsidian candidate. */
 export async function materializeConfiguredReadingCandidate({ prepared, controller, handoff, resources, onDependencyBoundary, candidateRevision = 1, reuseExisting = false, ...renderOptions } = {}) {
   const checkpoint = snapshotReadingFirstRuntime(controller);
   const current=getReadingFirstState(controller);
   if (checkpoint.control_fingerprint !== fingerprintReadingFirst(prepared.runControl.reading_first_binding)
     || checkpoint.handoff_fingerprint !== handoff?.handoff_fingerprint) throw new Error('APA_CONFIGURED_CANDIDATE_BINDING_MISMATCH');
-  const policy = prepared.runControl.reading_first_binding.configured_setup?.knowledge_registry;
-  const boundRoot = prepared.runControl.reading_first_binding.configured_setup?.paths?.candidateRoot;
+  const setup = prepared.runControl.reading_first_binding.configured_setup;
+  const policy = setup?.knowledge_registry;
+  const boundRoot = setup?.paths?.candidateRoot;
+  const readOnlySources = readingFirstPreviewSourceBinding(setup);
   if ((candidateRevision !== 1 || reuseExisting) && (typeof boundRoot !== 'string' || resolve(prepared.paths.candidateRoot) !== resolve(boundRoot))) throw new Error('APA_CONFIGURED_CANDIDATE_BINDING_MISMATCH');
   const maxRevision=current.review_round_limit+(checkpoint.state.user_revisions ?? []).filter(row=>!row.scientific).length;
   if (!Number.isInteger(candidateRevision) || candidateRevision < 1 || candidateRevision > maxRevision || typeof reuseExisting !== 'boolean') throw new Error('APA_CONFIGURED_CANDIDATE_REVISION_INVALID');
@@ -260,6 +276,10 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
   if (exists && !reuseExisting) throw Object.assign(new Error('RF_PREVIEW_OUTPUT_EXISTS'), { code: 'RF_PREVIEW_OUTPUT_EXISTS' });
   if (candidateRevision > 1 && recoveringReviewed && !exists) throw new Error('APA_CONFIGURED_CANDIDATE_REUSE_MISMATCH');
   const scratch = join(policy.vault_root, '.tmp', 'reading-first-candidates');
+  if (readOnlySources) {
+    assertReadingSourceOutputPath(scratch, readOnlySources.locations, { vaultRoot: policy.vault_root });
+    assertReadingSourceOutputPath(candidateRoot, readOnlySources.locations, { tree: true, vaultRoot: policy.vault_root });
+  }
   mkdirSync(scratch, { recursive: true });
   const runId = prepared.runControl.run_id;
   const planKnowledge = (candidate, registry) => {
@@ -293,8 +313,11 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
       const exported = await exportReadingFirstPreview({ outputRoot: stage, identity: handoff.identity,
         views: ['en', 'zh-CN'].map(language => checkpoint.state.views[language].value), presentation: getReadingFirstPresentation({ controller }), resources,
         ...(checkpoint.state.readingEditor ? { readingEditor: checkpoint.state.readingEditor.value } : {}), ...options,
+        instructionProfile: prepared.runControl.reading_first_binding.configured_setup.instruction_profile,
+        expandedMethodIndex: prepared.runControl.reading_first_binding.configured_setup.expanded_method_index,
+        stagedResearchMap: prepared.runControl.reading_first_binding.configured_setup.staged_research_map,
         targetRegistry: candidate.targetRegistry, noteLayout: prepared.runControl.reading_first_binding.note_layout, sourceLanguage: prepared.runControl.reading_first_binding.source_language,
-        historicalKnowledge: { vaultRoot: policy.vault_root } });
+        historicalKnowledge: { vaultRoot: policy.vault_root }, readOnlySources });
       await registerPreview(stage, exported.inventory, 'temporary');
       if (candidate.notes.some(note => exported.notes.find(other => other.path === note.path)?.content !== note.content)
         || (candidate.supportNotes?.length ?? 0) !== (exported.supportNotes?.length ?? 0)
@@ -304,7 +327,7 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
       assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: trusted, policy: policy.policy, paths });
       if (exists) {
         try {
-          const report=await inspectReadingFirstCandidate({outputRoot:candidateRoot,inventory:exported.inventory});
+          const report=await inspectReadingFirstCandidate({outputRoot:candidateRoot,inventory:exported.inventory,readOnlySources});
           if (report.status!=='passed') throw Object.assign(new Error('file set, bytes or links'),{report});
           assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: trusted, policy: policy.policy, paths });
         } catch (error) {
@@ -314,13 +337,29 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
         recordReadingFirstCandidateInventory({controller,presentation:candidate,outputRoot:candidateRoot,inventory:exported.inventory,revision:candidateRevision});
         return { candidate, exported: { ...exported, outputRoot: candidateRoot }, staging_root: stage, reused: true, planned_knowledge: planKnowledge(candidate, trusted) };
       }
+      if (readOnlySources) {
+        const staged = await inspectReadingFirstCandidate(exported);
+        if (staged.status !== 'passed') throw Object.assign(new Error('APA_CONFIGURED_CANDIDATE_STAGING_MISMATCH'), { report: staged });
+        assertReadingSourceOutputPath(candidateRoot, readOnlySources.locations, { tree: true, vaultRoot: policy.vault_root });
+      }
       mkdirSync(dirname(candidateRoot), { recursive: true });
       try { mkdirSync(candidateRoot); }
       catch (error) { if (error.code === 'EEXIST') throw Object.assign(new Error('RF_PREVIEW_OUTPUT_EXISTS'), { code: 'RF_PREVIEW_OUTPUT_EXISTS' }); throw error; }
       try {
-        cpSync(stage, candidateRoot, { recursive: true, force: false, errorOnExist: true });
+        if (readOnlySources) {
+          for (const { path } of exported.inventory) {
+            const destination = join(candidateRoot, path);
+            assertReadingSourceOutputPath(destination, readOnlySources.locations, { vaultRoot: policy.vault_root });
+            mkdirSync(dirname(destination), { recursive: true });
+            copyFileSync(join(stage, path), destination, constants.COPYFILE_EXCL);
+          }
+        } else cpSync(stage, candidateRoot, { recursive: true, force: false, errorOnExist: true });
         await registerPreview(candidateRoot, exported.inventory, 'historical');
         await onDependencyBoundary?.({ attempt, phase: 'after-finalize', stagingRoot: stage, outputRoot: candidateRoot });
+        if (readOnlySources) {
+          const finalized = await inspectReadingFirstCandidate({ outputRoot: candidateRoot, inventory: exported.inventory, readOnlySources });
+          if (finalized.status !== 'passed') throw Object.assign(new Error('APA_CONFIGURED_CANDIDATE_FINALIZE_MISMATCH'), { report: finalized });
+        }
         assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: trusted, policy: policy.policy, paths });
       } catch (error) {
         error.details = { ...error.details, owned_output_path: candidateRoot, staging_root: stage };

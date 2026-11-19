@@ -1,12 +1,14 @@
 import { isAbsolute, normalize, win32 } from 'node:path';
 import { APA_SCIENCE_ROLES } from '../apa-model-policy.mjs';
+import { DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, configuredReadingProfile } from '../lib/reading-profiles.mjs';
+import { hasReadingSessionContinuation } from './reading-session-continuation.mjs';
 
 const nonempty = value => typeof value === 'string' && Boolean(value.trim());
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 
 /** Predeclare task identities and finite control slots before any role dispatch. */
-export function buildReadingSessionTasks({ runId, scientificInput, sourceLanguage, checkpointCount, controllerActorId = 'controller', taskOverrides = {}, scienceTaskOverrides = {}, includeRepairs = false, presentationMode = 'reading-editor', enrichmentPolicy, instructionProfile = 'configured-reading-2.2' } = {}) {
-  if (instructionProfile !== 'configured-reading-2.2') fail('READING_BINDING_RETIRED');
+export function buildReadingSessionTasks({ runId, scientificInput, sourceLanguage, checkpointCount, controllerActorId = 'controller', taskOverrides = {}, scienceTaskOverrides = {}, includeRepairs = false, presentationMode = 'reading-editor', enrichmentPolicy, instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE } = {}, continuation) {
+  configuredReadingProfile(instructionProfile, { creating: !hasReadingSessionContinuation(continuation, { runId, instructionProfile }) });
   if (!/^[a-zA-Z0-9_-]+$/.test(runId ?? '') || !['en', 'zh-CN'].includes(sourceLanguage) || !nonempty(controllerActorId)) fail('READING_SESSION_INPUT_INVALID');
   const ids = scientificInput?.role_artifacts;
   if (!Array.isArray(ids) || ids.length !== APA_SCIENCE_ROLES.length || ids.some(id => !nonempty(id)) || new Set(ids).size !== ids.length) fail('READING_SESSION_SCIENCE_IDENTITIES');
