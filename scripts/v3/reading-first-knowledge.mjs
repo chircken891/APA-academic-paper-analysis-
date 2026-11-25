@@ -344,7 +344,7 @@ export function draftReadingFirstKnowledgeComparisons({ item, knowledgeRegistry,
 function composeKnowledgeAddition(existing, item, paperId, paperTitle) {
   const additions = (existing.paper_additions ?? []).filter(addition => addition.paper_id !== paperId);
   const sources = [...(existing.sources ?? [])];
-  for (const source of item.sources ?? []) if (!sources.some(other => other.url === source.url)) sources.push(source);
+  for (const source of item.sources ?? []) if (!sources.some(other => sameKnowledgeSource(other, source))) sources.push(source);
   const formulas = [...(existing.formulas ?? [])];
   for (const formula of item.formulas ?? []) if (!formulas.some(other => other.latex === formula.latex)) formulas.push(formula);
   const aliases = [...new Set([...(existing.aliases ?? []), ...(item.aliases ?? [])])];
@@ -368,12 +368,40 @@ function additionSections(addition, language) {
     ...(addition.sections?.[language] ?? []).map(section => ({ heading: label + ' · ' + section.heading, paragraphs: section.paragraphs }))];
 }
 
-function renderKnowledgeSource(source) {
+export function resolveSharedKnowledgeSources(item, sourcePaths) {
+  if (!item.sources?.length || item.source_kind !== 'method-background') return item;
+  const sources = item.sources.map(source => {
+    if (source?.url !== undefined) return source;
+    const sourcePath = sourcePaths.get(source?.source_id);
+    const locator = source?.locator;
+    if (!sourcePath || !/\.pdf$/i.test(sourcePath) || locator?.kind !== 'pdf-page'
+      || !Number.isSafeInteger(locator.page) || locator.page < 1) fail('RF_OBSIDIAN_KNOWLEDGE_SOURCE_INVALID');
+    // Source IDs are scoped to a paper. Shared state must retain the resolved path.
+    const name = path.posix.basename(sourcePath, path.posix.extname(sourcePath));
+    const title = source.title ?? source.label ?? `${name} · p. ${locator.page} / 第 ${locator.page} 页`;
+    return { title, path: sourcePath, page: locator.page };
+  });
+  return { ...item, sources };
+}
+
+function sameKnowledgeSource(left, right) {
+  return right.url !== undefined ? left.url === right.url
+    : left.url === undefined && left.path === right.path && left.page === right.page;
+}
+
+function renderKnowledgeSource(source, target, href) {
   const sourceLabel = source.title ?? source.label;
   const localizedLabels = languages.map(language => sourceLabel?.[language]);
   const label = localizedLabels.every(text) ? localizedLabels.join(' / ') : sourceLabel;
-  if (!text(label) || !/^https?:\/\/[^\s<>]+$/.test(source.url ?? '')) fail('RF_OBSIDIAN_KNOWLEDGE_SOURCE_INVALID');
-  return `- [${label.replace(/[\[\]\r\n]/g, ' ')}](${source.url.replace(/\(/g, '%28').replace(/\)/g, '%29')})`;
+  if (!text(label)) fail('RF_OBSIDIAN_KNOWLEDGE_SOURCE_INVALID');
+  let destination;
+  if (source.url === undefined && /\.pdf$/i.test(source.path ?? '') && Number.isSafeInteger(source.page) && source.page > 0) {
+    destination = href(target, source.path) + '#page=' + source.page;
+  } else {
+    if (typeof source.url !== 'string' || !/^https?:\/\/[^\s<>]+$/.test(source.url)) fail('RF_OBSIDIAN_KNOWLEDGE_SOURCE_INVALID');
+    destination = source.url.replace(/\(/g, '%28').replace(/\)/g, '%29');
+  }
+  return `- [${label.replace(/[\[\]\r\n]/g, ' ')}](${destination})`;
 }
 
 /** One generic identity produces one bilingual candidate; formal registry bytes are never mutated. */
@@ -426,7 +454,7 @@ export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, p
   }
   if (node.sources?.length) body += '## 来源 / Sources\n\n';
   for (const source of node.sources ?? []) {
-    body += `${renderKnowledgeSource(source)}\n`;
+    body += `${renderKnowledgeSource(source, target, href)}\n`;
   }
   body += '\n## 论文应用 / Paper applications\n\n' + applications.flatMap(row => renderApplicationLinks(row, target, href)).join('\n') + '\n';
   const state = Buffer.from(JSON.stringify({ item: node, applications })).toString('base64');
@@ -443,8 +471,8 @@ export function renderSharedKnowledge({ item, knowledgeRegistry, paperTargets, p
     for (const formula of node.formulas ?? []) if (!(prior.item.formulas ?? []).some(old => old.latex === formula.latex)) {
       appended += `\n$$\n${formula.latex}\n$$\n\n${formula.description['zh-CN']} / ${formula.description.en}\n`;
     }
-    for (const source of node.sources ?? []) if (!(prior.item.sources ?? []).some(old => old.url === source.url)) {
-      appended += `\n${renderKnowledgeSource(source)}\n`;
+    for (const source of node.sources ?? []) if (!(prior.item.sources ?? []).some(old => sameKnowledgeSource(old, source))) {
+      appended += `\n${renderKnowledgeSource(source, target, href)}\n`;
     }
     if (!previousApplications.some(row => row.paper_id === paperId)) {
       appended += '\n## 论文应用增补 / Additional paper applications\n\n' + renderApplicationLinks(application, target, href).join('\n') + '\n';
@@ -511,7 +539,10 @@ export function compareOwnKnowledge({ original, rebased, existing, originalExist
     const found = node.formulas?.find(value => value.latex === formula.latex);
     if (!found || languages.some(language => found.description?.[language] !== formula.description?.[language])) missing.push({ kind: 'formula', latex: formula.latex });
   }
-  for (const source of original.sources) if (!node.sources?.some(value => value.url === source.url)) missing.push({ kind: 'source', url: source.url });
+  for (const source of original.sources) {
+    if (node.sources?.some(value => sameKnowledgeSource(value, source))) continue;
+    missing.push({ kind: 'source', ...(source.url === undefined ? { path: source.path, page: source.page } : { url: source.url }) });
+  }
   for (const alias of original.aliases) if (!node.aliases?.includes(alias)) missing.push({ kind: 'alias', alias });
   if (missing.length) throw Object.assign(new Error('RF_REBASE_OWN_KNOWLEDGE_CHANGED'), { code: 'RF_REBASE_OWN_KNOWLEDGE_CHANGED', details: { path, mode_before: original.mode, mode_after: rebased.mode, missing } });
   return { dropped_paragraphs: dropped };

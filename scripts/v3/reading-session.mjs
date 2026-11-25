@@ -34,7 +34,7 @@ const delegatedSessions = new WeakMap();
 const CODE_ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)));
 const snapshotBinding = manifest => manifest?.profile === 'reading-runtime-snapshot-1.0';
 const snapshotApi = manifest => import(pathToFileURL(join(manifest.repo_root, 'scripts', 'v3', 'reading-session.mjs')).href);
-const fail = code => { throw Object.assign(new Error(code), { code }); };
+const fail = (code, details) => { throw Object.assign(new Error(code), { code, ...(details ? { details } : {}) }); };
 const text = value => typeof value === 'string' && !!value.trim();
 const clone = value => structuredClone(value);
 const validRenderOptions = value => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => ['targetRegistry', 'existingTargets', 'knowledgeRegistry'].includes(key));
@@ -69,6 +69,12 @@ const resumableResultCodes = new Set([
 ]);
 const capability = (state, task) => state.broker.issueCapability({ runId: state.prepared.runControl.run_id, actorId: task.owner_actor_id, role: task.role, artifactPath: task.artifact_path, revision: task.revision });
 const controlPath = root => join(root, 'control', 'science-state.json');
+async function readBoundScienceState(runRoot) {
+  const path = controlPath(runRoot), envelope = JSON.parse(await readFile(path, 'utf8'));
+  if (envelope?.schema_version !== 'science-controller-state-1.0' || !envelope.data
+    || envelope.fingerprint !== fingerprintReadingFirst(envelope.data)) fail('READING_SESSION_STATE_INVALID', { path });
+  return envelope;
+}
 const runtimeLocation = state => ({ repoRoot: state.prepared.runControl.reading_first_binding.configured_setup.knowledge_registry.vault_root,
   runId: state.prepared.runControl.run_id, runRoot: state.prepared.paths.runRoot });
 const runtimeInspection = state => inspectReadingRuntime({ manifest: state.runtimeBinding, ...(snapshotBinding(state.runtimeBinding) ? runtimeLocation(state) : {}) });
@@ -110,43 +116,116 @@ function withSessionConsumer(state, work) {
   };
   return state.consumerHeld ? guarded() : withReadingRuntimeConsumer(location, guarded);
 }
-async function runtimeCheckpoint(state) {
-  const science = JSON.parse(await readFile(controlPath(state.prepared.paths.runRoot), 'utf8'));
+async function runtimeCheckpointBasis(state) {
+  const science = await readBoundScienceState(state.prepared.paths.runRoot);
   const receipts = [];
   for (const task of state.checkpoints) {
     const found = await existingControl(state, task);
     if (found) receipts.push({ path: task.artifact_path, sha256: found.receipt.sha256 });
   }
-  return fingerprintReadingFirst({ science: science.fingerprint, receipts });
+  return { science: science.fingerprint, receipts };
 }
+const runtimeCheckpoint = async state => fingerprintReadingFirst(await runtimeCheckpointBasis(state));
 const sessionBindings = (brokerConfig, runId, actorId) => brokerConfig.authorized_bindings.filter(row => row.run_id === runId && row.actor_id === actorId && row.role === 'control' && /^control\/session-state-\d+\.json$/.test(row.artifact_path)).map(row => ({ artifact_id: `session-state-${row.revision}`, artifact_path: row.artifact_path, revision: row.revision, owner_actor_id: actorId, role: 'control' })).sort((a, b) => Number(a.revision) - Number(b.revision));
-async function readSessionMetadata(state) {
-  let latest = null, gap = false;
+const sha256 = /^sha256:[a-f0-9]{64}$/;
+
+async function savedApprovalCheckpoint(state, item, path) {
+  const basis = item.runtime_checkpoint;
+  const runId = state.prepared.runControl.run_id;
+  // Older owned records attest to the checkpoint already checked when rebindRuntime committed the approval.
+  if (basis === undefined) return approvalCheckpoint(item.approval, runId);
+  if (!basis || !sha256.test(basis.science ?? '') || !Array.isArray(basis.receipts)) fail('READING_SESSION_APPROVAL_INVALID', { path });
+  let lastIndex = -1;
+  for (const row of basis.receipts) {
+    const index = state.checkpoints.findIndex(task => task.artifact_path === row?.path);
+    if (index <= lastIndex || !sha256.test(row?.sha256 ?? '')) fail('READING_SESSION_APPROVAL_INVALID', { path });
+    const found = await existingControl(state, state.checkpoints[index]);
+    if (found?.receipt.sha256 !== row.sha256) fail('READING_SESSION_APPROVAL_INVALID', { path: join(state.prepared.paths.runRoot, row.path) });
+    lastIndex = index;
+  }
+  return fingerprintReadingFirst(basis);
+}
+
+async function readControllerSessionMetadata(state, pendingCheckpoint) {
+  const location = runtimeLocation(state), { runId, runRoot } = location;
+  let latest = null, gap = false, count = 0;
+  let manifest = state.prepared.runControl.reading_first_binding.configured_setup.runtime_binding;
   for (const task of state.sessionCheckpoints) {
-    const found = await existingControl(state, task);
+    const path = join(runRoot, task.artifact_path);
+    const found = await existingControl(state, task).catch(error => {
+      if (error.code === 'READING_SESSION_CHECKPOINT_ORPHAN' && task.artifact_id === pendingCheckpoint?.artifact_id) return null;
+      error.details ??= { path };
+      throw error;
+    });
     if (!found) { gap = true; continue; }
-    if (gap) fail('READING_SESSION_METADATA_CONFLICT');
+    if (gap || found.receipt.artifact_id !== task.artifact_id
+      || found.receipt.schema_version !== 'phase21-owned-artifact-receipt-1.0'
+      || task.artifact_id === pendingCheckpoint?.artifact_id && (found.receipt.sha256 !== pendingCheckpoint.sha256
+        || found.receipt.byte_length !== pendingCheckpoint.byte_length)) fail('READING_SESSION_METADATA_CONFLICT', { path });
     const value = JSON.parse(found.bytes);
-    if (value.schema_version !== 'reading-session-state-2.2' || value.run_id !== state.prepared.runControl.run_id || !Array.isArray(value.approvals)
-      || latest && (value.approvals.length < latest.approvals.length || latest.approvals.some((item, index) => !same(item, value.approvals[index])))) fail('READING_SESSION_METADATA_CONFLICT');
-    latest = value; state.nextSessionCheckpoint++;
+    const previousApprovals = latest?.approvals ?? [];
+    if (value?.schema_version !== 'reading-session-state-2.2' || value.run_id !== runId || !Array.isArray(value.approvals)
+      || value.approvals.length < previousApprovals.length || value.approvals.length > previousApprovals.length + 1
+      || previousApprovals.some((item, index) => !same(item, value.approvals[index]))) fail('READING_SESSION_METADATA_CONFLICT', { path });
+    const item = value.approvals[previousApprovals.length];
+    if (value.approvals.length > previousApprovals.length) {
+      if (!item?.previous || !item.current || !item.approval || !same(item.previous, manifest)
+        || snapshotBinding(item.current) && (!snapshotBinding(item.previous)
+          || !Number.isSafeInteger(item.restart_process_id) || item.restart_process_id < 1)) fail('READING_SESSION_METADATA_CONFLICT', { path });
+      const checked = validateHistoricalRuntimeRepairApproval({ approval: item.approval, runId,
+        checkpointFingerprint: await savedApprovalCheckpoint(state, item, path), previous: item.previous, current: item.current,
+        ...(snapshotBinding(item.current) ? location : {}) });
+      if (!checked.valid) fail('READING_SESSION_APPROVAL_INVALID', { path, errors: checked.errors,
+        ...(checked.test_evidence_paths ? { test_evidence_paths: checked.test_evidence_paths } : {}) });
+      manifest = item.current;
+    }
+    latest = value;
+    count++;
   }
-  const initial = state.prepared.runControl.reading_first_binding.configured_setup.runtime_binding;
-  let prior = initial;
-  for (const item of latest?.approvals ?? []) {
-    if (!item || !same(item.previous, prior) || item.approval?.previous_runtime_fingerprint !== prior.fingerprint || item.approval?.current_runtime_fingerprint !== item.current?.fingerprint) fail('READING_SESSION_METADATA_CONFLICT');
-    const runId = state.prepared.runControl.run_id;
-    if (!validateHistoricalRuntimeRepairApproval({ approval: item.approval, runId, checkpointFingerprint: approvalCheckpoint(item.approval, runId), previous: item.previous, current: item.current,
-      ...(snapshotBinding(item.current) ? runtimeLocation(state) : {}) }).valid) fail('READING_SESSION_APPROVAL_INVALID');
-    prior = item.current;
-  }
-  state.runtimeBinding = prior;
+  return { latest, manifest, count };
+}
+
+async function readSessionMetadata(state) {
+  const { latest, manifest, count } = await readControllerSessionMetadata(state);
+  state.nextSessionCheckpoint = count;
+  state.runtimeBinding = manifest;
   state.approvals = clone(latest?.approvals ?? []);
   state.runtimeRestartRequired = state.approvals.at(-1)?.restart_process_id === process.pid;
   if (latest?.render_options !== undefined && !validRenderOptions(latest.render_options)) fail('READING_SESSION_METADATA_CONFLICT');
   state.renderOptions = latest?.render_options === undefined ? undefined : clone(latest.render_options);
   state.rendererRepairReady = latest?.renderer_repair_ready === true;
   state.translationStop = clone(latest?.translation_stop ?? null);
+}
+
+/** Read owned runtime approvals without resuming a session or changing its active reference. */
+export async function readVerifiedReadingSessionRebindHistory({ repoRoot, runId, runRoot, expectedBinding, allowPending = false }) {
+  const path = controlPath(runRoot);
+  const { data: { prepared, brokerConfig } } = await readBoundScienceState(runRoot);
+  const binding = prepared?.runControl?.reading_first_binding;
+  if (!binding || prepared.runControl.run_id !== runId || prepared.paths?.runRoot !== runRoot || binding.configured_setup?.paths?.runRoot !== runRoot
+    || binding.configured_setup?.knowledge_registry?.vault_root !== repoRoot || !snapshotBinding(binding.configured_setup?.runtime_binding)
+    || !text(binding.controller_actor_id) || brokerConfig?.control_actor_id !== binding.controller_actor_id
+    || brokerConfig.artifact_root !== runRoot || !Array.isArray(brokerConfig.authorized_bindings)
+    || expectedBinding && !same(binding, expectedBinding)) fail('READING_SESSION_STATE_INVALID', { path, run_id: runId });
+  const actor = binding.controller_actor_id;
+  const sessionCheckpoints = sessionBindings(brokerConfig, runId, actor), checkpoints = checkpointBindings(brokerConfig, runId, actor);
+  if (sessionCheckpoints.length !== checkpoints.length || !sessionCheckpoints.length
+    || sessionCheckpoints.some((row, index) => row.revision !== String(index + 1) || row.artifact_path !== `control/session-state-${index + 1}.json`)) {
+    fail('READING_SESSION_METADATA_CONFLICT', { path });
+  }
+  const location = { repoRoot, runId, runRoot }, reference = readReadingRuntimeSnapshotReference(location);
+  if (!reference || reference.run_root !== runRoot || !allowPending && reference.pending_manifest) {
+    fail('READING_SESSION_RUNTIME_REFERENCE_CONFLICT', location);
+  }
+  const { latest, manifest } = await readControllerSessionMetadata({ prepared, sessionCheckpoints, checkpoints }, reference.pending_checkpoint);
+  const candidates = allowPending ? [reference.manifest, reference.pending_manifest] : [reference.manifest];
+  const approvals = latest?.approvals ?? [];
+  const referenced = [...candidates, ...(reference.previous_manifests ?? [])].filter(Boolean);
+  if (!candidates.some(candidate => candidate && same(candidate, manifest))
+    || approvals.some(item => !referenced.some(candidate => same(candidate, item.previous)) || !referenced.some(candidate => same(candidate, item.current)))) {
+    fail('READING_SESSION_RUNTIME_REFERENCE_CONFLICT', location);
+  }
+  return approvals.map(({ previous, current, approval }) => ({ previous, current, approval }));
 }
 async function refreshSessionResources(state) {
   if (!state.reading) return;
@@ -900,16 +979,18 @@ async function rebindRuntime(state, approval) {
   if (!task) fail('CONTROL_CHECKPOINT_CAPACITY');
   if (await existingControl(state, task)) fail('READING_SESSION_METADATA_CONFLICT');
   const location = runtimeLocation(state), previous = state.runtimeBinding, codeRoot = previous.source_code_root;
-  const checkpointFingerprint = await runtimeCheckpoint(state);
+  const runtime_checkpoint = await runtimeCheckpointBasis(state);
+  const checkpointFingerprint = fingerprintReadingFirst(runtime_checkpoint);
   const proposed = previewReadingRuntimeSnapshot({ ...location, codeRoot });
   if (!validateRuntimeRebindApproval({ approval, ...location, codeRoot, checkpointFingerprint, previous, current: proposed }).valid) fail('READING_SESSION_APPROVAL_INVALID');
+  const testEvidence = [...state.approvals.flatMap(item => item.approval.test_evidence), ...approval.test_evidence];
   let metadata;
   const current = prepareReadingRuntimeSnapshot({ ...location, codeRoot, reference: manifest => {
     if (manifest.fingerprint !== proposed.fingerprint) fail('READING_SESSION_RUNTIME_REBIND_CHANGED');
-    metadata = sessionMetadata(state, [...state.approvals, { approval, previous, current: manifest, restart_process_id: process.pid }]);
+    metadata = sessionMetadata(state, [...state.approvals, { approval, previous, current: manifest, runtime_checkpoint, restart_process_id: process.pid }]);
     const bytes = Buffer.from(JSON.stringify(metadata));
     const pendingCheckpoint = { artifact_id: task.artifact_id, sha256: 'sha256:' + createHash('sha256').update(bytes).digest('hex'), byte_length: bytes.length };
-    return { expectedFingerprint: previous.fingerprint, pending: true, pendingCheckpoint };
+    return { expectedFingerprint: previous.fingerprint, pending: true, pendingCheckpoint, testEvidence };
   } });
   await saveSessionMetadata(state, metadata);
   registerReadingRuntimeSnapshotReference({ ...location, manifest: current, expectedFingerprint: previous.fingerprint });

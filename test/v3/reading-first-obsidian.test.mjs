@@ -549,6 +549,50 @@ test('visual page links use registered main and supplement sources in both langu
   }
 });
 
+test('shared knowledge keeps registered PDF pages when another paper reuses the node', () => {
+  const first = writerInput();
+  first.presentation.knowledge_layout = 'shared-bilingual-1.0';
+  const ref = (source_id, page) => ({ source_id, locator: { kind: 'pdf-page', page } });
+  first.presentation.knowledge[0].sources = [
+    { title: 'Existing web source', url: 'https://example.org/method' },
+    ref('paper', 27),
+  ];
+  const old = renderReadingFirstObsidian(first).supportNotes[0];
+  assert.match(old.content, /\]\(\.\.\/\.\.\/Raw\/paper\.pdf#page=27\)/);
+
+  const second = writerInput();
+  second.identity.paper_id = 'pap_' + 'b'.repeat(32);
+  second.presentation.knowledge_layout = 'shared-bilingual-1.0';
+  second.presentation.source_pdf = 'Clippings/Second paper (author version).pdf';
+  second.presentation.sources[0].path = second.presentation.source_pdf;
+  second.presentation.knowledge[0].sources = [ref('paper', 27), ref('paper', 28)];
+  second.knowledgeRegistry = [{ canonical_key: 'age-standardisation', path: old.path, content: old.content, current_content: true }];
+  const updated = renderReadingFirstObsidian(second).supportNotes[0].content;
+  assert.match(updated, /\]\(https:\/\/example\.org\/method\)/);
+  assert.match(updated, /\]\(\.\.\/\.\.\/Raw\/paper\.pdf#page=27\)/);
+  for (const page of [27, 28]) {
+    assert.ok(updated.includes('../../Clippings/Second%20paper%20%28author%20version%29.pdf#page=' + page));
+  }
+
+  const render = rendering => {
+    const result = renderReadingFirstObsidian({ ...second, ...rendering });
+    const omitBytes = ({ bytes, ...note }) => note;
+    return { ...result, notes: result.notes.map(omitBytes), supportNotes: result.supportNotes.map(omitBytes) };
+  };
+  const originalRendering = { knowledgeRegistry: second.knowledgeRegistry };
+  const candidate = { ...render(originalRendering), presentation_fingerprint: 'reviewed-render' };
+  const current = old.content + '\nManual addition.\n';
+  const rendering = { knowledgeRegistry: [{ ...second.knowledgeRegistry[0], content: current,
+    content_sha256: 'sha256:' + createHash('sha256').update(current).digest('hex') }] };
+  const { record } = computeKnowledgeRebase({ recipe: { recipe_fingerprint: 'original-recipe', rendering: originalRendering, candidate },
+    rendering, render, presentation: second.presentation, identity: second.identity, readingReviewFingerprint: 'review', generationId: 'current' });
+  assert.match(record.candidate.supportNotes[0].content, /Manual addition\./);
+  assert.match(record.candidate.supportNotes[0].content, /Second%20paper%20%28author%20version%29\.pdf#page=28/);
+
+  second.presentation.knowledge[0].sources = [ref('unknown', 27)];
+  assert.throws(() => renderReadingFirstObsidian(second), { code: 'RF_OBSIDIAN_KNOWLEDGE_SOURCE_INVALID' });
+});
+
 test('DOCX visual links use figure locator without a page fragment', () => {
   const data = writerInput();
   data.presentation.sources.push({ id: 'supplement', path: 'Raw/supplement.docx', kind: 'supplement' });

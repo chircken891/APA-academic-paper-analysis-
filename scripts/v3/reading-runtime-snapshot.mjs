@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
-  readdirSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync,
+  readdirSync, realpathSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -408,6 +408,25 @@ function validPendingCheckpoint(checkpoint) {
     && /^session-state-\d+$/.test(checkpoint.artifact_id);
 }
 
+const orderedPaths = paths => [...new Set(paths)].sort();
+const validEvidencePaths = paths => Array.isArray(paths) && paths.length > 0
+  && paths.every(path => typeof path === 'string' && !path.includes('\0') && isAbsolute(path) && resolve(path) === path)
+  && json(paths) === json(orderedPaths(paths));
+
+export function readReadingRuntimeTestEvidencePath({ repoRoot, row }) {
+  let path;
+  try {
+    if (typeof row?.path === 'string') path = resolve(repoRoot, row.path);
+    if (!path || !validReceipt(row)) fail('READING_RUNTIME_TEST_EVIDENCE_INVALID', path);
+    const real = realpathSync(path), bytes = readFile(real);
+    if (bytes.length !== row.byte_length || sha(bytes) !== row.sha256) fail('READING_RUNTIME_TEST_EVIDENCE_INVALID', path);
+    return real;
+  } catch (error) {
+    const code = 'READING_RUNTIME_TEST_EVIDENCE_INVALID';
+    throw Object.assign(new Error(code + (path ? ': ' + path : '')), { code, details: { path }, cause: error });
+  }
+}
+
 export function readReadingRuntimeSnapshotReference({ repoRoot, runId }) {
   const path = referencePath(repoRoot, runId);
   if (!stat(join(repoRoot, '.runtime'))) return null;
@@ -437,6 +456,10 @@ export function readReadingRuntimeSnapshotReference({ repoRoot, runId }) {
   if (reference.pending_checkpoint !== undefined
     && (!reference.pending_manifest || !validPendingCheckpoint(reference.pending_checkpoint))) {
     fail('READING_RUNTIME_REFERENCE_INVALID', runId);
+  }
+  if (reference.test_evidence_paths !== undefined && !validEvidencePaths(reference.test_evidence_paths)
+    || reference.pending_test_evidence_paths !== undefined && (!reference.pending_checkpoint || !validEvidencePaths(reference.pending_test_evidence_paths))) {
+    throw Object.assign(new Error('READING_RUNTIME_REFERENCE_INVALID: ' + path), { code: 'READING_RUNTIME_REFERENCE_INVALID', details: { path } });
   }
   return reference;
 }
@@ -468,7 +491,7 @@ export function registerReadingRuntimeSnapshotReference({ repoRoot, runRoot, man
 }
 
 function writeSnapshotReference({
-  repoRoot, runId, runRoot, manifest, expectedFingerprint, pending = false, pendingCheckpoint, batchRunSha256,
+  repoRoot, runId, runRoot, manifest, expectedFingerprint, pending = false, pendingCheckpoint, batchRunSha256, testEvidence,
 }) {
   const previous = readReadingRuntimeSnapshotReference({ repoRoot, runId });
   if (!isAbsolute(runRoot ?? '') || previous && previous.run_root !== runRoot) fail('READING_RUNTIME_REFERENCE_INVALID', runId);
@@ -476,6 +499,9 @@ function writeSnapshotReference({
     fail('READING_RUNTIME_REFERENCE_CONFLICT', runId);
   }
   if (pendingCheckpoint !== undefined && (!pending || !validPendingCheckpoint(pendingCheckpoint))) {
+    fail('READING_RUNTIME_REFERENCE_INVALID', runId);
+  }
+  if (testEvidence !== undefined && (!pendingCheckpoint || !Array.isArray(testEvidence) || !testEvidence.length)) {
     fail('READING_RUNTIME_REFERENCE_INVALID', runId);
   }
   if (!pending && previous?.fingerprint === manifest.fingerprint) return previous;
@@ -492,13 +518,23 @@ function writeSnapshotReference({
     .some(field => storedCheckpoint[field] !== pendingCheckpoint[field])) {
     fail('READING_RUNTIME_REFERENCE_CONFLICT', runId);
   }
+  // Check and register the dependency while holding the same lock as retirement.
+  const pendingPaths = testEvidence?.map(row => readReadingRuntimeTestEvidencePath({ repoRoot, row }));
+  const pendingEvidence = pendingPaths && orderedPaths(pendingPaths);
+  if (pendingEvidence && previous?.pending_test_evidence_paths && json(pendingEvidence) !== json(previous.pending_test_evidence_paths)) {
+    fail('READING_RUNTIME_REFERENCE_CONFLICT', runId);
+  }
+  const activeEvidence = orderedPaths([...(previous?.test_evidence_paths ?? []),
+    ...(previous?.pending_manifest?.fingerprint === manifest.fingerprint ? previous.pending_test_evidence_paths ?? [] : [])]);
   const reference = pending ? {
     ...previous, pending_manifest: manifest,
     ...(pendingCheckpoint ? { pending_checkpoint: pendingCheckpoint } : {}),
+    ...(pendingEvidence ? { pending_test_evidence_paths: pendingEvidence } : {}),
   } : {
     run_id: runId, run_root: runRoot, snapshot_hash: manifest.snapshot_hash, fingerprint: manifest.fingerprint, manifest,
     ...(batchRunSha256 || previous?.batch_run_sha256 ? { batch_run_sha256: batchRunSha256 ?? previous.batch_run_sha256 } : {}),
     ...(history.length ? { previous_manifests: history } : {}),
+    ...(activeEvidence.length ? { test_evidence_paths: activeEvidence } : {}),
   };
   return writeReference(repoRoot, runId, reference);
 }
@@ -512,7 +548,7 @@ export function abandonReadingRuntimeSnapshotReference({
       || !reference.pending_manifest || reference.pending_manifest.fingerprint !== pendingFingerprint) {
       fail('READING_RUNTIME_REFERENCE_CONFLICT', runId);
     }
-    const { pending_manifest, pending_checkpoint, previous_manifests = [], ...active } = reference;
+    const { pending_manifest, pending_checkpoint, pending_test_evidence_paths, previous_manifests = [], ...active } = reference;
     const history = previous_manifests.some(manifest => manifest.fingerprint === pendingFingerprint)
       ? previous_manifests : [...previous_manifests, pending_manifest];
     return writeReference(repoRoot, runId, { ...active, previous_manifests: history });

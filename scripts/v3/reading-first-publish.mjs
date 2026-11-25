@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual as same } from 'node:util';
 import { createOwnedArtifactBroker } from './owned-artifact-store.mjs';
 import { PHASE22_COMMIT_PATH, phase22GenerationPaths, readRegisteredCommit } from './phase22-active-version.mjs';
@@ -12,6 +13,9 @@ import { applyReadingFirstSourceDerivation, applyReadingFirstUserCorrections, as
 import { deriveRebasedReadingFirstPublicationSource, inspectReadingFirstKnowledgeMergeCandidates,
   inspectReadingFirstPublicationSource } from './reading-first-runtime.mjs';
 import { cleanupPublishedReadingRuntime, cleanupReadingRuntimeRun, withReadingRuntimePublicationConsumer } from './reading-runtime-cleanup.mjs';
+import { verifyReadingRuntimeSnapshot } from './reading-runtime-snapshot.mjs';
+import { readVerifiedReadingSessionRebindHistory } from './reading-session.mjs';
+import { fingerprintV3Json } from './semantic-package-validator.mjs';
 
 const sha = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const identifier = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/.test(value);
@@ -199,6 +203,39 @@ function comparePlans(original, derived, record, originalRecord, data) {
 
 const sourceStamp = data => ({ recipe_fingerprint: data.recipe.recipe_fingerprint,
   candidate_fingerprint: data.candidate.presentation_fingerprint, reading_review_fingerprint: data.reading_review_fingerprint });
+
+async function snapshotPublicationTools(manifest, { repoRoot, runRoot }, binding) {
+  const path = join(manifest.code_root, 'scripts', 'v3', 'reading-first-runtime.mjs');
+  try { verifyReadingRuntimeSnapshot({ manifest, repoRoot, runRoot }); }
+  catch (error) { fail(error.code ?? 'RF_ONE_STEP_QUEUE_RUNTIME_SNAPSHOT_INVALID', { path: error.path ?? manifest.code_root, reason: error.message }); }
+  try {
+    const { getReadingFirstRuntimePublicationToolBindings } = await import(pathToFileURL(path).href);
+    return getReadingFirstRuntimePublicationToolBindings(binding);
+  } catch (error) {
+    fail('RF_ONE_STEP_QUEUE_RUNTIME_TOOL_BINDINGS_INVALID', { path: error.path ?? path, reason: error.message });
+  }
+}
+
+async function verifyQueuedRuntimeRebind(approved, current, recipe, execution) {
+  const { repoRoot, runId: run, runRoot, manifest } = execution;
+  if (!approved || !same(approved, { ...current, recipe_fingerprint: approved.recipe_fingerprint })
+    || !manifest || recipe.execution_runtime?.fingerprint !== manifest.fingerprint) fail('RF_ONE_STEP_QUEUE_REVIEW_CHANGED', { run });
+  const history = await readVerifiedReadingSessionRebindHistory({ repoRoot, runId: run, runRoot, expectedBinding: recipe.binding });
+  if (!same(history.at(-1)?.current, manifest)) fail('RF_ONE_STEP_QUEUE_REVIEW_CHANGED', { run });
+  const tools = await snapshotPublicationTools(manifest, execution, recipe.binding);
+  if (!same(tools, recipe.tool_bindings)) fail('RF_ONE_STEP_QUEUE_RUNTIME_TOOL_BINDINGS_INVALID', { path: manifest.code_root });
+  const { recipe_fingerprint, ...body } = recipe;
+  if (recipe_fingerprint !== fingerprintV3Json(body)) fail('RF_ONE_STEP_QUEUE_REVIEW_CHANGED', { run });
+  for (let index = history.length - 1; index >= 0; index--) {
+    const { previous } = history[index];
+    const previousTools = await snapshotPublicationTools(previous, execution, recipe.binding);
+    if (fingerprintV3Json({ ...body, execution_runtime: previous, tool_bindings: previousTools }) === approved.recipe_fingerprint) {
+      return history.slice(index).map(item => item.approval);
+    }
+  }
+  fail('RF_ONE_STEP_QUEUE_REVIEW_CHANGED', { run });
+}
+
 const rebaseProof = (record, summary) => record ? { nodes: record.nodes, rebase_fingerprint: record.rebase_fingerprint,
   ...(record.review_required ? { review_required: true } : {}),
   papers: (record.papers ?? []).map(row => ({ ...row,
@@ -241,7 +278,7 @@ export async function inspectReadingFirstQueueCandidate({ source, vaultRoot, ...
   }
 }
 
-async function bindApproval({ root, evidenceMode, summary, attempt, authorization, originalSource, rebase, original, changes, queueApproval }) {
+async function bindApproval({ root, evidenceMode, summary, attempt, authorization, originalSource, rebase, original, changes, queueApproval, runtimeRebind }) {
   const prefix = original ? 'DERIVED-' : '';
   const inventoryPath = join(attempt, prefix + 'INVENTORY.json');
   const inventoryBytes = json(summary);
@@ -253,6 +290,7 @@ async function bindApproval({ root, evidenceMode, summary, attempt, authorizatio
     ...summary.hashes, inventory_path: inventoryPath, inventory_sha256: sha(inventoryBytes),
     inventory_paths: summary.files.map(row => row.path), original_source: originalSource,
     ...(queueApproval ? { queue_approval: queueApproval } : {}),
+    ...(runtimeRebind ? { runtime_rebind: runtimeRebind } : {}),
     ...(rebase ? { rebase_record_path: rebase.record_path, rebase_diff_path: rebase.diff_path,
       ...(rebase.record ? { rebase_fingerprint: rebase.record.rebase_fingerprint } : {}) } : {}),
     ...(original ? { original_approval_path: original.path, original_approval_sha256: sha(original.bytes),
@@ -341,6 +379,10 @@ async function finishReadingFirstPublication({ folder, transaction, receipt, ver
   }
   const lines = ['**发布结果**', '', '已提交代次 ' + transaction.generation + '，事务 ' + transaction.transaction_id + '。',
     '', '已核验 ' + verified.length + ' 个正式文件及当前提交登记。', '', '[核验结果](VERIFICATION.json)'];
+  if (receipt.runtime_rebind) {
+    const record = receipt.runtime_rebind.path.slice(folder.length + 1).replaceAll('\\', '/');
+    lines.push('', '[运行重绑凭据](' + record + ')。');
+  }
   if (receipt.rebase_record_path) {
     const subfolder = receipt.rebase_record_path.slice(folder.length + 1).replaceAll('\\', '/');
     const diff = receipt.rebase_diff_path.slice(folder.length + 1).replaceAll('\\', '/');
@@ -430,9 +472,9 @@ export async function publishReadingFirstCandidate({ source, vaultRoot, generati
 async function publishBoundReadingFirstCandidate({ source, root, run, initial, execution, generation, resources,
   authorization, onPrepared, onRegistered, queuedApproval, evidenceMode, presentationAssetRegistrations, user_corrections }) {
   const folder = await publicationDirectory(root, run), attempt = await mkdtemp(join(folder, 'attempt-'));
-  const originalSource = sourceStamp(initial);
+  const currentSource = sourceStamp(initial), originalSource = queuedApproval?.original.original_source ?? currentSource;
   const request = { vaultRoot: root, generation, resources, evidenceMode, presentationAssetRegistrations, user_corrections };
-  let initialApproval, approval, rebase, summary, registration, transaction, changes, authority, selected, mergeDrafts;
+  let initialApproval, approval, rebase, summary, registration, transaction, changes, authority, selected, mergeDrafts, runtimeRebind;
   let displayed = 0;
   let applying = false;
   const reprepare = async () => {
@@ -468,15 +510,22 @@ async function publishBoundReadingFirstCandidate({ source, root, run, initial, e
   };
   try {
     await requireUnusedResult(folder);
-    if (queuedApproval && (!same(queuedApproval.original.original_source, originalSource)
-      || queuedApproval.original.summary.run_id !== run)) fail('RF_ONE_STEP_QUEUE_REVIEW_CHANGED', { run });
+    if (queuedApproval && queuedApproval.original.summary.run_id !== run) fail('RF_ONE_STEP_QUEUE_REVIEW_CHANGED', { run });
+    if (queuedApproval && !same(queuedApproval.original.original_source, currentSource)) {
+      const approvals = await verifyQueuedRuntimeRebind(queuedApproval.original.original_source, currentSource, initial.recipe, execution);
+      const path = join(attempt, 'RUNTIME-REBIND.json');
+      const bytes = json({ schema_version: 'reading-first-publication-runtime-rebind-1.0', run_id: run, queue_approval: queuedApproval.binding,
+        original_source: originalSource, current_source: currentSource, approvals });
+      await writeFile(path, bytes, { flag: 'wx' });
+      runtimeRebind = { path, sha256: sha(bytes) };
+    }
     let prepared;
     try { prepared = await reprepare(); }
     catch (error) {
       if (!driftCodes.has(error.code)) throw error;
       prepared = await reprepare();
     }
-    const approvalBase = { root, evidenceMode, attempt, authorization, originalSource, queueApproval: queuedApproval?.binding };
+    const approvalBase = { root, evidenceMode, attempt, authorization, originalSource, queueApproval: queuedApproval?.binding, runtimeRebind };
     if (queuedApproval) {
       initialApproval = await bindApproval({ ...approvalBase, summary: queuedApproval.original.summary });
       await requireIdentityApproval();
@@ -538,6 +587,7 @@ async function publishBoundReadingFirstCandidate({ source, root, run, initial, e
     const receipt = { original_approval_record: initialApproval.path, approval_record: approval.path,
       maintenance_window_record: authority.maintenanceWindowRecord, inventory_path: approval.binding.inventory_path,
       hashes: summary.hashes, ...(summary.publication_sources ? { publication_sources: summary.publication_sources } : {}),
+      ...(runtimeRebind ? { runtime_rebind: runtimeRebind } : {}),
       ...(mergeDrafts ? { knowledge_merge_drafts: mergeDrafts } : {}),
       ...(rebase?.record_path ? { rebase_record_path: rebase.record_path, rebase_diff_path: rebase.diff_path, changes: affected } : {}) };
     await onRegistered?.(structuredClone({ registration, receipt, summary }));
@@ -555,6 +605,7 @@ async function publishBoundReadingFirstCandidate({ source, root, run, initial, e
       ...(error.recovery ? { recovery: error.recovery } : {}),
       ...(applying ? {} : { business_writes: 0 }), ...(registration ? { registration } : {}), ...(transaction ? { transaction } : {}),
       ...(initialApproval ? { original_approval_record: initialApproval.path } : {}), ...(summary ? { summary } : {}),
+      ...(runtimeRebind ? { runtime_rebind: runtimeRebind } : {}),
       ...(mergeDrafts ? { knowledge_merge_drafts: mergeDrafts } : {}),
       ...(rebase?.record_path ? { rebase_record_path: rebase.record_path, rebase_diff_path: rebase.diff_path } : {}), review_path: reviewPath };
     await writeJson(reviewPath, result);

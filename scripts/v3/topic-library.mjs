@@ -6,9 +6,9 @@ import YAML from 'yaml';
 import { loadApaConfig, resolveApaConfig, resolveQueryPreferences } from '../lib/apa-config.mjs';
 import { hostDispatchCall } from '../apa-model-policy.mjs';
 import { readCommittedGeneration, readCommittedReadingFirstPresentations, assertCommittedSnapshot, verifyReadingFirstPresentation, phase22GenerationPaths } from './phase22-active-version.mjs';
-import { readCurrentVaultContent, assertCurrentVaultContent, readCurrentRegisteredBytes, getCurrentNote } from './current-vault-content.mjs';
+import { readCurrentVaultContent, assertCurrentVaultContent, readCurrentRegisteredBytes, readCurrentRegisteredEntries, getCurrentNote } from './current-vault-content.mjs';
 import { linkedPaths } from './library-map.mjs';
-import { queryLibrary } from './library-query.mjs';
+import { createCurrentLibrarySearch } from './library-query.mjs';
 import { inspectManagedNote } from './phase22-managed-markdown.mjs';
 import { fingerprintV3Json as hash } from './semantic-package-validator.mjs';
 
@@ -220,9 +220,13 @@ export async function readTopicSources({ vaultRoot, topicId, generationId } = {}
     sources, ...topicReviewState(topic, snapshot.generation.source_events), underlying_papers: [...new Set(topic.dependencies.map(row => row.paper_id))], claim_verification: 'not_performed' };
 }
 
-function scientificSharedNodes(snapshot) {
+function scientificSharedNodes(snapshot, observedPaths) {
   return snapshot.generation.shared_nodes.filter(node => {
-    try { return !String(getCurrentNote(snapshot, node.path).fm.knowledge_id ?? '').startsWith('chart-'); }
+    try {
+      const { fm } = getCurrentNote(snapshot, node.path);
+      observedPaths?.add(node.path);
+      return !String(fm.knowledge_id ?? '').startsWith('chart-');
+    }
     catch { return false; }
   });
 }
@@ -258,16 +262,24 @@ export async function getTopicUpdateHints({ vaultRoot, generationId, changedPape
     try { presentations.push(...presentationsFor(snapshot, paper.paper_id)); }
     catch (error) { diagnostics.push({ paper_id: paper.paper_id, code: error.code ?? 'P24_PRESENTATION_UNREADABLE' }); }
   }
-  const sharedNodes = scientificSharedNodes(snapshot);
+  const paperPaths = snapshot.generation.papers.flatMap(paper => Object.values(paper.paths));
+  const observedPaths = new Set(paperPaths);
+  const paperNotes = readCurrentRegisteredEntries(snapshot, paperPaths);
+  const sharedNodes = scientificSharedNodes(snapshot, observedPaths);
   const paperNodes = new Map(snapshot.generation.papers.map(paper => {
-    const links = new Set(Object.values(paper.paths).flatMap(path =>
-      [...linkedPaths(readCurrentRegisteredBytes(snapshot, path).bytes.toString('utf8'), path)]));
+    const links = new Set(Object.values(paper.paths).flatMap(path => {
+      const note = paperNotes.get(path);
+      if (!note) fail('P23_CURRENT_UNREADABLE', { path });
+      return [...linkedPaths(note.bytes.toString('utf8'), path)];
+    }));
     return [paper.paper_id, sharedNodes.filter(node => links.has(node.path.replace(/\.md$/, ''))).map(node => node.path)];
   }));
+  let search;
   for (const topic of snapshot.generation.topics ?? []) {
     const terms = [...new Set([...topic.query_terms, topic.title].flatMap(t => t.match(/[\p{L}\p{N}_-]+/gu) ?? []))];
     const matches = new Map();
-    for (const term of terms) for (const hit of (await queryLibrary({ vaultRoot: root, query: term, full: true })).results) {
+    if (terms.length) search ??= createCurrentLibrarySearch(snapshot);
+    for (const term of terms) for (const hit of search.search(term).results) {
       if (hit.entity_type === 'topic' || !changed.has(hit.paper_id)) continue;
       const paper = snapshot.generation.papers.find(p => p.paper_id === hit.paper_id);
       // Shared-node bibliographic backlinks may name other papers. They cannot make
@@ -278,6 +290,7 @@ export async function getTopicUpdateHints({ vaultRoot, generationId, changedPape
       if (!matches.has(hit.paper_id)) matches.set(hit.paper_id, []);
       matches.get(hit.paper_id).push(term);
     }
+    let project;
     for (const row of presentations.filter(r => changed.has(r.paper.paper_id))) {
       const relations = row.presentation.citation?.sources.filter(s => topic.dependencies.some(d => d.source_sha256 === s.sha256)) ?? [];
       const matchedTerms = [...new Set(matches.get(row.paper.paper_id) ?? [])];
@@ -287,7 +300,12 @@ export async function getTopicUpdateHints({ vaultRoot, generationId, changedPape
           source_id: source.source_id, source_sha256: source.sha256, source_version: source.source_version ?? null,
           locators: source.locators, adopted_for: ['selected update evidence'] };
         if (topic.dependencies.some(d => tupleKey(d) === tupleKey(dependency))) continue;
-        const relevant = topic.project_id ? relatedProjectEvidence((await (await import('./writing-project.mjs')).readWritingProject({ repoRoot: root, projectId: topic.project_id })).project, matchedTerms, paperNodes.get(row.paper.paper_id) ?? [], snapshot) : [];
+        if (topic.project_id && !project) {
+          const { readWritingProject } = await import('./writing-project.mjs');
+          ({ project } = await readWritingProject({ repoRoot: root, projectId: topic.project_id, currentSnapshot: snapshot }));
+          observedPaths.add(topic.path);
+        }
+        const relevant = project ? relatedProjectEvidence(project, matchedTerms, paperNodes.get(row.paper.paper_id) ?? [], snapshot) : [];
         hints.push({ ...(topic.project_id ? { entity_type: 'writing-project', project_id: topic.project_id, theme: topic.title, evidence_ids: relevant.map(row => row.evidence_id), evidence_matches: relevant, automatic_update: false } : { topic_id: topic.topic_id }), base_revision: topic.revision, generation_id: snapshot.generation_id,
           status: 'update_available', source: dependency, matched_terms: matchedTerms, relation: relations.length ? 'shared_source' : 'query_terms' });
       }
@@ -296,7 +314,8 @@ export async function getTopicUpdateHints({ vaultRoot, generationId, changedPape
     for (const reason of state.review_reasons) hints.push({ ...(topic.project_id ? { entity_type: 'writing-project', project_id: topic.project_id, theme: topic.title, evidence_ids: [], evidence_matches: [], automatic_update: false } : { topic_id: topic.topic_id }), base_revision: topic.revision,
       generation_id: snapshot.generation_id, status: 'needs_review', ...reason });
   }
-  assertSnapshot(snapshot);
+  for (const path of search?.observedPaths ?? []) observedPaths.add(path);
+  assertCurrentVaultContent(snapshot, { paths: observedPaths });
   return { ok: true, status: diagnostics.length ? 'partial' : 'available', generation_id: snapshot.generation_id, hints,
     ...(diagnostics.length ? { diagnostics } : {}), model_calls: 0 };
 }

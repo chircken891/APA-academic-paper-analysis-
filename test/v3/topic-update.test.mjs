@@ -2,14 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createTopicFixture, publishTopicFixture } from './helpers/topic-fixtures.mjs';
+import { createTopicFixture, publishTopicFixture, registerTopicFixture } from './helpers/topic-fixtures.mjs';
 import * as topics from '../../scripts/v3/topic-library.mjs';
 import { prepareTopicPublication } from '../../scripts/v3/topic-publication.mjs';
 import { applyBilingualPublication, registerBilingualPublication, loadBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { readingFirstPublicationAuthority, readingFirstPublicationFixture, applyReadingFirstFixture } from './helpers/reading-first-publication-fixtures.mjs';
 import { queryLibrary } from '../../scripts/v3/library-query.mjs';
-import { readCommittedGeneration, readCommittedReadingFirstPresentations } from '../../scripts/v3/phase22-active-version.mjs';
+import { PHASE22_COMMIT_PATH, readCommittedGeneration, readCommittedReadingFirstPresentations } from '../../scripts/v3/phase22-active-version.mjs';
 import { parseQueryArguments } from '../../scripts/apa-query.mjs';
 import { fingerprintV3Json as hash } from '../../scripts/v3/semantic-package-validator.mjs';
 
@@ -43,6 +43,96 @@ async function committed(t) {
   const snapshot = await publishTopicFixture(f);
   return { ...f, snapshot, topic: snapshot.generation.topics[0] };
 }
+
+function countHintSearch(inputs, mutation) {
+  const modules = Object.fromEntries(Object.entries({ current: '../../scripts/v3/current-vault-content.mjs',
+    terms: '../../scripts/lib/query-terms.mjs', topic: '../../scripts/v3/topic-library.mjs' })
+    .map(([key, path]) => [key, new URL(path, import.meta.url).href]));
+  const code = `
+    import { writeFileSync } from 'node:fs';
+    import { mock } from 'node:test';
+    const { modules, inputs, mutation } = JSON.parse(process.argv[1]);
+    const current = await import(modules.current), terms = await import(modules.terms);
+    let reads = 0, indexBuilds = 0;
+    mock.module(modules.current, { exports: { ...current, readCurrentVaultContent(...args) {
+      reads++;
+      return current.readCurrentVaultContent(...args);
+    } } });
+    mock.module(modules.terms, { exports: { ...terms, createLibraryBm25(...args) {
+      indexBuilds++;
+      const index = terms.createLibraryBm25(...args);
+      if (mutation && indexBuilds === 1) writeFileSync(mutation.path, Buffer.from(mutation.bytes, 'base64'));
+      return index;
+    } } });
+    let result, error;
+    try { result = await (await import(modules.topic)).getTopicUpdateHints(inputs); }
+    catch (caught) { error = { code: caught.code, details: caught.details }; }
+    console.log(JSON.stringify({ reads, indexBuilds, result, error }));`;
+  const child = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--input-type=module', '-e', code,
+    JSON.stringify({ modules, inputs, mutation })], { encoding: 'utf8', timeout: 60000, windowsHide: true });
+  assert.equal(child.status, 0, child.error?.message ?? child.stderr);
+  return JSON.parse(child.stdout);
+}
+
+test('topic hints reuse one current snapshot and BM25 while preserving exact matches, source relations and diagnostics', async t => {
+  const f = await createTopicFixture(t, { topicTitle: 'Recall wholeterm', queryTerms: ['wholeterm', 'backlinkneedle', 'alpha-beta'] });
+  const started = await publishTopicFixture(f);
+  const shared = started.generation.shared_nodes[0];
+  const sharedPath = join(f.vaultRoot, shared.path);
+  const third = await readingFirstPublicationFixture(t, { vaultRoot: f.vaultRoot, generation: 'topic-hints-paper-3',
+    runId: 'run_' + 'c'.repeat(32), paperId: 'pap_' + 'c'.repeat(32),
+    sourceText: 'Different registered synthetic source.', findingText: 'Visible wholeterm with alpha and beta separated.',
+    knowledgeRegistry: [{ id: 'method', canonical_key: 'synthetic-method', path: shared.path, content: await readFile(sharedPath, 'utf8') }] });
+  assert.equal((await applyBilingualPublication(applyReadingFirstFixture(third))).status, 'committed');
+  const pointer = join(f.vaultRoot, PHASE22_COMMIT_PATH), previousPointer = await readFile(pointer);
+  const nextTopic = await registerTopicFixture(f, { operationId: 'topic-save-2', topicTitle: 'Coverage', queryTerms: ['wholeterm', 'backlinkneedle'] });
+  const snapshot = await publishTopicFixture(nextTopic), currentPointer = await readFile(pointer);
+  assert.equal(snapshot.generation.topics.length, 2);
+  const inputs = { vaultRoot: f.vaultRoot, generationId: snapshot.generation_id, changedPaperIds: [f.papers[1].paperId, third.paperId] };
+  const presentations = readCommittedReadingFirstPresentations(snapshot).filter(row => inputs.changedPaperIds.includes(row.paper.paper_id));
+  await writeFile(sharedPath, (await readFile(sharedPath, 'utf8')) + '\nBacklinkneedle describes the shared method.\n');
+  const paper = snapshot.generation.papers.find(row => row.paper_id === third.paperId);
+  const sharedHit = (await queryLibrary({ vaultRoot: f.vaultRoot, query: 'backlinkneedle', full: true })).results.find(row => row.paper_id === third.paperId);
+  assert.ok(sharedHit?.hits.length);
+  assert.ok(sharedHit.hits.every(hit => hit.path === shared.path));
+  const splitHit = (await queryLibrary({ vaultRoot: f.vaultRoot, query: 'alpha-beta', full: true })).results.find(row => row.paper_id === third.paperId);
+  assert.ok(splitHit?.hits.some(hit => hit.path === paper.paths.en));
+
+  const expectedHints = snapshot.generation.topics.flatMap(topic => presentations.map(({ paper, presentation }) => {
+    const source = presentation.citation.sources[0], wholeMatch = paper.paper_id === third.paperId;
+    return { topic_id: topic.topic_id, base_revision: topic.revision, generation_id: snapshot.generation_id, status: 'update_available',
+      source: { paper_id: paper.paper_id, analysis_revision: paper.analysis_revision, adopted_generation_id: snapshot.generation_id,
+        source_id: source.source_id, source_sha256: source.sha256, source_version: source.source_version ?? null,
+        locators: source.locators, adopted_for: ['selected update evidence'] },
+      matched_terms: wholeMatch ? ['wholeterm'] : [], relation: wholeMatch ? 'query_terms' : 'shared_source' };
+  }));
+  const expected = { ok: true, status: 'available', generation_id: snapshot.generation_id, hints: expectedHints, model_calls: 0 };
+  const normal = countHintSearch(inputs);
+  assert.deepEqual(normal.result, expected);
+
+  const sidecar = join(f.vaultRoot, paper.reader_presentation.path), originalSidecar = await readFile(sidecar);
+  await writeFile(sidecar, 'Unavailable presentation');
+  const partial = countHintSearch(inputs);
+  assert.deepEqual(partial.result, { ...expected, status: 'partial', hints: expectedHints.filter(hint => hint.source.paper_id !== paper.paper_id),
+    diagnostics: [{ paper_id: third.paperId, code: 'P22_OBJECT_HASH_MISMATCH' }] });
+  await writeFile(sidecar, originalSidecar);
+
+  const notePath = join(f.vaultRoot, paper.paths.en), originalNote = await readFile(notePath);
+  const editedNote = Buffer.from(originalNote.toString('utf8').replaceAll('wholeterm', 'humaneditneedle'));
+  assert.notDeepEqual(editedNote, originalNote);
+  const edited = countHintSearch(inputs, { path: notePath, bytes: editedNote.toString('base64') });
+  const refreshed = await queryLibrary({ vaultRoot: f.vaultRoot, query: 'humaneditneedle' });
+  assert.equal(refreshed.generation_id, snapshot.generation_id);
+  assert.ok(refreshed.results.find(row => row.paper_id === third.paperId)?.hits.some(hit => hit.path === paper.paths.en && hit.changed));
+  await writeFile(notePath, originalNote);
+  const switched = countHintSearch(inputs, { path: pointer, bytes: previousPointer.toString('base64') });
+  await writeFile(pointer, currentPointer);
+  for (const observed of [normal, partial, edited, switched]) {
+    assert.deepEqual({ reads: observed.reads, indexBuilds: observed.indexBuilds }, { reads: 1, indexBuilds: 1 });
+  }
+  assert.deepEqual(edited.error, { code: 'P23_CURRENT_CHANGED', details: { path: paper.paths.en } });
+  assert.equal(switched.error?.code, 'P22_GENERATION_CHANGED');
+});
 
 test('topic update consumes presentation preferences while retaining the saved topic language', async t => {
   const f = await committed(t);
@@ -333,7 +423,8 @@ test('writing project new-paper hints identify related evidence without updating
       await writeFile(absolute, (await readFile(absolute, 'utf8')).replace(/\[\[[^\]]+\]\]/g, '').replace(/!?\[[^\]]*\]\(([^)]*)\)/g, (match, href) => /(?:methods|concepts)\//.test(decodeURI(href)) ? '' : match));
     }
     const live = await readCurrentVaultContent({ vaultRoot: f.vaultRoot });
-    const found = await (await import('../../scripts/v3/topic-library.mjs')).getTopicUpdateHints({ vaultRoot: f.vaultRoot, generationId: live.generation_id, changedPaperIds: [paperId] });
+    const inputs = { vaultRoot: f.vaultRoot, generationId: live.generation_id, changedPaperIds: [paperId] };
+    const found = await topics.getTopicUpdateHints(inputs);
     const hints = found.hints.filter(row => row.project_id === project.project_id && row.source?.paper_id === paperId);
     if (related) {
       assert.ok(hints.length);
@@ -342,6 +433,8 @@ test('writing project new-paper hints identify related evidence without updating
         assert.ok(hint.evidence_matches[0].matched_terms.includes('photon'));
         assert.equal(hint.automatic_update, false);
       }
+      const counted = countHintSearch(inputs);
+      assert.deepEqual(counted, { reads: 1, indexBuilds: 1, result: found });
     } else assert.deepEqual(hints, []);
     assert.deepEqual(await readFile(join(f.vaultRoot, project.path)), before);
     for (const [path, bytes] of originalNotes) await writeFile(path, bytes);

@@ -101,8 +101,8 @@ export function validateSectionSync(previous, next) {
   }
 }
 
-export async function readWritingProject({ repoRoot, projectId, generationId } = {}) {
-  const snapshot = await readCurrentVaultContent({ vaultRoot: repoRoot });
+export async function readWritingProject({ repoRoot, projectId, generationId, currentSnapshot } = {}) {
+  const snapshot = currentSnapshot ?? await readCurrentVaultContent({ vaultRoot: repoRoot });
   if (!snapshot.ok) fail('WQ_PROJECT_COMMITTED_REQUIRED', { errors: snapshot.errors });
   if (generationId && generationId !== snapshot.generation_id) fail('P24_GENERATION_CHANGED');
   const registered = (snapshot.generation.topics ?? []).find(row => row.project_id === projectId && row.schema_version === 'writing-project-1.0');
@@ -116,17 +116,17 @@ export async function readWritingProject({ repoRoot, projectId, generationId } =
   }
   // Saved citations may predate human edits to the cited notes; report them so an update can rebind.
   const { diagnostics } = await validateWritingProjectData({ repoRoot, generationId: snapshot.generation_id, projectData: Object.fromEntries(fields.map(field => [field, project[field]])),
-    adoptedSources: project.dependencies, citationChanges: 'report' });
+    adoptedSources: project.dependencies, citationChanges: 'report', currentSnapshot });
   const changes = sectionChanges(project);
   diagnostics.push(...changes.diagnostics);
   return { ok: true, project, diagnostics, section_changes: changes.section_changes, generation_id: snapshot.generation_id, content_sha256: sha(bytes),
     managed_hash: inspectManagedNote(bytes).managedHash, markdown: bytes.toString('utf8'), snapshot };
 }
 
-export async function validateWritingProjectData({ repoRoot, generationId, projectData, adoptedSources, citationChanges = 'reject' } = {}) {
+export async function validateWritingProjectData({ repoRoot, generationId, projectData, adoptedSources, citationChanges = 'reject', currentSnapshot } = {}) {
   if (!projectData || Object.keys(projectData).some(key => !fields.includes(key)) || fields.some(key => !Array.isArray(projectData[key]))) fail('WQ_PROJECT_DATA_INVALID');
   if (/<!--\s*(?:AUTO|APA_FIELD)|## Personal Notes/.test(JSON.stringify(projectData))) fail('WQ_PROJECT_DATA_INVALID');
-  const snapshot = await readCurrentVaultContent({ vaultRoot: repoRoot });
+  const snapshot = currentSnapshot ?? await readCurrentVaultContent({ vaultRoot: repoRoot });
   if (!snapshot.ok || snapshot.generation_id !== generationId) fail('P24_GENERATION_CHANGED');
   const ids = new Set(), diagnostics = [];
   if (!projectData.evidence_records.length) fail('WQ_PROJECT_EVIDENCE_REQUIRED');

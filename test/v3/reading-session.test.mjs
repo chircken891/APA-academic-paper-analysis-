@@ -1083,10 +1083,35 @@ test('explicit additional execution budget resumes the first scoped Writer repai
   await readingRuntime.restoreReadingFirstPublicationSource(legacy);
 });
 
-test('explicit original-page chart repair continues an unbound Results gap under the original budget', async t => {
-  const f = await configuredFixture(t, { systemTemp: true }), template = await configuredSessionTemplate(t);
+for (const mixed of [false, true]) test(mixed
+  ? 'original-page chart repair combines an unlettered figure, a registered relink and a translation correction'
+  : 'explicit original-page chart repair continues an unbound Results gap under the original budget', async t => {
+  const f = await configuredFixture(t, { systemTemp: true }), legacy = await configuredSessionTemplate(t);
+  const template = mixed ? await reviewedReadingFirstFixture(t, { methodsFirst: true, figurePath: 'Figures/run/figure.png' }) : legacy;
+  template.presentationCatalog.source_pdf = 'Clippings/paper.pdf';
+  const baselineMethod = template.presentationCatalog.knowledge[0];
+  let knowledgeResolution;
+  if (mixed) {
+    const olderCatalog = structuredClone(legacy.presentationCatalog);
+    olderCatalog.source_pdf = 'Raw/prior-chart-paper.pdf';
+    olderCatalog.visuals[0].path = 'Figures/prior-chart-paper/figure.png';
+    const narrow = { ...baselineMethod, id: 'narrow-chart', canonical_key: 'narrow-chart',
+      title: { en: 'Narrow chart', 'zh-CN': '特定图型' } };
+    olderCatalog.knowledge.push(narrow);
+    olderCatalog.visuals[0].chart_types = [{ knowledge_id: narrow.id, label: narrow.title }];
+    const earlier = await readingFirstPublicationFixture(t, { vaultRoot: f.root, evidenceMode: 'actual',
+      generation: 'original-page-repair-knowledge', runId: 'run_' + 'c'.repeat(32), paperId: 'pap_' + 'c'.repeat(32),
+      presentation: olderCatalog });
+    assert.equal((await applyBilingualPublication(applyReadingFirstFixture(earlier))).status, 'committed');
+    knowledgeResolution = { issue_id: 'issue-1', knowledge_id: baselineMethod.id,
+      from_path: earlier.candidate.supportNotes.find(note => note.id === narrow.id).path,
+      target_path: earlier.candidate.supportNotes.find(note => note.id === baselineMethod.id).path,
+      to_canonical_key: baselineMethod.canonical_key };
+    baselineMethod.canonical_key = narrow.canonical_key;
+  }
   const runRoot = join(f.root, 'runs', 'run');
-  let session = await createFrozenReading22({ ...f.options, includeRepairs: true, maxCalls: 8, maxTotalCalls: 16 });
+  const create = mixed ? createReadingSession : createFrozenReading22;
+  let session = await create({ ...f.options, includeRepairs: true, maxCalls: 8, maxTotalCalls: 16 });
   const content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (file, value, action = null) => {
     action ??= await nextReadingAction(session);
@@ -1098,7 +1123,9 @@ test('explicit original-page chart repair continues an unbound Results gap under
   };
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session);
-    await accept(action.role, content(action.role), action);
+    const extra = mixed && action.role === 'integration'
+      ? { method_steps: template.handoff.science.find(item => item.receipt.role === 'integration').content.method_steps } : {};
+    await accept(action.role, content(action.role, extra), action);
   }
   await accept('en', template.views[0]);
   await accept('zh-CN', template.views[1]);
@@ -1106,22 +1133,36 @@ test('explicit original-page chart repair continues an unbound Results gap under
   await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
   const sourceId = f.options.scientificInput.sources[0].id;
   const target = template.views[0].sections[0].id;
-  const issue = { severity: 'material', kind: 'chart-type-coverage', detail: 'Panel f needs its own chart type.',
+  const issue = { severity: 'material', kind: mixed ? 'chart-type' : 'chart-type-coverage', detail: 'The original figure needs its own chart type.',
     repair_owner: 'science', affected_languages: ['en', 'zh-CN'],
-    repair_scope: { status: 'located', section_ids: [target], knowledge_ids: [], visual_ids: ['fig-one'], editor_fields: [] },
+    repair_scope: { status: 'located', section_ids: [target], knowledge_ids: mixed ? [baselineMethod.id] : [], visual_ids: ['fig-one'], editor_fields: [] },
     scientific_gap: { id: 'chart-panel-f', question: 'How is intensity displayed?', impact: 'It controls interpretation.',
       severity: 'material', owner_role: 'results', source_kind: 'original_page', source_ids: [sourceId], target_sections: [target] } };
-  assert.equal((await accept('review', { ...template.review, issues: [issue] })).status, 'completed_with_limits');
+  const overallReview = await nextReadingAction(session);
+  const reviewPacket = JSON.parse((await readFile(overallReview.arguments.prompt, 'utf8')).split('\n\n').at(-1));
+  const rendererIssue = { severity: 'material', kind: 'navigation', detail: 'Use the broader registered chart definition.',
+    repair_owner: 'renderer', affected_languages: ['en', 'zh-CN'],
+    repair_scope: { status: 'located', section_ids: [target], knowledge_ids: [baselineMethod.id], visual_ids: ['fig-one'], editor_fields: [] },
+    affected_paths: [...reviewPacket.presentation.notes.map(note => note.path), knowledgeResolution?.from_path] };
+  assert.equal((await accept('review', { ...template.review, issues: mixed ? [rendererIssue, issue] : [issue] }, overallReview)).status, 'completed_with_limits');
   const baseline = await nextReadingAction(session);
   const { checkpoint_fingerprint, issue_ids } = baseline.continuation;
   assert.equal(baseline.continuation.reason, 'READING_FIRST_CONTINUATION_SCIENCE_SCOPE_UNAUTHORIZED');
-  const scope = { issue_id: 'issue-1', visual_id: 'fig-one', source_id: sourceId, panel: 'f' };
+  const before = template.views[1].sections[0].paragraphs[0];
+  const after = '这里澄清该段原意。';
+  const scope = { issue_id: mixed ? 'issue-2' : 'issue-1', visual_id: 'fig-one', source_id: sourceId, panel: mixed ? null : 'f',
+    ...(mixed ? { knowledge_resolutions: [knowledgeResolution],
+      translation_correction: { language: 'zh-CN', section_id: target, before, after } } : {}) };
   const authorization = { authorization_id: 'original-page-chart-repair', reason: 'Repair panel f using the original page.',
     checkpoint_fingerprint, issue_ids, max_additional_calls: 0, max_additional_review_rounds: 0 };
   const authorize = original_page_chart_repair => recordReadingEvent(session, { kind: 'authorize-continuation',
     authorization: { ...authorization, ...(original_page_chart_repair ? { original_page_chart_repair } : {}) } });
   await assert.rejects(() => authorize(), /CONTINUATION_SCIENCE_SCOPE_UNAUTHORIZED/);
   await assert.rejects(() => authorize({ ...scope, source_id: 'unauthorized' }), /ORIGINAL_PAGE_CHART_REPAIR_INVALID/);
+  if (mixed) {
+    await assert.rejects(() => authorize({ ...scope, knowledge_resolutions: [] }), /ORIGINAL_PAGE_CHART_REPAIR_INVALID/);
+    await assert.rejects(() => authorize({ ...scope, translation_correction: { ...scope.translation_correction, before: 'absent' } }), /ORIGINAL_PAGE_CHART_REPAIR_INVALID/);
+  }
   const plan = await recordReadingEvent(session, { kind: 'inspect-continuation', original_page_chart_repair: scope });
   assert.deepEqual(plan.remaining_task_keys, ['enrich-late-results', 'en-r2', 'zh-CN-r2', 'presentation-r2', 'review-r2']);
   assert.equal(plan.required_additional_calls, 0);
@@ -1138,25 +1179,39 @@ test('explicit original-page chart repair continues an unbound Results gap under
     classification: 'paper_fact', status: 'recovered', explanation: 'Color encodes the measured intensity.',
     consequence: 'Read intensity from the legend.', source_ids: [sourceId], target_sections: [target] }],
   visual_corrections: [{ visual_id: visual.id, source_id: sourceId, page: 1, label: visual.label, caption: visual.caption,
-    chart_types: [...(visual.chart_types ?? []), { knowledge_id: 'intensity-colors', panel: 'f', label: { en: 'False-color intensity plot', 'zh-CN': '伪彩色强度图' } }] }],
-  chart_knowledge: { id: 'intensity-colors', kind: 'method', source_kind: 'method-background',
+    chart_types: [...(visual.chart_types ?? []), { knowledge_id: mixed ? baselineMethod.id : 'intensity-colors',
+      ...(mixed ? {} : { panel: 'f' }), label: { en: 'False-color intensity plot', 'zh-CN': '伪彩色强度图' } }] }],
+  ...(mixed ? {} : { chart_knowledge: { id: 'intensity-colors', kind: 'method', source_kind: 'method-background',
     title: { en: 'False-color intensity plot', 'zh-CN': '伪彩色强度图' },
-    paragraphs: { en: ['Read signal intensity by matching the color to the legend.'], 'zh-CN': ['按色标将颜色对应到信号强度。'] } } };
+    paragraphs: { en: ['Read signal intensity by matching the color to the legend.'], 'zh-CN': ['按色标将颜色对应到信号强度。'] } } }) };
   await accept('enrich-late-results', result, action);
   session = await resumeReadingSession({ runRoot });
   await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
   const views = template.views.map(view => ({ ...view,
     enrichment_consumption: [{ gap_id: issue.scientific_gap.id, section_heading: view.sections[0].heading }] }));
   await accept('en-r2', views[0]);
-  await accept('zh-CN-r2', views[1]);
+  const translation = await nextReadingAction(session);
+  if (mixed) {
+    await assert.rejects(() => accept('zh-CN-r2', views[1], translation), /ORIGINAL_PAGE_CHART_REPAIR_INVALID/);
+    views[1].sections[0].paragraphs[0] = after;
+  }
+  await accept('zh-CN-r2', views[1], translation);
   await accept('presentation-r2', { ...template.editor, views_fingerprint: readingFirstViewsFingerprint(views) });
+  if (mixed) await recordReadingEvent(session, { kind: 'renderer-repair' });
   const final = await accept('review-r2', template.review);
   assert.equal(final.status, 'reading_complete');
   const complete = await nextReadingAction(session);
   assert.equal(complete.summary.budget.total_used, 15);
   assert.equal(complete.summary.budget.total_limit, 16);
   const source = await inspectReadingFirstPublicationSource(complete.publication_source);
-  assert.equal(source.presentation.visuals[0].chart_types.at(-1).knowledge_id, 'intensity-colors');
+  assert.equal(source.presentation.visuals[0].chart_types.at(-1).knowledge_id, mixed ? baselineMethod.id : 'intensity-colors');
+  if (mixed) {
+    assert.equal(source.presentation.visuals[0].chart_types.at(-1).panel, undefined);
+    assert.equal(source.candidate.supportNotes.some(note => note.path === knowledgeResolution.from_path), false);
+    assert.equal(source.candidate.supportNotes.some(note => note.path === knowledgeResolution.target_path), true);
+    assert.ok(source.candidate.notes.find(note => note.language === 'zh-CN').content.includes(after));
+    assert.deepEqual(JSON.parse(await readFile(join(runRoot, 'reading', 'review.json'), 'utf8')).issues, [rendererIssue, issue]);
+  }
   assert.equal(source.recipe.checkpoint.state.executionLedger.length, 15);
   assert.equal(source.recipe.binding.enrichment_policy, undefined);
   await readingRuntime.restoreReadingFirstPublicationSource(source.recipe);

@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 import MarkdownIt from 'markdown-it';
 import { fingerprintV3Json as fingerprint } from './semantic-package-validator.mjs';
-import { draftReadingFirstKnowledgeComparisons, extractOwnKnowledge, compareOwnKnowledge, matchReadingFirstKnowledgeIdentity } from './reading-first-knowledge.mjs';
+import { draftReadingFirstKnowledgeComparisons, extractOwnKnowledge, compareOwnKnowledge, matchReadingFirstKnowledgeIdentity,
+  resolveSharedKnowledgeSources } from './reading-first-knowledge.mjs';
 import { inspectManagedNote } from './phase22-managed-markdown.mjs';
 const sha = value => 'sha256:' + createHash('sha256').update(value).digest('hex');
 const fail = (code, details) => { throw Object.assign(new Error(code), {code,details}); };
@@ -73,6 +74,7 @@ export function computeKnowledgeRebase({recipe, rendering, render, presentation,
   const candidate = {...original,...content,presentation_fingerprint:fingerprint(content)};
   if (nextDrafts === undefined) delete candidate.knowledgeMergeCandidates;
   const nodes = [], papers = [], identityAmbiguities = [];
+  const sourcePaths = new Map((presentation.sources ?? []).map(source => [source.id, source.path]));
   const nextByIdentity = new Map((nextNodes ?? []).map(note => [key(note), note]));
   if (nextByIdentity.size !== (oldNodes ?? []).length || nextByIdentity.size !== (nextNodes ?? []).length) fail('RF_REBASE_OWN_KNOWLEDGE_CHANGED');
   const identityMappings = (oldNodes ?? []).flatMap(note => {
@@ -115,8 +117,9 @@ export function computeKnowledgeRebase({recipe, rendering, render, presentation,
     }
     if (!item) fail('RF_REBASE_OWN_KNOWLEDGE_CHANGED',{path:note.path});
     const modeBefore = before ? 'reused' : 'created', modeAfter = after ? 'reused' : 'created';
-    const own = extractOwnKnowledge({content:note.content,paperId:identity.paper_id,item,mode:modeBefore});
-    const rebased = extractOwnKnowledge({content:output.content,paperId:identity.paper_id,item,mode:modeAfter});
+    const resolvedItem = resolveSharedKnowledgeSources(item, sourcePaths);
+    const own = extractOwnKnowledge({content:note.content,paperId:identity.paper_id,item:resolvedItem,mode:modeBefore});
+    const rebased = extractOwnKnowledge({content:output.content,paperId:identity.paper_id,item:resolvedItem,mode:modeAfter});
     const existing = after?.content ? extractOwnKnowledge({content:after.content,paperId:identity.paper_id,item,mode:'reused'}) : undefined;
     const originalExisting = ambiguous ? extractOwnKnowledge({content:before.content,paperId:identity.paper_id,item,mode:'reused'}) : undefined;
     const compared = compareOwnKnowledge({original:own,rebased,existing,originalExisting,path:note.path});

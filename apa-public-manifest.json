@@ -143,7 +143,7 @@
     },
     {
       "path": "docs/apa-v3/reading-session.md",
-      "sha256": "8abf7ed99a482f6ee852d29864f732dd604046b6075a60f2b84bb2305e7fd73a"
+      "sha256": "b41b80dce6e923da5f957a414905156601a8d8a5fdf1bcd09d50ef4f7b2ad1c1"
     },
     {
       "path": "docs/apa-v3/scientific-writing-modules.md",
@@ -535,7 +535,7 @@
     },
     {
       "path": "scripts/v3/library-query.mjs",
-      "sha256": "21b78e7f12577d025c646142b955083cd2e8a70a218406350558049257e09f27"
+      "sha256": "9ee2be9d4ed94305f011e0a8c4637210789ba380667cedcc921e464b61b6a959"
     },
     {
       "path": "scripts/v3/library-synthesis.mjs",
@@ -731,11 +731,11 @@
     },
     {
       "path": "scripts/v3/reading-first-knowledge.mjs",
-      "sha256": "f5289df90117f5714248aebc379823abde87678039e909ae52d77422aefcd399"
+      "sha256": "43aa2c8fb2941885a466563baa9ef85f5e20356bc270a676080aa972d916e4c6"
     },
     {
       "path": "scripts/v3/reading-first-obsidian.mjs",
-      "sha256": "b50643f4ace82dd35efa103776a8991afccdc96387699f83e08d6c477225163c"
+      "sha256": "4a0cf46ce0ee6c1cb8881c72ad2a9c99faae8be29b87692a4f1feebca6d86a03"
     },
     {
       "path": "scripts/v3/reading-first-preview.mjs",
@@ -755,11 +755,11 @@
     },
     {
       "path": "scripts/v3/reading-first-publish.mjs",
-      "sha256": "da06983eb6ae3964d5640614d65285f9c344abcbe7448047265c677b7ede4866"
+      "sha256": "d4e1a5fc42e1d673b62905c5a8bcc792ba2761e9e47d53ab8f5ea3f49f004638"
     },
     {
       "path": "scripts/v3/reading-first-rebase.mjs",
-      "sha256": "717a52ac4549c17315e239000822cfe9a3f7a89542950d0fc63fcee12f2fd95c"
+      "sha256": "6ae326941a29daba86116ff2b1ec928ef2930b7cb71eed93827f2cddfe87d262"
     },
     {
       "path": "scripts/v3/reading-first-repair-scope.mjs",
@@ -771,7 +771,7 @@
     },
     {
       "path": "scripts/v3/reading-first-runtime.mjs",
-      "sha256": "dbb70d31d46dd5a756301ae9de8bbc45b1f81a4f8ef66d26f5a2d8ca4f1e485c"
+      "sha256": "1641737f94d59e8b63233f777531ade144f1b15e9170526d60c386a3c2a59114"
     },
     {
       "path": "scripts/v3/reading-host-evidence.mjs",
@@ -783,19 +783,19 @@
     },
     {
       "path": "scripts/v3/reading-runtime-binding.mjs",
-      "sha256": "5c0b65659118dca6fa0e0358bce430a2160ca58937c77c94b7bfa8bd49245b61"
+      "sha256": "105f46e859e609df3a1449e72a5d0241ea6f535366b7262b16d6c5c75aaf6800"
     },
     {
       "path": "scripts/v3/reading-runtime-cleanup.mjs",
-      "sha256": "6eab034cbedce82c46ca913e64bb3ff413793e0937ee1aa134683962d2462d9f"
+      "sha256": "5bade68b17c32a07881e8095fda4355205081bbbb14c8b273d91c8b86a946eee"
     },
     {
       "path": "scripts/v3/reading-runtime-snapshot.mjs",
-      "sha256": "71abf810fbfa7cb5ea2a8ab983a62c1337747b4dcd53b1c881d0b20480a11004"
+      "sha256": "eeb081e383cbc7b38fc047704dbd4bb343a09c1632c75ff2c0250d292024f835"
     },
     {
       "path": "scripts/v3/reading-session-cli.mjs",
-      "sha256": "7a255a05b222587829feb028563202e44be98658bd306cda6252ad97c2b1f00a"
+      "sha256": "1c9cac324d845313c5442a221cd9aa5c1bc7ca7c0bfe1f355328bcfb33cbe041"
     },
     {
       "path": "scripts/v3/reading-session-continuation.mjs",
@@ -807,7 +807,7 @@
     },
     {
       "path": "scripts/v3/reading-session.mjs",
-      "sha256": "7c82d553ba1b5350cf1e988b5cc8aeb358f25bce007fd961fa3ef9b6ea47d7f6"
+      "sha256": "3da3831d0cf117f8b867de59bc839996221451fae1fe95ca71eee949cab48dde"
     },
     {
       "path": "scripts/v3/reading-source-policy.mjs",
@@ -879,7 +879,7 @@
     },
     {
       "path": "scripts/v3/topic-library.mjs",
-      "sha256": "8a4b9502d5aaa8ba02a6789345ebf1b75ae5782e50d709b4743bbeb43df2a560"
+      "sha256": "3684219a4ef5420563b7c6fe757148debc35ee0dbe20060dfa5dc883675250f9"
     },
     {
       "path": "scripts/v3/topic-publication.mjs",
@@ -911,7 +911,7 @@
     },
     {
       "path": "scripts/v3/writing-project.mjs",
-      "sha256": "b068ad51a3af764bc64fb0717ae66997a69e227423d0692cb51bb88dae5181e1"
+      "sha256": "3738bd8d2cea838fd4a1c7f33e08150d56dc8bacf1d7e378838ecc07e07cd4da"
     },
     {
       "path": "SETUP.md",
@@ -1087,7 +1087,7 @@
     },
     {
       "path": "test/v3/helpers/topic-fixtures.mjs",
-      "sha256": "c69d24f3605ece461ebb46e596e2b8fe8bae7562c26352b459e592291fd07092"
+      "sha256": "a5fcca85dd818be2bc122ca5ed3f40710ffa25d4852c4aec29b26bfa841995c4"
     },
     {
       "path": "test/v3/knowledge-merge.test.mjs",
@@ -1239,7 +1239,7 @@
     },
     {
       "path": "test/v3/reading-first-obsidian.test.mjs",
-      "sha256": "4ead322f66dedc99f8ff8a6824ed100d8e3e8fc049b83adca748f546d050c9d8"
+      "sha256": "434ff55a0c69e52ff16129da58453905951efb0a92b2bae1f6b6b2a1859a2d4f"
     },
     {
       "path": "test/v3/reading-first-preview.test.mjs",
@@ -1299,15 +1299,15 @@
     },
     {
       "path": "test/v3/reading-runtime-cleanup.test.mjs",
-      "sha256": "657a445acd2c624fad1312b429436339fb974bbe6637aaf94d517818a865ee93"
+      "sha256": "51cb56f248ab0ad73d3ba8d792e8e7e8310dd937bf3eadcc381afed72d1275ac"
     },
     {
       "path": "test/v3/reading-runtime-snapshot.test.mjs",
-      "sha256": "90a56a20e956bed3d24a205656dc99fe0d6f8ccd391858a90d901e8b314cdd5f"
+      "sha256": "689d788b5d699d75ec947d79023420b2ec9be05842470efb0fd6ba4844c7ecc7"
     },
     {
       "path": "test/v3/reading-session-22.test.mjs",
-      "sha256": "d54c25eb7a01b03e4de13feb904e1ec0cef5c1546232454d192f0c5abaae81ab"
+      "sha256": "5643c0f112fd7ed3d9ec1822a7e4cf57b1dcc3bad8172bb7e25e342560525364"
     },
     {
       "path": "test/v3/reading-session-cli-audit.test.mjs",
@@ -1315,7 +1315,7 @@
     },
     {
       "path": "test/v3/reading-session.test.mjs",
-      "sha256": "f9000af9a60de7830499d6c3990e0b3510cb22943c8059d4ea34b0c5573fb487"
+      "sha256": "a404b84a7f25237107fc74d42c3215e9c71bb3e480637cf99e4a8455dcbd8709"
     },
     {
       "path": "test/v3/reading-source-policy.test.mjs",
@@ -1359,7 +1359,7 @@
     },
     {
       "path": "test/v3/topic-update.test.mjs",
-      "sha256": "6f1497652990a5742354228a3e41c2b4bd2ea14ad09c53c5968234bb4846fb9a"
+      "sha256": "f59bc83c125f1379e59931443c78328c921b1ec1164a71ad283367c5951c3a9c"
     },
     {
       "path": "test/v3/writing-project.test.mjs",

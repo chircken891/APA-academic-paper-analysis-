@@ -291,12 +291,19 @@ test('snapshot reference replacement and release guard against a stale fingerpri
   put(codeRoot, 'scripts/runner.mjs', 'export const value = 2;\n');
   const current = prepareReadingRuntimeSnapshot(options);
   const pendingCheckpoint = { artifact_id: 'session-state-1', sha256: sha('owned checkpoint'), byte_length: 16 };
-  const rebind = { ...options, manifest: current, expectedFingerprint: previous.fingerprint, pending: true, pendingCheckpoint };
+  const evidence = 'approved repair test passed', evidencePath = join(repoRoot, '.tmp/evidence/test.txt');
+  const testEvidence = [{ path: evidencePath, sha256: sha(evidence), byte_length: Buffer.byteLength(evidence) }];
+  const rebind = { ...options, manifest: current, expectedFingerprint: previous.fingerprint, pending: true, pendingCheckpoint, testEvidence };
+  const initialReference = readFileSync(refFile);
+  assert.throws(() => registerReadingRuntimeSnapshotReference(rebind), { code: 'READING_RUNTIME_TEST_EVIDENCE_INVALID' });
+  assert.deepEqual(readFileSync(refFile), initialReference);
+  put(repoRoot, '.tmp/evidence/test.txt', evidence);
   registerReadingRuntimeSnapshotReference(rebind);
   const pending = JSON.parse(readFileSync(refFile));
   assert.equal(pending.fingerprint, previous.fingerprint);
   assert.equal(pending.pending_manifest.fingerprint, current.fingerprint);
   assert.deepEqual(pending.pending_checkpoint, pendingCheckpoint);
+  assert.deepEqual(pending.pending_test_evidence_paths, [evidencePath]);
   assert.throws(() => registerReadingRuntimeSnapshotReference({
     ...rebind, pendingCheckpoint: { ...pendingCheckpoint, sha256: sha('changed owned checkpoint') },
   }), { code: 'READING_RUNTIME_REFERENCE_CONFLICT' });
@@ -310,6 +317,8 @@ test('snapshot reference replacement and release guard against a stale fingerpri
   assert.equal(abandoned.fingerprint, previous.fingerprint);
   assert.equal(abandoned.pending_manifest, undefined);
   assert.equal(abandoned.pending_checkpoint, undefined);
+  assert.equal(abandoned.pending_test_evidence_paths, undefined);
+  assert.equal(abandoned.test_evidence_paths, undefined);
   assert.deepEqual(abandoned.previous_manifests, [current]);
   assert.equal(existsSync(join(options.runRoot, current.patch.path)), true);
 
@@ -319,6 +328,8 @@ test('snapshot reference replacement and release guard against a stale fingerpri
   assert.equal(active.fingerprint, current.fingerprint);
   assert.equal(active.pending_manifest, undefined);
   assert.equal(active.pending_checkpoint, undefined);
+  assert.equal(active.pending_test_evidence_paths, undefined);
+  assert.deepEqual(active.test_evidence_paths, [evidencePath]);
   assert.deepEqual(active.previous_manifests, [previous]);
   assert.throws(() => releaseReadingRuntimeSnapshotReference({ ...options, expectedFingerprint: previous.fingerprint }), { code: 'READING_RUNTIME_REFERENCE_CONFLICT' });
   releaseReadingRuntimeSnapshotReference({ ...options, expectedFingerprint: current.fingerprint });

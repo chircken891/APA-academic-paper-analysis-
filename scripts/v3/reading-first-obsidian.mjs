@@ -9,7 +9,7 @@ import { fingerprintV3Json } from './semantic-package-validator.mjs';
 import { registerReaderTargets } from './phase221-targets.mjs';
 import { mergeManagedNote } from './phase22-managed-markdown.mjs';
 import { applyReadingFirstKnowledgeContent, collectSharedKnowledgeApplications, draftReadingFirstKnowledgeComparisons, matchReadingFirstKnowledgeIdentity,
-  registeredKnowledgeReference, renderSharedKnowledge, sharedKnowledgeKind } from './reading-first-knowledge.mjs';
+  registeredKnowledgeReference, renderSharedKnowledge, resolveSharedKnowledgeSources, sharedKnowledgeKind } from './reading-first-knowledge.mjs';
 
 const languages = ['en', 'zh-CN'];
 export const READING_FIRST_OBSIDIAN_SCHEMA = 'reading-first-obsidian-1.0';
@@ -136,8 +136,15 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
     const section = byId.get(item.section_id);
     if (!section || (item.after_paragraph !== undefined && (!Number.isInteger(item.after_paragraph) || item.after_paragraph < 0 || (language ? [language] : languages).some(lang => item.after_paragraph >= views.find(view => view.language === lang).sections[section.indices[lang]].paragraphs.length)))) fail('RF_OBSIDIAN_PLACEMENT_INVALID');
   }
+  const sources = new Map();
+  if (writerLayout) for (const source of p.sources ?? []) {
+    requireId(source.id); vaultPath(source.path);
+    if (sources.has(source.id) || !/^(?:Raw|Clippings)\/.+\.(?:pdf|docx)$/i.test(source.path)) fail('RF_OBSIDIAN_SOURCE_INVALID');
+    sources.set(source.id, source.path);
+  }
   const visuals = p.visuals ?? [];
-  const knowledge = (p.knowledge ?? []).map(item => sharedKnowledge ? { ...item, kind: sharedKnowledgeKind(item.kind) } : item);
+  const knowledge = (p.knowledge ?? []).map(item => sharedKnowledge
+    ? resolveSharedKnowledgeSources({ ...item, kind: sharedKnowledgeKind(item.kind) }, sources) : item);
   for (const rows of [visuals, knowledge]) if (new Set(rows.map(row => row.id)).size !== rows.length) fail('RF_OBSIDIAN_ID_INVALID');
   for (const visual of visuals) {
     requireId(visual.id); vaultPath(visual.path); localized(visual.label); localized(visual.caption); if (!writerLayout) checkPlacement(visual);
@@ -168,12 +175,6 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
       rows.forEach(row => checkPlacement(row, view.language));
     }
     placementSets.set(view.language, placements);
-  }
-  const sources = new Map();
-  if (writerLayout) for (const source of p.sources ?? []) {
-    requireId(source.id); vaultPath(source.path);
-    if (sources.has(source.id) || !/^(?:Raw|Clippings)\/.+\.(?:pdf|docx)$/i.test(source.path)) fail('RF_OBSIDIAN_SOURCE_INVALID');
-    sources.set(source.id, source.path);
   }
   const visualSources = new Map();
   for (const visual of visuals) {

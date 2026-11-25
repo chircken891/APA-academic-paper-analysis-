@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const CODE_ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)));
 const SNAPSHOT_PROFILE = 'reading-runtime-snapshot-1.0';
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
-const fail = code => { throw Object.assign(new Error(code), { code }); };
+const fail = (code, details) => { throw Object.assign(new Error(code), { code, ...(details ? { details } : {}) }); };
 const cliPath = 'scripts/v3/reading-session-cli.mjs';
 
 async function verifyBootstrapFiles(manifest, repoRoot) {
@@ -20,10 +20,17 @@ async function verifyBootstrapFiles(manifest, repoRoot) {
   for (const relativePath of [cliPath, 'scripts/v3/reading-runtime-snapshot.mjs']) {
     const target = join(manifest.repo_root, relativePath);
     const row = manifest.files.find(item => item?.path === relativePath);
-    if (!row || !(await lstat(target)).isFile() || await realpath(target) !== target) fail('READING_RUNTIME_SNAPSHOT_INVALID');
+    if (!row || !(await lstat(target)).isFile() || await realpath(target) !== target) fail('READING_RUNTIME_SNAPSHOT_INVALID', { path: target });
     const bytes = await readFile(target);
-    if (bytes.length !== row.byte_length || 'sha256:' + hash(bytes) !== row.sha256) fail('READING_RUNTIME_SNAPSHOT_INVALID');
+    if (bytes.length !== row.byte_length || 'sha256:' + hash(bytes) !== row.sha256) fail('READING_RUNTIME_SNAPSHOT_INVALID', { path: target });
   }
+}
+
+function addSnapshotDiagnostic(error, codeRoot) {
+  if (error.path || error.code === 'READING_RUNTIME_SNAPSHOT_INVALID') {
+    error.details ??= { path: error.path ?? codeRoot, reason: error.message };
+  }
+  throw error;
 }
 
 export async function prepareReadingSessionExecution(options = {}) {
@@ -77,39 +84,25 @@ export async function readReadingSessionExecution(runRoot) {
     if (terminal.profile !== 'reading-runtime-cleanup-1.0' || terminal.run_id !== runId) fail('READING_RUNTIME_TERMINAL_INVALID');
     return { repoRoot, runId, runRoot, terminal };
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  await verifyBootstrapFiles(initial, repoRoot);
+  await verifyBootstrapFiles(initial, repoRoot).catch(error => addSnapshotDiagnostic(error, initial.code_root));
   if (resolve(initial.repo_root) !== CODE_ROOT) {
     const selector = await import(pathToFileURL(join(initial.repo_root, cliPath)).href);
-    return selector.readReadingSessionExecution(runRoot);
+    return selector.readReadingSessionExecution(runRoot).catch(error => addSnapshotDiagnostic(error, initial.code_root));
   }
   const { readReadingRuntimeSnapshotReference, verifyReadingRuntimeSnapshot } = await import('./reading-runtime-snapshot.mjs');
-  verifyReadingRuntimeSnapshot({ manifest: initial, repoRoot, runRoot });
-  const { readOwnedArtifact } = await import('./owned-artifact-store.mjs');
-  const { validateHistoricalRuntimeRepairApproval } = await import('./reading-runtime-binding.mjs');
+  const verifySnapshot = manifest => {
+    try { return verifyReadingRuntimeSnapshot({ manifest, repoRoot, runRoot }); }
+    catch (error) { addSnapshotDiagnostic(error, manifest.code_root); }
+  };
+  verifySnapshot(initial);
+  const { readVerifiedReadingSessionRebindHistory } = await import('./reading-session.mjs');
   const reference = readReadingRuntimeSnapshotReference({ repoRoot, runId });
   if (!reference || resolve(reference.run_root) !== runRoot) fail('READING_SESSION_RUNTIME_REFERENCE_CONFLICT');
-  const actor = binding.controller_actor_id;
-  const metadata = data.brokerConfig.authorized_bindings.filter(row => row.run_id === runId && row.actor_id === actor
-    && row.role === 'control' && /^control\/session-state-\d+\.json$/.test(row.artifact_path)).sort((a, b) => Number(b.revision) - Number(a.revision));
-  let expected = initial;
-  for (const task of metadata) {
-    const found = await readOwnedArtifact({ artifactRoot: runRoot, artifactId: `session-state-${task.revision}` });
-    if (!found) continue;
-    const { receipt, bytes } = found;
-    const checkpoint = JSON.parse(bytes);
-    if (receipt.run_id !== runId || receipt.path !== task.artifact_path || receipt.revision !== task.revision || receipt.owner_actor_id !== actor
-      || receipt.role !== 'control' || checkpoint.schema_version !== 'reading-session-state-2.2' || checkpoint.run_id !== runId || !Array.isArray(checkpoint.approvals)) fail('READING_SESSION_METADATA_CONFLICT');
-    for (const item of checkpoint.approvals) {
-      const { approval, previous, current } = item ?? {};
-      if (!approval || previous?.fingerprint !== expected.fingerprint || !validateHistoricalRuntimeRepairApproval({ approval, previous, current, repoRoot, runRoot, runId,
-        checkpointFingerprint: approval.checkpoint_fingerprints?.[runId] ?? approval.checkpoint_fingerprint }).valid) fail('READING_SESSION_APPROVAL_INVALID');
-      expected = current;
-    }
-    break;
-  }
+  const approvals = await readVerifiedReadingSessionRebindHistory({ repoRoot, runRoot, runId, expectedBinding: binding, allowPending: true });
+  const expected = approvals.at(-1)?.current ?? initial;
   const manifest = [reference.manifest, reference.pending_manifest].find(item => item?.fingerprint === expected.fingerprint);
   if (!manifest) fail('READING_SESSION_RUNTIME_REFERENCE_CONFLICT');
-  if (manifest.fingerprint !== initial.fingerprint) verifyReadingRuntimeSnapshot({ manifest, repoRoot, runRoot });
+  if (manifest.fingerprint !== initial.fingerprint) verifySnapshot(manifest);
   return { repoRoot, runId, runRoot, manifest, reference };
 }
 

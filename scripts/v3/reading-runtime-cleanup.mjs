@@ -6,7 +6,7 @@ import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { assertReadingSourceOutputPath, READ_ONLY_SOURCE_ACCESS } from './reading-source-policy.mjs';
-import { listReadingRuntimeSnapshotReferences, readReadingRuntimeSnapshotReference,
+import { listReadingRuntimeSnapshotReferences, readReadingRuntimeSnapshotReference, readReadingRuntimeTestEvidencePath,
   releaseReadingRuntimeSnapshotReference, validateReadingRuntimeSnapshotManifest,
   verifyReadingRuntimeSnapshot, withReadingRuntimeSnapshotLock } from './reading-runtime-snapshot.mjs';
 
@@ -14,6 +14,8 @@ const PROFILE = 'reading-runtime-cleanup-1.0';
 const SNAPSHOT = 'reading-runtime-snapshot-1.0';
 const TERMINAL_FILE = 'runtime-terminal.json';
 const OWNERSHIP = 'runtime-cleanup-owned';
+const OWNERSHIP_JSON = /\.json$/i;
+const OWNERSHIP_RECORD = /^[a-f0-9]{64}\.json$/;
 const PLAN_FILE = 'runtime-cleanup-plan.json';
 const CLAIM_FILE = 'runtime-cleanup-claim.json';
 const RETIRED_FILE = 'runtime-cleanup-retired.json';
@@ -258,21 +260,33 @@ export async function registerReadingRuntimeCleanupFiles({ files = [], directori
   });
 }
 
-async function ownedRows(ctx) {
-  const base = join(ctx.runRoot, OWNERSHIP);
-  if (!await inspectPath(ctx.runRoot, base, 'directory')) return [];
+async function readOwnershipRows({ repoRoot, runRoot }) {
+  const base = join(runRoot, OWNERSHIP);
+  if (!await inspectPath(runRoot, base, 'directory')) return [];
   const rows = [];
   for (const name of await readdir(base)) {
-    if (!/^[0-9a-f]{64}\.json$/.test(name)) continue;
-    const row = await readRecord(ctx.runRoot, join(base, name));
-    if (!row || !isAbsolute(row.path ?? '') || resolve(row.path) !== row.path || sha(row.path).slice(7) + '.json' !== name
-      || !['host', 'historical', 'temporary', 'directory'].includes(row.kind) || !sourceBoundary(ctx, row.path, row.kind)
-      || row.kind !== 'directory' && (!hashValue(row.sha256) || !Number.isSafeInteger(row.byte_length) || row.byte_length < 0)) {
-      fail('READING_RUNTIME_CLEANUP_REGISTRATION', { path: join(base, name) });
+    if (!OWNERSHIP_JSON.test(name)) continue;
+    const path = join(base, name);
+    if (!OWNERSHIP_RECORD.test(name)) fail('READING_RUNTIME_CLEANUP_REGISTRATION', { path, reason: 'invalid-filename' });
+    let row;
+    try { row = await readRecord(runRoot, path); }
+    catch (error) {
+      if (error instanceof SyntaxError) fail('READING_RUNTIME_CLEANUP_REGISTRATION', { path, reason: 'invalid-json' });
+      throw error;
     }
-    assertCleanupOutput(ctx, row);
+    if (typeof row?.path !== 'string' || !isAbsolute(row.path) || resolve(row.path) !== row.path || sha(row.path).slice(7) + '.json' !== name
+      || !['host', 'historical', 'temporary', 'directory'].includes(row.kind) || !sourceBoundary({ repoRoot, runRoot }, row.path, row.kind)
+      || row.kind !== 'directory' && (!hashValue(row.sha256) || !Number.isSafeInteger(row.byte_length) || row.byte_length < 0)) {
+      fail('READING_RUNTIME_CLEANUP_REGISTRATION', { path });
+    }
     rows.push(row);
   }
+  return rows;
+}
+
+async function readCleanupOutputs(ctx) {
+  const rows = await readOwnershipRows(ctx);
+  for (const row of rows) assertCleanupOutput(ctx, row);
   return rows;
 }
 
@@ -402,7 +416,7 @@ async function archiveControllerEvidence(ctx, controller) {
 async function planFiles(ctx, manifests, controller) {
   const archives = await archiveControllerEvidence(ctx, controller);
   const retained = [], files = [], directories = new Set();
-  const rows = await ownedRows(ctx);
+  const rows = await readCleanupOutputs(ctx);
   const known = rows.filter(row => row.kind !== 'directory').map(row => row.path);
   const patches = new Map(manifests.map(({ patch }) => [patch.path, patch]));
   for (const [path, receipt] of patches) {
@@ -463,11 +477,39 @@ function recordVersions(root, directory, include) {
 
 const COMMIT_FILE = '.apa-v3/phase22/COMMITTED.json';
 const REF_RECORD = /^[a-zA-Z0-9_-]+\.json$/;
-const OWNED_RECORD = /^[a-f0-9]{64}\.json$/;
 const referenceVersions = ctx => json(recordVersions(ctx.repoRoot, join(ctx.repoRoot, '.runtime', 'apa-code-refs'), REF_RECORD));
-const ownershipVersions = runRoot => json(recordVersions(runRoot, join(runRoot, OWNERSHIP), OWNED_RECORD));
+const ownershipVersions = runRoot => json(recordVersions(runRoot, join(runRoot, OWNERSHIP), OWNERSHIP_JSON));
 const commitVersion = ctx => pathState(ctx.repoRoot, join(ctx.repoRoot, COMMIT_FILE), 'file')?.version;
-const protects = (paths, path) => paths.some(consumer => consumer === path || inside(consumer, path));
+const protects = (paths, path) => paths.some(consumer => relative(consumer, path) === '' || inside(consumer, path));
+
+async function hasLegacySessionCheckpoint(runRoot) {
+  for (const folder of ['control', '.phase21-receipts']) {
+    const directory = join(runRoot, folder);
+    if (await inspectPath(runRoot, directory, 'directory')
+      && (await readdir(directory)).some(name => /^session-state-\d+\.json$/.test(name))) return true;
+  }
+  return false;
+}
+
+async function legacyTestEvidencePaths(repoRoot, ref) {
+  const legacyActive = ref.test_evidence_paths === undefined && ref.previous_manifests?.length;
+  const legacyPending = ref.pending_test_evidence_paths === undefined && ref.pending_manifest;
+  if (!legacyActive && !legacyPending) return [];
+  const runRoot = ref.run_root, statePath = join(runRoot, 'control', 'science-state.json');
+  if (!await inspectPath(runRoot, statePath, 'file')) {
+    if (ref.pending_checkpoint || await hasLegacySessionCheckpoint(runRoot)) {
+      fail('READING_SESSION_STATE_INVALID', { path: statePath });
+    }
+    return [];
+  }
+  const { readVerifiedReadingSessionRebindHistory } = await import('./reading-session.mjs');
+  const approvals = await readVerifiedReadingSessionRebindHistory({ repoRoot, runRoot, runId: ref.run_id, allowPending: true });
+  if (legacyPending && !approvals.some(({ current }) => current.fingerprint === legacyPending.fingerprint)) {
+    fail('READING_RUNTIME_TEST_EVIDENCE_REQUIRED', { path: statePath, run_id: ref.run_id });
+  }
+  return approvals.flatMap(({ approval }) => approval.test_evidence.map(row => readReadingRuntimeTestEvidencePath({ repoRoot, row })));
+}
+
 async function captureProtection(ctx) {
   const refVersion = referenceVersions(ctx), committed = commitVersion(ctx);
   const refs = listReadingRuntimeSnapshotReferences(ctx);
@@ -480,7 +522,11 @@ async function captureProtection(ctx) {
     if (!commitCurrent()) return null;
     throw error;
   }
-  for (const other of others) paths.push(...(await ownedRows({ ...ctx, runRoot: other.run_root })).map(row => row.path));
+  for (const other of others) {
+    const rows = await readOwnershipRows({ repoRoot: ctx.repoRoot, runRoot: other.run_root });
+    paths.push(...rows.map(row => row.path), ...(other.test_evidence_paths ?? []), ...(other.pending_test_evidence_paths ?? []));
+    paths.push(...await legacyTestEvidencePaths(ctx.repoRoot, other));
+  }
   return {
     refs, paths, commitCurrent,
     hashes: new Set(others.flatMap(other => referenceManifests(other).map(row => row.snapshot_hash))),
@@ -676,7 +722,7 @@ async function finishCleanup(ctx, manifest, terminal, ref) {
     fail('READING_RUNTIME_CLEANUP_RECORD_CONFLICT', { path: planPath });
   }
   for (const item of plan.manifests) validateReadingRuntimeSnapshotManifest({ manifest: item, repoRoot: ctx.repoRoot });
-  const owned = new Map((await ownedRows(ctx)).map(row => [row.path, row]));
+  const owned = new Map((await readCleanupOutputs(ctx)).map(row => [row.path, row]));
   for (const row of plan.archives) {
     const path = join(ctx.repoRoot, row.archive_path);
     if (!await inspectPath(ctx.evidenceRoot, path, 'file') || sha(await readFile(path)) !== row.archive_sha256) {

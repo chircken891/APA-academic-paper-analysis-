@@ -18,24 +18,28 @@ export async function createTopicFixture(t, options = {}) {
     runId: 'run_' + 'b'.repeat(32), paperId: 'pap_' + 'b'.repeat(32), title: { en: 'Other synthetic paper', 'zh-CN': '另一合成论文' },
     knowledgeRegistry: [{ id: 'method', canonical_key: 'synthetic-method', path: shared.path, content: await readFile(join(first.vaultRoot, shared.path), 'utf8') }] });
   await applyBilingualPublication(applyReadingFirstFixture(second));
-  const snapshot = await readCommittedGeneration({ vaultRoot: first.vaultRoot });
-  const selected = readCommittedReadingFirstPresentations(snapshot).find(row => row.paper.paper_id === first.paperId);
-  const source = selected.presentation.citation.sources[0];
   await mkdir(join(first.vaultRoot, 'config'), { recursive: true });
   await writeFile(join(first.vaultRoot, 'config/apa.local.json'), JSON.stringify({ schema_version: 'apa-local-config-1.0', paths: { candidates: 'candidates' } }));
+  return registerTopicFixture({ root: second.root, vaultRoot: first.vaultRoot, repoRoot: first.vaultRoot, papers: [first, second] }, options);
+}
+
+export async function registerTopicFixture(f, options = {}) {
+  const snapshot = await readCommittedGeneration({ vaultRoot: f.vaultRoot });
+  const paperId = options.paperId ?? f.papers[0].paperId;
+  const selected = readCommittedReadingFirstPresentations(snapshot).find(row => row.paper.paper_id === paperId);
+  const source = selected.presentation.citation.sources[0];
   const operationId = options.operationId ?? 'topic-save-1';
-  const adoptedSources = [{ paper_id: first.paperId, analysis_revision: selected.paper.analysis_revision,
+  const adoptedSources = [{ paper_id: paperId, analysis_revision: selected.paper.analysis_revision,
     adopted_generation_id: snapshot.generation_id, source_id: source.source_id, source_sha256: source.sha256,
     source_version: source.source_version ?? null, locators: source.locators, adopted_for: ['answer paragraph 1'] }];
-  const saved = await prepareTopicSave({ repoRoot: first.vaultRoot, operationId, question: 'What does the study support?',
+  const saved = await prepareTopicSave({ repoRoot: f.vaultRoot, operationId, question: 'What does the study support?',
     language: 'en', title: options.topicTitle ?? 'Synthetic topic', answer: 'The supported topiconlytoken answer explains the study and limits.',
     queryTerms: options.queryTerms ?? ['supported'], adoptedSources, expectedGenerationId: snapshot.generation_id, saveIntent: 'save' });
-  const prepared = await prepareTopicPublication({ vaultRoot: first.vaultRoot, candidate: saved.candidate, operationId });
-  const authority = await readingFirstPublicationAuthority({ root: second.root, vaultRoot: first.vaultRoot, runId: operationId }, prepared.plan);
-  const registration = options.register === false ? null : await registerBilingualPublication({ vaultRoot: first.vaultRoot, run: operationId,
+  const prepared = await prepareTopicPublication({ vaultRoot: f.vaultRoot, candidate: saved.candidate, operationId });
+  const authority = await readingFirstPublicationAuthority({ root: f.root, vaultRoot: f.vaultRoot, runId: operationId }, prepared.plan);
+  const registration = options.register === false ? null : await registerBilingualPublication({ vaultRoot: f.vaultRoot, run: operationId,
     plan: prepared.plan, sourceInputs: prepared.sourceInputs, ...authority });
-  return { root: second.root, vaultRoot: first.vaultRoot, repoRoot: first.vaultRoot, run: operationId, candidate: saved.candidate,
-    saved, papers: [first, second], currentSnapshot: snapshot, ...prepared, authority, registration };
+  return { ...f, run: operationId, candidate: saved.candidate, saved, currentSnapshot: snapshot, ...prepared, authority, registration };
 }
 
 export async function publishTopicFixture(f, { freshProcess = false } = {}) {

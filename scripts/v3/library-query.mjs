@@ -126,17 +126,20 @@ function moduleNumber(doc) {
   return { abstract: 1, summary: 1, design: 2, methods: 3, results: 4, findings: 4, discussion: 5, limitations: 6, conclusion: 7, conclusions: 7 }[doc.section_id];
 }
 
-function searchCurrent(snapshot, query, options, readPresentation) {
+/** Build the search index and aliases for one observed generation and set of filters. */
+export function createCurrentLibrarySearch(snapshot, options = searchSettings({ full: true }), readPresentation) {
   const papers = new Map(snapshot.generation.papers.map(row => [row.paper_id, row]));
   const allDocuments = currentDocuments(snapshot, papers);
+  const observedPaths = new Set(allDocuments.map(row => row.path));
   const nodes = snapshot.generation.shared_nodes.flatMap(node => {
     try {
       const note = getCurrentNote(snapshot, node.path);
+      observedPaths.add(node.path);
       const titles = typeof note.fm.title === 'string' ? [note.fm.title] : Object.values(note.fm.title ?? {}).filter(value => typeof value === 'string');
       return [{ ...node, aliases: [...new Set([...(Array.isArray(note.fm.aliases) ? note.fm.aliases.filter(value => typeof value === 'string') : []), ...titles])] }];
     } catch { return []; }
   });
-  const { groups: queryGroups, expandedTerms, diagnostics: queryDiagnostics = [] } = expandQueryGroups(query, [...nodes, ...definedAcronymNodes(allDocuments)]);
+  const aliases = [...nodes, ...definedAcronymNodes(allDocuments)];
   const { filters } = options;
   const years = new Map();
   const documents = allDocuments.filter(doc => {
@@ -157,8 +160,14 @@ function searchCurrent(snapshot, query, options, readPresentation) {
     return true;
   });
   const search = createLibraryBm25(documents);
-  const expression = combineWith => ({ combineWith, queries: queryGroups.map(group => ({ combineWith: 'OR', queries: group.terms.map(terms => ({ combineWith: 'AND', queries: terms })) })) });
   const docs = new Map(documents.map(row => [row.id, row]));
+  return { observedPaths, search: query => searchCurrent(query, { snapshot, options, papers, aliases, search, docs }) };
+}
+
+function searchCurrent(query, { snapshot, options, papers, aliases, search, docs }) {
+  const { filters } = options;
+  const { groups: queryGroups, expandedTerms, diagnostics: queryDiagnostics = [] } = expandQueryGroups(query, aliases);
+  const expression = combineWith => ({ combineWith, queries: queryGroups.map(group => ({ combineWith: 'OR', queries: group.terms.map(terms => ({ combineWith: 'AND', queries: terms })) })) });
   const groupMatches = matches => {
     const groups = new Map();
     for (const match of matches) {
@@ -194,7 +203,7 @@ function searchCurrent(snapshot, query, options, readPresentation) {
   const totalResults = results.length;
   if (!options.full) results = results.slice(0, options.limit).map(group => ({ ...group, total_hits: group.hits.length,
     hits: group.hits.slice(0, options.hitsPerPaper).map(hit => ({ ...hit, text: [...hit.text].slice(0, options.snippetChars).join(''), text_truncated: [...hit.text].length > options.snippetChars })) }));
-  return { generation_id: snapshot.generation_id, evidence_mode: snapshot.evidence_mode, observed_paths: [...new Set(allDocuments.map(row => row.path))],
+  return { generation_id: snapshot.generation_id, evidence_mode: snapshot.evidence_mode,
     query_diagnostics: queryDiagnostics, match_mode: mode, expanded_terms: expandedTerms, query_groups: queryGroups, total_results: totalResults,
     truncated: !options.full && (totalResults > results.length || results.some(row => row.total_hits > row.hits.length || row.hits.some(hit => hit.text_truncated))),
     scientific_approval: snapshot.evidence_mode === 'actual' && !results.some(group => ['topic', 'writing-project'].includes(group.entity_type) || group.hits.some(hit => hit.changed !== false)), results };
@@ -267,7 +276,8 @@ async function queryLibraryOnce({ root, query, onReadBoundary, options }) {
       if (error) throw error;
       return presentation;
     };
-    const { observed_paths: observedPaths, query_diagnostics: queryDiagnostics, ...found } = searchCurrent(snapshot, query, options, readPresentation), diagnostics = [...snapshot.diagnostics, ...queryDiagnostics];
+    const search = createCurrentLibrarySearch(snapshot, options, readPresentation);
+    const { query_diagnostics: queryDiagnostics, ...found } = search.search(query), diagnostics = [...snapshot.diagnostics, ...queryDiagnostics];
     const results = found.results.map(group => {
       if (['concept', 'method'].includes(group.entity_type)) return { ...group, claim_verification: 'not_performed' };
       if (['topic', 'writing-project'].includes(group.entity_type)) {
@@ -287,7 +297,7 @@ async function queryLibraryOnce({ root, query, onReadBoundary, options }) {
         return { ...group, citation: unavailableCitation() };
       }
     });
-    assertCurrentVaultContent(snapshot, { paths: observedPaths });
+    assertCurrentVaultContent(snapshot, { paths: search.observedPaths });
     return applyResultBudget({ ok: true, status: diagnostics.length ? 'partial' : !snapshot.generation.papers.length && !(snapshot.generation.topics ?? []).length ? 'empty_library' : results.length ? 'matches' : 'no_matches',
       ...found, results, ...(diagnostics.length ? { diagnostics, incomplete: true } : {}) }, options);
   } catch (error) { return stale(error, snapshot); }

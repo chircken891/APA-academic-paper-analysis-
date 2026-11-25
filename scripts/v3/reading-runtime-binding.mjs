@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync, statSync, realpathSync } from 'node:fs';
 import { dirname, resolve, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { READING_RUNTIME_SNAPSHOT_PROFILE, previewReadingRuntimeSnapshot, validateReadingRuntimeSnapshotManifest, verifyReadingRuntimeSnapshot } from './reading-runtime-snapshot.mjs';
+import { READING_RUNTIME_SNAPSHOT_PROFILE, previewReadingRuntimeSnapshot, readReadingRuntimeTestEvidencePath,
+  validateReadingRuntimeSnapshotManifest, verifyReadingRuntimeSnapshot } from './reading-runtime-snapshot.mjs';
 
 const DEFAULT_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const PROFILE = 'reading-runtime-binding-1.0';
@@ -89,7 +90,7 @@ function validateApproval({
   approval, runId, checkpointFingerprint, previous, current, runRoot, codeRoot,
   repoRoot = current?.data_root ?? previous?.data_root ?? previous?.repo_root ?? DEFAULT_ROOT,
 }, verification) {
-  const errors = [];
+  const errors = [], testEvidencePaths = [];
   try {
     const snapshot = manifest => manifest?.profile === READING_RUNTIME_SNAPSHOT_PROFILE;
     for (const manifest of [previous, current]) {
@@ -123,7 +124,8 @@ function validateApproval({
         && Object.values(checkpoints).every(value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value))
         && Object.hasOwn(checkpoints, runId) && checkpoints[runId] === checkpointFingerprint
       : approval.run_id === runId && approval.checkpoint_fingerprint === checkpointFingerprint;
-    if (!runId || !checkpointFingerprint || !correctScope) errors.push('APPROVAL_SCOPE_INVALID');
+    if (!runId || !checkpointFingerprint || !correctScope
+      || snapshot(current) && !/^sha256:[a-f0-9]{64}$/.test(checkpointFingerprint)) errors.push('APPROVAL_SCOPE_INVALID');
     if (!changes.length || approval.previous_runtime_fingerprint !== previous.fingerprint || approval.current_runtime_fingerprint !== current.fingerprint
       || verification !== 'historical' && verifiedFingerprint !== current.fingerprint
       || snapshot(previous) && !snapshot(current) || canonical(approval.changed_files) !== canonical(changes)) errors.push('RUNTIME_SCOPE_INVALID');
@@ -131,11 +133,14 @@ function validateApproval({
     else for (const row of approval.test_evidence) {
       try {
         if (!row || canonical(Object.keys(row).sort()) !== canonical(['byte_length', 'path', 'sha256'])) throw new Error();
-        const bytes = readFileSync(resolve(repoRoot, row.path));
-        if (hash(bytes) !== row.sha256 || bytes.length !== row.byte_length) throw new Error();
-      } catch { errors.push('TEST_EVIDENCE_INVALID'); }
+        readReadingRuntimeTestEvidencePath({ repoRoot, row });
+      } catch {
+        errors.push('TEST_EVIDENCE_INVALID');
+        if (typeof row?.path === 'string') testEvidencePaths.push(resolve(repoRoot, row.path));
+      }
     }
-    return { valid: errors.length === 0, errors, changed_files: changes };
+    return { valid: errors.length === 0, errors, changed_files: changes,
+      ...(testEvidencePaths.length ? { test_evidence_paths: testEvidencePaths } : {}) };
   } catch { return { valid: false, errors: ['RUNTIME_MANIFEST_INVALID'], changed_files: [] }; }
 }
 

@@ -1,24 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, cp, appendFile, rm, readdir, chmod, symlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdtemp, mkdir, writeFile, readFile, cp, appendFile, rm, readdir, chmod, symlink, rename } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { reviewedReadingFirstFixture } from './helpers/reading-first-publication-source-fixtures.mjs';
 import { applyReadingFirstFixture, readingFirstPublicationFixture } from './helpers/reading-first-publication-fixtures.mjs';
+import { publishTopicFixture, registerTopicFixture } from './helpers/topic-fixtures.mjs';
 import { applyBilingualPublication } from '../../scripts/v3/phase22-publication.mjs';
-import { fingerprintReadingFirst, inspectReadingFirstPublicationSource, restoreReadingFirstPublicationSource } from '../../scripts/v3/reading-first-runtime.mjs';
+import { captureReadingFirstPublicationSource, fingerprintReadingFirst, inspectReadingFirstPublicationSource, restoreReadingFirstPublicationSource } from '../../scripts/v3/reading-first-runtime.mjs';
 import { buildReadingFirstPublicationReview } from '../../scripts/v3/reading-first-publication.mjs';
 import { publishReadingFirstCandidate } from '../../scripts/v3/reading-first-publish.mjs';
-import { readRegisteredCommit } from '../../scripts/v3/phase22-active-version.mjs';
+import { approveReadingFirstPublicationQueue, drainReadingFirstPublicationQueue, prepareReadingFirstPublicationQueue,
+  readReadingFirstPublicationQueue } from '../../scripts/v3/reading-first-publication-queue.mjs';
+import { PHASE22_COMMIT_PATH, readRegisteredCommit } from '../../scripts/v3/phase22-active-version.mjs';
 import { inspectV3Graph } from '../../scripts/v3/obsidian-graph.mjs';
+import { OFFICIAL_GRAPH_SCOPE_PATH, OFFICIAL_GRAPH_SCOPE_PROVIDER, syncCommittedGraph } from '../../scripts/v3/obsidian-graph-sync.mjs';
 import { checkCommittedIndex } from '../../scripts/check-bm25-index.mjs';
 import { prepareReadingRuntimeSnapshot, readReadingRuntimeSnapshotReference, registerReadingRuntimeSnapshotReference } from '../../scripts/v3/reading-runtime-snapshot.mjs';
+import { closeReadingRuntimeRun, registerReadingRuntimeCleanupFiles } from '../../scripts/v3/reading-runtime-cleanup.mjs';
 import { writeTranslationProgress } from '../../scripts/v3/reading-translation-progress.mjs';
 import { executionBudgetSummary } from '../../scripts/v3/reading-execution-budget.mjs';
-import { createReadingSession, resumeReadingSession, nextReadingAction, recordReadingEvent } from '../../scripts/v3/reading-session.mjs';
+import { captureCompletedReadingSessionPublicationSource, createReadingSession, resumeReadingSession, nextReadingAction, recordReadingEvent,
+  readVerifiedReadingSessionRebindHistory } from '../../scripts/v3/reading-session.mjs';
 import { createFrozenReading22, enableFrozenReading22 } from './helpers/frozen-configured-reading.mjs';
 
 async function configuredFixture(t, { systemTemp = false, tempBase } = {}) {
@@ -331,7 +337,8 @@ test('interrupted rebind preserves only the registered unreceipted metadata byte
   assert.equal(readReadingRuntimeSnapshotReference(location).pending_manifest, undefined);
 });
 
-for (const repairResources of [false, true]) test(`2.2 retains Results resources${repairResources ? ' with a scoped renderer repair' : ''} across recovery`, async t => {
+for (const mode of ['publication', 'renderer repair', 'approved queue rebind']) test(`2.2 retains Results resources across recovery and ${mode}`, async t => {
+  const repairResources = mode === 'renderer repair';
   const f = await configuredFixture(t, { systemTemp: true }), template = await reviewedReadingFirstFixture(t, { controlOptions: { presentationProfile: 'reading-editor-1.4' } });
   f.profile.capabilities = { task_continuation: { status: 'detected', method: 'ContinueTask target prompt', scope: 'current-session', evidence: [{ source: 'tool-schema', reference: 'synthetic schema' }], limitations: [], continuation: { tool: 'ContinueTask', handle_argument: 'target', instruction_argument: 'prompt', same_context: true, original_host_accessible: true } } };
   let session = await createFrozenReading22({ ...f.options, maxTotalCalls: 22 });
@@ -472,6 +479,15 @@ for (const repairResources of [false, true]) test(`2.2 retains Results resources
   const prior = await readingFirstPublicationFixture(t, { vaultRoot: f.root, paperId: 'pap_' + 'b'.repeat(32),
     title: { en: 'Earlier registered study', 'zh-CN': '已登记的研究' } });
   await applyBilingualPublication(applyReadingFirstFixture(prior));
+  let topic;
+  if (mode === 'approved queue rebind') {
+    const topicAuthorityRoot = join(prior.root, 'topic-authority');
+    await mkdir(topicAuthorityRoot);
+    topic = await registerTopicFixture({ root: topicAuthorityRoot, vaultRoot: f.root, papers: [prior] },
+      { operationId: 'queued-paper-topic', queryTerms: ['supported'] });
+    await publishTopicFixture(topic);
+    await syncCommittedGraph({ vaultRoot: f.root, enableAutoSync: true, scopeProvider: OFFICIAL_GRAPH_SCOPE_PROVIDER });
+  }
   const target = 'Wiki/methods/合成方法.md';
   const registered = await readFile(join(f.root, target));
   const resolution = { authorization_id: 'approved-reuse', knowledge_id: 'incoming-method',
@@ -558,6 +574,239 @@ for (const repairResources of [false, true]) test(`2.2 retains Results resources
     assert.ok(frozenTool);
     const restoredSource = await restoreReadingFirstPublicationSource(data.recipe);
     assert.equal((await inspectReadingFirstPublicationSource(restoredSource)).origin, 'registered');
+    if (mode === 'approved queue rebind') {
+      const preceding = await reviewedReadingFirstFixture(t, { currentRegistryRoot: f.root, runId: 'queue-first',
+        paperId: 'pap_' + 'c'.repeat(32), title: { en: 'First queued paper', 'zh-CN': '队首论文' } });
+      const firstSource = await captureReadingFirstPublicationSource({
+        controller: preceding.controller, presentation: preceding.candidate });
+      const capture = async request => request.run === 'queue-first' ? firstSource : captureCompletedReadingSessionPublicationSource(request);
+      const queue = { vaultRoot: f.root, evidenceMode: 'synthetic', captureSource: capture };
+      const entries = [
+        { run: 'queue-first', runRoot: preceding.artifactRoot, generation: 'queue-first', resources: preceding.resources },
+        { run: 'run', runRoot: root, generation: 'queue-rebound', resources: [{ path: presentation.source_pdf, source_path: source.path,
+          sha256: source.sha256, byte_length: source.byte_length }, row] },
+      ];
+      const { proposal, proposal_sha256 } = await prepareReadingFirstPublicationQueue({ ...queue, entries });
+      const authorization = { authorization_id: 'synthetic-queue-approval', user_reply: '两篇全部发布。' };
+      const approved = await approveReadingFirstPublicationQueue({ vaultRoot: f.root, proposal, expectedProposalSha256: proposal_sha256, authorization });
+      const approvedBytes = await readFile(approved.approval_request_paths[1]);
+      const execution = data.recipe.execution_runtime;
+      const owner = { repoRoot: f.root, runId: 'rebind-evidence-owner', runRoot: join(f.root, 'runs', 'rebind-evidence-owner') };
+      const ownerManifest = prepareReadingRuntimeSnapshot({ ...owner, codeRoot: execution.source_code_root, reference: {} });
+      assert.equal(ownerManifest.snapshot_hash, execution.snapshot_hash);
+      const publishedTool = 'scripts/v3/reading-first-obsidian.mjs';
+      await appendFile(join(execution.source_code_root, publishedTool), '\n// Synthetic publication compatibility repair.\n');
+      const { current_snapshot_hash, ...scope } = await recordReadingEvent(session, { kind: 'inspect-runtime-rebind' });
+      assert.ok(scope.changed_files.some(file => file.path === publishedTool));
+      const evidencePath = join(f.root, '.tmp', owner.runId, 'rebind-test-evidence.txt'), evidence = Buffer.from('Synthetic regression passed.');
+      await mkdir(dirname(evidencePath), { recursive: true });
+      await writeFile(evidencePath, evidence);
+      await registerReadingRuntimeCleanupFiles({ ...owner, files: [{ path: evidencePath, kind: 'temporary' }] });
+      const approval = { ...scope, authorization_id: 'synthetic-approved-queue-rebind', run_id: 'run',
+        test_evidence: [{ path: evidencePath, sha256: hash(evidence), byte_length: evidence.length }] };
+      const rebind = spawnSync(process.execPath, [join(execution.source_code_root, 'scripts/v3/reading-session-cli.mjs'),
+        'event', '--run-root', root, '--input', '-'], { encoding: 'utf8', input: JSON.stringify({ kind: 'rebind', approval }) });
+      assert.equal(rebind.status, 0, rebind.stderr);
+      assert.equal(JSON.parse(rebind.stdout).code, 'READING_SESSION_RUNTIME_RESTART_REQUIRED');
+      const reference = readReadingRuntimeSnapshotReference({ repoRoot: f.root, runId: 'run' });
+      assert.deepEqual(reference.test_evidence_paths, [evidencePath]);
+      assert.equal(reference.pending_test_evidence_paths, undefined);
+      session = await resumeReadingSession({ runRoot: root });
+      await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+      await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
+      await recordReadingEvent(session, { kind: 'computer-control-observation', observation: { event_id: 'fixture-progress',
+        coverage: 'unknown', operations: [], source_reference: 'synthetic checkpoint progression' } });
+      assert.notEqual((await recordReadingEvent(session, { kind: 'inspect-runtime-rebind' })).checkpoint_fingerprint, approval.checkpoint_fingerprint);
+      const request = { run: 'run', runRoot: root, vaultRoot: f.root };
+      const reboundSource = await capture(request);
+      const rebound = await inspectReadingFirstPublicationSource(reboundSource);
+      const stamp = proposal.entries[1].original.original_source;
+      assert.equal(rebound.recipe.execution_runtime.snapshot_hash, current_snapshot_hash);
+      assert.equal(rebound.candidate.presentation_fingerprint, stamp.candidate_fingerprint);
+      assert.equal(rebound.reading_review_fingerprint, stamp.reading_review_fingerprint);
+      assert.notEqual(rebound.recipe.recipe_fingerprint, stamp.recipe_fingerprint);
+      assert.notEqual(rebound.tool_bindings.find(file => file.path.endsWith('reading-first-obsidian.mjs')).sha256,
+        data.tool_bindings.find(file => file.path.endsWith('reading-first-obsidian.mjs')).sha256);
+
+      const original = proposal.entries[1].original, beforeQueue = await readReadingFirstPublicationQueue(queue);
+      const binding = { queue_proposal_sha256: proposal_sha256, queue_approval_sha256: beforeQueue.entries[1].approval_sha256, approved_position: 2 };
+      const marker = join(f.root, PHASE22_COMMIT_PATH), beforeCommit = await readFile(marker);
+      const attempt = (source = reboundSource, queued = original) => publishReadingFirstCandidate({
+        source, ...entries[1], vaultRoot: f.root, evidenceMode: 'synthetic', authorization, queuedApproval: { original: queued, binding, count: 2 },
+        onPrepared: () => {}, onRegistered: () => assert.fail('A refused queue entry must not register a transaction.') });
+      const blocked = async (code, source, queued) => {
+        const result = await attempt(source, queued);
+        assert.equal(result.status, 'awaiting_reapproval', JSON.stringify(result.error));
+        assert.equal(result.error.code, code, JSON.stringify(result.error));
+        assert.equal(result.business_writes, 0);
+        assert.deepEqual(await readFile(marker), beforeCommit);
+        return result;
+      };
+      const verifiedRecipe = async change => {
+        const recipe = structuredClone(rebound.recipe);
+        delete recipe.recipe_fingerprint;
+        change(recipe);
+        recipe.recipe_fingerprint = fingerprintReadingFirst(recipe);
+        return restoreReadingFirstPublicationSource(recipe);
+      };
+      const displacedSnapshot = execution.code_root + '-fixture-missing';
+      await t.test('missing old snapshot stops the production capture path', async () => {
+        await rename(execution.code_root, displacedSnapshot);
+        try {
+          await assert.rejects(capture(request), error => error.details?.path?.startsWith(execution.code_root)
+            && /ENOENT|READING_RUNTIME_SNAPSHOT_INVALID/.test(error.code));
+        } finally { await rename(displacedSnapshot, execution.code_root); }
+        assert.deepEqual(await readFile(marker), beforeCommit);
+      });
+      await t.test('missing and altered test evidence stop before registration', async () => {
+        await rename(evidencePath, evidencePath + '.fixture-missing');
+        try {
+          const missing = await blocked('READING_SESSION_APPROVAL_INVALID');
+          assert.deepEqual(missing.error.details.test_evidence_paths, [evidencePath]);
+        } finally { await rename(evidencePath + '.fixture-missing', evidencePath); }
+        await writeFile(evidencePath, 'Modified test evidence.');
+        try {
+          const altered = await blocked('READING_SESSION_APPROVAL_INVALID');
+          assert.deepEqual(altered.error.details.test_evidence_paths, [evidencePath]);
+        } finally { await writeFile(evidencePath, evidence); }
+      });
+      const metadata = [];
+      for (const name of (await readdir(join(root, 'control'))).filter(name => /^session-state-\d+\.json$/.test(name))) {
+        const path = join(root, 'control', name), raw = await readFile(path);
+        if (JSON.parse(raw).approvals.length) {
+          const receiptPath = join(root, '.phase21-receipts', name);
+          metadata.push({ path, raw, receiptPath, receiptRaw: await readFile(receiptPath) });
+        }
+      }
+      assert.equal(metadata.length, 2);
+      const historyChange = async (change, verify, changeReceipt = () => {}, rows = metadata) => {
+        try {
+          for (const record of rows) {
+            const value = JSON.parse(record.raw);
+            change(value);
+            const bytes = Buffer.from(JSON.stringify(value));
+            const receipt = { ...JSON.parse(record.receiptRaw), sha256: hash(bytes), byte_length: bytes.length };
+            changeReceipt(receipt);
+            await writeFile(record.path, bytes);
+            await writeFile(record.receiptPath, JSON.stringify(receipt));
+          }
+          await verify();
+        } finally {
+          for (const record of rows) {
+            await writeFile(record.path, record.raw);
+            await writeFile(record.receiptPath, record.receiptRaw);
+          }
+        }
+      };
+      await t.test('an active reference without the owned approval cannot authorize a rebind', () =>
+        historyChange(value => { value.approvals = []; }, () => blocked('READING_SESSION_RUNTIME_REFERENCE_CONFLICT')));
+      await t.test('the owned receipt must keep the authorized Controller owner', () =>
+        historyChange(() => {}, () => blocked('READING_SESSION_CHECKPOINT_CONFLICT'), receipt => { receipt.owner_actor_id = 'another-owner'; }));
+      await t.test('the current state cannot replace an earlier owned rebind entry', () =>
+        historyChange(value => { value.approvals[0].approval.authorization_id = 'replacement-approval'; },
+          () => blocked('READING_SESSION_METADATA_CONFLICT'), undefined, metadata.slice(-1)));
+      await t.test('an older active rebind keeps its owned checkpoint and protects another run’s cleanup evidence', () =>
+        historyChange(value => { delete value.approvals[0].runtime_checkpoint; }, async () => {
+          const history = await readVerifiedReadingSessionRebindHistory({ repoRoot: f.root, runId: 'run', runRoot: root, expectedBinding: rebound.recipe.binding });
+          assert.deepEqual(history.map(item => item.approval), [approval]);
+          const path = join(f.root, '.runtime', 'apa-code-refs', 'run.json');
+          const rawReference = await readFile(path), historicalReference = JSON.parse(rawReference);
+          delete historicalReference.test_evidence_paths;
+          await writeFile(path, JSON.stringify(historicalReference));
+          try {
+            const ownerCleanup = await closeReadingRuntimeRun({ ...owner, manifest: ownerManifest,
+              terminal: { status: 'terminated', authorization_id: 'synthetic-close-proof-owner', user_reply: '终止' } });
+            assert.equal(ownerCleanup.snapshot_status, 'referenced');
+            assert.ok(ownerCleanup.retained.some(item => item.path.endsWith('/rebind-test-evidence.txt') && item.reason === 'live-reference'));
+            assert.deepEqual(await readFile(evidencePath), evidence);
+            assert.equal(readReadingRuntimeSnapshotReference(owner), null);
+          } finally { await writeFile(path, rawReference); }
+        }));
+      await t.test('a rebind approval scoped to a different run or checkpoint is refused', async () => {
+        await historyChange(value => { value.approvals[0].approval.run_id = 'different-run'; }, () => blocked('READING_SESSION_APPROVAL_INVALID'));
+        await historyChange(value => { value.approvals[0].approval.checkpoint_fingerprint = 'sha256:' + 'a'.repeat(64); },
+          () => blocked('READING_SESSION_APPROVAL_INVALID'));
+      });
+      await t.test('changed tool bindings and unrelated recipe fields cannot inherit approval', async () => {
+        await assert.rejects(verifiedRecipe(recipe => { recipe.tool_bindings[0].sha256 = 'sha256:' + 'a'.repeat(64); }),
+          { code: 'READING_FIRST_PUBLICATION_DEPENDENCY_CHANGED' });
+        const changedRecipe = await verifiedRecipe(recipe => { recipe.synthetic_unapproved_recipe_change = true; });
+        await blocked('RF_ONE_STEP_QUEUE_REVIEW_CHANGED', changedRecipe);
+      });
+      await t.test('changed candidate and review stamps require a new approval', async () => {
+        for (const key of ['candidate_fingerprint', 'reading_review_fingerprint']) {
+          await blocked('RF_ONE_STEP_QUEUE_REVIEW_CHANGED', reboundSource,
+            { ...original, original_source: { ...stamp, [key]: 'sha256:' + 'a'.repeat(64) } });
+        }
+      });
+      await t.test('a verified rebind still refuses a changed paper preimage', async () => {
+        const targetPath = join(f.root, rebound.candidate.notes[0].path);
+        const inserted = Buffer.from(rebound.candidate.notes[0].content);
+        await mkdir(dirname(targetPath), { recursive: true });
+        await writeFile(targetPath, inserted);
+        try {
+          const refused = await blocked('RF_ONE_STEP_PAPER_CHANGED');
+          assert.equal(refused.error.details.path, rebound.candidate.notes[0].path);
+          assert.deepEqual(await readFile(targetPath), inserted);
+        } finally { await rm(targetPath); }
+      });
+
+      const manual = '保留这段人工正文。';
+      const result = await drainReadingFirstPublicationQueue({ ...queue, onPublished: async report => {
+        if (report.run_id === 'queue-first') await appendFile(join(f.root, target), '\n' + manual + '\n');
+      } });
+      assert.equal(result.status, 'complete', JSON.stringify(result.error));
+      assert.deepEqual(result.published.map(paper => paper.run_id), ['queue-first', 'run']);
+      assert.ok((await readFile(join(f.root, target), 'utf8')).includes(manual));
+      assert.deepEqual(await readFile(approved.approval_request_paths[1]), approvedBytes);
+      const [firstResult, secondResult] = result.published;
+      assert.equal(firstResult.hint_status, 'available', JSON.stringify(firstResult.hint_error));
+      assert.equal(secondResult.hint_status, 'available', JSON.stringify(secondResult.hint_error));
+      assert.ok(firstResult.relevance_hints.some(hint => hint.topic_id === topic.saved.topic.topic_id));
+      for (const item of result.published) {
+        assert.equal(item.graph_sync?.generation_id, item.generation);
+        assert.equal(item.graph_sync.scope_provider, OFFICIAL_GRAPH_SCOPE_PROVIDER);
+        assert.equal(item.generation_retention.ok, true);
+      }
+      const graphScope = JSON.parse(await readFile(join(f.root, OFFICIAL_GRAPH_SCOPE_PATH), 'utf8'));
+      assert.equal(graphScope.generation_id, 'queue-rebound');
+      const record = await readFile(secondResult.runtime_rebind.path);
+      assert.equal(hash(record), secondResult.runtime_rebind.sha256);
+      const proof = JSON.parse(record);
+      assert.deepEqual(proof.original_source, stamp);
+      assert.equal(proof.current_source.recipe_fingerprint, rebound.recipe.recipe_fingerprint);
+      assert.deepEqual(proof.approvals, [approval]);
+      assert.deepEqual(proof.queue_approval, binding);
+      for (const path of [secondResult.original_approval_record, secondResult.approval_record]) {
+        const readApproval = JSON.parse(await readFile(path));
+        assert.equal(readApproval.user_reply, authorization.user_reply);
+        assert.deepEqual(readApproval.original_source, stamp);
+        assert.deepEqual(readApproval.runtime_rebind, secondResult.runtime_rebind);
+      }
+      assert.equal(secondResult.runtime_cleanup?.status, 'complete', JSON.stringify(secondResult.runtime_cleanup));
+      assert.equal(readReadingRuntimeSnapshotReference({ repoRoot: f.root, runId: 'run' }), null);
+      assert.equal(secondResult.runtime_cleanup.snapshots.length, 2);
+      for (const snapshot of [execution, rebound.recipe.execution_runtime]) {
+        await assert.rejects(readFile(join(snapshot.code_root, publishedTool)), { code: 'ENOENT' });
+      }
+      assert.deepEqual(await readFile(evidencePath), evidence);
+      const { queue_path, ...queueState } = await readReadingFirstPublicationQueue(queue);
+      assert.equal(queueState.entries[1].attempt.summary.previous_generation, 'queue-first');
+      assert.equal(queueState.entries[0].attempt.registration.transaction_id, firstResult.transaction_id);
+      assert.equal(queueState.entries[1].attempt.registration.transaction_id, secondResult.transaction_id);
+      assert.notEqual(firstResult.transaction_id, secondResult.transaction_id);
+      const final = await readFile(marker);
+      queueState.entries[1].status = 'applying';
+      delete queueState.entries[1].result;
+      await writeFile(queue_path, JSON.stringify(queueState));
+      const resumed = await drainReadingFirstPublicationQueue({ ...queue, captureSource: () => assert.fail('Recovery must not recapture old snapshots.') });
+      assert.equal(resumed.status, 'complete', JSON.stringify(resumed.error));
+      assert.deepEqual(resumed.published.map(item => item.transaction_id), [secondResult.transaction_id]);
+      assert.deepEqual(await readFile(marker), final);
+      assert.equal((await checkCommittedIndex(f.root)).status, 'registered_index_valid');
+      assert.equal((await inspectV3Graph({ vaultRoot: f.root, checkConfiguration: false })).ok, true);
+      return;
+    }
     const publication = await publishReadingFirstCandidate({ source: completed.publication_source, vaultRoot: f.root, generation: 'frozen-reading-generation',
       evidenceMode: 'synthetic', resources: [{ path: presentation.source_pdf, source_path: source.path, sha256: source.sha256, byte_length: source.byte_length }, row],
       authorization: { authorization_id: 'synthetic-frozen-publication', user_reply: '发布' }, onPrepared: () => assert.rejects(

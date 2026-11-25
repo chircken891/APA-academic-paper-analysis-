@@ -378,8 +378,14 @@ function downstreamHandoff(state) {
 }
 
 // Owned recovery records amend the consumed catalogue; the original handoff stays immutable.
+function continuedKnowledgeResolutions(state) {
+  return (state.continuationAuthorizations ?? []).flatMap(row =>
+    row.authorization.original_page_chart_repair?.knowledge_resolutions ?? []);
+}
+
 function resolvedPresentation(state, original) {
-  if (!state.resourceRepair && !state.knowledgeIdentityResolutions?.length) return original;
+  const continued = continuedKnowledgeResolutions(state);
+  if (!state.resourceRepair && !state.knowledgeIdentityResolutions?.length && !continued.length) return original;
   const presentation = copy(original);
   for (const row of state.resourceRepair?.resources ?? []) {
     Object.assign(presentation.visuals.find(item => item.id === row.id), { path: row.path, locator: copy(row.locator) });
@@ -388,6 +394,9 @@ function resolvedPresentation(state, original) {
     const item = presentation.knowledge.find(row => row.id === resolution.knowledge_id);
     if (item?.canonical_key !== resolution.from_canonical_key) fail('READING_FIRST_KNOWLEDGE_RESOLUTION_INVALID');
     item.canonical_key = resolution.to_canonical_key;
+  }
+  for (const { knowledge_id, to_canonical_key } of continued) {
+    presentation.knowledge.find(row => row.id === knowledge_id).canonical_key = to_canonical_key;
   }
   return presentation;
 }
@@ -408,7 +417,7 @@ function effectivePresentation(state) {
 }
 
 function assertResolvedKnowledgePaths(state, registry, rebase = false) {
-  for (const resolution of state.knowledgeIdentityResolutions ?? []) {
+  for (const resolution of [...(state.knowledgeIdentityResolutions ?? []), ...continuedKnowledgeResolutions(state)]) {
     if (registry.some(row => row.path === resolution.target_path && row.canonical_key === resolution.to_canonical_key
       && typeof row.content === 'string')) continue;
     if (rebase) {
@@ -812,7 +821,7 @@ export async function acceptReadingFirstResult({controller, request, observation
           const editorFacts = ({ languages, map, argument, primary_finding_ids }) => ({ languages, map, argument, primary_finding_ids });
           assertUserFactsUnchanged(editorFacts(state.renderRepairBaseEditor), editorFacts(aligned));
         }
-        assertEditorRepairScope(state.renderRepairBaseEditor,aligned,activeReview(state),effectivePresentation(state));
+        assertEditorRepairScope(state.renderRepairBaseEditor,aligned,repairReview(state),effectivePresentation(state));
       }
     } catch (error) { rejection=error.code; }
     if (!rejection) validateReadingFirstEditor({expandedMethodIndex:state.binding.configured_setup?.expanded_method_index, stagedResearchMap:state.binding.configured_setup?.staged_research_map,editor:value,views:languages.map(language=>state.views[language].value),presentation:effectivePresentation(state)});
@@ -824,6 +833,7 @@ export async function acceptReadingFirstResult({controller, request, observation
     if (value.issues.some(issue=>issue.severity==='material' && issue.repair_owner==='renderer' && issue.affected_paths.some(path=>!reviewed.has(path)))) fail('READING_FIRST_REVIEW_INVALID');
     if (state.binding.enrichment_policy && state.reviews===1) collectGaps(value.issues.filter(issue=>issue.severity==='material' && issue.scientific_gap).map(issue=>issue.scientific_gap),state.binding);
   }
+  if (record.payload.translation_correction) validateContinuationTranslation(record.payload.translation_correction, value, 'after');
   const existing=await readOwnedArtifact({artifactRoot:state.runControl.artifactRoot,artifactId:request.task.artifact_id});
   if (existing && (!existing.bytes.equals(bytes) || existing.receipt.path!==request.task.artifact_path || existing.receipt.revision!==request.task.revision)) fail('READING_FIRST_RESULT_OWNER_INVALID');
   const ownedBinding={run_id:state.runControl.runId,actor_id:request.task.owner_actor_id,role:request.task.role,artifact_path:request.task.artifact_path,revision:request.task.revision};
@@ -879,6 +889,15 @@ function activeReview(state) {
     return Object.assign({},issue,...notes.filter(row=>row.issue_id==='issue-'+(index+1)).map(row=>row.fields));
   });
   return {...state.review,issues};
+}
+
+function repairReview(state) {
+  const review = activeReview(state), correction = continuationTranslation(state);
+  if (!correction) return review;
+  const { language, section_id, before, after } = correction;
+  return { ...review, issues: [...review.issues, { severity: 'material', kind: 'user-revision', repair_owner: 'writer',
+    detail: `In ${language} section ${section_id}, use ${JSON.stringify(after)} in place of ${JSON.stringify(before)}. Preserve the source-language meaning and other content.`,
+    affected_languages: [language], repair_scope: { status: 'located', section_ids: [section_id], knowledge_ids: [], visual_ids: [], editor_fields: [] } }] };
 }
 
 function reviewRoutingReport(state) {
@@ -1019,7 +1038,7 @@ export async function recoverReadingFirstRejectedEditor({controller, checkpointR
     || !stat.isFile() || stat.isSymbolicLink() || stat.nlink!==1 || realpathSync(path)!==path
     || !owned.bytes.equals(bytes) || sha(bytes)!==rejection.sha256 || bytes.length!==rejection.byte_length) fail('READING_FIRST_RECOVERY_RESULT_CHANGED');
   const value=JSON.parse(bytes.toString('utf8'));
-  assertEditorRepairScope(state.renderRepairBaseEditor,value,activeReview(state),effectivePresentation(state));
+  assertEditorRepairScope(state.renderRepairBaseEditor,value,repairReview(state),effectivePresentation(state));
   validateReadingFirstEditor({expandedMethodIndex:state.binding.configured_setup?.expanded_method_index, stagedResearchMap:state.binding.configured_setup?.staged_research_map,editor:value,views:languages.map(language=>state.views[language].value),presentation:effectivePresentation(state)});
   const result=freeze({receipt:copy(owned.receipt),status:'pending_review',recovered:true,publishable:false});
   state.repairRecoveries=[{authorization:copy(authorization),prior_checkpoint:copy(checkpointReceipt),rejection:copy(rejection),result:copy(result)}];
@@ -1047,18 +1066,73 @@ const originalPagePolicy = Object.freeze({sources:[],allow_targeted_methods:fals
 const originalPageResultsKey = 'enrich-late-results';
 
 function originalPageChartGap(state, scope, review=activeReview(state)) {
-  const [entry, other] = materialIssues(review);
+  const material = materialIssues(review);
+  const entry = material.find(row => row.id === scope?.issue_id);
   const issue = entry?.issue, gap = issue?.scientific_gap;
   const visual = state.handoff.presentation?.visuals?.find(row=>row.id===scope?.visual_id);
-  if (!scope || Object.keys(scope).some(key=>!['issue_id','visual_id','source_id','panel'].includes(key))
-    || !text(scope.panel) || !/^[A-Za-z0-9]+$/.test(scope.panel)
-    || other || entry?.id!==scope.issue_id || issue?.kind!=='chart-type-coverage' || issue.repair_owner!=='science'
+  if (!scope || Object.keys(scope).some(key=>!['issue_id','visual_id','source_id','panel','knowledge_resolutions','translation_correction'].includes(key))
+    || scope.panel !== null && (!text(scope.panel) || !/^[A-Za-z0-9]+$/.test(scope.panel))
+    || !['chart-type-coverage','chart-type'].includes(issue?.kind) || issue.repair_owner!=='science'
     || issue.repair_scope?.status!=='located' || !sameArray(issue.repair_scope.visual_ids,[scope.visual_id])
     || gap?.severity!=='material' || gap.owner_role!=='results' || gap.source_kind!=='original_page'
     || !sameArray(gap.source_ids,[scope.source_id]) || !visual || !text(scope.source_id) || visual.source_id!==scope.source_id
     || !state.handoff.sources.some(source=>source.id===scope.source_id)
     || visual.locator?.kind!=='pdf-page' || !Number.isSafeInteger(visual.locator.page) || visual.locator.page<1) fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
-  return {gap,visual};
+  const resolutions = scope.knowledge_resolutions ?? [];
+  const otherIssues = material.filter(row => row !== entry);
+  const fields = ['issue_id', 'knowledge_id', 'from_path', 'target_path', 'to_canonical_key'];
+  if (!Array.isArray(resolutions) || resolutions.some(row => !row || Object.keys(row).length !== fields.length
+    || fields.some(key => !text(row[key])) || row.from_path === row.target_path)
+    || new Set(resolutions.map(row => row.knowledge_id)).size !== resolutions.length
+    || new Set(resolutions.map(row => row.from_path)).size !== resolutions.length
+    || otherIssues.some(({ issue, id }) => issue.repair_owner !== 'renderer' || issue.repair_scope?.status !== 'located'
+      || !issue.repair_scope.knowledge_ids.length || issue.repair_scope.knowledge_ids.some(knowledgeId =>
+        !resolutions.some(row => row.issue_id === id && row.knowledge_id === knowledgeId)))
+    || resolutions.some(row => !otherIssues.some(({ issue, id }) => row.issue_id === id
+      && issue.repair_scope.knowledge_ids.includes(row.knowledge_id) && issue.affected_paths.includes(row.from_path)))) {
+    fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
+  }
+  return {gap,visual,knowledgeIds:issue.repair_scope.knowledge_ids};
+}
+
+async function validateContinuationKnowledge(state, resolutions) {
+  if (!resolutions?.length) return;
+  const policy = state.binding.configured_setup?.knowledge_registry;
+  const presentation = state.handoff.presentation;
+  if (policy?.policy !== KNOWLEDGE_REGISTRY_POLICY || presentation.knowledge_layout !== 'shared-bilingual-1.0') {
+    fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
+  }
+  const knowledgeRegistry = await readCommittedReadingFirstKnowledgeRegistry({ binding: state.binding });
+  for (const row of resolutions) {
+    const item = presentation.knowledge.find(item => item.id === row.knowledge_id);
+    if (item?.source_kind !== 'method-background' || state.knowledgeIdentityResolutions?.some(prior => prior.knowledge_id === row.knowledge_id)) {
+      fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
+    }
+    const target = knowledgeRegistry.find(target => target.path === row.target_path && typeof target.content === 'string');
+    const directory = item.kind === 'method' ? 'Wiki/methods/' : 'Wiki/concepts/';
+    const initial = matchReadingFirstKnowledgeIdentity({ item, knowledgeRegistry });
+    const confirmed = matchReadingFirstKnowledgeIdentity({ item: { ...item, canonical_key: row.to_canonical_key }, knowledgeRegistry });
+    if (!target?.path.startsWith(directory) || target.canonical_key !== row.to_canonical_key
+      || !sameArray(initial.paths, [row.from_path]) || !sameArray(confirmed.paths, [row.target_path])) {
+      fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
+    }
+  }
+  assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: knowledgeRegistry,
+    policy: policy.policy, paths: resolutions.flatMap(row => [row.from_path, row.target_path]) });
+}
+
+function validateContinuationTranslation(correction, view, phase, binding) {
+  const fields = ['language', 'section_id', 'before', 'after'];
+  if (!correction || Object.keys(correction).length !== fields.length || fields.some(key => !text(correction[key]))
+    || correction.before === correction.after || correction.language !== view?.language
+    || phase === 'before' && (binding.writing_mode !== 'source-translation' || binding.source_language === correction.language)) {
+    fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
+  }
+  const paragraphs = view.sections.find(section => section.id === correction.section_id)?.paragraphs ?? [];
+  const occurrences = phrase => paragraphs.reduce((sum, paragraph) => sum + paragraph.split(phrase).length - 1, 0);
+  if (occurrences(correction[phase]) !== 1 || phase === 'after' && occurrences(correction.before)) {
+    fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
+  }
 }
 
 function sameArray(a,b) {
@@ -1068,6 +1142,8 @@ function sameArray(a,b) {
 const originalPageScope = state => lastAuthorization(state)?.review_count===state.enrichmentReviewCount
   ? lastAuthorization(state)?.authorization.original_page_chart_repair : null;
 const effectiveEnrichmentPolicy = state => originalPageScope(state) ? originalPagePolicy : state.binding.enrichment_policy;
+const continuationTranslation = state => lastAuthorization(state)?.review_count === state.reviews
+  ? lastAuthorization(state)?.authorization.original_page_chart_repair?.translation_correction : undefined;
 
 async function assertContinuationUnpublished(state) {
   const vaultRoot=state.binding.configured_setup?.knowledge_registry?.vault_root;
@@ -1186,6 +1262,9 @@ export async function inspectReadingFirstContinuation({controller,checkpointRece
         || state.binding.task_bindings[originalPageResultsKey] || state.issued.has(originalPageResultsKey)
         || reviewRepairPlan(state.binding,activeReview(state)).affected.length!==languages.length) fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
       originalPageChartGap(state,originalPageChartRepair);
+      await validateContinuationKnowledge(state, originalPageChartRepair.knowledge_resolutions);
+      const correction = originalPageChartRepair.translation_correction;
+      if (correction !== undefined) validateContinuationTranslation(correction, state.views[correction?.language]?.value, 'before', state.binding);
     }
     if (state.status==='review_unroutable') {
       const deficit=Math.max(0,totalUsed(state)+1-executionLimit(state));
@@ -1288,9 +1367,12 @@ async function verifyContinuations(state) {
       const chartTask=row.task_bindings[originalPageResultsKey];
       if (baseline.reviews!==1 || baseline.status!=='completed_with_limits'
         || row.authorization.max_additional_calls!==0 || row.additional_task_calls!==0 || row.authorization.max_additional_review_rounds!==0
-        || row.authorization.chart_type_corrections!==undefined || !sameArray(row.authorization.issue_ids,[chartScope.issue_id])
+        || row.authorization.chart_type_corrections!==undefined
+        || !sameArray([...row.authorization.issue_ids].sort(), materialIssues(baselineReview).map(row => row.id).sort())
         || state.binding.task_bindings[originalPageResultsKey] || !chartTask
         || !sameArray(row.late_gaps,collectGaps([gap],state.binding))) fail('READING_FIRST_CONTINUATION_CHECKPOINT_INVALID');
+      const correction = chartScope.translation_correction;
+      if (correction !== undefined) validateContinuationTranslation(correction, baseline.views[correction?.language]?.value, 'before', state.binding);
       const resultRecords=state.enrichmentRecords.filter(item=>item.receipt.artifact_id===chartTask.artifact_id);
       const consumed=requests.get(state.requestEntries.get(originalPageResultsKey))?.consumed;
       if (resultRecords.length!==Number(consumed===true)) fail('READING_FIRST_CONTINUATION_CHECKPOINT_INVALID');
@@ -1601,8 +1683,13 @@ function validateReviewRequest(state, presentation, renderRepair) {
       ...(state.renderRepairBaseEditor ? {readingEditor:state.renderRepairBaseEditor} : {}),...rendered.rendering,
       instructionProfile:state.binding.configured_setup?.instruction_profile, expandedMethodIndex:state.binding.configured_setup?.expanded_method_index, stagedResearchMap:state.binding.configured_setup?.staged_research_map, noteLayout:state.binding.note_layout,sourceLanguage:state.binding.source_language});
     const rendererChanges=presentationNotes(baseline, true);
+    const relinks = continuedKnowledgeResolutions(state);
+    const retiredPath = path => relinks.some(({ from_path, target_path, knowledge_id }) => from_path === path
+      && !updated.has(path) && !rendererChanges.has(path) && rendererChanges.has(target_path)
+      && presentation.supportNotes.some(note => note.id === knowledge_id && note.path === target_path));
     if (!local || ['completed_with_limits','reading_complete'].includes(state.status) || presentation.presentation_fingerprint===state.reviewedPresentationFingerprint
-      || plan.renderer.some(issue=>issue.affected_paths.some(path=>!original.has(path) || !updated.has(path) || !rendererChanges.has(path) || original.get(path)===rendererChanges.get(path)))) fail('READING_FIRST_RENDER_REPAIR_UNAVAILABLE');
+      || plan.renderer.some(issue=>issue.affected_paths.some(path=>!original.has(path) || !retiredPath(path)
+        && (!updated.has(path) || !rendererChanges.has(path) || original.get(path)===rendererChanges.get(path))))) fail('READING_FIRST_RENDER_REPAIR_UNAVAILABLE');
   } else if (renderRepair && (state.binding.presentation_mode!=='reading-editor' || !local || state.status!=='reading_complete' || !minorRenderIssues.length || !state.readingEditor || presentation.presentation_fingerprint===state.reviewedPresentationFingerprint)) fail('READING_FIRST_RENDER_REPAIR_UNAVAILABLE');
   if ((!renderRepair && ['reading_complete','completed_with_limits'].includes(state.status)) || state.reviews>=reviewLimit(state) || state.issued.has(repairKey(state,'review'))) fail('READING_FIRST_REVIEW_ALREADY_REQUESTED');
   const needsOwnedRevision=local && (!renderRepair || materialRender && (plan.affected.length || plan.editor.length));
@@ -1626,7 +1713,7 @@ export function createReadingFirstReviewRequest({controller, presentation, rende
   const keyNodePolicy = methodsFirst
     ? 'Reconstruct the core method from the rendered accounts, then verify its source. Also check main conclusions, key design and conclusion-changing values.'
     : 'Main conclusions, key design, and values/formulas/table relations that could change the conclusion only. Ordinary format and unchecked details do not block.';
-  const result=describe(state,key,{...(methodsFirst && local ? {prior_key_nodes:state.review.key_nodes, method_steps:effectivePresentation(state).map.steps} : {}), presentation:externalNotes ? inlinePresentation : presentation, ...(externalNotes ? {support_note_files:supportNoteFiles} : {}), ...(includeEnrichmentContext(state) ? {enrichment_context:enrichmentContext(state)} : {}), ...(local ? {sources:state.handoff.sources, issues:minorOnly ? minorRenderIssues : activeReview(state).issues.filter(issue=>issue.severity==='material'), prior_overall:state.review.overall, ...(renderRepair ? {revision_scope:minorOnly ? 'Renderer-only correction of the reported minor layout/navigation issues; accepted Writer and Reading Editor outputs are unchanged.' : 'Review the corrected renderer targets and any other material repairs together; a changed target does not itself establish correctness.'} : {})} : {handoff:downstreamHandoff(state)}), ...(local ? {} : {annotation_check:annotationCheck(state, presentation)}), review_scope:local?'local':'overall', key_node_policy:keyNodePolicy});
+  const result=describe(state,key,{...(methodsFirst && local ? {prior_key_nodes:state.review.key_nodes, method_steps:effectivePresentation(state).map.steps} : {}), presentation:externalNotes ? inlinePresentation : presentation, ...(externalNotes ? {support_note_files:supportNoteFiles} : {}), ...(includeEnrichmentContext(state) ? {enrichment_context:enrichmentContext(state)} : {}), ...(local ? {sources:state.handoff.sources, issues:minorOnly ? minorRenderIssues : repairReview(state).issues.filter(issue=>issue.severity==='material'), prior_overall:state.review.overall, ...(renderRepair ? {revision_scope:minorOnly ? 'Renderer-only correction of the reported minor layout/navigation issues; accepted Writer and Reading Editor outputs are unchanged.' : 'Review the corrected renderer targets and any other material repairs together; a changed target does not itself establish correctness.'} : {})} : {handoff:downstreamHandoff(state)}), ...(local ? {} : {annotation_check:annotationCheck(state, presentation)}), review_scope:local?'local':'overall', key_node_policy:keyNodePolicy});
   state.reviews+=1; state.status='reviewing'; return result;
 }
 /** Deterministic annotation gaps on the rendered pages, checked against this paper's knowledge catalogue. */
@@ -1670,7 +1757,12 @@ export function createReadingFirstRevisionRequests({controller} = {}) {
   if (!keys.length) fail('READING_FIRST_REVISION_UNAVAILABLE');
   const translating=state.binding.writing_mode==='source-translation';
   const result=keys.map(key=>{const language=key.replace(/-r\d+$/, '');
-    if (translating && language!==state.binding.source_language) return describe(state,key,{...translationPayload(state,language),prior_view:state.views[language].value,issues:material,revision_scope:'Repair the affected translation only; keep the accepted source draft and its section structure.'});
+    if (translating && language!==state.binding.source_language) {
+      const correction = continuationTranslation(state);
+      return describe(state,key,{...translationPayload(state,language),prior_view:state.views[language].value,
+        issues: correction ? repairReview(state).issues.filter(issue => issue.severity === 'material' && ['writer','science'].includes(issue.repair_owner)) : material,
+        ...(correction ? { translation_correction: correction } : {}),revision_scope:'Repair the affected translation only; keep the accepted source draft and its section structure.'});
+    }
     return describe(state,key,{handoff:downstreamHandoff(state),...(state.binding.enrichment_session_profile === 'reading-session-enrichment-1.0' && !includeEnrichmentContext(state) ? {} : {enrichment_context:enrichmentContext(state)}),language,prior_view:state.views[language].value,...sourceViewPayload(state,language),issues:material,overall:state.review.overall,revision_scope:'Repair the affected account only; retain other scientific work.'});});
   state.revisionRequests.push(...result); state.status='revising'; return result;
 }
@@ -1716,7 +1808,7 @@ export function createReadingFirstPresentationRequest({controller} = {}) {
   if (state.readingEditor && state.status !== 'revision_required' || ['reading_complete','completed_with_limits'].includes(state.status)) fail('READING_FIRST_EDITOR_UNAVAILABLE');
   if (state.readingEditor && !state.rejection && (!state.review || !lastAuthorization(state)?.repair_keys.presentation && (reviewRepairPlan(state.binding,activeReview(state)).affected.length || !reviewRepairPlan(state.binding,activeReview(state)).editor.length))) fail('READING_FIRST_REVISION_PENDING');
   const key=repairKey(state,'presentation');
-  const editorIssues=activeReview(state)?.issues.filter(issue=>issue.severity==='material' && issue.repair_owner!=='renderer') ?? [];
+  const editorIssues=repairReview(state)?.issues.filter(issue=>issue.severity==='material' && issue.repair_owner!=='renderer') ?? [];
   const result=describe(state,key,{views:languages.map(language=>state.views[language].value),views_fingerprint:readingFirstViewsFingerprint(languages.map(language=>state.views[language].value)),view_receipts:languages.map(language=>state.views[language].receipt),context:state.handoff.context,sources:state.handoff.sources,...(state.handoff.presentation ? {presentation:readingFirstEditorPresentation({presentation:effectivePresentation(state),views:languages.map(language=>state.views[language].value)})} : {}),output_schema:state.binding.presentation_profile,...(state.binding.configured_setup?.staged_research_map ? {staged_research_map:true} : {}),...(state.reviews ? {issues:editorIssues, ...(state.renderRepairBaseEditor ? {prior_editor:state.renderRepairBaseEditor} : {})} : {})});
   if (state.reviews) { state.readingEditor=null; state.pendingRevisions=[key]; state.revisionRequests=[result]; }
   state.status='presenting'; return result;
@@ -2348,11 +2440,14 @@ export function createReadingFirstEnrichmentRequests({controller}={}) {
   const remainingLanguageCalls=remainingWriters+1+(binding.presentation_mode==='reading-editor'?1:0);
   if((usesExecutionLedger(binding) ? totalUsed(state)+requiredReadingKeys(state).length>executionLimit(state) : totalUsed(state)+roles.length+remainingLanguageCalls>binding.max_total_calls) || binding.enrichment_session_profile === 'reading-session-enrichment-1.0' && state.requestLog.filter(item=>!['evidence','methods','results'].includes(item.role)).length+remainingLanguageCalls>binding.max_calls+additionalTaskAllowance(state))fail('READING_FIRST_CALL_BUDGET_EXHAUSTED');
   const scope=originalPageScope(state);
+  const chartScope=scope && originalPageChartGap(state,scope);
   const result=roles.map((role,index)=>describe(state,keys[index],{gaps:pending.filter(gap=>gap.owner_role===role),enrichment_policy:policy,
     original_sources:scope ? state.handoff.sources.filter(source=>source.id===scope.source_id) : state.handoff.sources,
     prior_context:enrichmentContext(state),...(scope ? {original_page_chart_repair:{
-      scope, visual:originalPageChartGap(state,scope).visual,
-      result_contract:'Return one recovered paper_fact resolution from the assigned original page. In visual_corrections return exactly the existing visual_id, source_id, page, label, caption and unchanged chart_types followed by one new chart type for the authorized panel. Use an existing appropriate method-background knowledge_id when available, otherwise provide chart_knowledge: {id, kind:"method", source_kind:"method-background", title:{en,zh-CN}, paragraphs:{en:[...],zh-CN:[...]}}. Keep the chart definition reusable and separate from the paper result. No new sources, crops or figure bytes.',
+      scope: { issue_id: scope.issue_id, visual_id: scope.visual_id, source_id: scope.source_id, panel: scope.panel },
+      visual:chartScope.visual,
+      ...(scope.panel === null && chartScope.knowledgeIds.length ? { allowed_knowledge_ids: chartScope.knowledgeIds } : {}),
+      result_contract:'Return one recovered paper_fact resolution from the assigned original page. In visual_corrections return exactly the existing visual_id, source_id, page, label, caption and unchanged chart_types followed by one new chart type for the authorized panel. If panel is null, this is a whole-figure annotation and the new chart type must omit panel. Use an existing appropriate method-background knowledge_id when available, otherwise provide chart_knowledge: {id, kind:"method", source_kind:"method-background", title:{en,zh-CN}, paragraphs:{en:[...],zh-CN:[...]}}. Keep the chart definition reusable and separate from the paper result. No new sources, crops or figure bytes.',
       existing_knowledge:(state.handoff.presentation.knowledge ?? []).map(({id,title,source_kind})=>({id,title,source_kind})),
     }} : {})}));
   state.status='enriching';return result;
@@ -2420,7 +2515,7 @@ function validateEnrichment(state,task,gaps,value) {
 }
 
 function validateOriginalPageChartResult(state,scope,review,value) {
-  const {gap,visual}=originalPageChartGap(state,scope,review);
+  const {gap,visual,knowledgeIds}=originalPageChartGap(state,scope,review);
   const correction=value.visual_corrections?.[0], answer=value.resolutions?.[0], chart=value.chart_knowledge;
   const existing=state.handoff.presentation.knowledge ?? [], prior=visual.chart_types ?? [], next=correction?.chart_types;
   const added=Array.isArray(next) ? next.at(-1) : null;
@@ -2435,8 +2530,10 @@ function validateOriginalPageChartResult(state,scope,review,value) {
     || correction.kind!==undefined && correction.kind!==visual.kind
     || fingerprintV3Json(correction.label)!==fingerprintV3Json(visual.label)
     || fingerprintV3Json(correction.caption)!==fingerprintV3Json(visual.caption)
-    || !added || added.panel!==scope.panel || next.length!==prior.length+1 || !sameArray(next.slice(0,-1),prior)
-    || prior.some(item=>item.panel?.split(/[\s,;]+/).includes(scope.panel))) invalid();
+    || !added || added.panel!==(scope.panel ?? undefined) || next.length!==prior.length+1 || !sameArray(next.slice(0,-1),prior)
+    || scope.panel===null && knowledgeIds.length && !knowledgeIds.includes(added.knowledge_id)
+    || prior.some(item=>scope.panel===null ? !item.panel && item.knowledge_id===added.knowledge_id
+      : item.panel?.split(/[\s,;]+/).includes(scope.panel))) invalid();
   if (chart!==undefined && (!chart || Object.keys(chart).some(key=>!['id','kind','source_kind','title','paragraphs'].includes(key))
     || !/^[a-z][a-z0-9-]*$/.test(chart.id ?? '') || chart.id!==added.knowledge_id || existing.some(item=>item.id===chart.id)
     || chart.kind!=='method' || chart.source_kind!=='method-background'

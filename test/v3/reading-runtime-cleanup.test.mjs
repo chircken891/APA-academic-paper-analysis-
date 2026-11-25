@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import { chmod, cp, link, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, cp, link, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -39,6 +40,59 @@ async function fixture(t) {
 }
 
 const terminal = { status: 'terminated', authorization_id: 'fixture-approval', user_reply: '终止阅读' };
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+
+async function configureReadOnlyCleanup(put, current, originalPath) {
+  const { fingerprintV3Json } = await import('../../scripts/v3/semantic-package-validator.mjs');
+  const original = await stat(originalPath, { bigint: true });
+  const location = { path: originalPath, sha256: 'sha256:' + sha256(await readFile(originalPath)),
+    file_identity: { dev: String(original.dev), ino: String(original.ino), mtime_ns: String(original.mtimeNs) } };
+  const data = { prepared: { paths: { runRoot: current.runRoot }, runControl: { run_id: current.runId,
+    reading_first_binding: { controller_actor_id: 'controller', configured_setup: {
+      source_access: 'read-only-original-1.0', source_locations: [location],
+    } } } }, brokerConfig: { authorized_bindings: [] } };
+  await put('Eval/apa-v3/runs/' + current.runId + '/control/science-state.json', JSON.stringify({
+    schema_version: 'science-controller-state-1.0', data, fingerprint: fingerprintV3Json(data),
+  }));
+}
+
+async function crossRunCleanupFixture(t, { currentClaimsPdf = false } = {}) {
+  const { closeReadingRuntimeRun, registerReadingRuntimeCleanupFiles } = await import('../../scripts/v3/reading-runtime-cleanup.mjs');
+  const { readReadingRuntimeSnapshotReference } = await import('../../scripts/v3/reading-runtime-snapshot.mjs');
+  const { put, run } = await fixture(t);
+  const legacy = await run('run-legacy'), current = await run('run-current');
+  assert.equal(legacy.manifest.snapshot_hash, current.manifest.snapshot_hash);
+  const pdfBytes = Buffer.from('%PDF-1.7\nlegacy source');
+  const original = await put('Clippings/original.pdf', pdfBytes);
+  const pdf = await put('.tmp/legacy/staged-copy.pdf', pdfBytes);
+  const shared = await put('.tmp/shared/preview.md', 'shared');
+  const ownBytes = Buffer.from([0, 13, 10, 255]);
+  const own = await put('.tmp/current/role-output.bin', ownBytes);
+  const sharedRow = { path: shared, kind: 'temporary' };
+  const pdfRow = { path: pdf, kind: 'historical' };
+  await registerReadingRuntimeCleanupFiles({ ...legacy, files: [pdfRow, sharedRow] });
+  await registerReadingRuntimeCleanupFiles({ ...current,
+    files: [sharedRow, { path: own, kind: 'historical' }, ...(currentClaimsPdf ? [pdfRow] : [])] });
+  await configureReadOnlyCleanup(put, current, original);
+  await closeReadingRuntimeRun({ ...current, terminal, deferCleanup: true });
+  const legacyPdfRecord = join(legacy.runRoot, 'runtime-cleanup-owned', sha256(pdf) + '.json');
+  const snapshotFile = join(current.manifest.code_root, 'scripts', 'fixture.mjs');
+  const protectedHashes = new Map();
+  for (const path of [pdf, original, shared, snapshotFile]) protectedHashes.set(path, sha256(await readFile(path)));
+  const currentRef = readReadingRuntimeSnapshotReference(current);
+  const legacyRef = readReadingRuntimeSnapshotReference(legacy);
+  const assertProtected = async ({ currentReleased = false } = {}) => {
+    for (const [path, hash] of protectedHashes) assert.equal(sha256(await readFile(path)), hash, path);
+    assert.deepEqual(readReadingRuntimeSnapshotReference(legacy), legacyRef);
+    assert.deepEqual(readReadingRuntimeSnapshotReference(current), currentReleased ? null : currentRef);
+  };
+  const assertUnclaimed = async () => {
+    await assertProtected();
+    assert.deepEqual(await readFile(own), ownBytes);
+    await assert.rejects(readFile(join(current.runRoot, 'runtime-cleanup-claim.json')), { code: 'ENOENT' });
+  };
+  return { current, pdf, shared, own, ownBytes, legacyPdfRecord, assertProtected, assertUnclaimed };
+}
 
 test('terminal cleanup archives raw bytes and removes only registered temporary files and the last snapshot', async t => {
   const { closeReadingRuntimeRun, registerReadingRuntimeCleanupFiles } = await import('../../scripts/v3/reading-runtime-cleanup.mjs');
@@ -81,9 +135,251 @@ test('another live run keeps its shared snapshot and shared temporary file', asy
   await assert.rejects(readFile(shared), { code: 'ENOENT' });
 });
 
+async function testEvidenceCleanupFixture(t, { pending = false, upperCaseOwnerPath = false } = {}) {
+  const { registerReadingRuntimeCleanupFiles } = await import('../../scripts/v3/reading-runtime-cleanup.mjs');
+  const core = await import('../../scripts/v3/reading-runtime-snapshot.mjs');
+  const { put, run } = await fixture(t);
+  const owner = await run('evidence-owner'), consumer = await run('evidence-consumer');
+  const evidenceBytes = Buffer.from('approved test transcript\n');
+  const evidencePath = '.tmp/evidence-owner/verification.log';
+  const evidence = await put(evidencePath, evidenceBytes);
+  const ownedPath = upperCaseOwnerPath ? join(dirname(evidence), 'verification.LOG') : evidence;
+  await registerReadingRuntimeCleanupFiles({ ...owner, files: [{ path: ownedPath, kind: 'temporary' }] });
+  await put('scripts/fixture.mjs', 'export const fixture = false;\n');
+  const manifest = core.prepareReadingRuntimeSnapshot({ ...consumer, codeRoot: consumer.repoRoot });
+  const rebound = { ...consumer, manifest, expectedFingerprint: consumer.manifest.fingerprint };
+  const receipt = { path: evidence, sha256: 'sha256:' + sha256(evidenceBytes), byte_length: evidenceBytes.length };
+  core.registerReadingRuntimeSnapshotReference({ ...rebound, pending: true, testEvidence: [receipt],
+    pendingCheckpoint: { artifact_id: 'session-state-1', sha256: 'sha256:' + 'a'.repeat(64), byte_length: 17 } });
+  if (!pending) core.registerReadingRuntimeSnapshotReference(rebound);
+  return { owner, consumer: pending ? consumer : { ...consumer, manifest }, evidence, evidencePath, evidenceBytes };
+}
+
+for (const pending of [false, true]) {
+  test(`cleanup protects test evidence of another run’s ${pending ? 'pending' : 'active'} runtime reference without transferring ownership`, async t => {
+    const { closeReadingRuntimeRun } = await import('../../scripts/v3/reading-runtime-cleanup.mjs');
+    const { readReadingRuntimeSnapshotReference } = await import('../../scripts/v3/reading-runtime-snapshot.mjs');
+    const { owner, consumer, evidence, evidencePath, evidenceBytes } = await testEvidenceCleanupFixture(t, { pending });
+    const consumerRef = readReadingRuntimeSnapshotReference(consumer);
+    const result = await closeReadingRuntimeRun({ ...owner, terminal });
+    assert.deepEqual(result.removed, []);
+    assert.deepEqual(result.retained, [{ path: evidencePath, reason: 'live-reference' }]);
+    assert.deepEqual(await readFile(evidence), evidenceBytes);
+    assert.equal(readReadingRuntimeSnapshotReference(owner), null);
+    assert.deepEqual(readReadingRuntimeSnapshotReference(consumer), consumerRef);
+    if (!pending) {
+      const final = await closeReadingRuntimeRun({ ...consumer, terminal });
+      assert.deepEqual(final.removed, []);
+      assert.ok(!final.archives.some(row => row.original_path === evidencePath));
+      assert.equal(readReadingRuntimeSnapshotReference(consumer), null);
+      assert.deepEqual(await readFile(evidence), evidenceBytes);
+    }
+  });
+}
+
+test('an owner reclaims test evidence once the other runtime releases its dependency', async t => {
+  const { closeReadingRuntimeRun } = await import('../../scripts/v3/reading-runtime-cleanup.mjs');
+  const { readReadingRuntimeSnapshotReference } = await import('../../scripts/v3/reading-runtime-snapshot.mjs');
+  const { owner, consumer, evidence, evidencePath, evidenceBytes } = await testEvidenceCleanupFixture(t);
+  const consumerResult = await closeReadingRuntimeRun({ ...consumer, terminal });
+  assert.deepEqual(consumerResult.removed, []);
+  assert.equal(readReadingRuntimeSnapshotReference(consumer), null);
+  assert.deepEqual(await readFile(evidence), evidenceBytes);
+  const result = await closeReadingRuntimeRun({ ...owner, terminal });
+  assert.deepEqual(result.removed, [evidencePath]);
+  await assert.rejects(readFile(evidence), { code: 'ENOENT' });
+  assert.equal(readReadingRuntimeSnapshotReference(owner), null);
+});
+
+test('Windows cleanup protects a test evidence path from an ownership record with different casing',
+  { skip: process.platform !== 'win32' }, async t => {
+    const { closeReadingRuntimeRun } = await import('../../scripts/v3/reading-runtime-cleanup.mjs');
+    const { readReadingRuntimeSnapshotReference } = await import('../../scripts/v3/reading-runtime-snapshot.mjs');
+    const { owner, consumer, evidence, evidenceBytes } = await testEvidenceCleanupFixture(t, { upperCaseOwnerPath: true });
+    const consumerRef = readReadingRuntimeSnapshotReference(consumer);
+    const result = await closeReadingRuntimeRun({ ...owner, terminal });
+    assert.deepEqual(result.removed, []);
+    assert.deepEqual(result.retained, [{ path: '.tmp/evidence-owner/verification.LOG', reason: 'live-reference' }]);
+    assert.deepEqual(await readFile(evidence), evidenceBytes);
+    assert.equal(readReadingRuntimeSnapshotReference(owner), null);
+    assert.deepEqual(readReadingRuntimeSnapshotReference(consumer), consumerRef);
+  });
+
+test('cleanup rejects a malformed test evidence dependency before moving files or releasing the owner reference', async t => {
+  const { closeReadingRuntimeRun } = await import('../../scripts/v3/reading-runtime-cleanup.mjs');
+  const { readReadingRuntimeSnapshotReference } = await import('../../scripts/v3/reading-runtime-snapshot.mjs');
+  const { owner, consumer, evidence, evidencePath, evidenceBytes } = await testEvidenceCleanupFixture(t);
+  const ownerRef = readReadingRuntimeSnapshotReference(owner);
+  const refPath = join(consumer.repoRoot, '.runtime', 'apa-code-refs', consumer.runId + '.json');
+  const corrupted = Buffer.from(JSON.stringify({ ...readReadingRuntimeSnapshotReference(consumer), test_evidence_paths: [evidencePath] }));
+  await writeFile(refPath, corrupted);
+  await assert.rejects(closeReadingRuntimeRun({ ...owner, terminal }), {
+    code: 'READING_RUNTIME_REFERENCE_INVALID', details: { path: refPath },
+  });
+  assert.deepEqual(await readFile(evidence), evidenceBytes);
+  assert.deepEqual(readReadingRuntimeSnapshotReference(owner), ownerRef);
+  assert.deepEqual(await readFile(refPath), corrupted);
+  await assert.rejects(readFile(join(owner.runRoot, 'runtime-cleanup-claim.json')), { code: 'ENOENT' });
+});
+
+test('cleanup stops before moving files when a legacy runtime has unreadable test evidence history', async t => {
+  const { closeReadingRuntimeRun } = await import('../../scripts/v3/reading-runtime-cleanup.mjs');
+  const { readReadingRuntimeSnapshotReference } = await import('../../scripts/v3/reading-runtime-snapshot.mjs');
+  const { owner, consumer, evidence, evidenceBytes } = await testEvidenceCleanupFixture(t);
+  const ownerRef = readReadingRuntimeSnapshotReference(owner);
+  const consumerRef = readReadingRuntimeSnapshotReference(consumer);
+  delete consumerRef.test_evidence_paths;
+  const refPath = join(consumer.repoRoot, '.runtime', 'apa-code-refs', consumer.runId + '.json');
+  await writeFile(refPath, JSON.stringify(consumerRef));
+  const statePath = join(consumer.runRoot, 'control', 'science-state.json');
+  await mkdir(dirname(statePath));
+  await writeFile(statePath, '{}');
+  await assert.rejects(closeReadingRuntimeRun({ ...owner, terminal }), {
+    code: 'READING_SESSION_STATE_INVALID', details: { path: statePath },
+  });
+  assert.deepEqual(await readFile(evidence), evidenceBytes);
+  assert.deepEqual(readReadingRuntimeSnapshotReference(owner), ownerRef);
+  assert.deepEqual(readReadingRuntimeSnapshotReference(consumer), consumerRef);
+  await assert.rejects(readFile(join(owner.runRoot, 'runtime-cleanup-claim.json')), { code: 'ENOENT' });
+});
+
+for (const [marker, relativePath] of [
+  ['session checkpoint file', 'control/session-state-1.json'],
+  ['session checkpoint receipt', '.phase21-receipts/session-state-1.json'],
+  ['pending checkpoint reference', null],
+]) {
+  test(`cleanup stops when legacy science state is missing but a ${marker} survives`, async t => {
+    const { closeReadingRuntimeRun } = await import('../../scripts/v3/reading-runtime-cleanup.mjs');
+    const { readReadingRuntimeSnapshotReference } = await import('../../scripts/v3/reading-runtime-snapshot.mjs');
+    const { owner, consumer, evidence, evidenceBytes } = await testEvidenceCleanupFixture(t, { pending: !relativePath });
+    const ownerRef = readReadingRuntimeSnapshotReference(owner);
+    const consumerRef = readReadingRuntimeSnapshotReference(consumer);
+    delete consumerRef.test_evidence_paths;
+    delete consumerRef.pending_test_evidence_paths;
+    const refPath = join(consumer.repoRoot, '.runtime', 'apa-code-refs', consumer.runId + '.json');
+    await writeFile(refPath, JSON.stringify(consumerRef));
+    if (relativePath) {
+      const markerPath = join(consumer.runRoot, relativePath);
+      await mkdir(dirname(markerPath));
+      await writeFile(markerPath, '{}');
+    }
+    const statePath = join(consumer.runRoot, 'control', 'science-state.json');
+    await assert.rejects(closeReadingRuntimeRun({ ...owner, terminal }), {
+      code: 'READING_SESSION_STATE_INVALID', details: { path: statePath },
+    });
+    assert.deepEqual(await readFile(evidence), evidenceBytes);
+    assert.deepEqual(readReadingRuntimeSnapshotReference(owner), ownerRef);
+    assert.deepEqual(readReadingRuntimeSnapshotReference(consumer), consumerRef);
+    await assert.rejects(readFile(join(owner.runRoot, 'runtime-cleanup-claim.json')), { code: 'ENOENT' });
+  });
+}
+
+for (const retry of [false, true]) {
+  test(`read-only cleanup ${retry ? 'resumes a durable plan' : 'finishes on the first call'} with a legacy PDF owner`, async t => {
+    const { cleanupReadingRuntimeRun } = await import('../../scripts/v3/reading-runtime-cleanup.mjs');
+    const { current, own, ownBytes, legacyPdfRecord, assertProtected, assertUnclaimed } = await crossRunCleanupFixture(t);
+    const planPath = join(current.runRoot, 'runtime-cleanup-plan.json');
+    await writeFile(legacyPdfRecord + '.4eed67a6-5103-435e-8944-c4f4a36f9d56.tmp', '{');
+    let savedPlan;
+    if (retry) {
+      const read = fs.readFile;
+      const interception = t.mock.method(fs, 'readFile', async (path, ...args) => {
+        if (path === legacyPdfRecord) throw Object.assign(new Error('interrupted while reading ownership'), { code: 'EIO' });
+        return read(path, ...args);
+      });
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(cleanupReadingRuntimeRun(current), { code: 'EIO' });
+      } finally {
+        interception.mock.restore();
+        syncBuiltinESMExports();
+      }
+      savedPlan = await readFile(planPath);
+      await assertUnclaimed();
+    }
+    const result = await cleanupReadingRuntimeRun(current);
+    assert.deepEqual(result.removed, ['.tmp/current/role-output.bin']);
+    assert.deepEqual(result.retained, [{ path: '.tmp/shared/preview.md', reason: 'live-reference' }]);
+    assert.equal(result.snapshot_status, 'referenced');
+    await assert.rejects(readFile(own), { code: 'ENOENT' });
+    await assertProtected({ currentReleased: true });
+    if (savedPlan) assert.deepEqual(await readFile(planPath), savedPlan);
+    const archived = result.archives.find(row => row.original_path === '.tmp/current/role-output.bin');
+    assert.equal(archived.sha256, 'sha256:' + sha256(ownBytes));
+    const archiveBytes = await readFile(join(current.repoRoot, archived.archive_path));
+    assert.equal(archived.archive_sha256, 'sha256:' + sha256(archiveBytes));
+    assert.deepEqual(gunzipSync(archiveBytes), ownBytes);
+  });
+}
+
+test('read-only cleanup rejects its own protected PDF output before moving files or releasing its reference', async t => {
+  const { cleanupReadingRuntimeRun } = await import('../../scripts/v3/reading-runtime-cleanup.mjs');
+  const { current, pdf, assertUnclaimed } = await crossRunCleanupFixture(t, { currentClaimsPdf: true });
+  await assert.rejects(cleanupReadingRuntimeRun(current), { code: 'RF_READ_ONLY_SOURCE_OUTPUT_CONFLICT', details: { path: pdf } });
+  await assertUnclaimed();
+});
+
+for (const [corruption, corrupt] of [
+  ['mismatched filename', (row, shared) => JSON.stringify({ ...row, path: shared })],
+  ['invalid JSON', () => '{'],
+  ['non-string path', row => JSON.stringify({ ...row, path: 17 })],
+]) {
+  test(`cleanup rejects another run’s ownership row with ${corruption} before moving files or releasing its reference`, async t => {
+    const { cleanupReadingRuntimeRun } = await import('../../scripts/v3/reading-runtime-cleanup.mjs');
+    const { current, shared, legacyPdfRecord, assertUnclaimed } = await crossRunCleanupFixture(t);
+    const row = JSON.parse(await readFile(legacyPdfRecord));
+    await writeFile(legacyPdfRecord, corrupt(row, shared));
+    await assert.rejects(cleanupReadingRuntimeRun(current), error => {
+      assert.equal(error.code, 'READING_RUNTIME_CLEANUP_REGISTRATION');
+      assert.equal(error.details.path, legacyPdfRecord);
+      return true;
+    });
+    await assertUnclaimed();
+  });
+}
+
+test('cleanup refuses a renamed ownership JSON that would otherwise leave a shared file unprotected', async t => {
+  const { cleanupReadingRuntimeRun } = await import('../../scripts/v3/reading-runtime-cleanup.mjs');
+  const { current, shared, legacyPdfRecord, assertUnclaimed } = await crossRunCleanupFixture(t);
+  const directory = dirname(legacyPdfRecord);
+  const badPath = join(directory, 'bad.json');
+  await rename(join(directory, sha256(shared) + '.json'), badPath);
+  await assert.rejects(cleanupReadingRuntimeRun(current), {
+    code: 'READING_RUNTIME_CLEANUP_REGISTRATION', details: { path: badPath, reason: 'invalid-filename' },
+  });
+  await assertUnclaimed();
+});
+
+test('cleanup rechecks newly added noncanonical ownership JSON before claiming files', async t => {
+  const { cleanupReadingRuntimeRun } = await import('../../scripts/v3/reading-runtime-cleanup.mjs');
+  const { current, legacyPdfRecord, assertUnclaimed } = await crossRunCleanupFixture(t);
+  const directory = dirname(legacyPdfRecord);
+  const badPath = join(directory, 'bad.json');
+  const bytes = await readFile(legacyPdfRecord);
+  const readdir = fs.readdir;
+  let added = false;
+  const interception = t.mock.method(fs, 'readdir', async (path, ...args) => {
+    const names = await readdir(path, ...args);
+    if (path === directory && !added) {
+      added = true;
+      await writeFile(badPath, bytes);
+    }
+    return names;
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(cleanupReadingRuntimeRun(current), {
+      code: 'READING_RUNTIME_CLEANUP_REGISTRATION', details: { path: badPath, reason: 'invalid-filename' },
+    });
+  } finally {
+    interception.mock.restore();
+    syncBuiltinESMExports();
+  }
+  await assertUnclaimed();
+});
+
 test('read-only cleanup refuses PDF copies and aliases while reclaiming generated preview files', async t => {
   const { closeReadingRuntimeRun, registerReadingRuntimeCleanupFiles } = await import('../../scripts/v3/reading-runtime-cleanup.mjs');
-  const { fingerprintV3Json } = await import('../../scripts/v3/semantic-package-validator.mjs');
   const { put, run } = await fixture(t);
   const current = await run('read-only-run');
   const originalPath = await put('Clippings/只读 原件.pdf', '%PDF-1.7\nsynthetic');
@@ -91,14 +387,7 @@ test('read-only cleanup refuses PDF copies and aliases while reclaiming generate
   await link(originalPath, alias);
   const copy = await put('.tmp/read-only/staged-copy.pdf', await readFile(originalPath));
   const original = await stat(originalPath, { bigint: true });
-  const location = { path: originalPath, file_identity: { dev: String(original.dev), ino: String(original.ino), mtime_ns: String(original.mtimeNs) } };
-  const data = { prepared: { paths: { runRoot: current.runRoot }, runControl: { run_id: current.runId,
-    reading_first_binding: { controller_actor_id: 'controller', configured_setup: {
-      source_access: 'read-only-original-1.0', source_locations: [location],
-    } } } }, brokerConfig: { authorized_bindings: [] } };
-  await put('Eval/apa-v3/runs/read-only-run/control/science-state.json', JSON.stringify({
-    schema_version: 'science-controller-state-1.0', data, fingerprint: fingerprintV3Json(data),
-  }));
+  await configureReadOnlyCleanup(put, current, originalPath);
   for (const row of [{ path: alias, kind: 'host' }, { path: copy, kind: 'historical' }]) {
     await assert.rejects(registerReadingRuntimeCleanupFiles({ ...current, files: [row] }), { code: 'RF_READ_ONLY_SOURCE_OUTPUT_CONFLICT' });
   }
