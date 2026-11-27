@@ -22,6 +22,37 @@ import { reviewedReadingFirstFixture } from './helpers/reading-first-publication
 
 const readJson = async path => JSON.parse(await readFile(path, 'utf8'));
 
+test('same-paper overwrite keeps its exact preimages through queue prepare and publication', async t => {
+  const first = await readingFirstPublicationFixture(t, { methodsFirst: true });
+  await applyBilingualPublication(applyReadingFirstFixture(first));
+  const next = await reviewedReadingFirstFixture(t, { methodsFirst: true, currentRegistryRoot: first.vaultRoot,
+    paperId: first.paperId, runId: 'run_' + '7'.repeat(32),
+    title: { en: 'Evaluation alternate targets', 'zh-CN': '独立评测目标' } });
+  const source = await captureReadingFirstPublicationSource({ controller: next.controller, presentation: next.candidate });
+  const before_sha256 = {};
+  for (const note of first.candidate.notes) {
+    before_sha256[note.language] = 'sha256:' + createHash('sha256').update(await readFile(join(first.vaultRoot, note.path))).digest('hex');
+  }
+  const paperOverwrite = { paper_id: first.paperId, before_sha256 };
+  const options = { vaultRoot: first.vaultRoot, evidenceMode: 'synthetic', captureSource: async () => source };
+  const entries = [{ run: next.runId, runRoot: next.artifactRoot, generation: 'queue-overwrite', resources: next.resources, paperOverwrite }];
+  const prepared = await prepareReadingFirstPublicationQueue({ ...options, entries });
+  assert.deepEqual(prepared.proposal.entries[0].input.paperOverwrite, paperOverwrite);
+  assert.deepEqual(prepared.proposal.entries[0].original.summary.paper_overwrite.request, paperOverwrite);
+  const altered = structuredClone(prepared.proposal);
+  altered.entries[0].input.paperOverwrite.before_sha256.en = 'sha256:' + '0'.repeat(64);
+  await assert.rejects(approveReadingFirstPublicationQueue({ vaultRoot: first.vaultRoot, proposal: altered,
+    expectedProposalSha256: 'sha256:' + createHash('sha256').update(JSON.stringify(altered, null, 2) + '\n').digest('hex'),
+    authorization: { authorization_id: 'altered-overwrite', user_reply: '发布并覆盖' } }), { code: 'RF_QUEUE_PROPOSAL_INVALID' });
+  await approveReadingFirstPublicationQueue({ vaultRoot: first.vaultRoot, proposal: prepared.proposal,
+    expectedProposalSha256: prepared.proposal_sha256, authorization: { authorization_id: 'exact-overwrite', user_reply: '发布并覆盖' } });
+  const result = await drainReadingFirstPublicationQueue(options);
+  assert.equal(result.status, 'complete', JSON.stringify(result));
+  const { generation } = await readRegisteredCommit(options);
+  assert.equal(generation.papers.length, 1);
+  assert.deepEqual(generation.papers[0].paths, first.candidate.targetRegistry.paper_targets);
+});
+
 async function fixture(t, count = 3, { sharedAsset = false, renamedNode = false, nearNode = false, crossReference = false } = {}) {
   const placements = crossReference ? { knowledgePlacementIds: ['method', 'secondary'] } : {};
   let first = await readingFirstPublicationFixture(t, { register: false });

@@ -10,9 +10,9 @@ import { compactionEnabled, compactionReminder } from './reading-compaction.mjs'
 import { normalizeHostReceipt, validateHostReceiptEvidence } from './reading-host-evidence.mjs';
 import { validateReadingResources } from './reading-resources.mjs';
 import { normalizeReadingFirstMap } from './reading-first-obsidian.mjs';
-import { assertMethodsFirstScience } from './methods-first-handoff.mjs';
+import { assertMethodsFirstScience, assertResultModules } from './methods-first-handoff.mjs';
 import { APA_SCIENCE_ROLES as roles, extractHostTaskHandle } from '../apa-model-policy.mjs';
-import { isMethodsFirstReadingProfile } from '../lib/reading-profiles.mjs';
+import { isContentCompleteReadingProfile, isMethodsFirstReadingProfile } from '../lib/reading-profiles.mjs';
 
 const dependencies = { evidence: [], methods: ['evidence'], results: ['evidence'], interpretation: ['evidence', 'methods', 'results'], 'scientific-reading': ['evidence', 'methods', 'results', 'interpretation'], integration: ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading'] };
 const controllers = new WeakMap();
@@ -124,6 +124,16 @@ async function migratedLedger(data) {
 async function scienceArtifact(data, role) {
   const migrated = migratedRole(data, role);
   return readOwnedArtifact({ artifactRoot: migrated?.artifact_root ?? data.prepared.paths.runRoot, artifactId: migrated?.receipt.artifact_id ?? data.tasks[role].artifact_id });
+}
+
+async function acceptedResultModuleInputs(data, role) {
+  const resultRoles = ['results', 'interpretation'];
+  const entries = await Promise.all(resultRoles.filter(dep => dependencies[role].includes(dep)).map(async dep => {
+    const saved = await scienceArtifact(data, dep);
+    if (!saved || !same(saved.receipt, activeEntry(data, dep).receipt)) fail('SCIENCE_RECEIPT_INVALID');
+    return [dep, JSON.parse(saved.bytes.toString('utf8'))];
+  }));
+  return Object.fromEntries(entries);
 }
 async function checkInstructionHashRecovery(state, entry, task, recovery) {
   const invalid = () => fail('SCIENCE_INSTRUCTION_HASH_RECOVERY_INVALID');
@@ -554,17 +564,25 @@ export async function acceptScienceResult({ controller, role, instructionHashRec
     const recovered = instructionHashRecovery !== undefined && !entry.instruction_hash_recovery
       ? await checkInstructionHashRecovery(state, entry, task, instructionHashRecovery) : null;
     if (entry.receipt) return copy(entry.receipt);
+    const { scientificInput, runControl } = state.data.prepared;
+    const setup = runControl.reading_first_binding.configured_setup;
+    const checkModules = isContentCompleteReadingProfile(setup.instruction_profile)
+      && ['results', 'interpretation', 'integration'].includes(role);
     let nativeResult = recovered?.bytes;
-    if (role === 'results' || role === 'integration') {
+    if (role === 'results' || role === 'integration' || checkModules) {
       nativeResult ??= await readFile(ownedPath(root, task.native_path));
       const value = JSON.parse(nativeResult.toString('utf8'));
+      if (checkModules) {
+        const upstream = await acceptedResultModuleInputs(state.data, role);
+        assertResultModules(value, scientificInput.sources, { role, upstream });
+      }
       if (role === 'results') {
-        const spec=state.data.prepared.runControl.reading_first_binding.configured_setup.results_resources, mt=spec.manifest_task;
+        const spec=setup.results_resources, mt=spec.manifest_task;
         const native=ownedPath(root,mt.native_path), stat=await lstat(native);
         if (!stat.isFile() || stat.isSymbolicLink() || await realpath(native) !== native) fail('SCIENCE_RESOURCE_MANIFEST_INVALID');
         const bytes=await readFile(native), ref={path:ownedPath(root,mt.artifact_path),resources_root:ownedPath(root,spec.output_root),sha256:hash(bytes),byte_length:bytes.length};
         if (!same(value.resource_manifest,ref)) fail('SCIENCE_RESOURCE_MANIFEST_INVALID');
-        validateReadingResources({manifest:JSON.parse(bytes.toString('utf8')),resourcesRoot:ref.resources_root,sources:state.data.prepared.scientificInput.sources,figuresDir:spec.figures_dir});
+        validateReadingResources({manifest:JSON.parse(bytes.toString('utf8')),resourcesRoot:ref.resources_root,sources:scientificInput.sources,figuresDir:spec.figures_dir});
         const pending={resource_manifest:ref,manifest_base64:bytes.toString('base64'),manifest_sha256:hash(bytes)};
         if (state.data.results_resources) {
           const {receipt:ignored,...saved}=state.data.results_resources;
@@ -587,13 +605,13 @@ export async function acceptScienceResult({ controller, role, instructionHashRec
         }
         if (!receiptMatches(existing.receipt,state,mt) || !existing.bytes.equals(bytes)) fail('SCIENCE_RESOURCE_RECEIPT_INVALID');
         state.data.results_resources={...pending,receipt:copy(existing.receipt)}; await save(state);
-      } else {
+      } else if (role === 'integration') {
         const handoff=await checkedResultsResources(state), visuals=value.presentation?.visuals ?? value.visual_resources;
         if (!same(value.visual_handoff?.resource_manifest,handoff.resource_manifest) || !Array.isArray(visuals)
           || visuals.some(visual=>!handoff.resources.some(row=>row.id===visual.id && row.path===visual.path && row.source_id===visual.source_id && same(row.locator,visual.locator)))) fail('SCIENCE_RESOURCE_HANDOFF_INVALID');
         // Check the research map here so a malformed map returns to the Integrator instead of failing at final render.
-        if (isMethodsFirstReadingProfile(state.data.prepared.runControl.reading_first_binding.configured_setup.instruction_profile)) {
-          assertMethodsFirstScience(value, state.data.prepared.scientificInput.sources);
+        if (isMethodsFirstReadingProfile(setup.instruction_profile)) {
+          assertMethodsFirstScience(value, scientificInput.sources);
         } else if (value.presentation?.map != null) {
           const sectionIds=Array.isArray(value.presentation.sections) ? new Set(value.presentation.sections.map(section=>section?.id)) : undefined;
           try { normalizeReadingFirstMap(value.presentation.map,sectionIds); } catch (cause) { throw Object.assign(new Error('SCIENCE_CONTENT_INVALID'),{code:'SCIENCE_CONTENT_INVALID',details:{field:'presentation.map',cause:cause.code ?? cause.message}}); }

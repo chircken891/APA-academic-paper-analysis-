@@ -3,9 +3,9 @@ import { constants, copyFileSync, readFileSync, mkdirSync, writeFileSync, linkSy
 import { dirname, isAbsolute, relative, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectApaConfig, resolveApaConfig } from '../lib/apa-config.mjs';
-import { configuredReadingProfile, DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, isMethodsFirstReadingProfile } from '../lib/reading-profiles.mjs';
+import { configuredReadingProfile, DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, isMethodsFirstReadingProfile, isContentCompleteReadingProfile } from '../lib/reading-profiles.mjs';
 import { createConfiguredApaRoleModelPolicy, resolveApaRoleModel, buildHostDispatchArguments } from '../apa-model-policy.mjs';
-import { SCIENCE_INDEX_PROFILE, createReadingFirstRunControl, fingerprintReadingFirst, getReadingFirstPresentation, renderReadingFirstNotes, snapshotReadingFirstRuntime, getReadingFirstState, recordReadingFirstCandidateInventory } from './reading-first-runtime.mjs';
+import { SCIENCE_INDEX_PROFILE, REQUIRED_SCIENCE_INDEX_PROFILE, createReadingFirstRunControl, fingerprintReadingFirst, getReadingFirstPresentation, renderReadingFirstNotes, snapshotReadingFirstRuntime, getReadingFirstState, recordReadingFirstCandidateInventory } from './reading-first-runtime.mjs';
 import { exportReadingFirstPreview, inspectReadingFirstCandidate, readingFirstPreviewSourceBinding } from './reading-first-preview.mjs';
 import { emitApprovedRunStep, createCurrentMineruBaselinePort, INSTRUCTION_PATH_DISPATCH_PROFILE } from './phase21-runner.mjs';
 import { getRoleReplyContract } from './role-reply-contract.mjs';
@@ -53,6 +53,7 @@ export function deriveConfiguredMaxCalls({ maxTotalCalls, presentationMode } = {
 /** Freeze selected guidance into the binding. Disabled skills contribute no optional instructions. */
 export function buildConfiguredReadingInstructions(writingSkills = {}, { instructionProfile = DEFAULT_CONFIGURED_INSTRUCTION_PROFILE } = {}) {
   const { sciencePrompt, readingPrompt, editor } = configuredReadingProfile(instructionProfile);
+  const scienceIndexProfile = isContentCompleteReadingProfile(instructionProfile) ? REQUIRED_SCIENCE_INDEX_PROFILE : SCIENCE_INDEX_PROFILE;
   const urls = [sciencePrompt, readingPrompt, editor + '.md'].map(name => new URL('../../prompts/v3/' + name, import.meta.url));
   const buffers = urls.map(url => readFileSync(url));
   const sections = sectionsOf(buffers[1]);
@@ -63,7 +64,7 @@ export function buildConfiguredReadingInstructions(writingSkills = {}, { instruc
       + '\nApply only guidance relevant to this language and the assigned article module, within the existing APA output contract. Do not run skill workflows, commands, extra roles or review loops.\n' + guide.content).join('\n\n')]));
   return { instruction_profile: instructionProfile,
     ...(isMethodsFirstReadingProfile(instructionProfile) ? { expanded_method_index: true, staged_research_map: true } : {}),
-    frozen_support: { science_index: freezeSupportPrompt('science-index-1.0.md', SCIENCE_INDEX_PROFILE), role_reply: freezeSupportPrompt('role-reply-1.0.md', 'role-reply-1.0', getRoleReplyContract()) }, prompt_files: urls.map((url, index) => ({ path: fileURLToPath(url), sha256: sha(buffers[index]), byte_length: buffers[index].length })),
+    frozen_support: { science_index: freezeSupportPrompt(scienceIndexProfile + '.md', scienceIndexProfile), role_reply: freezeSupportPrompt('role-reply-1.0.md', 'role-reply-1.0', getRoleReplyContract()) }, prompt_files: urls.map((url, index) => ({ path: fileURLToPath(url), sha256: sha(buffers[index]), byte_length: buffers[index].length })),
     sections, science_sections: sectionsOf(buffers[0]), writing_instructions: writingInstructions,
     writing_guides: Object.fromEntries(Object.entries(writingSkills).map(([key, guide]) => [key, { path: guide.path, sha256: sha(Buffer.from(guide.content)), byte_length: Buffer.byteLength(guide.content) }])) };
 }
@@ -133,7 +134,8 @@ export function prepareConfiguredReading({ repoRoot, mainSession, sessionContext
     compactionPolicy: COMPACTION_POLICY,
     roleReplyContract: options.roleReplyContract === undefined ? getRoleReplyContract() : options.roleReplyContract,
     presentationProfile: editor,
-    firstWritingLanguage: options.sourceLanguage, presentationMode: resolvedConfig.reading.presentation_mode, handoffProfile: SCIENCE_INDEX_PROFILE });
+    firstWritingLanguage: options.sourceLanguage, presentationMode: resolvedConfig.reading.presentation_mode,
+    handoffProfile: isContentCompleteReadingProfile(instructionProfile) ? REQUIRED_SCIENCE_INDEX_PROFILE : SCIENCE_INDEX_PROFILE });
   return freeze({ resolvedConfig, scientificInput, raw_source_matches, configurationFingerprint: loaded.fingerprint, paths, parserOptions, runControl });
 }
 
@@ -310,7 +312,7 @@ export async function materializeConfiguredReadingCandidate({ prepared, controll
       const options = { ...renderOptions, knowledgeRegistry: trusted };
       const candidate = renderReadingFirstNotes({ controller, ...options });
       const stage = join(scratch, 'candidate-' + randomUUID());
-      const exported = await exportReadingFirstPreview({ outputRoot: stage, identity: handoff.identity,
+      const exported = await exportReadingFirstPreview({ outputRoot: stage, identity: candidate.identity,
         views: ['en', 'zh-CN'].map(language => checkpoint.state.views[language].value), presentation: getReadingFirstPresentation({ controller }), resources,
         ...(checkpoint.state.readingEditor ? { readingEditor: checkpoint.state.readingEditor.value } : {}), ...options,
         instructionProfile: prepared.runControl.reading_first_binding.configured_setup.instruction_profile,

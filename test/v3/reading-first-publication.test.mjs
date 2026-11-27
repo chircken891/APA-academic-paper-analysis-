@@ -228,6 +228,142 @@ test('republication preserves both Personal Notes and manual knowledge bytes and
   assert.equal(queryBilingualIndex({ index: snapshot.index, activeSnapshot: snapshot, query: 'manualknowledgeonlytoken' }).results.length, 0);
 });
 
+test('a reviewed same-paper candidate overwrites only its registered bilingual paths with bound preimages', async t => {
+  const first = await readingFirstPublicationFixture(t, { methodsFirst: true });
+  await applyBilingualPublication(applyReadingFirstFixture(first));
+  const { vaultRoot } = first;
+  const before = new Map();
+  for (const note of first.candidate.notes) {
+    const target = join(vaultRoot, note.path);
+    const bytes = Buffer.concat([await readFile(target), Buffer.from(`\nHuman note in ${note.language}.\n`)]);
+    await writeFile(target, bytes);
+    before.set(note.language, bytes);
+  }
+  const next = await reviewedReadingFirstFixture(t, { methodsFirst: true, currentRegistryRoot: vaultRoot,
+    paperId: first.paperId, runId: 'run_' + '5'.repeat(32),
+    title: { en: 'Reviewed evaluation at alternate targets', 'zh-CN': '独立路径的已审评测' } });
+  const source = await captureReadingFirstPublicationSource({ controller: next.controller, presentation: next.candidate });
+  const args = { source, vaultRoot, generation: 'registered-paper-overwrite', resources: next.resources, evidenceMode: 'synthetic' };
+  const digest = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
+  const paperOverwrite = { paper_id: first.paperId,
+    before_sha256: Object.fromEntries([...before].map(([language, bytes]) => [language, digest(bytes)])) };
+  const oldPaths = first.candidate.targetRegistry.paper_targets;
+  const candidatePaths = next.candidate.targetRegistry.paper_targets;
+  assert.notDeepEqual(candidatePaths, oldPaths);
+  assert.equal(next.candidate.generated_assets?.length, 2);
+  await assert.rejects(prepareReadingFirstPublication(args), { code: 'RF_PUBLICATION_TARGET_REGISTRY_CHANGED' });
+  const prepared = await prepareReadingFirstPublication({ ...args, paperOverwrite });
+  await assert.rejects(prepareReadingFirstPublication({ ...args, paperOverwrite: { ...paperOverwrite, paper_id: 'pap_' + '6'.repeat(32) } }),
+    { code: 'RF_PUBLICATION_PAPER_OVERWRITE_INVALID' });
+  await assert.rejects(prepareReadingFirstPublication({ ...args, paperOverwrite: { ...paperOverwrite,
+    before_sha256: { ...paperOverwrite.before_sha256, en: 'sha256:' + '0'.repeat(64) } } }), { code: 'RF_PUBLICATION_PAPER_OVERWRITE_PREIMAGE_CHANGED' });
+  const { reviewManifest } = prepared.review;
+  assert.equal(reviewManifest.dependencies.presentation, next.candidate.presentation_fingerprint);
+  for (const note of next.candidate.notes) {
+    const alternate = note.language === 'en' ? 'zh-CN' : 'en';
+    const row = prepared.plan.inventory.find(entry => entry.path === oldPaths[note.language]);
+    assert.equal(row.before_sha256, paperOverwrite.before_sha256[note.language]);
+    const inspected = inspectManagedNote(row.bytes);
+    assert.equal(inspected.frontmatter.alternate_language_path, oldPaths[alternate]);
+    assert.deepEqual(inspected.humanRanges.map(range => range.bytes), inspectManagedNote(before.get(note.language)).humanRanges.map(range => range.bytes));
+    assert.equal(inspected.regions.find(region => region.id === 'reading').bytes.toString().includes('Human note in'), false);
+    assert.equal(prepared.plan.inventory.some(entry => entry.path === note.path), false);
+    const absolute = join(vaultRoot, note.path);
+    await assert.rejects(lstat(absolute), { code: 'ENOENT' });
+  }
+  const support = prepared.plan.inventory.find(row => row.kind === 'support').bytes.toString();
+  const state = JSON.parse(Buffer.from(/<!-- KNOWLEDGE_STATE ([A-Za-z0-9+/=]+) -->/.exec(support)[1], 'base64'));
+  assert.equal(state.applications.find(row => row.paper_id === first.paperId).targets, undefined);
+  const visible = support.replace(/<!-- KNOWLEDGE_STATE [A-Za-z0-9+/=]+ -->/, '');
+  for (const [language, old] of Object.entries(oldPaths)) {
+    assert.ok(visible.includes(encodeURIComponent(old.split('/').at(-1))));
+    assert.ok(!visible.includes(encodeURIComponent(candidatePaths[language].split('/').at(-1))));
+  }
+  for (const asset of next.candidate.generated_assets) {
+    const row = prepared.plan.inventory.find(entry => entry.path === asset.path);
+    assert.ok(row.bytes.toString().includes(oldPaths[asset.language].replace(/\.md$/, '')));
+    assert.ok(!row.bytes.toString().includes(candidatePaths[asset.language].replace(/\.md$/, '')));
+  }
+  const authority = await readingFirstPublicationAuthority({ ...next, vaultRoot }, prepared.plan);
+  const apply = { vaultRoot, run: next.runId, plan: prepared.plan, ...authority };
+  const registration = await registerBilingualPublication({ ...apply, sourceInputs: prepared.sourceInputs });
+  const load = () => loadBilingualPublication({ vaultRoot, run: next.runId, trustAnchor: registration.trust_anchor });
+  assert.deepEqual((await load()).plan.hashes, prepared.plan.hashes);
+  assert.equal((await applyBilingualPublication(apply)).status, 'committed');
+  assert.deepEqual((await load()).plan.hashes, prepared.plan.hashes);
+  const snapshot = await readCommittedGeneration({ vaultRoot });
+  assert.equal(snapshot.ok, true, JSON.stringify(snapshot.errors));
+  assert.deepEqual(snapshot.generation.papers.map(row => row.paths), [oldPaths]);
+  const bundle = JSON.parse(await readFile(join(vaultRoot, registration.bundle_path)));
+  const registeredNote = bundle.plan.inventory.find(row => row.path === oldPaths.en);
+  await writeFile(join(vaultRoot, registeredNote.output_path), 'tampered projection');
+  await assert.rejects(load(), { code: 'P22_REGISTERED_OUTPUT_CHANGED' });
+});
+
+test('same-paper overwrite keeps historical block links when the reviewed reading changes its anchor IDs', async t => {
+  const first = await readingFirstPublicationFixture(t, { methodsFirst: true });
+  await applyBilingualPublication(applyReadingFirstFixture(first));
+  const { vaultRoot } = first;
+  const digest = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
+  const oldPaths = first.candidate.targetRegistry.paper_targets;
+  const defs = new Map([['rf-methods', 'rf-legacy-method'], ['rf-held-out-test', 'rf-methods']]);
+  const plainParagraph = value => value.split('\n').find(line => /^\p{L}/u.test(line) && line.length > 40 && !/\^rf-[a-z0-9-]+\s*$/.test(line));
+  const reading = content => inspectManagedNote(Buffer.from(content)).regions.find(region => region.id === 'reading').bytes.toString();
+  const before_sha256 = {};
+  for (const note of first.candidate.notes) {
+    const path = join(vaultRoot, note.path);
+    const original = await readFile(path, 'utf8');
+    const paragraph = plainParagraph(reading(original));
+    assert.ok(paragraph);
+    const bytes = original.replace(paragraph, paragraph + ' ^rf-legacy-extra')
+      .replace(/\^(rf-methods|rf-held-out-test)(?=\r?$)/gm, (_, id) => '^' + defs.get(id));
+    await writeFile(path, bytes);
+    before_sha256[note.language] = digest(bytes);
+  }
+  const priorSupport = first.candidate.supportNotes[0].path;
+  const inbound = Object.values(oldPaths).flatMap(path => [...defs.values(), 'rf-legacy-extra'].map(id =>
+    `[Existing application](../${path.slice('Wiki/'.length)}#^${id})`)).join('\n');
+  await writeFile(join(vaultRoot, priorSupport), (await readFile(join(vaultRoot, priorSupport), 'utf8')) + '\n' + inbound + '\n');
+  const next = await reviewedReadingFirstFixture(t, { methodsFirst: true, currentRegistryRoot: vaultRoot,
+    paperId: first.paperId, runId: 'run_' + '7'.repeat(32),
+    title: { en: 'Reviewed reading with replacement anchors', 'zh-CN': '修改锚点的评测稿' } });
+  const source = await captureReadingFirstPublicationSource({ controller: next.controller, presentation: next.candidate });
+  const anchorMappings = Object.fromEntries(next.candidate.notes.map(note => {
+    const region = reading(note.content);
+    const lines = region.split('\n');
+    const mappings = [...defs].map(([from_anchor, to_anchor]) => {
+      const paragraph = lines.find(line => line.endsWith('^' + from_anchor));
+      assert.ok(paragraph, from_anchor);
+      return { from_anchor, to_anchor, paragraph_sha256: digest(paragraph) };
+    });
+    mappings.push({ from_anchor: null, to_anchor: 'rf-legacy-extra', paragraph_sha256: digest(plainParagraph(region)) });
+    return [note.language, mappings];
+  }));
+  const paperOverwrite = { paper_id: first.paperId, before_sha256, anchorMappings };
+  const args = { source, vaultRoot, generation: 'overwrite-anchor-aliases', resources: next.resources, evidenceMode: 'synthetic' };
+  const prepared = await prepareReadingFirstPublication({ ...args, paperOverwrite });
+  for (const note of next.candidate.notes) {
+    const row = prepared.plan.inventory.find(entry => entry.path === oldPaths[note.language]);
+    const output = reading(row.bytes.toString());
+    for (const { from_anchor, to_anchor, paragraph_sha256 } of anchorMappings[note.language]) {
+      const line = output.split('\n').filter(value => value.endsWith('^' + to_anchor));
+      assert.equal(line.length, 1, to_anchor);
+      assert.equal(digest(from_anchor ? line[0].replace(new RegExp(`\\^${to_anchor}$`), '^' + from_anchor)
+        : line[0].slice(0, -(' ^' + to_anchor).length)), paragraph_sha256);
+    }
+  }
+  const support = prepared.plan.inventory.find(row => row.path === priorSupport);
+  assert.ok(support.bytes.toString().includes(inbound));
+  const bad = structuredClone(paperOverwrite);
+  bad.anchorMappings.en[0].paragraph_sha256 = 'sha256:' + '0'.repeat(64);
+  await assert.rejects(prepareReadingFirstPublication({ ...args, paperOverwrite: bad }), { code: 'RF_PUBLICATION_PAPER_OVERWRITE_ANCHOR_INVALID' });
+  const authority = await readingFirstPublicationAuthority({ ...next, vaultRoot }, prepared.plan);
+  const apply = { vaultRoot, run: next.runId, plan: prepared.plan, ...authority };
+  const registration = await registerBilingualPublication({ ...apply, sourceInputs: prepared.sourceInputs });
+  const load = () => loadBilingualPublication({ vaultRoot, run: next.runId, trustAnchor: registration.trust_anchor });
+  assert.deepEqual((await load()).plan.hashes, prepared.plan.hashes);
+});
+
 test('reading-first interruption after a resource write recovers in another process', async t => {
   const f = await readingFirstPublicationFixture(t);
   const url = new URL('../../scripts/v3/phase22-publication.mjs', import.meta.url).href;

@@ -19,7 +19,7 @@ import { bindPublishedKnowledgeReferences, registeredKnowledgeReference } from '
 import { createPhase22ContractValidator } from './phase22-contract-loader.mjs';
 import { readOwnedArtifact } from './owned-artifact-store.mjs';
 import { renderReadingFirstObsidian } from './reading-first-obsidian.mjs';
-import { relocateNoteLinks } from './note-relocation.mjs';
+import { relocateCanvasLinks, relocateNoteLinks } from './note-relocation.mjs';
 import { READ_ONLY_SOURCE_ACCESS, assertReadingSourceOutputPath, assertReadingSourceUnchanged, findRawSourceMatches, inspectClippingsSourceDrift, readRegisteredSourceMatchMetadata } from './reading-source-policy.mjs';
 
 export { deriveRebasedReadingFirstPublicationSource } from './reading-first-runtime.mjs';
@@ -469,6 +469,215 @@ export function applyReadingFirstSourceDerivation(data, derivation) {
   return { ...data.candidate, notes, assetPaths };
 }
 
+const overwriteAnchorId = /^rf-[a-z0-9][a-z0-9-]*$/;
+const overwriteAnchorDefinition = /(?:^|[ \t])\^(rf-[a-z0-9][a-z0-9-]*)(?=[ \t]*$)/;
+const overwriteAnchorError = details => fail('RF_PUBLICATION_PAPER_OVERWRITE_ANCHOR_INVALID', details);
+
+function overwriteAnchorMappings(input) {
+  if (input === undefined) return null;
+  if (!input || !same(Object.keys(input).sort(), [...languages].sort())) overwriteAnchorError({ reason: 'languages' });
+  for (const language of languages) {
+    const rows = input[language];
+    if (!Array.isArray(rows) || !rows.length || rows.some(row => !row
+      || !same(Object.keys(row).sort(), ['from_anchor', 'paragraph_sha256', 'to_anchor'])
+      || !overwriteAnchorId.test(row.to_anchor) || row.from_anchor !== null && !overwriteAnchorId.test(row.from_anchor)
+      || row.from_anchor === row.to_anchor || !/^sha256:[a-f0-9]{64}$/.test(row.paragraph_sha256))) overwriteAnchorError({ language, reason: 'shape' });
+    const named = rows.filter(row => row.from_anchor !== null);
+    if (new Set(rows.map(row => row.to_anchor)).size !== rows.length
+      || new Set(named.map(row => row.from_anchor)).size !== named.length
+      || new Set(rows.map(row => row.paragraph_sha256)).size !== rows.length) overwriteAnchorError({ language, reason: 'duplicate' });
+  }
+  const identity = rows => rows.map(row => `${row.from_anchor ?? ''}:${row.to_anchor}`).sort();
+  if (!same(identity(input.en), identity(input['zh-CN']))) overwriteAnchorError({ reason: 'bilingual-map' });
+  return input;
+}
+
+function projectOverwriteAnchorDefinitions(text, rows, path) {
+  // Keep each original line break. The supplied fingerprint binds one complete UTF-8 line.
+  const source = text.split(/(\r?\n)/);
+  const lines = source.filter((_, index) => index % 2 === 0);
+  const changes = new Map();
+  for (const row of rows) {
+    const match = lines.flatMap((line, index) => sha(line) === row.paragraph_sha256 ? [index] : []);
+    const index = match[0], old = lines[index];
+    const id = overwriteAnchorDefinition.exec(old ?? '')?.[1] ?? null;
+    if (match.length !== 1 || id !== row.from_anchor || !old.trim()
+      || row.from_anchor === null && /^(?:\s*#|\s*<!--|\s*>|\s*```)/.test(old)
+      || row.from_anchor !== null && lines.filter(line => overwriteAnchorDefinition.exec(line)?.[1] === row.from_anchor).length !== 1) {
+      overwriteAnchorError({ path, from_anchor: row.from_anchor, to_anchor: row.to_anchor, reason: 'candidate-definition' });
+    }
+    changes.set(index, row.from_anchor === null ? old.replace(/[ \t]*$/, ` ^${row.to_anchor}$&`)
+      : old.replace(overwriteAnchorDefinition, value => value.slice(0, -row.from_anchor.length) + row.to_anchor));
+  }
+  const result = source.map((line, index) => index % 2 === 0 ? changes.get(index / 2) ?? line : line);
+  for (const { to_anchor } of rows) if (result.filter((line, index) => index % 2 === 0 && overwriteAnchorDefinition.exec(line)?.[1] === to_anchor).length !== 1) {
+    overwriteAnchorError({ path, to_anchor, reason: 'output-definition' });
+  }
+  return result.join('');
+}
+
+function rewriteOverwriteAnchorLinks(text, path, anchorsByPath) {
+  if (!anchorsByPath.size) return text;
+  const href = (raw, wiki = false) => {
+    const angle = raw.startsWith('<') && raw.endsWith('>');
+    const value = angle ? raw.slice(1, -1) : raw;
+    const fragment = /#(\^|%5e)(rf-[a-z0-9][a-z0-9-]*)$/i.exec(value);
+    if (!fragment) return raw;
+    const destination = value.slice(0, fragment.index);
+    if (/^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(destination)) return raw;
+    let decoded;
+    try { decoded = decodeURIComponent(destination); } catch { return raw; }
+    const target = !decoded ? path : wiki && !/^\.\.?\//.test(decoded) ? decoded : posix.normalize(posix.join(posix.dirname(path), decoded));
+    const replacement = (anchorsByPath.get(target) ?? anchorsByPath.get(target + '.md'))?.get(fragment[2]);
+    if (!replacement) return raw;
+    const next = destination + '#' + fragment[1] + replacement;
+    return angle ? '<' + next + '>' : next;
+  };
+  return text.replace(/(\]\()(<[^>\r\n]+>|[^\s)]+)(?=[\s)])/g, (_, prefix, target) => prefix + href(target))
+    .replace(/\[\[([^\]|\r\n]+)(\|[^\]\r\n]*)?\]\]/g, (_, target, label = '') => '[[' + href(target, true) + label + ']]');
+}
+
+function paperOverwriteProof({ request, data, base, previousPaper, before, citation }) {
+  const invalid = details => fail('RF_PUBLICATION_PAPER_OVERWRITE_INVALID', details);
+  if (!request || request.paper_id !== data.identity.paper_id || previousPaper?.paper_id !== request.paper_id
+    || previousPaper.profile !== profile || previousPaper.run_id === data.identity.run_id
+    || !same(Object.keys(request).sort(), request.anchorMappings === undefined ? ['before_sha256', 'paper_id'] : ['anchorMappings', 'before_sha256', 'paper_id'])
+    || !request.before_sha256 || !same(Object.keys(request.before_sha256).sort(), [...languages].sort())) invalid();
+  const anchorMappings = overwriteAnchorMappings(request.anchorMappings);
+  const prior = verifyReadingFirstPresentation(previousPaper, base.files.get(previousPaper.reader_presentation.path), base.generation);
+  const oldSource = prior.citation?.sources[0], source = citation?.sources[0];
+  if (!oldSource || !source || oldSource.sha256 !== source.sha256 || oldSource.byte_length !== source.byte_length) invalid({ reason: 'source' });
+  const targets = {};
+  for (const language of languages) {
+    const from = safePath(data.candidate.notes.find(note => note.language === language)?.path);
+    const to = safePath(previousPaper.paths[language]);
+    const expected = request.before_sha256[language];
+    if (!/^sha256:[a-f0-9]{64}$/.test(expected)
+      || from !== to && base.generation.objects.some(row => row.path.normalize('NFC').toLowerCase() === from.normalize('NFC').toLowerCase())) {
+      invalid({ language, path: from });
+    }
+    const original = before(to);
+    if (!original || sha(original) !== expected) fail('RF_PUBLICATION_PAPER_OVERWRITE_PREIMAGE_CHANGED', { language, path: to, expected, observed: original && sha(original) });
+    const old = inspectManagedNote(original);
+    if (old.frontmatter.paper_id !== request.paper_id || old.frontmatter.language !== language || old.frontmatter.rendering_profile !== profile) invalid({ language, path: to });
+    if (anchorMappings) {
+      const lines = old.regions.find(region => region.id === 'reading').bytes.toString('utf8').split(/\r?\n/);
+      for (const { to_anchor } of anchorMappings[language]) if (lines.filter(line => overwriteAnchorDefinition.exec(line)?.[1] === to_anchor).length !== 1) {
+        overwriteAnchorError({ language, path: to, to_anchor, reason: 'prior-definition' });
+      }
+    }
+    targets[language] = { from_path: from, to_path: to, before_sha256: expected, before_byte_length: original.length };
+  }
+  if (languages.every(language => targets[language].from_path === targets[language].to_path)) invalid({ reason: 'no-target-change' });
+  return { request: clone(request), prior_run_id: previousPaper.run_id, prior_analysis_revision: previousPaper.analysis_revision,
+    source_sha256: source.sha256, source_byte_length: source.byte_length, targets };
+}
+
+function relocateOverwriteKnowledge(note, data, mapping, anchorsByPath) {
+  const registry = (data.recipe.knowledge_rebase?.rendering ?? data.recipe.rendering)?.knowledgeRegistry ?? [];
+  const original = registry.find(row => row.path === note.path || row.canonical_path === note.path);
+  const stateMarker = /<!-- KNOWLEDGE_STATE ([A-Za-z0-9+/=]+) -->/;
+  const end = '<!-- AUTO:END shared-knowledge -->';
+  const marker = stateMarker.exec(note.content);
+  const relocate = value => rewriteOverwriteAnchorLinks(relocateNoteLinks(value, note.path, note.path, mapping), note.path, anchorsByPath);
+  let content;
+  if (original?.current_content && typeof original.content === 'string') {
+    // The current node is retained verbatim. Only the appended links belong to this reading.
+    const stripState = value => value.replace(stateMarker, '');
+    const at = original.content.indexOf(end);
+    const prefix = stripState(at < 0 ? original.content : original.content.slice(0, at));
+    const suffix = at < 0 ? '' : original.content.slice(at);
+    const visible = stripState(note.content);
+    if (!visible.startsWith(prefix) || !visible.endsWith(suffix) || visible.length < prefix.length + suffix.length) {
+      fail('RF_PUBLICATION_HUMAN_CONTENT_CHANGED', { path: note.path });
+    }
+    const suffixAt = visible.length - suffix.length;
+    const projected = prefix + relocate(visible.slice(prefix.length, suffixAt)) + suffix;
+    content = marker ? projected.slice(0, marker.index) + marker[0] + projected.slice(marker.index) : projected;
+  } else {
+    const start = note.content.indexOf('<!-- AUTO:START shared-knowledge -->'), stop = note.content.indexOf(end);
+    content = start < 0 || stop < 0 ? relocate(note.content)
+      : note.content.slice(0, start) + relocate(note.content.slice(start, stop)) + note.content.slice(stop);
+  }
+  if (marker) {
+    const state = JSON.parse(Buffer.from(marker[1], 'base64').toString('utf8'));
+    const application = state.applications.find(row => row.paper_id === data.identity.paper_id);
+    if (!application || languages.some(language => !mapping.has(application.targets?.[language]))) {
+      fail('RF_PUBLICATION_PAPER_OVERWRITE_INVALID', { path: note.path, reason: 'knowledge-target' });
+    }
+    application.targets = Object.fromEntries(languages.map(language => [language, mapping.get(application.targets[language])]));
+    const sectionAnchors = anchorsByPath.get(application.targets.en);
+    if (sectionAnchors && application.sections) application.sections = application.sections.map(section => {
+      const anchor = sectionAnchors.get('rf-' + section.id);
+      return anchor ? { ...section, id: anchor.slice('rf-'.length) } : section;
+    });
+    content = content.replace(stateMarker, '<!-- KNOWLEDGE_STATE ' + Buffer.from(JSON.stringify(state)).toString('base64') + ' -->');
+  }
+  return { ...note, content };
+}
+
+/** Project only link destinations from reviewed paths onto the signed overwrite targets. */
+export function applyReadingFirstPaperOverwrite(data, proof) {
+  if (!proof) return data.candidate;
+  const { candidate, identity } = data;
+  const { request, targets } = proof;
+  const mapping = new Map();
+  if (request?.paper_id !== identity.paper_id || !data.sources.some(row => row.sha256 === proof.source_sha256 && row.byte_length === proof.source_byte_length)) {
+    fail('RF_PUBLICATION_PAPER_OVERWRITE_INVALID');
+  }
+  for (const language of languages) {
+    const target = targets?.[language], from = target?.from_path, to = safePath(target?.to_path);
+    if (from !== candidate.notes.find(note => note.language === language)?.path || mapping.has(from)
+      || target.before_sha256 !== request.before_sha256?.[language] || !/^Wiki\/(sources|translations)\/[^/]+\.md$/.test(to)) {
+      fail('RF_PUBLICATION_PAPER_OVERWRITE_INVALID', { language });
+    }
+    mapping.set(from, to);
+  }
+  if (new Set(mapping.values()).size !== languages.length) fail('RF_PUBLICATION_PAPER_OVERWRITE_INVALID');
+  const anchorMappings = overwriteAnchorMappings(request.anchorMappings);
+  const anchorsByPath = new Map(anchorMappings ? languages.map(language => [targets[language].to_path,
+    new Map(anchorMappings[language].filter(row => row.from_anchor !== null).map(row => [row.from_anchor, row.to_anchor]))]) : []);
+  const notes = candidate.notes.map(note => {
+    const path = mapping.get(note.path);
+    let bytes = Buffer.from(note.content);
+    const { regions } = inspectManagedNote(bytes);
+    for (const region of [...regions].reverse()) {
+      let text = region.bytes.toString('utf8');
+      if (anchorMappings && region.id === 'reading') text = projectOverwriteAnchorDefinitions(text, anchorMappings[note.language], note.path);
+      const rewritten = rewriteOverwriteAnchorLinks(relocateNoteLinks(text, note.path, path, mapping), path, anchorsByPath);
+      bytes = Buffer.concat([bytes.subarray(0, region.from), Buffer.from(rewritten), bytes.subarray(region.to)]);
+    }
+    const { from } = regions[0];
+    const header = bytes.subarray(0, from).toString('utf8').replace(/^alternate_language_path:[^\r\n]+$/m,
+      line => relocateNoteLinks(line, note.path, path, mapping));
+    bytes = Buffer.concat([Buffer.from(header), bytes.subarray(from)]);
+    return { ...note, path, content: bytes.toString('utf8'), managedHash: inspectManagedNote(bytes).managedHash };
+  });
+  const supportNotes = (candidate.supportNotes ?? []).map(note => relocateOverwriteKnowledge(note, data, mapping, anchorsByPath));
+  const generatedAssets = candidate.generated_assets?.map(asset => {
+    const original = Buffer.from(asset.content);
+    if (original.length !== asset.byte_length || sha(original) !== asset.sha256) fail('RF_PUBLICATION_PRESENTATION_ASSET_INVALID', { path: asset.path });
+    let bytes = relocateCanvasLinks(original, asset.path, asset.path, mapping, [...mapping.keys()]);
+    if (anchorsByPath.size) {
+      const canvas = parseRegisteredResearchMap(bytes, asset.path);
+      let changed = false;
+      for (const node of canvas.nodes) {
+        if (node.type === 'text' && typeof node.text === 'string') {
+          const text = rewriteOverwriteAnchorLinks(node.text, asset.path, anchorsByPath);
+          if (text !== node.text) { node.text = text; changed = true; }
+        } else if (node.type === 'file' && typeof node.subpath === 'string') {
+          const anchor = /^#\^(rf-[a-z0-9][a-z0-9-]*)$/.exec(node.subpath);
+          const target = anchor && anchorsByPath.get(node.file)?.get(anchor[1]);
+          if (target) { node.subpath = '#^' + target; changed = true; }
+        }
+      }
+      if (changed) bytes = Buffer.from(JSON.stringify(canvas, null, 2) + '\n');
+    }
+    return { ...asset, content: bytes.toString('utf8'), sha256: sha(bytes), byte_length: bytes.length };
+  });
+  return { ...candidate, notes, supportNotes, ...(generatedAssets ? { generated_assets: generatedAssets } : {}) };
+}
+
 const pointNumber = /^(?:\\(?:dfrac|tfrac|frac)(?:\{\d+\}\{\d+\}|\d{2})|[+\-−]?(?:\d+(?:[.,]\d+)*(?:[eE][+\-]?\d+)?(?:\/\d+)?|\.\d+)|[¼½¾⅐-⅞])$/u;
 const pointSymbol = /^(?:<=|>=|[<>=≤≥±×÷−+%％]|\\(?:leq?|geq?|pm|times|div))$/u;
 const pointUnit = /^(?:[kcmnµμ]?g|[mdµμ]?L|[munµμ]?M|[µμnmkc]?(?:m|mol|s)|min|h|d|day|days|weeks?|months?|years?|mmHg|bpm|Hz|Pa|kPa|°C|°F|岁|年|天|日|周|月|秒|分钟|小时|毫克|微克)(?:[·/](?:[kcmnµμ]?g|[mdµμ]?L|[munµμ]?M|[µμnmkc]?(?:m|mol|s)|min|h|d))*$/u;
@@ -543,7 +752,7 @@ export function applyReadingFirstUserCorrections(candidate, corrections = []) {
 
 /** Prepare the exact accepted reading output for the existing V3 publication transaction. */
 export async function buildReadingFirstPublicationReview({ source, vaultRoot, generation, evidenceMode = 'actual', resources,
-  knowledgeMetadataMigrations, user_corrections, presentationAssetRegistrations: assetApprovals } = {}) {
+  knowledgeMetadataMigrations, user_corrections, paperOverwrite, presentationAssetRegistrations: assetApprovals } = {}) {
   const root = rootPath(vaultRoot);
   const checked = await assertReadingFirstRegisteredSourcesCurrent({ vaultRoot: root });
   const data = await inspectReadingFirstPublicationSource(source);
@@ -556,6 +765,7 @@ export async function buildReadingFirstPublicationReview({ source, vaultRoot, ge
   const sourceOptions = sourcePlan(root, data, await resourceBindings(data, resources, approvedAssets), base, approvedAssets, matchMetadata);
   const options = { vaultRoot: root, generation, evidenceMode, ...sourceOptions,
     ...(user_corrections === undefined ? {} : { user_corrections: clone(user_corrections) }),
+    ...(paperOverwrite === undefined ? {} : { paperOverwrite: clone(paperOverwrite) }),
     ...(approvedAssets.length ? { presentationAssetRegistrations: approvedAssets } : {}),
     ...(knowledgeMetadataMigrations === undefined ? {} : { knowledgeMetadataMigrations: clone(knowledgeMetadataMigrations) }) };
   return buildReview({ source, data, options, base, preimages: null });
@@ -571,7 +781,7 @@ async function buildReview({ source, data, options, base, preimages, projected }
   const changed = derivation?.remaps.length || derivation?.supplements.length;
   const corrected = applyReadingFirstUserCorrections(data.candidate, options.user_corrections);
   const corrections = corrected === data.candidate ? null : options.user_corrections;
-  const candidate = changed ? applyReadingFirstSourceDerivation({ ...data, candidate: corrected }, derivation) : corrected;
+  let candidate = changed ? applyReadingFirstSourceDerivation({ ...data, candidate: corrected }, derivation) : corrected;
   const root = options.vaultRoot;
   const setup = data.recipe.binding?.configured_setup;
   const originals = setup?.source_access === READ_ONLY_SOURCE_ACCESS ? setup.source_locations : undefined;
@@ -601,6 +811,9 @@ async function buildReview({ source, data, options, base, preimages, projected }
     if (existingCanvases.has(path)) parseRegisteredResearchMap(bytes, path);
     return bytes;
   };
+  const overwrite = options.paperOverwrite === undefined ? null : paperOverwriteProof({ request: options.paperOverwrite,
+    data, base, previousPaper, before, citation: publicationCitation(data, options.citationResources ?? options.resources, options.presentationAssetRegistrations ?? []) });
+  if (overwrite) candidate = applyReadingFirstPaperOverwrite({ ...data, candidate }, overwrite);
   const output = [], readDependencies = [], files = new Map(base.files), previews = [];
   const written = new Set(), add = (path, kind, bytes, extra = {}) => {
     safePath(path); const key = path.normalize('NFC').toLowerCase();
@@ -616,19 +829,24 @@ async function buildReview({ source, data, options, base, preimages, projected }
   for (const language of languages) {
     const matches = candidate.notes.filter(row => row.language === language);
     if (matches.length !== 1 || typeof matches[0].content !== 'string') fail('RF_PUBLICATION_NOTES_REQUIRED');
-    const note = matches[0], path = safePath(note.path), bytes = Buffer.from(note.content), original = before(path);
+    const note = matches[0], path = safePath(note.path), rendered = Buffer.from(note.content), original = before(path);
     if (!/^Wiki\/(sources|translations)\/[^/]+\.md$/.test(path)) fail('RF_PUBLICATION_NOTE_PATH_INVALID');
-    const inspected = inspectManagedNote(bytes);
-    if (inspected.frontmatter.paper_id !== identity.paper_id || inspected.frontmatter.language !== language
-      || inspected.frontmatter.rendering_profile !== profile || inspected.frontmatter.pipeline_version !== '3.0') fail('RF_PUBLICATION_NOTE_IDENTITY_MISMATCH');
+    const reviewed = inspectManagedNote(rendered);
+    if (reviewed.frontmatter.paper_id !== identity.paper_id || reviewed.frontmatter.language !== language
+      || reviewed.frontmatter.rendering_profile !== profile || reviewed.frontmatter.pipeline_version !== '3.0') fail('RF_PUBLICATION_NOTE_IDENTITY_MISMATCH');
+    let bytes = rendered, beforeManagedHash = null;
     if (original !== null) {
       const old = inspectManagedNote(original);
-      if (old.frontmatter.paper_id !== identity.paper_id || old.frontmatter.rendering_profile !== profile
-        || !mergeManagedNote({ existingBytes: original, rendered: bytes, expectedManagedHash: old.managedHash }).bytes.equals(bytes)) fail('RF_PUBLICATION_HUMAN_PREIMAGE_MISMATCH');
+      if (old.frontmatter.paper_id !== identity.paper_id || old.frontmatter.rendering_profile !== profile) fail('RF_PUBLICATION_HUMAN_PREIMAGE_MISMATCH');
+      const merged = mergeManagedNote({ existingBytes: original, rendered, expectedManagedHash: old.managedHash });
+      if (overwrite) bytes = merged.bytes;
+      else if (!merged.bytes.equals(rendered)) fail('RF_PUBLICATION_HUMAN_PREIMAGE_MISMATCH');
+      beforeManagedHash = old.managedHash;
     }
     if (previousPaper && previousPaper.paths[language] !== path) fail('RF_PUBLICATION_TARGET_REGISTRY_CHANGED');
+    const inspected = bytes === rendered ? reviewed : inspectManagedNote(bytes);
     const row = add(path, 'paper', bytes, { language, managed_hash: inspected.managedHash,
-      before_managed_hash: original === null ? null : inspectManagedNote(original).managedHash });
+      before_managed_hash: beforeManagedHash });
     paths[language] = path;
     noteTargets[language] = { path, managed_hash: inspected.managedHash, byte_sha256: row.byte_sha256 };
     previews.push({ language, path, byte_sha256: row.byte_sha256, byte_length: bytes.length, managed_hash: inspected.managedHash,
@@ -712,11 +930,13 @@ async function buildReview({ source, data, options, base, preimages, projected }
     reading_review: data.reading_review_fingerprint, presentation: data.candidate.presentation_fingerprint,
     ...(corrections ? { user_corrections: hash(corrections) } : {}),
     ...(changed ? { source_derivation: clone(derivation) } : {}),
+    ...(overwrite ? { paper_overwrite: overwrite } : {}),
     ...(data.recipe.knowledge_rebase ? { knowledge_rebase: data.recipe.knowledge_rebase.rebase_fingerprint } : {}) };
   if (options.presentationAssetRegistrations?.length) dependencies.presentation_asset_registrations = hash(options.presentationAssetRegistrations);
   const manifestPath = '.apa-v3/reading-first/presentation/' + identity.run_id + '-' + hash(identity).slice(7, 31) + '.json';
-  const outputFingerprint = changed || corrections ? hash({ original: data.candidate.presentation_fingerprint,
-    ...(changed ? { source_derivation: derivation } : {}), ...(corrections ? { user_corrections: corrections } : {}), notes: noteTargets })
+  const outputFingerprint = changed || corrections || overwrite ? hash({ original: data.candidate.presentation_fingerprint,
+    ...(changed ? { source_derivation: derivation } : {}), ...(corrections ? { user_corrections: corrections } : {}),
+    ...(overwrite ? { paper_overwrite: overwrite, presentation_assets: presentationAssets } : {}), notes: noteTargets })
     : candidate.presentation_fingerprint;
   const presentation = { schema_version: 'reading-first-publication-1.0', profile, identity,
     presentation_fingerprint: outputFingerprint, scientific_input_fingerprint: data.scientific_input_fingerprint,
@@ -781,7 +1001,7 @@ async function buildReview({ source, data, options, base, preimages, projected }
     ...(data.reading_editor_receipt ? { reading_editor_receipt: data.reading_editor_receipt } : {}),
     ...(data.user_revision_checks ? { user_revision_checks: data.user_revision_checks } : {}),
     ...(data.recipe.knowledge_rebase ? { knowledge_rebase: data.recipe.knowledge_rebase.rebase_fingerprint } : {}),
-    presentation: corrections ? data.candidate.presentation_fingerprint : outputFingerprint });
+    presentation: corrections || overwrite ? data.candidate.presentation_fingerprint : outputFingerprint });
   const assetApprovals = options.presentationAssetRegistrations ?? [];
   const toolBindings = tools(), sourceBindings = [...new Map([...data.source_bindings, ...options.resources.map(row => binding(row.source_path)),
     ...(options.citationResources ?? []).map(row => binding(row.source_path)),
@@ -870,6 +1090,7 @@ export async function captureReadingFirstPublicationRegistration({ review, sourc
   if (data.origin !== 'live' || sourceInputs?.readingFirst?.source !== record.source) fail('RF_PUBLICATION_LIVE_SOURCE_REQUIRED');
   return { source_bindings: clone(record.sourceBindings),
     ...(data.recipe.knowledge_rebase || review.reviewManifest.dependencies.source_derivation || review.reviewManifest.dependencies.user_corrections
+      || review.reviewManifest.dependencies.paper_overwrite
       ? { reading_first_source: clone(data.recipe) } : {}),
     tool_bindings: [...new Map([...data.tool_bindings, ...record.toolBindings].map(row => [row.path, row])).values()],
     control_snapshot: { schema_version: 'reading-first-publication-control-1.0', run_id: review.reviewManifest.identity.run_id,
@@ -924,7 +1145,7 @@ export async function projectReadingFirstPublicationQueue({ vaultRoot, requests,
   const before = path => projected.has(path) ? projected.get(path) : regularBytes(root, path, { missing: true });
   let base = { ...await baseFor(root, true, checked), carryHistoricalDocuments: true };
   const outputs = [];
-  for (const { source, generation, resources, user_corrections, presentationAssetRegistrations: assetApprovals } of requests) {
+  for (const { source, generation, resources, user_corrections, paperOverwrite, presentationAssetRegistrations: assetApprovals } of requests) {
     const data = await inspectReadingFirstPublicationSource(source);
     const boundRoot = data.recipe.binding?.configured_setup?.knowledge_registry?.vault_root;
     if (data.origin !== 'live' || data.recipe.knowledge_rebase || boundRoot && resolve(boundRoot) !== root) {
@@ -940,6 +1161,7 @@ export async function projectReadingFirstPublicationQueue({ vaultRoot, requests,
     const sourceOptions = sourcePlan(root, selected, await resourceBindings(selected, resources, approvals), base, approvals, matchMetadata, before);
     const review = await buildReview({ source, data: selected, options: { vaultRoot: root, generation, evidenceMode, ...sourceOptions,
       ...(user_corrections === undefined ? {} : { user_corrections: clone(user_corrections) }),
+      ...(paperOverwrite === undefined ? {} : { paperOverwrite: clone(paperOverwrite) }),
       ...(approvals.length ? { presentationAssetRegistrations: approvals } : {}) }, base, preimages: null, projected });
     const { outputInventory: inventory, reviewManifest: manifest } = review;
     const active = JSON.parse(inventory.find(row => row.kind === 'active').bytes);

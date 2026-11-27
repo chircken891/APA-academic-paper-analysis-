@@ -7,13 +7,13 @@ import { basename, join } from 'node:path';
 import { exportPublicApa } from '../../scripts/setup/export-public-apa.mjs';
 import { DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, buildConfiguredReadingInstructions, deriveConfiguredMaxCalls } from '../../scripts/v3/configured-reading.mjs';
 import { evaluateReadingPreflight } from '../../scripts/lib/reading-preflight.mjs';
-import { METHODS_FIRST_READING_PROFILE } from '../../scripts/lib/reading-profiles.mjs';
+import { CONTENT_COMPLETE_READING_PROFILE, METHODS_FIRST_READING_PROFILE } from '../../scripts/lib/reading-profiles.mjs';
 
-test('2.3 default freezes new prompt and derives bounded budget', () => {
-  assert.equal(DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, METHODS_FIRST_READING_PROFILE);
+test('2.4 default freezes new prompt and derives bounded budget', () => {
+  assert.equal(DEFAULT_CONFIGURED_INSTRUCTION_PROFILE, CONTENT_COMPLETE_READING_PROFILE);
   const pack = buildConfiguredReadingInstructions();
-  assert.equal(pack.instruction_profile, METHODS_FIRST_READING_PROFILE);
-  assert.equal(pack.frozen_support.science_index.metadata.profile, 'science-index-1.0');
+  assert.equal(pack.instruction_profile, CONTENT_COMPLETE_READING_PROFILE);
+  assert.equal(pack.frozen_support.science_index.metadata.profile, 'science-index-1.1');
   assert.equal(pack.frozen_support.role_reply.metadata.profile, 'role-reply-1.0');
   assert.match(pack.frozen_support.role_reply.content, /\S/);
   for (const item of Object.values(pack.frozen_support)) {
@@ -47,7 +47,7 @@ test('2.3 freezes its own science, reading and Editor prompt bytes', async () =>
   assert.match(pack.sections['Reading Editor'], /first substantive use across the paper body/);
 });
 
-for (const instructionProfile of ['configured-reading-2.2', METHODS_FIRST_READING_PROFILE])
+for (const instructionProfile of ['configured-reading-2.2', METHODS_FIRST_READING_PROFILE, 'configured-reading-2.4'])
 test(instructionProfile + ' requires referenced Results tool capabilities', () => {
   const base = { inspection: {validation:{complete:true},dependencies:[{key:'parser.python',path:process.execPath,status:'available'}]}, instructionProfile };
   let checks = evaluateReadingPreflight(base).checks;

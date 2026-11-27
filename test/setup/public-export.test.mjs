@@ -179,12 +179,12 @@ test('current public export includes query and topic entries with their regressi
   for (const name of ['academic-paper-analysis', 'apa-query', 'apa-setup']) assert.ok(paths.has(`.claude/skills/${name}/SKILL.md`), 'Export is missing Claude Code entry: ' + name);
   assert.equal([...paths].some(path => /^\.claude\/skills\/apa-(?:push|review)\//.test(path)), false);
   for (const [path, recovery] of [
-    ['AGENTS.md', /Read and recover existing 2\.2 and 1\.4 records under their frozen contracts/],
-    ['README.md', /2\.2 用于读取和恢复已绑定的记录/],
-    ['docs/apa-v3/current-contracts.md', /2\.2／1\.4 用于读取和恢复对应的已绑定记录/]
+    ['AGENTS.md', /Recover existing 2\.2, 2\.3 and 2\.4 runs and prepared batches from their own frozen bindings and snapshots/],
+    ['README.md', /已有 2\.2／2\.3／2\.4 运行与已准备批次继续使用各自冻结的版本、模型、预算和代码快照/],
+    ['docs/apa-v3/current-contracts.md', /已有 2\.2／2\.3／2\.4 运行及已准备批次按各自冻结版本恢复/]
   ]) {
     const text = await readFile(join(outputRoot, path), 'utf8');
-    assert.match(text, /configured-reading-2\.3/, path);
+    assert.match(text, /configured-reading-2\.4/, path);
     assert.match(text, /reading-editor-1\.5/, path);
     assert.match(text, recovery, path);
     assert.doesNotMatch(text, /(?:freeze|使用|冻结) `configured-reading-2\.[01]`/, path);
@@ -236,7 +236,7 @@ test('public export ships the active Editor prompt and omits the retired prompt'
   const outputRoot = join(root, 'public');
   await exportPublicApa({ outputRoot });
   const prompts = await readdir(join(outputRoot, 'prompts', 'v3'));
-  for (const file of ['reading-editor-1.4.md', 'reading-editor-1.5.md', 'reading-configured-2.3.md', 'science-configured-2.3.md']) assert.ok(prompts.includes(file), file);
+  for (const file of ['reading-editor-1.4.md', 'reading-editor-1.5.md', 'reading-configured-2.2.md', 'science-configured-2.2.md', 'reading-configured-2.3.md', 'science-configured-2.3.md', 'reading-configured-2.4.md', 'science-configured-2.4.md', 'science-index-1.0.md', 'science-index-1.1.md']) assert.ok(prompts.includes(file), file);
   assert.ok(!prompts.includes('reading-editor-1.3.md'));
 });
 

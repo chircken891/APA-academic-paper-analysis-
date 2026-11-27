@@ -1,5 +1,6 @@
 export const METHODS_FIRST_READING_PROFILE = 'configured-reading-2.3';
-export const DEFAULT_CONFIGURED_INSTRUCTION_PROFILE = METHODS_FIRST_READING_PROFILE;
+export const CONTENT_COMPLETE_READING_PROFILE = 'configured-reading-2.4';
+export const DEFAULT_CONFIGURED_INSTRUCTION_PROFILE = CONTENT_COMPLETE_READING_PROFILE;
 
 const configuredProfiles = Object.freeze({
   'configured-reading-2.2': Object.freeze({
@@ -15,6 +16,14 @@ const configuredProfiles = Object.freeze({
     editor: 'reading-editor-1.5',
     sciencePrompt: 'science-configured-2.3.md',
     readingPrompt: 'reading-configured-2.3.md',
+    executionLedger: true,
+    resultsToolPreflight: true,
+  }),
+  [CONTENT_COMPLETE_READING_PROFILE]: Object.freeze({
+    allowCreation: true,
+    editor: 'reading-editor-1.5',
+    sciencePrompt: 'science-configured-2.4.md',
+    readingPrompt: 'reading-configured-2.4.md',
     executionLedger: true,
     resultsToolPreflight: true,
   }),
@@ -39,7 +48,8 @@ export function configuredReadingProfile(profile, { creating = false } = {}) {
 }
 
 export const configuredEditorProfile = profile => configuredReadingProfile(profile).editor;
-export const isMethodsFirstReadingProfile = profile => profile === METHODS_FIRST_READING_PROFILE;
+export const isContentCompleteReadingProfile = profile => profile === CONTENT_COMPLETE_READING_PROFILE;
+export const isMethodsFirstReadingProfile = profile => profile === METHODS_FIRST_READING_PROFILE || isContentCompleteReadingProfile(profile);
 export const configuredReadingUsesExecutionLedger = profile =>
   isSupportedConfiguredReadingProfile(profile) && configuredProfiles[profile].executionLedger;
 export const configuredReadingRequiresResultsTools = profile =>

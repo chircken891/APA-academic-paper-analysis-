@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prepareReadingBatch, readReadingBatchStatus } from '../../scripts/v3/reading-batch.mjs';
 import { writeBatchCheckpoint } from '../../scripts/v3/reading-batch-summary.mjs';
@@ -69,6 +69,7 @@ test('batch prepares separate run roots with one code snapshot and bounded body-
   assert.ok(batch.papers.every(row => row.snapshot_hash === batch.snapshot_hash));
   assert.deepEqual(batch.papers.map(row => row.source_paths), paths.map(path => [path]));
   const second = JSON.parse(await readFile(join(batch.papers[1].run_root, 'reading-batch-run.json')));
+  assert.equal(second.options.instructionProfile, 'configured-reading-2.4');
   assert.equal(second.source_access, 'read-only-original-1.0');
   assert.deepEqual(second.source_locations[0].file_identity,
     { dev: String(initialSource.dev), ino: String(initialSource.ino), mtime_ns: String(initialSource.mtimeNs) });
@@ -166,7 +167,8 @@ test('batch checks the committed source fingerprint and reports moved Clippings 
   await assert.rejects(readFile(join(root, '.runtime', 'apa-reading-batches', input.batchId + '.json')), { code: 'ENOENT' });
 });
 
-for (const historic of [false, true]) test(`batch CLI freezes the ${historic ? '2.2 batch' : '2.3 default'} against checkout and parameter changes`, async t => {
+for (const version of ['2.4', '2.3', '2.2']) test(`batch CLI freezes ${version}${version === '2.4' ? ' by default' : ''} against checkout and parameter changes`, async t => {
+  const historic = version === '2.2';
   const { root, paths, input } = await fixture(t);
   const checkout = join(root, 'checkout');
   const dependencyRoot = resolve(CODE_ROOT, 'node_modules');
@@ -179,9 +181,10 @@ for (const historic of [false, true]) test(`batch CLI freezes the ${historic ? '
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
   const cli = (...args) => execCli(checkout, ...args);
   const manifest = join(root, 'batch-input.json');
-  const expectedProfile = historic ? 'configured-reading-2.2' : 'configured-reading-2.3';
+  const expectedProfile = 'configured-reading-' + version;
   const preparer = historic ? await copyFrozenReading22(join(root, 'legacy-checkout')) : checkout;
   await writeFile(manifest, JSON.stringify({ schema_version: 'reading-batch-request-1.0', ...input,
+    ...(version === '2.3' ? { defaults: { ...input.defaults, instructionProfile: expectedProfile } } : {}),
     papers: [{ pdf: paths[0] }, { pdf: paths[1], maxTotalCalls: 10 }] }));
   const batch = execCli(preparer, 'reading-batch-cli.mjs', 'prepare', '--root', root, '--manifest', manifest);
   assert.deepEqual(batch.papers.map(row => row.budget.max_total_calls), [14, 10]);
@@ -243,7 +246,11 @@ for (const historic of [false, true]) test(`batch CLI freezes the ${historic ? '
   const binding = science.data.prepared.runControl.reading_first_binding;
   assert.equal(binding.source_language, 'zh-CN');
   assert.equal(binding.configured_setup.instruction_profile, expectedProfile);
-  assert.equal(binding.presentation_profile, historic ? 'reading-editor-1.4' : 'reading-editor-1.5');
+  const editorProfile = historic ? 'reading-editor-1.4' : 'reading-editor-1.5';
+  const handoffProfile = version === '2.4' ? 'science-index-1.1' : 'science-index-1.0';
+  assert.equal(binding.presentation_profile, editorProfile);
+  assert.equal(binding.handoff_profile, handoffProfile);
+  assert.equal(binding.configured_setup.frozen_support.science_index.metadata.profile, handoffProfile);
   if (historic) assert.equal(binding.configured_setup.source_access, undefined);
   else {
     assert.equal(binding.configured_setup.source_access, 'read-only-original-1.0');
@@ -253,9 +260,12 @@ for (const historic of [false, true]) test(`batch CLI freezes the ${historic ? '
     assert.throws(() => cli('reading-session-cli.mjs', 'next', '--run-root', first.run_root, '--export-dir', exportDir),
       error => error.stderr.includes('READING_FIRST_SOURCE_CHANGED'));
   }
-  const sciencePrompt = historic ? 'science-configured-2.2.md' : 'science-configured-2.3.md';
+  const sciencePrompt = 'science-configured-' + version + '.md';
   const snapshot = binding.configured_setup.runtime_binding;
   assert.ok(snapshot.files.some(row => row.path === 'prompts/v3/' + sciencePrompt));
+  assert.ok(snapshot.files.some(row => row.path === 'prompts/v3/' + handoffProfile + '.md'));
+  assert.deepEqual(binding.configured_setup.prompt_files.map(file => basename(file.path)),
+    [sciencePrompt, `reading-configured-${version}.md`, `${editorProfile}.md`]);
   assert.equal(binding.configured_setup.prompt_files[0].path, join(snapshot.repo_root, 'prompts', 'v3', sciencePrompt));
   assert.equal(binding.configured_setup.runtime_binding.fingerprint, frozen.snapshot_fingerprint);
 });

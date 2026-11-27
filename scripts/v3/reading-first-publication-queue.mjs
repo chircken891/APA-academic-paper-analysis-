@@ -52,14 +52,17 @@ async function queueLocation(root, { create = false } = {}) {
 }
 
 function entryInput(row) {
-  const { run, runRoot, generation, resources, presentationAssetRegistrations, user_corrections } = row ?? {};
+  const { run, runRoot, generation, resources, presentationAssetRegistrations, user_corrections, paperOverwrite } = row ?? {};
   if (!identifier(run) || !isAbsolute(runRoot ?? '') || resolve(runRoot) !== runRoot
     || generation !== undefined && !identifier(generation) || !Array.isArray(resources)
     || presentationAssetRegistrations !== undefined && !Array.isArray(presentationAssetRegistrations)
-    || user_corrections !== undefined && !Array.isArray(user_corrections)) fail('RF_QUEUE_ENTRY_INVALID', { run });
+    || user_corrections !== undefined && !Array.isArray(user_corrections)
+    || paperOverwrite !== undefined && (!paperOverwrite || typeof paperOverwrite.paper_id !== 'string'
+      || !digest(paperOverwrite.before_sha256?.en) || !digest(paperOverwrite.before_sha256?.['zh-CN']))) fail('RF_QUEUE_ENTRY_INVALID', { run });
   return { run, runRoot, resources, ...(generation === undefined ? {} : { generation }),
     ...(presentationAssetRegistrations === undefined ? {} : { presentationAssetRegistrations }),
-    ...(user_corrections === undefined ? {} : { user_corrections }) };
+    ...(user_corrections === undefined ? {} : { user_corrections }),
+    ...(paperOverwrite === undefined ? {} : { paperOverwrite }) };
 }
 
 function validateProposal(proposal, root) {
@@ -69,11 +72,12 @@ function validateProposal(proposal, root) {
   }
   const runs = new Set(), papers = new Set(), generations = new Set();
   for (const { input, original } of proposal.entries) {
-    const { run, user_corrections } = entryInput(input);
+    const { run, user_corrections, paperOverwrite } = entryInput(input);
     const { summary, original_source: source } = original ?? {};
     const paths = new Set();
     if (runs.has(run) || typeof original?.paper_id !== 'string' || papers.has(original.paper_id)
       || summary?.run_id !== run || !same(summary.user_corrections ?? [], user_corrections ?? [])
+      || !same(summary.paper_overwrite?.request, paperOverwrite)
       || !identifier(summary.generation) || generations.has(summary.generation)
       || !digest(summary.hashes?.review_hash) || !digest(summary.hashes?.output_inventory_hash)
       || !digest(source?.recipe_fingerprint) || !digest(source?.candidate_fingerprint) || !digest(source?.reading_review_fingerprint)

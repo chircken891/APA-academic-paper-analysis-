@@ -11,6 +11,7 @@ import { readBatchRun, writeBatchCheckpoint } from './reading-batch-summary.mjs'
 import { readCommittedReadingFirstKnowledgeRegistry } from './reading-first-knowledge-registry.mjs';
 import { assertReadingFirstRegisteredSourcesCurrent } from './reading-first-publication.mjs';
 import { readingFirstUsedMethodSources } from './reading-first-runtime.mjs';
+import { recordReadingFirstPaperIdentityCorrection } from './reading-first-runtime.mjs';
 import { assertReadingSourceOutputPath, assertReadingSourceUnchanged, READ_ONLY_SOURCE_ACCESS, readRegisteredSourceMatchMetadata } from './reading-source-policy.mjs';
 import { checkTranslationProgress, evaluateTranslationContinuation } from './reading-translation-progress.mjs';
 import { getScienceBudgetSummary, getSciencePendingContinuations, getScienceContinuation, reserveScienceContinuation, markScienceContinuationDispatched, recordScienceContinuationReceipt, recordScienceComputerControlObservation, getScienceComputerControlReport } from './science-controller.mjs';
@@ -62,6 +63,7 @@ const resumableResultCodes = new Set([
   'READING_FIRST_EDITOR_ARGUMENT_PATH_INVALID',
   'READING_FIRST_VIEW_INVALID',
   'READING_FIRST_VIEW_LAYOUT_INVALID',
+  'READING_FIRST_TRANSLATION_STRUCTURE_INVALID',
   'READING_FIRST_ENRICHMENT_CONSUMPTION_REQUIRED',
   'RF_OBSIDIAN_KNOWLEDGE_CONTENT_INVALID',
   'RF_OBSIDIAN_KNOWLEDGE_APPLICATION_INVALID',
@@ -309,6 +311,7 @@ function extendsSnapshot(later, earlier) {
   if ((b.continuationAuthorizations ?? []).some((row,index)=>!a.continuationAuthorizations?.[index] || !same(a.continuationAuthorizations[index],row))) return false;
   if (b.repairContinuation && (!a.repairContinuation || !same(a.repairContinuation,b.repairContinuation))) return false;
   if (b.resourceRepair && (!a.resourceRepair || !same(a.resourceRepair, b.resourceRepair))) return false;
+  if (b.paperIdentityCorrection && (!a.paperIdentityCorrection || !same(a.paperIdentityCorrection, b.paperIdentityCorrection))) return false;
   if (b.rendererKnowledgeResolutions && (!a.rendererKnowledgeResolutions || !same(a.rendererKnowledgeResolutions, b.rendererKnowledgeResolutions))) return false;
   if (b.executionLedger) {
     if (!a.executionLedger || a.executionLedger.length < b.executionLedger.length) return false;
@@ -837,6 +840,7 @@ async function readingProgress(state, entry, expectedCompleted) {
   try { nativeOutput = JSON.parse(await readFile(join(state.prepared.paths.runRoot, entry.request.task.native_path), 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw Object.assign(new Error('READING_TRANSLATION_PROGRESS_RECONCILE'), { code: 'READING_TRANSLATION_PROGRESS_RECONCILE' }); }
   return checkTranslationProgress({ artifactRoot: state.prepared.paths.runRoot, task: entry.request.task, runId: state.prepared.runControl.run_id,
+    instructionProfile: state.prepared.runControl.reading_first_binding.configured_setup?.instruction_profile,
     sourceView: entry.payload.source_view, nativeOutput, expectedCompleted });
 }
 
@@ -1102,6 +1106,15 @@ async function recordSessionEvent(session, event = {}) {
     if (!state.reading || state.preflight.status !== 'pass') fail('READING_SESSION_RECOVERY_PREFLIGHT_REQUIRED');
     if (state.nextCheckpoint >= state.checkpoints.length - 1) return { action: 'reconcile', code: 'CONTROL_CHECKPOINT_CAPACITY' };
     const result = await recordReadingFirstKnowledgeIdentityResolution({ controller: state.reading, resolution: event.resolution });
+    if (result.recorded) await saveReading(state);
+    return result;
+  }
+  if (event.kind === 'identity-correction') {
+    if (!state.reading || state.preflight.status !== 'pass') fail('READING_SESSION_RECOVERY_PREFLIGHT_REQUIRED');
+    if (state.nextCheckpoint >= state.checkpoints.length - 1
+      && !snapshotReadingFirstRuntime(state.reading).state.paperIdentityCorrection) return { action: 'reconcile', code: 'CONTROL_CHECKPOINT_CAPACITY' };
+    const result = await recordReadingFirstPaperIdentityCorrection({ controller: state.reading,
+      authorization: event.authorization, checkpointReceipt: state.checkpointReceipt });
     if (result.recorded) await saveReading(state);
     return result;
   }

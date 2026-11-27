@@ -5,7 +5,7 @@ import { copyFile, mkdtemp, mkdir, writeFile, readFile, readdir, rename, rm, sym
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -150,7 +150,7 @@ for (const { instructionProfile, retries } of [
     }
   }
   const create = methodsFirst ? createReadingSession : createFrozenReading22;
-  let session = await create({ ...f.options, maxTotalCalls: 14 });
+  let session = await create({ ...f.options, instructionProfile, maxTotalCalls: 14 });
   const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog, 'run', supplementPath);
   const accept = async (action, path, value) => {
     const observation = observe(action);
@@ -293,13 +293,22 @@ for (const { instructionProfile, retries } of [
   assert.equal(plan.recommended_additional_calls,2*retries);
 });
 
-async function startSyntheticDrafting(t, { codex = false } = {}) {
-  const f = await configuredFixture(t, { systemTemp: true, codex }), template = await configuredSessionTemplate(t);
+async function startSyntheticDrafting(t, { codex = false, instructionProfile, useDefaultProfile = false, truncatedPaperId = false } = {}) {
+  const f = await configuredFixture(t, { systemTemp: true, codex });
+  const contentComplete = useDefaultProfile || instructionProfile === 'configured-reading-2.4';
+  const template = contentComplete
+    ? await reviewedReadingFirstFixture(t, { instructionProfile: 'configured-reading-2.4', figurePath: 'Figures/run/figure.png' }) : await configuredSessionTemplate(t);
   const capability = continuationCapability();
   if (codex) Object.assign(capability.continuation, { tool: 'collaboration.followup_task', instruction_argument: 'message' });
   f.profile.capabilities = { task_continuation: capability };
-  const session = await createFrozenReading22(f.options);
-  const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, template.presentationCatalog);
+  if (truncatedPaperId) {
+    f.options.scientificInput.identity.paper_id = 'pap_' + f.options.scientificInput.sources[0].sha256.slice(7, 37);
+  }
+  const session = contentComplete
+    ? await createReadingSession({ ...f.options, ...(instructionProfile ? { instructionProfile } : {}) }) : await createFrozenReading22(f.options);
+  const runRoot = join(f.root, 'runs', 'run'), content = await scienceOutputs(f, {
+    ...template.presentationCatalog, source_pdf: 'Clippings/paper.pdf',
+  });
   const resultEvent = (action, observation = observe(action)) => ({ kind: 'result', action_id: action.action_id, observation });
   const accept = async (currentSession, action, path, value) => {
     assert.equal(action.action, 'dispatch', JSON.stringify({ path, action }));
@@ -310,11 +319,109 @@ async function startSyntheticDrafting(t, { codex = false } = {}) {
   };
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session);
-    await accept(session, action, action.role, content(action.role));
+    const upstream = template.handoff.science.find(row => row.receipt.role === action.role)?.content;
+    const extra = contentComplete ? {
+      ...(upstream?.result_modules ? { result_modules: upstream.result_modules } : {}),
+      ...(upstream?.method_steps ? { method_steps: upstream.method_steps } : {}),
+    } : {};
+    await accept(session, action, action.role, content(action.role, extra));
   }
   await accept(session, await nextReadingAction(session), 'en', template.views[0]);
   return { f, template, session, runRoot, accept, resultEvent };
 }
+
+test('a checkpointed paper identity correction preserves accepted default 2.4 work through rendering, review and publication recovery', async t => {
+  const { f, template, session, runRoot, accept } = await startSyntheticDrafting(t, {
+    useDefaultProfile: true, truncatedPaperId: true,
+  });
+  await accept(session, await nextReadingAction(session), 'zh-CN', template.views[1]);
+  await accept(session, await nextReadingAction(session), 'presentation', template.editor);
+  const before = await nextAction(session);
+  assert.equal(before.kind, 'render-assets');
+  assert.equal(before.summary.budget.total_used, 9);
+  const checkpointPath = before.summary.state_ref;
+  const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8'));
+  const protectedPaths = [checkpointPath, ...['control/science-state.json', 'science/integration.json',
+    'reading/en.json', 'reading/zh-CN.json', 'reading/presentation.json'].map(path => join(runRoot, path))];
+  const originalBytes = await Promise.all(protectedPaths.map(path => readFile(path)));
+  const { prepared } = JSON.parse(originalBytes[1]).data;
+  const binding = prepared.runControl.reading_first_binding;
+  assert.equal(binding.configured_setup.instruction_profile, 'configured-reading-2.4');
+  assert.equal(binding.handoff_profile, 'science-index-1.1');
+  assert.equal(binding.configured_setup.frozen_support.science_index.metadata.profile, 'science-index-1.1');
+  assert.equal(binding.presentation_profile, 'reading-editor-1.5');
+  assert.deepEqual(binding.configured_setup.prompt_files.map(file => basename(file.path)),
+    ['science-configured-2.4.md', 'reading-configured-2.4.md', 'reading-editor-1.5.md']);
+  const event = { kind: 'identity-correction', authorization: {
+    run_id: 'run', authorization_id: 'approved-truncation-repair', user_reply: '授权',
+    checkpoint_fingerprint: checkpoint.checkpoint_fingerprint,
+    from_paper_id: f.options.scientificInput.identity.paper_id,
+    to_paper_id: 'pap_' + f.options.scientificInput.sources[0].sha256.slice(7, 39),
+    source_sha256: f.options.scientificInput.sources[0].sha256,
+  } };
+  await recordReadingEvent(session, { kind: 'render-assets', renderOptions: {} });
+  await assert.rejects(() => nextAction(session), { code: 'P221_TARGET_IDENTITY_INVALID' });
+  for (const patch of [{ run_id: 'other-run' }, { checkpoint_fingerprint: 'sha256:' + 'a'.repeat(64) },
+    { from_paper_id: 'pap_' + 'a'.repeat(30) }, { to_paper_id: 'pap_' + 'a'.repeat(32) },
+    { source_sha256: 'sha256:' + 'a'.repeat(64) }, { user_reply: '' }]) {
+    await assert.rejects(() => recordReadingEvent(session, { ...event, authorization: { ...event.authorization, ...patch } }),
+      { code: 'READING_FIRST_PAPER_ID_CORRECTION_INVALID' });
+  }
+  const candidateRoot = prepared.paths.candidateRoot;
+  await mkdir(candidateRoot, { recursive: true });
+  await assert.rejects(() => recordReadingEvent(session, event), { code: 'READING_FIRST_PAPER_ID_CORRECTION_UNAVAILABLE' });
+  await fs.promises.rmdir(candidateRoot);
+  assert.equal((await recordReadingEvent(session, event)).recorded, true);
+  const recovered = await resumeReadingSession({ runRoot });
+  await recordReadingEvent(recovered, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+  assert.equal((await recordReadingEvent(recovered, event)).recorded, false);
+  assert.deepEqual(await Promise.all(protectedPaths.map(path => readFile(path))), originalBytes);
+  const reminder = await nextAction(recovered);
+  assert.equal(reminder.boundary_id, 'before-review');
+  assert.equal(reminder.summary.budget.total_used, 9);
+  const reviewAction = await nextAction(recovered);
+  const instruction = await readFile(reviewAction.arguments.prompt, 'utf8');
+  const reviewPacket = JSON.parse(instruction.split('\n\n').at(-1));
+  assert.equal(reviewPacket.identity.paper_id, event.authorization.to_paper_id);
+  assert.equal(reviewPacket.presentation.identity.paper_id, event.authorization.to_paper_id);
+  assert.deepEqual(reviewPacket.handoff.required_science.map(item => item.role), ['results', 'interpretation']);
+  await accept(recovered, reviewAction, 'review', template.review);
+  const completedSession = await resumeReadingSession({ runRoot });
+  await recordReadingEvent(completedSession, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+  const done = await nextAction(completedSession);
+  assert.equal(done.status, 'reading_complete');
+  assert.equal(done.summary.budget.total_used, 10);
+  const { candidate, identity, recipe, results_resource_manifest } = await inspectReadingFirstPublicationSource(done.publication_source);
+  assert.equal(identity.paper_id, event.authorization.to_paper_id);
+  assert.equal(recipe.scientific_input.identity.paper_id, event.authorization.from_paper_id);
+  const rebuilt = await inspectReadingFirstPublicationSource(await readingRuntime.restoreReadingFirstPublicationSource(recipe));
+  assert.deepEqual(rebuilt.identity, identity);
+  assert.deepEqual(rebuilt.candidate, candidate);
+  const source = f.options.scientificInput.sources[0];
+  const dryRun = await prepareReadingFirstPublication({ source: done.publication_source, vaultRoot: f.root, evidenceMode: 'synthetic', resources: [
+    { path: 'Clippings/paper.pdf', source_path: source.path, sha256: source.sha256, byte_length: source.byte_length },
+    ...results_resource_manifest.resources.map(({ path, source_path, sha256, byte_length }) => ({ path, source_path, sha256, byte_length })),
+  ] });
+  assert.equal(dryRun.status, 'dry_run');
+  assert.equal(dryRun.business_writes, 0);
+  assert.equal(dryRun.review.reviewManifest.identity.paper_id, identity.paper_id);
+  const editedRecipe = structuredClone(recipe);
+  editedRecipe.checkpoint.state.paperIdentityCorrection.authorization.user_reply = 'altered approval';
+  const { checkpoint_fingerprint, ...editedCheckpoint } = editedRecipe.checkpoint;
+  editedRecipe.checkpoint.checkpoint_fingerprint = readingRuntime.fingerprintReadingFirst(editedCheckpoint);
+  const { recipe_fingerprint, ...editedBody } = editedRecipe;
+  editedRecipe.recipe_fingerprint = readingRuntime.fingerprintReadingFirst(editedBody);
+  await assert.rejects(() => readingRuntime.restoreReadingFirstPublicationSource(editedRecipe), { code: 'READING_FIRST_PAPER_ID_CORRECTION_INVALID' });
+  assert.equal((await recordReadingEvent(completedSession, { kind: 'inspect-candidate' })).status, 'passed');
+  for (const note of candidate.notes) {
+    const content = await readFile(join(candidateRoot, note.path), 'utf8');
+    assert.match(content, new RegExp('paper_id:.*' + identity.paper_id + '\\b'));
+  }
+  await assert.rejects(() => recordReadingEvent(completedSession, { ...event,
+    authorization: { ...event.authorization, authorization_id: 'different-approval' } }),
+    { code: 'READING_FIRST_PAPER_ID_CORRECTION_INVALID' });
+  assert.deepEqual(await Promise.all(protectedPaths.map(path => readFile(path))), originalBytes);
+});
 
 test('finalize-only continuation dispatches the reserved execution after interrupted stop cleanup', async t => {
   const { f, template, session, runRoot, accept, resultEvent } = await startSyntheticDrafting(t);
@@ -383,6 +490,28 @@ test('finalize-only continuation dispatches the reserved execution after interru
   const done = await nextReadingAction(recovered);
   assert.equal(done.status, 'reading_complete');
   assert.equal(done.summary.budget.continuations, 1);
+});
+
+test('2.4 rejected merged translation returns recovery on the original task without locking it', async t => {
+  const { f, template, session, runRoot, resultEvent } = await startSyntheticDrafting(t, { instructionProfile: 'configured-reading-2.4' });
+  const translation = await nextReadingAction(session), event = resultEvent(translation);
+  await recordReadingEvent(session, { ...event, kind: 'host_observation' });
+  const invalid = structuredClone(template.views[1]);
+  const section = invalid.sections.find(row => row.id === 'findings');
+  section.paragraphs = [section.paragraphs.join(' ')];
+  await writeFile(join(runRoot, 'native/zh-CN.json'), JSON.stringify(invalid));
+  await assert.rejects(() => recordReadingEvent(session, event), error => {
+    assert.equal(error.code ?? error.message, 'READING_FIRST_TRANSLATION_STRUCTURE_INVALID');
+    assert.deepEqual(error.recovery, { action: 'continuation-intent', action_id: translation.action_id, code: 'READING_FIRST_TRANSLATION_STRUCTURE_INVALID' });
+    return true;
+  });
+  await recordReadingEvent(session, { kind: 'continuation-intent', action_id: translation.action_id,
+    execution_id: 'repair-paragraph-boundaries', message: 'Correct the unaccepted translated paragraph boundaries.' });
+  const restored = await resumeReadingSession({ runRoot });
+  await recordReadingEvent(restored, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+  const action = await nextReadingAction(restored);
+  assert.equal(action.kind, 'continuation');
+  assert.equal(action.original_action_id, translation.action_id);
 });
 
 test('Editor structural rejection provides a CLI and API continuation on the original action', async t => {
@@ -1115,7 +1244,8 @@ for (const scenario of ['original-page', 'mixed', 'renderer-only']) test({
   }
   const runRoot = join(f.root, 'runs', 'run');
   const create = methodsFirst ? createReadingSession : createFrozenReading22;
-  let session = await create({ ...f.options, includeRepairs: true, maxCalls: 8, maxTotalCalls: 16 });
+  let session = await create({ ...f.options, ...(methodsFirst ? { instructionProfile: 'configured-reading-2.3' } : {}),
+    includeRepairs: true, maxCalls: 8, maxTotalCalls: 16 });
   const content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (file, value, action = null) => {
     action ??= await nextReadingAction(session);

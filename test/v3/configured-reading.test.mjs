@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { exportPublicApa } from '../../scripts/setup/export-public-apa.mjs';
@@ -67,7 +67,10 @@ async function configuredRepo(t, enabled = false) {
   return { root, config };
 }
 
-test('new configured reading freezes the original Clippings source without changing it or the submitted input', async t => {
+for (const { instructionProfile, expectedVersion, handoffProfile } of [
+  { expectedVersion: '2.4', handoffProfile: 'science-index-1.1' },
+  { instructionProfile: 'configured-reading-2.3', expectedVersion: '2.3', handoffProfile: 'science-index-1.0' },
+]) test(`${instructionProfile ?? 'default configured-reading-2.4'} freezes the original Clippings source and selected budget without changing the input`, async t => {
   const { root } = await configuredRepo(t);
   await mkdir(join(root, 'Clippings'));
   const original = join(root, 'Clippings', 'paper.pdf');
@@ -78,11 +81,18 @@ test('new configured reading freezes the original Clippings source without chang
   const scientificInput = { profile: 'reading-first-1.0', identity: { run_id: 'run', paper_id: 'synthetic' },
     context: 'Synthetic evidence', sources: [source], presentation: { source_pdf: 'Raw/legacy.pdf' } };
   const options = { repoRoot: root, runId: 'run', scientificInput, sourceLanguage: 'en', maxTotalCalls: 20,
+    ...(instructionProfile ? { instructionProfile } : {}),
     mainSession: { model: 'gpt-6.1-sol', reasoning_effort: 'low' } };
   assert.throws(() => prepareCurrentConfiguredReading(options), /READING_FIRST_CONTROL_INVALID/);
   const prepared = prepareCurrentConfiguredReading({ ...options, authorizationId: 'synthetic' });
-  const setup = prepared.runControl.reading_first_binding.configured_setup;
-  assert.equal(setup.instruction_profile, 'configured-reading-2.3');
+  const binding = prepared.runControl.reading_first_binding, setup = binding.configured_setup;
+  assert.equal(setup.instruction_profile, 'configured-reading-' + expectedVersion);
+  assert.equal(binding.handoff_profile, handoffProfile);
+  assert.equal(setup.frozen_support.science_index.metadata.profile, handoffProfile);
+  assert.equal(binding.presentation_profile, 'reading-editor-1.5');
+  assert.deepEqual(setup.prompt_files.map(file => basename(file.path)),
+    [`science-configured-${expectedVersion}.md`, `reading-configured-${expectedVersion}.md`, 'reading-editor-1.5.md']);
+  assert.equal(binding.max_total_calls, 20);
   assert.equal(setup.source_policy, 'clippings-originals-1.0');
   assert.equal(setup.source_access, 'read-only-original-1.0');
   assert.deepEqual(setup.source_locations, [
@@ -322,7 +332,8 @@ test('isolated reply resource drift blocks a new reply contract while a frozen c
   const { root } = await configuredRepo(t);
   let prepared, creationOptions;
   const runId = 'run_' + '5'.repeat(32);
-  const s = await fixture(t, { artifactRoot: join(root, '.tmp/runs', runId), clippingsRoot: join(root, 'Clippings'), methodsFirst: true, runId, completeReview: false, instructionFiles: true,
+  const s = await fixture(t, { artifactRoot: join(root, '.tmp/runs', runId), clippingsRoot: join(root, 'Clippings'),
+    instructionProfile: 'configured-reading-2.4', runId, completeReview: false, instructionFiles: true,
     controlOptions: { maxCalls: 8 }, createRunControl: options => {
       creationOptions = options;
       prepared = configured.prepareConfiguredReading({ ...options, repoRoot: root, maxTotalCalls: 20 });
@@ -496,7 +507,7 @@ test('configured parser packets record no requested model', async t => {
   assert.equal(result.output_inventory[0].path, 'markdown.md');
 });
 
-test('configured runs freeze the science index handoff profile', async t => {
+test('frozen 2.2 configured runs retain their science index handoff profile', async t => {
   const { root } = await configuredRepo(t);
   const runId = 'run_' + '2'.repeat(32);
   let options;

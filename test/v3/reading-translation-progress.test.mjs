@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as progress from '../../scripts/v3/reading-translation-progress.mjs';
 
 test('2.2 permits one unexplained zero-progress continuation and distinguishes capacity evidence', () => {
@@ -77,4 +79,133 @@ test('2.2 refuses missing progress paths and collisions', async () => {
   const options = {runId:'run',scientificInput:{role_artifacts:['a','b','c','d','e','f']},sourceLanguage:'en',checkpointCount:1};
   assert.throws(()=>buildReadingSessionTasks({...options,taskOverrides:{'zh-CN':{progress_path:''}}}),/TASK_CONFLICT/);
   assert.throws(()=>buildReadingSessionTasks({...options,taskOverrides:{'zh-CN':{progress_path:'native/zh-CN.json'}}}),/TASK_CONFLICT/);
+});
+
+const strictInstructionProfile = 'configured-reading-2.4';
+const strictProgressProfile = 'reading-translation-progress-1.1';
+const cli = fileURLToPath(new URL('../../scripts/v3/reading-translation-progress.mjs', import.meta.url));
+const translatedSection = { id: 'findings', module_id: 'findings', heading: '发现', paragraphs: ['第一段。', '第二段。'] };
+const translatedKnowledge = {
+  id: 'contrast', paragraphs: ['定义。', '用途。'], application_section_ids: ['findings'],
+  sections: [{ heading: '示例', paragraphs: ['输入。', '解读。'] }],
+};
+
+function checkpointFixture(t, instructionProfile) {
+  const artifactRoot = mkdtempSync(join(tmpdir(), 'apa-translation-structure-'));
+  t.after(() => rmSync(artifactRoot, { recursive: true, force: true }));
+  const task = { task_id: 'zh-CN', source_view_path: 'input/source.json', translation_context_path: 'input/context.json', progress_path: 'input/progress.json', native_path: 'native/zh.json' };
+  const sourceView = {
+    sections: [{ id: 'findings', module_id: 'findings', heading: 'Findings', paragraphs: ['One observation.', 'Its contrasting condition.'] }],
+    knowledge_content: [{ id: 'contrast', paragraphs: ['Definition.', 'Use.'], application_section_ids: ['findings'],
+      sections: [{ heading: 'Example', paragraphs: ['Input.', 'Interpretation.'] }] }],
+  };
+  const runId = 'structure-test';
+  const options = { artifactRoot, task, runId, sourceView, instructionProfile };
+  const payload = { language: 'zh-CN', source_view: sourceView };
+  mkdirSync(join(artifactRoot, 'native'));
+  const prepare = () => progress.prepareTranslationInputs({ ...options, payload });
+  const saveNative = nativeOutput => writeFileSync(join(artifactRoot, task.native_path), JSON.stringify(nativeOutput));
+  const checkpoint = nativeOutput => {
+    saveNative(nativeOutput);
+    const args = [cli, 'checkpoint', artifactRoot, runId, task.task_id, task.source_view_path, task.native_path, task.progress_path];
+    return spawnSync(process.execPath, args, { encoding: 'utf8' });
+  };
+  return { ...options, prepare, saveNative, checkpoint, progressPath: join(artifactRoot, task.progress_path) };
+}
+
+test('2.3 checkpoint writes an unchanged v1.0 manifest and preserves existing correction boundaries', t => {
+  const fixture = checkpointFixture(t, 'configured-reading-2.3');
+  const compressed = { sections: [{ id: 'findings', paragraphs: ['一段合译。'] }] };
+  fixture.prepare();
+  const outcome = fixture.checkpoint(compressed);
+  assert.equal(outcome.status, 0, outcome.stderr);
+  const manifest = JSON.parse(readFileSync(fixture.progressPath));
+  assert.equal(manifest.profile, 'translation-progress-1.0');
+  assert.deepEqual(JSON.parse(outcome.stdout).remaining_sections, []);
+  assert.throws(() => progress.checkTranslationProgress({ ...fixture, instructionProfile: strictInstructionProfile, nativeOutput: compressed }), /RECONCILE/);
+});
+
+test('2.4 CLI leaves a merged result fragment unlocked and accepts the corrected paragraphs', t => {
+  const fixture = checkpointFixture(t, strictInstructionProfile);
+  const compressed = { sections: [{ ...translatedSection, paragraphs: ['一段合译。'] }] };
+  assert.throws(() => progress.checkTranslationProgress(fixture), /RECONCILE/);
+  fixture.prepare();
+  const initialBytes = readFileSync(fixture.progressPath);
+  const initial = JSON.parse(initialBytes);
+  assert.equal(initial.profile, strictProgressProfile);
+  assert.deepEqual(initial.completed_sections, {});
+  const outcome = fixture.checkpoint(compressed);
+  assert.equal(outcome.status, 1);
+  assert.match(outcome.stderr, /READING_FIRST_TRANSLATION_STRUCTURE_INVALID/);
+  assert.ok(readFileSync(fixture.progressPath).equals(initialBytes));
+  assert.deepEqual(progress.checkTranslationProgress({ ...fixture, nativeOutput: compressed }).remaining_sections, ['findings']);
+  const corrected = { sections: [translatedSection] };
+  const resumed = fixture.checkpoint(corrected);
+  assert.equal(resumed.status, 0, resumed.stderr);
+  assert.deepEqual(JSON.parse(resumed.stdout).remaining_sections, []);
+  assert.deepEqual(JSON.parse(resumed.stdout).remaining_knowledge, ['contrast']);
+  assert.throws(() => progress.checkTranslationProgress({ ...fixture, sourceView: {
+    ...fixture.sourceView, sections: [{ ...fixture.sourceView.sections[0], paragraphs: ['Changed observation.', 'Its contrasting condition.'] }],
+  }, nativeOutput: corrected }), /RECONCILE/);
+});
+
+test('2.4 CLI leaves earlier fragments intact when a knowledge subsection is missing or compressed', t => {
+  const fixture = checkpointFixture(t, strictInstructionProfile);
+  const first = { sections: [translatedSection] };
+  fixture.prepare();
+  const checkpoint = fixture.checkpoint(first);
+  assert.equal(checkpoint.status, 0, checkpoint.stderr);
+  const locked = readFileSync(fixture.progressPath);
+  const prior = JSON.parse(checkpoint.stdout);
+  for (const sections of [[], [{ heading: '示例', paragraphs: ['合译。'] }]]) {
+    const draft = { ...first, knowledge_content: [{ ...translatedKnowledge, sections }] };
+    const invalid = fixture.checkpoint(draft);
+    assert.equal(invalid.status, 1);
+    assert.match(invalid.stderr, /READING_FIRST_TRANSLATION_STRUCTURE_INVALID/);
+    assert.ok(readFileSync(fixture.progressPath).equals(locked));
+    assert.deepEqual(progress.checkTranslationProgress({ ...fixture, nativeOutput: draft, expectedCompleted: prior }).remaining_knowledge, ['contrast']);
+  }
+  const good = fixture.checkpoint({ ...first, knowledge_content: [translatedKnowledge] });
+  assert.equal(good.status, 0, good.stderr);
+  assert.deepEqual(JSON.parse(good.stdout).remaining_knowledge, []);
+});
+
+test('2.4 CLI will not lock missing headings or changed module and knowledge application IDs', t => {
+  const fixture = checkpointFixture(t, strictInstructionProfile);
+  fixture.prepare();
+  const initialBytes = readFileSync(fixture.progressPath);
+  const complete = { sections: [translatedSection], knowledge_content: [translatedKnowledge] };
+  for (const [field, mutate] of [
+    ['heading', draft => { delete draft.sections[0].heading; }],
+    ['module_id', draft => { draft.sections[0].module_id = 'discussion'; }],
+    ['module_id', draft => { delete draft.sections[0].module_id; }],
+    ['sections.heading', draft => { draft.knowledge_content[0].sections[0].heading = ' '; }],
+    ['application_section_ids', draft => { draft.knowledge_content[0].application_section_ids = ['discussion']; }],
+    ['application_section_ids', draft => { delete draft.knowledge_content[0].application_section_ids; }],
+  ]) {
+    const draft = structuredClone(complete);
+    mutate(draft);
+    const invalid = fixture.checkpoint(draft);
+    assert.equal(invalid.status, 1, `${field} was locked`);
+    assert.match(invalid.stderr, /READING_FIRST_TRANSLATION_STRUCTURE_INVALID/);
+    assert.ok(readFileSync(fixture.progressPath).equals(initialBytes));
+    const pending = progress.checkTranslationProgress({ ...fixture, nativeOutput: draft });
+    assert.deepEqual(pending.remaining_sections, ['findings']);
+    assert.deepEqual(pending.remaining_knowledge, ['contrast']);
+    assert.throws(() => progress.assertTranslationStructure(fixture.sourceView, draft), error =>
+      error.code === 'READING_FIRST_TRANSLATION_STRUCTURE_INVALID' && error.details.field === field);
+  }
+  const corrected = fixture.checkpoint(complete);
+  assert.equal(corrected.status, 0, corrected.stderr);
+  assert.deepEqual(JSON.parse(corrected.stdout).remaining_sections, []);
+  assert.deepEqual(JSON.parse(corrected.stdout).remaining_knowledge, []);
+});
+
+test('2.4 complete structure compares all section and knowledge IDs and top-level knowledge paragraphs', t => {
+  const { sourceView } = checkpointFixture(t, strictInstructionProfile);
+  assert.doesNotThrow(() => progress.assertTranslationStructure(sourceView, { sections: sourceView.sections }, { partial: true }));
+  assert.throws(() => progress.assertTranslationStructure(sourceView, { sections: sourceView.sections }), { code: 'READING_FIRST_TRANSLATION_STRUCTURE_INVALID' });
+  const draft = { ...sourceView, knowledge_content: [{ ...sourceView.knowledge_content[0], paragraphs: ['一段合译。'] }] };
+  assert.throws(() => progress.assertTranslationStructure(sourceView, draft), { code: 'READING_FIRST_TRANSLATION_STRUCTURE_INVALID' });
+  assert.doesNotThrow(() => progress.assertTranslationStructure(sourceView, structuredClone(sourceView)));
 });

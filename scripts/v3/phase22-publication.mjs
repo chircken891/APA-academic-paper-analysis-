@@ -17,9 +17,9 @@ import { fingerprintV3Json as hash } from './semantic-package-validator.mjs';
 import { assertBilingualReviewCurrent } from './phase22-review.mjs';
 import { getRunControlForDispatch, createOwnedArtifactBroker } from './owned-artifact-store.mjs';
 import { assertActiveGeneration, assertIndexGeneration, assertActiveIndexContract, readCommittedGeneration, readRegisteredCommit, PHASE22_COMMIT_PATH } from './phase22-active-version.mjs';
-import { inspectManagedNote } from './phase22-managed-markdown.mjs';
+import { inspectManagedNote, mergeManagedNote } from './phase22-managed-markdown.mjs';
 import { captureReadingFirstPublicationRegistration, rebuildRegisteredReadingFirstReview,
-  applyReadingFirstSourceDerivation, applyReadingFirstUserCorrections, assertReadingFirstPublicationReviewLive,
+  applyReadingFirstPaperOverwrite, applyReadingFirstSourceDerivation, applyReadingFirstUserCorrections, assertReadingFirstPublicationReviewLive,
   usesCurrentReadingFirstPublication } from './reading-first-publication.mjs';
 import { assertNoteRelocationReviewCurrent, NOTE_RELOCATION_PROFILE, usesCurrentNoteRelocation } from './note-relocation.mjs';
 import { KNOWLEDGE_MERGE_PROFILE, usesCurrentKnowledgeMerge } from './knowledge-merge.mjs';
@@ -1311,8 +1311,9 @@ export async function loadBilingualPublication({ vaultRoot, run, requireApproval
   if (simple && bundle.reading_first_source) {
     const { dependencies, provenance_limits: provenance } = bundle.reviewManifest;
     const corrections = provenance?.user_corrections;
+    const overwrite = dependencies?.paper_overwrite;
     if (bundle.reviewManifest.profile !== 'reading-first-obsidian-1.0'
-      || !bundle.reading_first_source.knowledge_rebase && !dependencies?.source_derivation && !dependencies?.user_corrections
+      || !bundle.reading_first_source.knowledge_rebase && !dependencies?.source_derivation && !dependencies?.user_corrections && !overwrite
       || dependencies?.user_corrections !== (corrections ? hash(corrections) : undefined)) fail('P221_REGISTERED_REBUILD_MISMATCH');
     restoredReadingSource = await restoreReadingFirstPublicationSource(bundle.reading_first_source);
     const data = await inspectReadingFirstPublicationSource(restoredReadingSource);
@@ -1320,14 +1321,31 @@ export async function loadBilingualPublication({ vaultRoot, run, requireApproval
       || dependencies.presentation !== data.candidate.presentation_fingerprint
       || dependencies.reading_review !== data.reading_review_fingerprint) fail('P221_REGISTERED_REBUILD_MISMATCH');
     const corrected = applyReadingFirstUserCorrections(data.candidate, corrections);
-    const candidate = applyReadingFirstSourceDerivation({ ...data, candidate: corrected }, dependencies.source_derivation);
+    const derived = applyReadingFirstSourceDerivation({ ...data, candidate: corrected }, dependencies.source_derivation);
+    const candidate = applyReadingFirstPaperOverwrite({ ...data, candidate: derived }, overwrite);
     const visible = value => value.replace(/<!-- KNOWLEDGE_STATE [A-Za-z0-9+/=]+ -->/, '');
-    for (const note of [...candidate.notes, ...candidate.supportNotes]) {
+    for (const note of candidate.notes) {
+      const output = plan.inventory.find(row => row.path === note.path && row.kind === 'paper');
+      const rendered = Buffer.from(note.content), target = overwrite?.targets[note.language];
+      const matches = output && (target ? output.before_sha256 === target.before_sha256 && output.before_byte_length === target.before_byte_length
+        && inspectManagedNote(output.bytes).managedHash === note.managedHash
+        && mergeManagedNote({ existingBytes: output.bytes, rendered, expectedManagedHash: note.managedHash }).bytes.equals(output.bytes)
+        : output.bytes.equals(rendered));
+      if (!matches) fail('P221_REGISTERED_REBUILD_MISMATCH', { path: note.path });
+    }
+    for (const note of candidate.supportNotes) {
       const output = plan.inventory.find(row => row.path === note.path);
       const raw = Buffer.from(note.content), normalized = provenance?.knowledge_render_hashes?.[note.path];
       const matches = normalized ? output?.kind === 'support' && digest(raw) === normalized
         && visible(output.bytes.toString('utf8')) === visible(note.content) : output?.bytes.equals(raw);
       if (!matches) fail('P221_REGISTERED_REBUILD_MISMATCH', { path: note.path });
+    }
+    if (overwrite) for (const asset of candidate.generated_assets ?? []) {
+      const output = plan.inventory.find(row => row.path === asset.path && row.kind === 'asset');
+      const dependency = bundle.reviewManifest.read_dependencies.find(row => row.path === asset.path);
+      const matches = output ? output.bytes.equals(Buffer.from(asset.content))
+        : dependency?.byte_sha256 === asset.sha256 && dependency.byte_length === asset.byte_length;
+      if (!matches) fail('P221_REGISTERED_REBUILD_MISMATCH', { path: asset.path });
     }
   }
   let rebuiltReview = null;

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import YAML from 'yaml';
 import { validateReadingFirstEditor } from './reading-first-editor.mjs';
 import { METHODS_READING_EDITOR_PROFILE } from './reading-first-editor-contract.mjs';
-import { METHODS_FIRST_READING_PROFILE } from '../lib/reading-profiles.mjs';
+import { isMethodsFirstReadingProfile } from '../lib/reading-profiles.mjs';
 import { buildResearchMapCanvas, normalizeResearchMapStepLinks, serializeResearchMapCanvas, researchMapCanvasSection } from './research-map-canvas.mjs';
 import { fingerprintV3Json } from './semantic-package-validator.mjs';
 import { registerReaderTargets } from './phase221-targets.mjs';
@@ -90,7 +90,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
   if (p.knowledge_layout && !sharedKnowledge) fail('RF_OBSIDIAN_KNOWLEDGE_LAYOUT_INVALID');
   const editor = readingEditor === undefined ? undefined : validateReadingFirstEditor({ editor: readingEditor, views, presentation, expandedMethodIndex, stagedResearchMap });
   const methodsEditor = editor?.schema_version === METHODS_READING_EDITOR_PROFILE;
-  const methodsFirst = methodsEditor || instructionProfile === METHODS_FIRST_READING_PROFILE;
+  const methodsFirst = methodsEditor || isMethodsFirstReadingProfile(instructionProfile);
   // Retain the original layout when replaying older 1.5 metadata without principles.
   const expandedMethods = methodsEditor && editor.languages.en.methods.some(method => method.explanation !== undefined);
   const numbered = Boolean(editor) || methodsFirst;

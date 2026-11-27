@@ -52,7 +52,7 @@ test('bindings without the stage reminder profile produce no reminder', async t 
   assert.equal(readingApi.getReadingCompactionReminder({ controller: s.created.controller, boundaryId: 'before-writer' }), null);
 });
 
-async function setup(t, { instructionProfile = 'configured-reading-2.2', presentation, presentationRequired = false, writingMode = 'independent', sourceLanguage = 'en', presentationMode = 'writer', priorCalls = 0, maxTotalCalls, roleReplyContract, enrichmentPolicy, handoffProfile, legacyPresentationProfile, legacyRepairRouting = false, invalidRepairRouting = false, maxCalls = presentationMode==='reading-editor'?7:6, firstWritingLanguage, integrationContent = {}, writingSkills = {}, compactionPolicy } = {}) {
+async function setup(t, { instructionProfile = 'configured-reading-2.2', presentation, presentationRequired = false, writingMode = 'independent', sourceLanguage = 'en', presentationMode = 'writer', priorCalls = 0, maxTotalCalls, roleReplyContract, enrichmentPolicy, handoffProfile, legacyPresentationProfile, legacyRepairRouting = false, invalidRepairRouting = false, maxCalls = presentationMode==='reading-editor'?7:6, firstWritingLanguage, integrationContent = {}, scienceContent = {}, sourceId, writingSkills = {}, compactionPolicy } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'reading-first-'));
   t.after(() => rm(root, {recursive:true,force:true}));
   const sourceBytes=Buffer.from('Synthetic original source: design, result and limitation.');
@@ -62,7 +62,7 @@ async function setup(t, { instructionProfile = 'configured-reading-2.2', present
   for(const task of Object.values(tasks)) if(task.role==='translation') Object.assign(task,{source_view_path:'translation/'+task.task_id+'/source.json',translation_context_path:'translation/'+task.task_id+'/context.json',progress_path:'translation/'+task.task_id+'/progress.json'});
   if(enrichmentPolicy) tasks['enrich-late-evidence']={task_id:'enrich-late-evidence',task_name:'enrich_late_evidence',owner_actor_id:'enrich-late-evidence',role:'evidence',source_root:'sources/enrich-late-evidence',artifact_id:'enrich-late-evidence',artifact_path:'enrich-late-evidence.json',native_path:'native/enrich-late-evidence.json',revision:'1'};
   const bindings=[...roles.map(role=>({run_id:'run',actor_id:role,role,artifact_path:'science/'+role+'.json',revision:'1'})),...Object.values(tasks).map(task=>({run_id:'run',actor_id:task.owner_actor_id,role:task.role,artifact_path:task.artifact_path,revision:task.revision}))];
-  const input={identity:{paper_id:presentation ? 'pap_'+'a'.repeat(32) : 'synthetic',run_id:'run'},sources:[{...(enrichmentPolicy ? {id:'main'} : {}),path:join(root,'source.pdf'),sha256:sha(sourceBytes),byte_length:sourceBytes.length}],context:'Read all existing material as a connected account.',role_artifacts:roles};
+  const input={identity:{paper_id:presentation ? 'pap_'+'a'.repeat(32) : 'synthetic',run_id:'run'},sources:[{...(sourceId || enrichmentPolicy ? {id:sourceId ?? 'main'} : {}),path:join(root,'source.pdf'),sha256:sha(sourceBytes),byte_length:sourceBytes.length}],context:'Read all existing material as a connected account.',role_artifacts:roles};
   // source-translation takes its writing rules only from a configured setup, so those runs use a configured fixture with all eleven roles.
   const configuredSetup=writingMode==='source-translation' ? {schema_version:'apa-configured-reading-1.0',config_fingerprint:sha(Buffer.from('config')),paths:{runRoot:root},
     role_model_policy:createConfiguredApaRoleModelPolicy({model:'gpt-6-astra',reasoning_effort:'high'},Object.fromEntries(APA_CONFIGURED_ROLES.map(role=>[role,{model:'gpt-6-astra',reasoning_effort:'high'}]))),...buildConfiguredReadingInstructions(writingSkills,{instructionProfile})} : undefined;
@@ -85,7 +85,7 @@ async function setup(t, { instructionProfile = 'configured-reading-2.2', present
   const schema=JSON.parse(await readFile(new URL('../../Schema/phase21/proof-chain.schema.json',import.meta.url),'utf8'));
   const phase21Validator=await createPhase21ContractValidator({schemas:[schema]});
   const scienceRun={run_id:'run',workflow_profile:READING_FIRST_PROFILE,artifact_root:root,phase21Validator,declared_fingerprints:fingerprints,current_fingerprints:fingerprints,route_fingerprint:'fixed',chain:{schema_version:'phase21-proof-chain-1.0',run_id:'run',delivery_status:'pending_resolver',artifacts:[],dependencies:[],required_artifacts:required,integration_prerequisites:integration,metadata:{requirement_refs:['APA3-04']},p20_e12_status:'unverified'}};
-  const scienceResult=await runFiniteRoleSequence({run:scienceRun,dispatchContext:broker.dispatchContext,artifactStore:broker,actions:roles.map(role=>({role,action:{type:'write_artifact',actor_id:role,role,artifact_path:'science/'+role+'.json',revision:'1',artifact:{artifact_id:role,content:JSON.stringify({context:'Full connected science for '+role,...(role==='integration' && presentation ? {presentation} : {}),...(role==='integration' ? integrationContent : {})})}}}))});
+  const scienceResult=await runFiniteRoleSequence({run:scienceRun,dispatchContext:broker.dispatchContext,artifactStore:broker,actions:roles.map(role=>({role,action:{type:'write_artifact',actor_id:role,role,artifact_path:'science/'+role+'.json',revision:'1',artifact:{artifact_id:role,content:JSON.stringify({context:'Full connected science for '+role,...scienceContent[role],...(role==='integration' && presentation ? {presentation} : {}),...(role==='integration' ? integrationContent : {})})}}}))});
   assert.notEqual(scienceResult.status,'blocked',JSON.stringify(scienceResult.delivery_gate));
   assert.equal(scienceResult.receipts.length,6);
   assert.equal(scienceResult.chain.source_check,undefined);
@@ -156,6 +156,96 @@ const LEGACY_EN_WRITER = {
 };
 const requestPayload = request => JSON.parse(request.emittedStep.arguments.message.split('\n\n').at(-1));
 const INDEXED_ROLES = ['evidence', 'methods', 'results', 'interpretation', 'scientific-reading'];
+
+const resultModule = () => ({
+  id: 'immune-context', title: 'Immune context', question: 'Which immune compartment supports the effect?',
+  sources: [{ source_id: 'paper', locator: { kind: 'pdf-page', page: 1 } }],
+  comparisons: [{ objects: ['CD8 depletion', 'B-cell depletion'], conditions: ['Matched host genotypes'],
+    observations: [{ statement: 'CD8 depletion removed the difference; B-cell depletion did not.', direction: 'Loss of effect only with CD8 depletion', attribution: 'author_report',
+      sources: [{ source_id: 'paper', locator: { kind: 'pdf-page', page: 1 } }] }] }],
+  explanations: [{ statement: 'The negative control supports compartment specificity.', attribution: 'author_interpretation',
+    sources: [{ source_id: 'paper', locator: { kind: 'pdf-page', page: 1 } }] }],
+});
+
+async function contentCompleteSetup(t, instructionProfile = 'configured-reading-2.4', overrides = {}) {
+  const ids = ['abstract', 'design', 'methods', 'findings', 'discussion', 'limitations', 'conclusion'];
+  const presentation = {
+    layout: 'writer-modules-1.0', sections: ids.map(id => ({ id })), modules: ids.map(id => ({ id, label: { en: id, 'zh-CN': id } })),
+    visuals: [], knowledge: [{ id: 'control', kind: 'method', title: { en: 'Negative control', 'zh-CN': '阴性对照' },
+      paragraphs: { en: ['A control tests an alternative.'], 'zh-CN': ['对照检验其他解释。'] } }],
+    map: { steps: [{ id: 'deplete', section_id: 'methods', label: { en: 'Deplete', 'zh-CN': '清除' } }],
+      findings: [{ id: 'specific', section_id: 'findings', label: { en: 'Specificity', 'zh-CN': '特异性' } }],
+      relations: [{ step_id: 'deplete', finding_id: 'specific' }], step_links: [] },
+  };
+  const module = resultModule();
+  const s = await setup(t, { instructionProfile, sourceId: 'paper', writingMode: 'source-translation',
+    handoffProfile: instructionProfile === 'configured-reading-2.4' ? 'science-index-1.1' : SCIENCE_INDEX_PROFILE,
+    presentation, scienceContent: { results: { result_modules: [module] }, interpretation: { result_modules: [module] } },
+    integrationContent: { method_steps: [{ step_id: 'deplete', purpose: 'Identify the compartment.', input: 'Matched genotypes.', operation: 'Deplete the named cells.',
+      output: 'Growth difference.', next_use: 'Interpret specificity.', key_choices: ['Matched controls'], sources: module.sources }],
+      result_modules: [{ ...module, section_ids: ['findings', 'discussion'], upstream_refs: ['results', 'interpretation'].map(role => ({ role, module_id: module.id })) }] },
+    ...overrides });
+  s.fullView = language => ({ language, sections: ids.map(id => ({ id, module_id: id, heading: id,
+    paragraphs: ['The comparison retains its direction.', 'The control limits the interpretation.'] })), placements: { visuals: [], knowledge: [] } });
+  return s;
+}
+
+test('2.4 requires accepted result and interpretation modules in Writer and restored inputs', async t => {
+  const s = await contentCompleteSetup(t);
+  const payload = requestPayload(s.created.requests[0]);
+  assert.deepEqual(payload.handoff.required_science.map(item => item.role), ['results', 'interpretation']);
+  for (const item of payload.handoff.required_science) {
+    assert.deepEqual(item.modules, [resultModule()]);
+    assert.deepEqual(item.receipt, s.handoff.science.find(row => row.receipt.role === item.role).receipt);
+  }
+  assert.equal(s.created.requests[0].packet.backend.configuration.science_index.profile, 'science-index-1.1');
+  const receipt = await commitCheckpoint(s, s.created.controller);
+  const restored = await restoreReadingFirstRuntime({ handoff: s.handoff, runControl: s.runControl, checkpointReceipt: receipt });
+  assert.equal(restored.ok, true);
+  assert.deepEqual(requestPayload(restored.requests[0]).handoff.required_science, payload.handoff.required_science);
+});
+
+test('2.4 rejects translation paragraph merging while 2.3 keeps its original mirror', async t => {
+  for (const profile of ['configured-reading-2.4', 'configured-reading-2.3']) {
+    const s = await contentCompleteSetup(t, profile);
+    await s.complete(s.created.requests[0], s.fullView('en'));
+    const [translation] = createReadingFirstDraftRequests({ controller: s.created.controller });
+    const view = s.fullView('zh-CN');
+    view.sections[3].paragraphs = [view.sections[3].paragraphs.join(' ')];
+    if (profile.endsWith('2.4')) await assert.rejects(() => s.complete(translation, view), /READING_FIRST_TRANSLATION_STRUCTURE_INVALID/);
+    else await s.complete(translation, view);
+  }
+});
+
+test('2.4 rejects out-of-range paragraph placements before accepting a source view', async t => {
+  const s = await contentCompleteSetup(t);
+  const view = s.fullView('en');
+  view.placements.knowledge.push({ id: 'control', section_id: 'methods', after_paragraph: 2 });
+  await assert.rejects(() => s.complete(s.created.requests[0], view), /READING_FIRST_VIEW_LAYOUT_INVALID/);
+});
+
+test('2.4 rejects a Writer view that drops a mapped result section', async t => {
+  const s = await contentCompleteSetup(t);
+  const view = s.fullView('en');
+  view.sections = view.sections.filter(section => section.id !== 'discussion');
+  await assert.rejects(() => s.complete(s.created.requests[0], view), /READING_FIRST_VIEW_LAYOUT_INVALID/);
+});
+
+test('2.4 translation keeps knowledge body paragraphs and subsection structure', async t => {
+  for (const change of ['body', 'section', 'section-count']) {
+    const s = await contentCompleteSetup(t);
+    const source = s.fullView('en');
+    source.knowledge_content = [{ id: 'control', paragraphs: ['First principle.', 'Second principle.'],
+      sections: [{ heading: 'Interpretation', paragraphs: ['Meaning.', 'Boundary.'] }] }];
+    await s.complete(s.created.requests[0], source);
+    const [translation] = createReadingFirstDraftRequests({ controller: s.created.controller });
+    const view = { ...structuredClone(source), language: 'zh-CN' };
+    if (change === 'body') view.knowledge_content[0].paragraphs.pop();
+    if (change === 'section') view.knowledge_content[0].sections[0].paragraphs.pop();
+    if (change === 'section-count') view.knowledge_content[0].sections = [];
+    await assert.rejects(() => s.complete(translation, view), /READING_FIRST_TRANSLATION_STRUCTURE_INVALID/);
+  }
+});
 test('editor 1.4 guidance is bound and restored while retired editor profiles are rejected', async t => {
   const s = await setup(t, { presentationMode: 'reading-editor' });
   for (const request of s.created.requests) await s.complete(request, s.view(request.language));

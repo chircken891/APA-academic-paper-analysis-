@@ -100,7 +100,8 @@ export function syntheticThresholdStages(argument, map) {
 /** Synthetic owned artifacts and host observations; never dispatches a real model. */
 export async function reviewedReadingFirstFixture(t, options = {}) {
   const adopted = options.adoptedFrom;
-  const methodsFirst = options.methodsFirst === true;
+  const contentComplete = options.instructionProfile === 'configured-reading-2.4';
+  const methodsFirst = options.methodsFirst === true || contentComplete;
   const commentary = methodsFirst && options.commentary === true;
   const root = options.artifactRoot ?? await mkdtemp(join(tmpdir(), 'apa-rf-publication-'));
   if (!options.artifactRoot) t.after(() => rm(root, { recursive: true, force: true }));
@@ -232,8 +233,8 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
       knowledge_registry: { policy: 'current-shared-nodes-1.0', vault_root: options.currentRegistryRoot } } } : {}),
     ...(methodsFirst ? {
       sourceLanguage, writingMode: 'source-translation', maxTotalCalls: 20, presentationProfile: 'reading-editor-1.5',
-      handoffProfile: 'science-index-1.0',
-      configuredSetup: { ...buildConfiguredReadingInstructions({}, { instructionProfile: 'configured-reading-2.3' }), paths: { runRoot: root },
+      handoffProfile: contentComplete ? 'science-index-1.1' : 'science-index-1.0',
+      configuredSetup: { ...buildConfiguredReadingInstructions({}, { instructionProfile: options.instructionProfile ?? 'configured-reading-2.3' }), paths: { runRoot: root },
         ...(options.currentRegistryRoot ? { knowledge_registry: { policy: 'current-shared-nodes-1.0', vault_root: options.currentRegistryRoot } } : {}) },
     } : {}),
   });
@@ -286,9 +287,15 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
     : assetMapping ? { resource_handoff: { asset_mapping: options.assetMappingChange ? options.assetMappingChange(assetMapping) : assetMapping } }
     : ownedVisualResources ? { visual_resources: ownedVisualResources } : {};
   if (options.manifestDocx) await commitOwnedArtifact({artifactRoot:root,dispatchContext:broker.dispatchContext,capability:broker.issueCapability({runId,actorId:'results',role:'results',artifactPath:manifestTask.artifact_path,revision:'1'}),artifact:{artifact_id:manifestTask.artifact_id,content:manifestBytes},expectedRevision:'1'});
+  const resultModule = { id: 'held-out-performance', title: 'Held-out performance', question: 'Does the fixed rule retain sensitivity?', sources: [cutoffLocator],
+    comparisons: [{ objects: ['Participants with the outcome'], conditions: ['Independent cohort; fixed threshold of 6'],
+      observations: [{ statement: '8 of 10 participants screened positive.', direction: 'Positive classification in 8 of 10.', attribution: 'author_report', sources: [cutoffLocator] }] }],
+    explanations: [{ statement: 'The fixed threshold separates validation and evaluation.', attribution: 'author_interpretation', sources: [cutoffLocator] }] };
   for (const role of input.role_artifacts) await commitOwnedArtifact({ artifactRoot: root, dispatchContext: broker.dispatchContext,
     capability: broker.issueCapability({ runId, actorId: role, role, artifactPath: 'science/' + role + '.json', revision: '1' }),
     artifact: { artifact_id: role, content: JSON.stringify({ context: 'Registered synthetic scientific output for ' + role,
+      ...(contentComplete && ['results', 'interpretation', 'integration'].includes(role) ? { result_modules: [{ ...resultModule,
+        ...(role === 'integration' ? { section_ids: ['findings'], upstream_refs: ['results', 'interpretation'].map(role => ({ role, module_id: resultModule.id })) } : {}) }] } : {}),
       ...(role === 'integration' ? { presentation, ...ownedRegistration, ...(methodsFirst ? { method_steps: commentary ? [] : cutoffSteps } : {}) } : {}) }) }, expectedRevision: '1' });
   const scientificInput = { ...input, profile: 'reading-first-1.0' };
   const handoff = await buildReadingFirstHandoff({ run: { run_id: runId }, dispatchContext: broker.dispatchContext, artifactRoot: root, scientificInput });

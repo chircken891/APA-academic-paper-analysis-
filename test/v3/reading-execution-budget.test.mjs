@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { reserveExecution, markExecutionDispatched, recordExecutionReceipt, validateExecutionLedger, executionBudgetSummary, usesExecutionLedger } from '../../scripts/v3/reading-execution-budget.mjs';
 
-test('both configured 2.2 and 2.3 use the same execution ledger', () => {
-  for (const instruction_profile of ['configured-reading-2.2', 'configured-reading-2.3'])
+test('configured 2.2, 2.3 and 2.4 use the same execution ledger', () => {
+  for (const instruction_profile of ['configured-reading-2.2', 'configured-reading-2.3', 'configured-reading-2.4'])
     assert.equal(usesExecutionLedger({ configured_setup: { instruction_profile } }), true);
   assert.equal(usesExecutionLedger({ configured_setup: { instruction_profile: 'configured-reading-2.1' } }), false);
   assert.equal(usesExecutionLedger({}), false);
