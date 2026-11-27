@@ -14,6 +14,7 @@ import { buildReadingFirstPublicationReview, assertReadingFirstPublicationReview
 import { NOTE_RELOCATION_PROFILE, assertNoteRelocationReviewCurrent } from './note-relocation.mjs';
 import { KNOWLEDGE_MERGE_PROFILE, assertKnowledgeMergeReviewCurrent } from './knowledge-merge.mjs';
 import { MAP_REFRESH_PROFILE, assertMapRefreshReviewCurrent } from './research-map-refresh.mjs';
+import { KNOWLEDGE_ADDITION_PROFILE, assertKnowledgeAdditionReviewCurrent } from './knowledge-addition.mjs';
 
 const records = new WeakMap();
 const digest = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
@@ -292,6 +293,7 @@ export function assertBilingualReviewCurrent(review, currentArgs) {
   if (review?.reviewManifest?.profile === NOTE_RELOCATION_PROFILE) return assertNoteRelocationReviewCurrent(review);
   if (review?.reviewManifest?.profile === KNOWLEDGE_MERGE_PROFILE) return assertKnowledgeMergeReviewCurrent(review);
   if (review?.reviewManifest?.profile === MAP_REFRESH_PROFILE) return assertMapRefreshReviewCurrent(review);
+  if (review?.reviewManifest?.profile === KNOWLEDGE_ADDITION_PROFILE) return assertKnowledgeAdditionReviewCurrent(review);
   if (review?.reviewManifest?.profile === 'reading-first-obsidian-1.0') return assertReadingFirstPublicationReviewCurrent(review);
   const record = records.get(review);
   if (!record) fail('P22_REVIEW_NOT_OWNED');

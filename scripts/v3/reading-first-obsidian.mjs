@@ -204,7 +204,8 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
   const applicationSectionsById = new Map();
   const definitionIndexes = new Map();
   for (const item of knowledge) {
-    requireId(item.id); localized(item.title);
+    if (typeof item.id !== 'string' || !/^[A-Za-z][A-Za-z0-9-]*$/.test(item.id)) fail('RF_OBSIDIAN_ID_INVALID');
+    localized(item.title);
     if (!['method', 'concept'].includes(item.kind) || !['method-background', 'paper-fact'].includes(item.source_kind) || (!writerLayout && !Array.isArray(item.placements))) fail('RF_OBSIDIAN_KNOWLEDGE_INVALID');
     if (!writerLayout) item.placements.forEach(item => checkPlacement(item));
     if (sharedKnowledge) {
@@ -322,7 +323,7 @@ export function renderReadingFirstObsidian({ identity, views, presentation, targ
       let destination;
       const source = /^apa-source:([a-z][a-z0-9-]*)#page=([1-9][0-9]*)$/.exec(reference);
       const visual = /^apa-visual:([a-z][a-z0-9-]*)$/.exec(reference);
-      const concept = /^apa-knowledge:([a-z][a-z0-9-]*)$/.exec(reference);
+      const concept = /^apa-knowledge:([A-Za-z][A-Za-z0-9-]*)$/.exec(reference);
       if (source && sources.has(source[1]) && Number.isSafeInteger(Number(source[2]))) destination = href(target, sources.get(source[1])) + '#page=' + source[2];
       else if (visual && visuals.some(item => item.id === visual[1])) destination = visualLink(visual[1]);
       else if (concept && knowledge.some(item => item.id === concept[1])) destination = knowledgeHref(concept[1]);

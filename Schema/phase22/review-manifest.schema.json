@@ -21,6 +21,9 @@
       "$ref": "#/$defs/mapRefresh"
     },
     {
+      "$ref": "#/$defs/knowledgeAddition"
+    },
+    {
       "$ref": "#/$defs/topic"
     },
     {
@@ -31,6 +34,58 @@
     }
   ],
   "$defs": {
+    "knowledgeAddition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "profile", "identity", "status", "evidence_mode", "review_ready", "publishable", "reading_accepted", "native_presentation", "scientific_review_hash", "generation", "previous_generation", "previews", "support_notes", "assets", "read_dependencies", "dependencies", "tools", "index", "active", "write_set", "maintenance", "diagnostics", "provenance_limits"],
+      "properties": {
+        "schema_version": { "$ref": "#/$defs/noteRelocation/properties/schema_version" },
+        "profile": { "const": "phase22-knowledge-addition-1.0" },
+        "identity": { "$ref": "#/$defs/noteRelocation/properties/identity" },
+        "status": { "$ref": "#/$defs/noteRelocation/properties/status" },
+        "evidence_mode": { "$ref": "#/$defs/noteRelocation/properties/evidence_mode" },
+        "review_ready": { "$ref": "#/$defs/noteRelocation/properties/review_ready" },
+        "publishable": { "$ref": "#/$defs/noteRelocation/properties/publishable" },
+        "reading_accepted": { "$ref": "#/$defs/noteRelocation/properties/reading_accepted" },
+        "native_presentation": { "$ref": "#/$defs/noteRelocation/properties/native_presentation" },
+        "scientific_review_hash": { "$ref": "#/$defs/noteRelocation/properties/scientific_review_hash" },
+        "generation": { "$ref": "#/$defs/noteRelocation/properties/generation" },
+        "previous_generation": { "$ref": "#/$defs/noteRelocation/properties/previous_generation" },
+        "previews": { "$ref": "#/$defs/noteRelocation/properties/previews" },
+        "support_notes": { "$ref": "#/$defs/noteRelocation/properties/support_notes" },
+        "assets": { "$ref": "#/$defs/noteRelocation/properties/assets" },
+        "read_dependencies": { "$ref": "#/$defs/noteRelocation/properties/read_dependencies" },
+        "dependencies": { "$ref": "#/$defs/noteRelocation/properties/dependencies" },
+        "tools": { "$ref": "#/$defs/noteRelocation/properties/tools" },
+        "index": { "$ref": "#/$defs/noteRelocation/properties/index" },
+        "active": { "$ref": "#/$defs/noteRelocation/properties/active" },
+        "write_set": { "$ref": "#/$defs/noteRelocation/properties/write_set" },
+        "diagnostics": { "$ref": "#/$defs/noteRelocation/properties/diagnostics" },
+        "provenance_limits": { "$ref": "#/$defs/noteRelocation/properties/provenance_limits" },
+        "maintenance": {
+          "type": "object", "additionalProperties": false, "required": ["operation", "paper_id", "original_run_id", "methods", "nodes"],
+          "properties": {
+            "operation": { "const": "knowledge-addition" },
+            "paper_id": { "type": "string", "minLength": 1 },
+            "original_run_id": { "type": "string", "minLength": 1 },
+            "methods": { "type": "object", "additionalProperties": false, "required": ["path", "byte_sha256", "byte_length"],
+              "properties": { "path": { "type": "string", "pattern": "^Eval/apa-v3/runs/[^/]+/science/methods\\.json$" },
+                "byte_sha256": { "$ref": "#/$defs/noteRelocation/properties/scientific_review_hash" }, "byte_length": { "type": "integer", "minimum": 1 } } },
+            "nodes": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false,
+              "required": ["path", "candidate_index", "applications"], "properties": {
+                "path": { "type": "string", "pattern": "^Wiki/methods/[^/]+\\.md$" },
+                "candidate_index": { "type": "integer", "minimum": 0 },
+                "applications": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+              } } }
+          }
+        }
+      },
+      "allOf": [{
+        "if": { "properties": { "evidence_mode": { "const": "actual" } } },
+        "then": { "properties": { "status": { "const": "review_ready" }, "review_ready": { "const": true } } },
+        "else": { "properties": { "status": { "const": "synthetic_prepared" }, "review_ready": { "const": false } } }
+      }]
+    },
     "mapRefresh": {
       "type": "object",
       "additionalProperties": false,

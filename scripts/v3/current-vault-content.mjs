@@ -49,7 +49,7 @@ function parseNote(bytes, path, generation, index) {
     if (fm.pipeline_version !== '3.0' || !validId || (expectedType && fm.type !== expectedType)
       || (embedded?.kind && fm.type !== embedded.kind) || invalidRegisteredId
       || (embedded && fm.knowledge_id && fm.knowledge_id !== embedded.id)
-      || (embedded && fm.canonical_key && fm.canonical_key !== embedded.canonical_key)
+      || (embedded && fm.canonical_key && fm.canonical_key !== (embedded.canonical_key ?? embedded.id))
       || (embedded && (fm.measure_id || fm.concept_id) && (fm.measure_id ?? fm.concept_id) !== embedded.canonical_key)) fail('P23_CURRENT_IDENTITY_MISMATCH', { path });
   } else fail('P23_CURRENT_UNREGISTERED', { path });
   let managedHash = null;

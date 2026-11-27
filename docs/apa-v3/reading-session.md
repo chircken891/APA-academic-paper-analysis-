@@ -117,6 +117,8 @@ await recordReadingEvent(session, {
 
 修复限于首次整体审查已定位的 renderer 图号，并绑定同一来源、同一物理页或 DOCX 图号与段落位置。派生图片使用新的相对资源路径及指纹。原 Results 清单、图片、科学回执和首版候选继续作为基线，派生清单及原审查回执保存到 owned 检查点。恢复时重新核验这些绑定和实际图片字节，冲突重试被拒绝。两语候选与发布准备使用已核验的派生资源。会话核验受影响输出的变化后，准备原有的一次局部复核。
 
+首次整体审查已定位错误复用的共享知识条目时，通过 `renderer-repair` 的 `knowledgeResolutions` 提交改链。每项填写 `issue_id`、`knowledge_id`、`from_path`、`target_path` 和 `to_canonical_key`。控制器核对审查问题的范围、首版候选的错误目标和当前已登记的新目标。改链保存到 owned 检查点，以已接收的原稿重渲染两语候选，进入原有的一次局部复核。若同轮还需换图，分别登记改链和换图。
+
 **科学补缺**
 
 入口预登记 Evidence、Methods、Results 三个初始补缺任务，仅派发实际有缺口的角色。`includeRepairs:true` 时再登记三个后期补缺任务；未使用的登记不消耗调用，也不加入发布依赖。每项任务使用自身的 native、owned、指令路径和 `source_root`。

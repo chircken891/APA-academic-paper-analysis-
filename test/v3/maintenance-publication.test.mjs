@@ -68,6 +68,100 @@ test('map refresh CLI rejects an empty paper selection', async t => {
   await review(root, 'empty-map-refresh', 'map-refresh', { papers: [] }, 'P22_MAINTENANCE_OPTIONS_INVALID');
 });
 
+async function knowledgeAdditionFixture(t) {
+  const f = await published(t);
+  const root = f.vaultRoot, run = 'knowledge-addition-maintenance';
+  const prior = await readRegisteredCommit({ vaultRoot: root });
+  const paper = prior.generation.papers.find(row => row.paper_id === f.paperId);
+  const paperNotes = {}, before_sha256 = {}, index_lines = {};
+  for (const [language, path] of Object.entries(paper.paths)) {
+    const absolute = join(root, path), original = await readFile(absolute, 'utf8');
+    const heading = language === 'en' ? 'Methods and concepts at a glance' : '方法与概念索引';
+    index_lines[language] = `> [${language === 'en' ? 'Current method' : '本节方法'}](#^rf-methods)`;
+    // Existing current-content edits are allowed and must be carried through byte for byte.
+    const withIndex = `### 3.1 ${heading}\r\n\r\n> [!info] Test\r\n${index_lines[language]}\r\n\r\n### 3.2 Current method\r\n\r\nExisting material. ^rf-added-test-method\r\n\r\n`;
+    const bytes = Buffer.from(original.replace(`### 3.1 ${heading}\n`, '### Original method index\n')
+      .replace('<!-- AUTO:START reading -->\n', '$&' + withIndex) + '\nOwner annotation 🧪  \r\n');
+    assert.notEqual(bytes.toString('utf8'), original);
+    await writeFile(absolute, bytes);
+    paperNotes[language] = bytes;
+    before_sha256[language] = sha(bytes);
+  }
+  const runRoot = join(root, 'Eval', 'apa-v3', 'runs', paper.run_id);
+  await mkdir(join(runRoot, 'science'), { recursive: true });
+  await mkdir(join(runRoot, '.phase21-receipts'), { recursive: true });
+  const methodsPath = join(runRoot, 'science', 'methods.json');
+  const receiptPath = join(runRoot, '.phase21-receipts', 'methods.json');
+  const methods = { role: 'Methods', run_id: paper.run_id, revision: '1', reusable_knowledge_candidates: { items: [
+    { type: 'method', title: '示例聚合', english_title: 'Example aggregation', definition: 'Combine matched measures.',
+      operation: 'Average the measures.', applicability_and_limit: 'Use a common measurement scale.', source_location: 'paper, physical page 1' },
+    { type: 'method_context', title: '示例变换', english_title: 'Example transform', definition: 'Transform the resulting measure.',
+      operation: 'Double the value.', applicability_and_limit: 'It preserves the order of real numbers.', source_location: 'paper, physical page 1' },
+  ] } };
+  const methodsBytes = Buffer.from(JSON.stringify(methods));
+  const methods_sha256 = sha(methodsBytes);
+  const receiptBytes = Buffer.from(JSON.stringify({ schema_version: 'phase21-owned-artifact-receipt-1.0', artifact_id: 'methods',
+    run_id: paper.run_id, owner_actor_id: 'methods', role: 'methods', path: 'science/methods.json', revision: '1',
+    sha256: methods_sha256, byte_length: methodsBytes.length }));
+  await writeFile(methodsPath, methodsBytes);
+  await writeFile(receiptPath, receiptBytes);
+  const options = { paperId: paper.paper_id, before_sha256, methods_sha256, nodes: [
+    { id: 'example-aggregation', candidate_index: 0, paragraphs_zh: ['对同尺度的测量值取平均。'], page: 1,
+      applications: ['added-test-method'], index_lines },
+    { id: 'example-transform', candidate_index: 1, paragraphs_zh: ['将测量值乘以 2。'], page: 1,
+      applications: ['added-test-method'], index_lines },
+  ] };
+  return { root, run, prior, paper, paperNotes, index_lines, methodsPath, receiptPath, methods, methodsBytes, receiptBytes, options };
+}
+
+test('knowledge addition promotes only the approved method links and new shared nodes', async t => {
+  const { root, run, prior, paper, paperNotes, index_lines, methodsPath, receiptPath, methods, methodsBytes, receiptBytes, options } =
+    await knowledgeAdditionFixture(t);
+  const outOfScope = structuredClone(options);
+  outOfScope.nodes[0].index_lines.en = 'Existing material. ^rf-added-test-method';
+  await review(root, 'knowledge-addition-out-of-scope', 'knowledge-addition', outOfScope, 'P22_KNOWLEDGE_ADDITION_INDEX_LINE_INVALID');
+  const candidate = await review(root, run, 'knowledge-addition', options);
+  const reviewManifest = await json(join(publicationFolder(root, run), 'candidate/REVIEW.json'));
+  assert.equal(reviewManifest.profile, 'phase22-knowledge-addition-1.0');
+  assert.equal(reviewManifest.scientific_review_hash, paper.dependencies.reading_review);
+  assert.deepEqual(candidate.counts, { create: 6, overwrite: 3, delete: 0 });
+  assert.equal((await readRegisteredCommit({ vaultRoot: root })).generation_id, prior.generation_id);
+  const enPath = join(root, paper.paths.en);
+  await writeFile(enPath, Buffer.concat([paperNotes.en, Buffer.from('Changed after review.\n')]));
+  assert.equal(apply(root, run, candidate.inventory_sha256).error?.code, 'P22_KNOWLEDGE_ADDITION_PREIMAGE_CHANGED');
+  await writeFile(enPath, paperNotes.en);
+  await writeFile(methodsPath, Buffer.concat([methodsBytes, Buffer.from('\n')]));
+  assert.equal(apply(root, run, candidate.inventory_sha256).error?.code, 'P22_KNOWLEDGE_ADDITION_METHODS_CHANGED');
+  await writeFile(methodsPath, methodsBytes);
+  const result = apply(root, run, candidate.inventory_sha256);
+  assert.equal(result.status, 'committed', JSON.stringify(result));
+  const committed = await readCommittedGeneration({ vaultRoot: root });
+  assert.equal(committed.generation_id, run, JSON.stringify(committed.errors));
+  const { reader_presentation, ...updatedPaper } = committed.generation.papers.find(row => row.paper_id === paper.paper_id);
+  assert.deepEqual(updatedPaper, Object.fromEntries(Object.entries(paper).filter(([key]) => key !== 'reader_presentation')));
+  const presentation = verifyReadingFirstPresentation({ ...updatedPaper, reader_presentation },
+    await readFile(join(root, reader_presentation.path)), committed.generation);
+  for (const [language, path] of Object.entries(paper.paths)) {
+    const bytes = await readFile(join(root, path));
+    const links = bytes.toString('utf8').split('\r\n').find(line => line.startsWith(index_lines[language]));
+    assert.match(links, /\.md#(?:English|%E4%B8%AD%E6%96%87)\).* · .*\.md#/);
+    assert.deepEqual(Buffer.from(bytes.toString('utf8').replace(links, index_lines[language])), paperNotes[language]);
+    verifyReadingFirstPaperBytes({ ...updatedPaper, reader_presentation }, language, bytes, committed.generation, presentation);
+  }
+  for (const method of methods.reusable_knowledge_candidates.items) {
+    const path = `Wiki/methods/${method.title}.md`;
+    assert.ok(committed.generation.shared_nodes.some(row => row.path === path));
+    assert.ok(presentation.targets.support.some(row => row.path === path));
+    const content = await readFile(join(root, path), 'utf8');
+    assert.ok(content.includes(method.definition));
+    assert.equal((content.match(/#\^rf-added-test-method/g) ?? []).length, 2);
+    assert.equal(committed.index.documents.filter(row => row.path === path).length, 2);
+  }
+  assert.deepEqual(await readFile(methodsPath), methodsBytes);
+  assert.deepEqual(await readFile(receiptPath), receiptBytes);
+  assert.equal((await json(join(publicationFolder(root, run), 'VERIFICATION.json'))).status, 'passed');
+});
+
 async function legacyMapFixture(t) {
   const f = await published(t, { controlOptions: { presentationMode: 'writer', maxCalls: 6 } });
   const bilingual = (en, zh) => ({ en, 'zh-CN': zh });
@@ -626,6 +720,54 @@ test('maintenance registration rejects an overlong window before business writes
   assert.notEqual((await readRegisteredCommit({ vaultRoot: root })).generation_id, run);
 });
 
+async function interruptMaintenancePromotion({ root, run, candidate, kind, targetPath = '', inspectPromoted }) {
+  const module = new URL('../../scripts/v3/maintenance-publication.mjs', import.meta.url).href;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', `
+    import { applyMaintenanceReview } from ${JSON.stringify(module)};
+    const [vaultRoot, run, inventorySha256, targetKind, targetPath] = process.argv.slice(1);
+    const idle = setInterval(() => {}, 1000);
+    try {
+      await applyMaintenanceReview({ vaultRoot, run, inventorySha256, authorizationId: 'crash-approved', userReply: '批准',
+        async onPromotionBoundary({ timing, path, kind }) {
+          if (timing === 'after' && kind === targetKind && (!targetPath || path === targetPath)) {
+            process.send({ timing, path, kind });
+            await new Promise(() => {});
+          }
+        } });
+    } finally { clearInterval(idle); }
+  `, root, run, candidate.inventory_sha256, kind, targetPath], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+  const exit = once(child, 'exit');
+  let stderr = '';
+  child.stderr.on('data', data => { stderr += data; });
+  let timeout;
+  try {
+    const message = await Promise.race([
+      once(child, 'message').then(([message]) => message),
+      once(child, 'close').then(([code]) => assert.fail(`maintenance process exited before interruption (${code}): ${stderr}`)),
+      new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('maintenance promotion was not reached')), 60_000); }),
+    ]);
+    assert.equal(message.timing, 'after');
+    assert.equal(message.kind, kind);
+    if (targetPath) assert.equal(message.path, targetPath);
+    await inspectPromoted();
+  } finally {
+    clearTimeout(timeout);
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await exit;
+  }
+  assert.equal((await exit)[1], 'SIGKILL');
+}
+
+async function recoverInterruptedMaintenance(root, run) {
+  const intent = await json(join(publicationFolder(root, run), 'INTENT.json'));
+  const result = cli(root, 'recover', run, ['--transaction-id', intent.transaction_id],
+    { ...process.env, APA_V3_PUBLICATION_TRUST_ANCHOR: JSON.stringify(intent.trust_anchor) });
+  assert.equal(result.exit, 0, JSON.stringify(result));
+  assert.equal(result.status, 'rolled_back', JSON.stringify(result));
+  assert.equal(result.transaction_id, intent.transaction_id);
+  return result;
+}
+
 for (const [mode, existingCanvas] of [['relocate', false], ['map-refresh', false], ['map-refresh', true]]) test(
   `existing recover rolls back ${existingCanvas ? 'registered map refresh' : mode} interrupted during promotion`, { timeout: 120_000 }, async t => {
   const legacy = mode === 'map-refresh' ? await legacyMapFixture(t) : null;
@@ -641,42 +783,68 @@ for (const [mode, existingCanvas] of [['relocate', false], ['map-refresh', false
   const notePaths = f.candidate.notes.map(note => note.path);
   const notes = await Promise.all(notePaths.map(path => readFile(join(root, path))));
   const marker = join(root, '.apa-v3/phase22/COMMITTED.json'), prior = await readFile(marker);
-  const module = new URL('../../scripts/v3/maintenance-publication.mjs', import.meta.url).href;
-  const child = spawn(process.execPath, ['--input-type=module', '-e', `
-    import { applyMaintenanceReview } from ${JSON.stringify(module)};
-    const [vaultRoot, run, inventorySha256] = process.argv.slice(1);
-    const idle = setInterval(() => {}, 1000);
-    try {
-      await applyMaintenanceReview({ vaultRoot, run, inventorySha256, authorizationId: 'crash-approved', userReply: '批准',
-        async onPromotionBoundary({ timing, kind }) {
-          if (timing === 'after' && kind === 'asset') {
-            process.send('promoted');
-            await new Promise(() => {});
-          }
-        } });
-    } finally { clearInterval(idle); }
-  `, root, run, candidate.inventory_sha256], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
-  const exit = once(child, 'exit');
-  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
-  let stderr = '';
-  child.stderr.on('data', data => { stderr += data; });
-  await Promise.race([
-    once(child, 'message').then(([message]) => assert.equal(message, 'promoted')),
-    once(child, 'close').then(([code]) => assert.fail(`maintenance process exited before interruption (${code}): ${stderr}`)),
-  ]);
-  const promotedAsset = await readFile(join(root, firstAsset));
-  assert.ok(promotedAsset.length > 0);
-  if (beforeAsset) assert.notDeepEqual(promotedAsset, beforeAsset);
-  child.kill('SIGKILL');
-  assert.equal((await exit)[1], 'SIGKILL');
-  const intent = await json(join(publicationFolder(root, run), 'INTENT.json'));
-  const result = cli(root, 'recover', run, ['--transaction-id', intent.transaction_id],
-    { ...process.env, APA_V3_PUBLICATION_TRUST_ANCHOR: JSON.stringify(intent.trust_anchor) });
-  assert.equal(result.status, 'rolled_back', JSON.stringify(result));
+  await interruptMaintenancePromotion({ root, run, candidate, kind: 'asset', async inspectPromoted() {
+    const promotedAsset = await readFile(join(root, firstAsset));
+    assert.ok(promotedAsset.length > 0);
+    if (beforeAsset) assert.notDeepEqual(promotedAsset, beforeAsset);
+  } });
+  await recoverInterruptedMaintenance(root, run);
   assert.deepEqual(await readFile(marker), prior);
   if (beforeAsset) assert.deepEqual(await readFile(join(root, firstAsset)), beforeAsset);
   else await assert.rejects(readFile(join(root, firstAsset)), { code: 'ENOENT' });
   assert.deepEqual(await Promise.all(notePaths.map(path => readFile(join(root, path)))), notes);
   assert.equal((await readCommittedGeneration({ vaultRoot: root })).ok, true);
   assert.equal((await json(join(publicationFolder(root, run), 'VERIFICATION.json'))).status, 'rolled_back');
+});
+
+for (const [kind, scenario] of [['support', 'creating the shared method node'], ['paper', 'overwriting the English paper note']]) test(
+  `existing recover rolls back knowledge addition interrupted after ${scenario}`, { timeout: 120_000 }, async t => {
+  const { root, run, prior, paper, paperNotes, methodsPath, receiptPath, methodsBytes, receiptBytes, options } =
+    await knowledgeAdditionFixture(t);
+  const candidate = await review(root, run, 'knowledge-addition', options);
+  const targetPath = kind === 'support' ? candidate.targets.find(path => path === 'Wiki/methods/示例聚合.md') : paper.paths.en;
+  assert.ok(candidate.targets.includes(targetPath));
+  const target = join(root, targetPath);
+  const marker = join(root, '.apa-v3/phase22/COMMITTED.json'), markerBefore = await readFile(marker);
+  const shared = await Promise.all(prior.generation.shared_nodes.map(async ({ path }) => [path, await readFile(join(root, path))]));
+  assert.ok(shared.length > 0);
+  if (kind === 'support') await assert.rejects(readFile(target), { code: 'ENOENT' });
+  else assert.deepEqual(await readFile(target), paperNotes.en);
+  const folder = publicationFolder(root, run);
+  const approvalPath = join(folder, 'APPROVAL.json');
+  let approval;
+  await interruptMaintenancePromotion({ root, run, candidate, kind, targetPath, async inspectPromoted() {
+    approval = await readFile(approvalPath);
+    const { authorization_id, inventory_sha256 } = JSON.parse(approval);
+    assert.equal(authorization_id, 'crash-approved');
+    assert.equal(inventory_sha256, candidate.inventory_sha256);
+    const promoted = await readFile(target);
+    if (kind === 'support') assert.match(promoted.toString('utf8'), /Combine matched measures\./);
+    else assert.notDeepEqual(promoted, paperNotes.en);
+    assert.deepEqual(await readFile(marker), markerBefore);
+  } });
+  const result = await recoverInterruptedMaintenance(root, run);
+  assert.deepEqual(await readFile(approvalPath), approval);
+  assert.deepEqual(await readFile(marker), markerBefore);
+  if (kind === 'support') await assert.rejects(readFile(target), { code: 'ENOENT' });
+  assert.deepEqual(await readFile(join(root, paper.paths.en)), paperNotes.en);
+  assert.deepEqual(await readFile(join(root, paper.paths['zh-CN'])), paperNotes['zh-CN']);
+  for (const [path, bytes] of shared) assert.deepEqual(await readFile(join(root, path)), bytes, path);
+  assert.deepEqual(await readFile(methodsPath), methodsBytes);
+  assert.deepEqual(await readFile(receiptPath), receiptBytes);
+  const verification = await json(join(folder, 'VERIFICATION.json'));
+  assert.equal(verification.status, 'rolled_back');
+  assert.equal(verification.transaction_id, result.transaction_id);
+  assert.equal(verification.journal_path, result.journal_path);
+  assert.equal(verification.generation, prior.generation_id);
+  const observed = await Promise.all(candidate.targets.map(async path => {
+    try {
+      const bytes = await readFile(join(root, path));
+      return { path, sha256: sha(bytes), byte_length: bytes.length };
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      return { path, sha256: null, byte_length: null };
+    }
+  }));
+  assert.deepEqual(verification.verified_files, observed);
 });

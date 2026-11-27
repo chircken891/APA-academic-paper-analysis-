@@ -378,13 +378,13 @@ function downstreamHandoff(state) {
 }
 
 // Owned recovery records amend the consumed catalogue; the original handoff stays immutable.
-function continuedKnowledgeResolutions(state) {
+function reviewedKnowledgeResolutions(state) {
   return (state.continuationAuthorizations ?? []).flatMap(row =>
-    row.authorization.original_page_chart_repair?.knowledge_resolutions ?? []);
+    row.authorization.original_page_chart_repair?.knowledge_resolutions ?? []).concat(state.rendererKnowledgeResolutions ?? []);
 }
 
 function resolvedPresentation(state, original) {
-  const continued = continuedKnowledgeResolutions(state);
+  const continued = reviewedKnowledgeResolutions(state);
   if (!state.resourceRepair && !state.knowledgeIdentityResolutions?.length && !continued.length) return original;
   const presentation = copy(original);
   for (const row of state.resourceRepair?.resources ?? []) {
@@ -417,7 +417,7 @@ function effectivePresentation(state) {
 }
 
 function assertResolvedKnowledgePaths(state, registry, rebase = false) {
-  for (const resolution of [...(state.knowledgeIdentityResolutions ?? []), ...continuedKnowledgeResolutions(state)]) {
+  for (const resolution of [...(state.knowledgeIdentityResolutions ?? []), ...reviewedKnowledgeResolutions(state)]) {
     if (registry.some(row => row.path === resolution.target_path && row.canonical_key === resolution.to_canonical_key
       && typeof row.content === 'string')) continue;
     if (rebase) {
@@ -1062,6 +1062,40 @@ async function continuationCheckpoint(state,recovery) {
 }
 const materialIssues = review => (review?.issues ?? []).flatMap((issue,index)=>issue.severity==='material' ? [{issue,id:'issue-'+(index+1)}] : []);
 
+function validReviewedKnowledgeResolutions(resolutions) {
+  const fields = ['issue_id', 'knowledge_id', 'from_path', 'target_path', 'to_canonical_key'];
+  return Array.isArray(resolutions) && resolutions.every(row => row && Object.keys(row).length === fields.length
+    && fields.every(key => text(row[key])) && row.from_path !== row.target_path)
+    && new Set(resolutions.map(row => row.knowledge_id)).size === resolutions.length
+    && new Set(resolutions.map(row => row.from_path)).size === resolutions.length;
+}
+
+/** Replace an incorrectly reused shared node using the original review and current registry. */
+export async function recordReadingFirstRendererKnowledgeRepair({ controller, resolutions } = {}) {
+  const state = stateFor(controller);
+  current(state);
+  const invalid = 'READING_FIRST_RENDERER_KNOWLEDGE_REPAIR_INVALID';
+  if (!validReviewedKnowledgeResolutions(resolutions) || !resolutions.length) fail(invalid);
+  if (state.rendererKnowledgeResolutions) {
+    if (!sameArray(state.rendererKnowledgeResolutions, resolutions)) fail('READING_FIRST_RENDERER_KNOWLEDGE_REPAIR_CONFLICT');
+    return { recorded: false };
+  }
+  if (state.reviews !== 1 || !['revision_required', 'pending_review'].includes(state.status) || pendingUserRevision(state)) fail(invalid);
+  const issues = materialIssues(activeReview(state));
+  const reviewed = requests.get(state.requestEntries.get('review'))?.payload?.presentation?.knowledgeProposals ?? [];
+  const continued = reviewedKnowledgeResolutions(state);
+  for (const row of resolutions) {
+    const issue = issues.find(({ id }) => id === row.issue_id)?.issue;
+    if (issue?.repair_owner !== 'renderer' || issue.repair_scope?.status !== 'located'
+      || !issue.repair_scope.knowledge_ids.includes(row.knowledge_id) || !issue.affected_paths.includes(row.from_path)
+      || !reviewed.some(proposal => proposal.id === row.knowledge_id && proposal.path === row.from_path)
+      || continued.some(prior => prior.knowledge_id === row.knowledge_id || prior.from_path === row.from_path)) fail(invalid);
+  }
+  await validateReviewedKnowledgeTargets(state, resolutions, invalid);
+  state.rendererKnowledgeResolutions = copy(resolutions);
+  return { recorded: true };
+}
+
 const originalPagePolicy = Object.freeze({sources:[],allow_targeted_methods:false});
 const originalPageResultsKey = 'enrich-late-results';
 
@@ -1080,11 +1114,7 @@ function originalPageChartGap(state, scope, review=activeReview(state)) {
     || visual.locator?.kind!=='pdf-page' || !Number.isSafeInteger(visual.locator.page) || visual.locator.page<1) fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
   const resolutions = scope.knowledge_resolutions ?? [];
   const otherIssues = material.filter(row => row !== entry);
-  const fields = ['issue_id', 'knowledge_id', 'from_path', 'target_path', 'to_canonical_key'];
-  if (!Array.isArray(resolutions) || resolutions.some(row => !row || Object.keys(row).length !== fields.length
-    || fields.some(key => !text(row[key])) || row.from_path === row.target_path)
-    || new Set(resolutions.map(row => row.knowledge_id)).size !== resolutions.length
-    || new Set(resolutions.map(row => row.from_path)).size !== resolutions.length
+  if (!validReviewedKnowledgeResolutions(resolutions)
     || otherIssues.some(({ issue, id }) => issue.repair_owner !== 'renderer' || issue.repair_scope?.status !== 'located'
       || !issue.repair_scope.knowledge_ids.length || issue.repair_scope.knowledge_ids.some(knowledgeId =>
         !resolutions.some(row => row.issue_id === id && row.knowledge_id === knowledgeId)))
@@ -1095,18 +1125,18 @@ function originalPageChartGap(state, scope, review=activeReview(state)) {
   return {gap,visual,knowledgeIds:issue.repair_scope.knowledge_ids};
 }
 
-async function validateContinuationKnowledge(state, resolutions) {
+async function validateReviewedKnowledgeTargets(state, resolutions, errorCode = 'READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID') {
   if (!resolutions?.length) return;
   const policy = state.binding.configured_setup?.knowledge_registry;
   const presentation = state.handoff.presentation;
-  if (policy?.policy !== KNOWLEDGE_REGISTRY_POLICY || presentation.knowledge_layout !== 'shared-bilingual-1.0') {
-    fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
+  if (policy?.policy !== KNOWLEDGE_REGISTRY_POLICY || presentation?.knowledge_layout !== 'shared-bilingual-1.0') {
+    fail(errorCode);
   }
   const knowledgeRegistry = await readCommittedReadingFirstKnowledgeRegistry({ binding: state.binding });
   for (const row of resolutions) {
     const item = presentation.knowledge.find(item => item.id === row.knowledge_id);
     if (item?.source_kind !== 'method-background' || state.knowledgeIdentityResolutions?.some(prior => prior.knowledge_id === row.knowledge_id)) {
-      fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
+      fail(errorCode);
     }
     const target = knowledgeRegistry.find(target => target.path === row.target_path && typeof target.content === 'string');
     const directory = item.kind === 'method' ? 'Wiki/methods/' : 'Wiki/concepts/';
@@ -1114,7 +1144,7 @@ async function validateContinuationKnowledge(state, resolutions) {
     const confirmed = matchReadingFirstKnowledgeIdentity({ item: { ...item, canonical_key: row.to_canonical_key }, knowledgeRegistry });
     if (!target?.path.startsWith(directory) || target.canonical_key !== row.to_canonical_key
       || !sameArray(initial.paths, [row.from_path]) || !sameArray(confirmed.paths, [row.target_path])) {
-      fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
+      fail(errorCode);
     }
   }
   assertCommittedReadingFirstKnowledgeRegistry({ vaultRoot: policy.vault_root, registry: knowledgeRegistry,
@@ -1262,7 +1292,7 @@ export async function inspectReadingFirstContinuation({controller,checkpointRece
         || state.binding.task_bindings[originalPageResultsKey] || state.issued.has(originalPageResultsKey)
         || reviewRepairPlan(state.binding,activeReview(state)).affected.length!==languages.length) fail('READING_FIRST_ORIGINAL_PAGE_CHART_REPAIR_INVALID');
       originalPageChartGap(state,originalPageChartRepair);
-      await validateContinuationKnowledge(state, originalPageChartRepair.knowledge_resolutions);
+      await validateReviewedKnowledgeTargets(state, originalPageChartRepair.knowledge_resolutions);
       const correction = originalPageChartRepair.translation_correction;
       if (correction !== undefined) validateContinuationTranslation(correction, state.views[correction?.language]?.value, 'before', state.binding);
     }
@@ -1683,12 +1713,13 @@ function validateReviewRequest(state, presentation, renderRepair) {
       ...(state.renderRepairBaseEditor ? {readingEditor:state.renderRepairBaseEditor} : {}),...rendered.rendering,
       instructionProfile:state.binding.configured_setup?.instruction_profile, expandedMethodIndex:state.binding.configured_setup?.expanded_method_index, stagedResearchMap:state.binding.configured_setup?.staged_research_map, noteLayout:state.binding.note_layout,sourceLanguage:state.binding.source_language});
     const rendererChanges=presentationNotes(baseline, true);
-    const relinks = continuedKnowledgeResolutions(state);
-    const retiredPath = path => relinks.some(({ from_path, target_path, knowledge_id }) => from_path === path
+    const relinks = reviewedKnowledgeResolutions(state);
+    const retiredPath = (issueId, path) => relinks.some(({ issue_id, from_path, target_path, knowledge_id }) => issue_id === issueId && from_path === path
       && !updated.has(path) && !rendererChanges.has(path) && rendererChanges.has(target_path)
       && presentation.supportNotes.some(note => note.id === knowledge_id && note.path === target_path));
+    const rendererIssues = materialIssues(activeReview(state)).filter(({ issue }) => issue.repair_owner === 'renderer');
     if (!local || ['completed_with_limits','reading_complete'].includes(state.status) || presentation.presentation_fingerprint===state.reviewedPresentationFingerprint
-      || plan.renderer.some(issue=>issue.affected_paths.some(path=>!original.has(path) || !retiredPath(path)
+      || rendererIssues.some(({ id, issue })=>issue.affected_paths.some(path=>!original.has(path) || !retiredPath(id,path)
         && (!updated.has(path) || !rendererChanges.has(path) || original.get(path)===rendererChanges.get(path))))) fail('READING_FIRST_RENDER_REPAIR_UNAVAILABLE');
   } else if (renderRepair && (state.binding.presentation_mode!=='reading-editor' || !local || state.status!=='reading_complete' || !minorRenderIssues.length || !state.readingEditor || presentation.presentation_fingerprint===state.reviewedPresentationFingerprint)) fail('READING_FIRST_RENDER_REPAIR_UNAVAILABLE');
   if ((!renderRepair && ['reading_complete','completed_with_limits'].includes(state.status)) || state.reviews>=reviewLimit(state) || state.issued.has(repairKey(state,'review'))) fail('READING_FIRST_REVIEW_ALREADY_REQUESTED');
@@ -1842,6 +1873,7 @@ function readingFirstSnapshot(state) {
     state:{...(state.executionLedger ? {executionLedger:state.executionLedger} : {}),...(state.rejection ? {rejection:state.rejection} : {}),...(state.readingEditor ? {readingEditor:state.readingEditor} : {}),...(state.reviewedPresentationFingerprint ? {reviewedPresentationFingerprint:state.reviewedPresentationFingerprint} : {}),...(state.renderRepairBaseViews ? {renderRepairBaseViews:state.renderRepairBaseViews} : {}),...(state.renderRepairBaseEditor ? {renderRepairBaseEditor:state.renderRepairBaseEditor} : {}),...(state.renderRepairBaseEditorReceipt ? {renderRepairBaseEditorReceipt:state.renderRepairBaseEditorReceipt} : {}),...(state.writingGuide ? {writingGuide:state.writingGuide} : {}),...(state.scienceIndexNote ? {scienceIndexNote:state.scienceIndexNote} : {}),callsUsed:state.callsUsed,status:state.status,draftsRevision:state.draftsRevision,views:state.views,review:state.review,reviews:state.reviews,observations:state.observations,requestLog:state.requestLog,
       ...(state.repairRecoveries ? {repairRecoveries:state.repairRecoveries} : {}),...(state.continuationAuthorizations ? {continuationAuthorizations:state.continuationAuthorizations} : {}),...(state.reviewScopeNotes ? {reviewScopeNotes:state.reviewScopeNotes} : {}),...(state.revisionNeedsContinuation ? {revisionNeedsContinuation:true} : {}),...(state.candidateInventories ? {candidateInventories:state.candidateInventories} : {}),...(state.user_revisions ? {user_revisions:state.user_revisions} : {}),...(state.userRevisionChecks ? {userRevisionChecks:state.userRevisionChecks} : {}),...(state.userRevisionWithdrawals ? {userRevisionWithdrawals:state.userRevisionWithdrawals} : {}),...(state.repairContinuation ? {repairContinuation:state.repairContinuation} : {}),...(state.reviewExtension ? {reviewExtension:state.reviewExtension} : {}),
       ...(state.knowledgeIdentityResolutions ? { knowledgeIdentityResolutions: state.knowledgeIdentityResolutions } : {}),
+      ...(state.rendererKnowledgeResolutions ? { rendererKnowledgeResolutions: state.rendererKnowledgeResolutions } : {}),
       ...(state.resourceRepair ? { resourceRepair: state.resourceRepair } : {}),
       enrichmentSources:state.enrichmentSources,enrichmentRecords:state.enrichmentRecords,enrichmentGaps:state.enrichmentGaps,enrichmentRound:state.enrichmentRound,
       ...(state.enrichmentReviewCount === undefined ? {} : { enrichmentReviewCount: state.enrichmentReviewCount }),

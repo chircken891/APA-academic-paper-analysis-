@@ -162,6 +162,22 @@ test('a repeatedly changing note produces a bounded failure without a mixed snap
   assert.equal(observations, 2);
 });
 
+test('current content reads the canonical key rendered from a legacy item ID', async t => {
+  const f = await readingFirstIndexFixture(t, { legacyKnowledgeKey: true });
+  await f.save(await f.build());
+  const path = f.manifest.targets.support[0].path;
+  const absolute = join(f.vaultRoot, path);
+  const original = await readFile(absolute, 'utf8');
+  assert.match(original, /^canonical_key: rate$/m);
+  const snapshot = await readCurrentVaultContent({ vaultRoot: f.vaultRoot });
+  assert.deepEqual(snapshot.diagnostics, []);
+  assert.equal(readCurrentRegisteredBytes(snapshot, path).bytes.toString(), original);
+
+  await writeFile(absolute, original.replace(/^canonical_key: rate$/m, 'canonical_key: different'));
+  const invalid = await readCurrentVaultContent({ vaultRoot: f.vaultRoot });
+  assert.ok(invalid.diagnostics.some(row => row.path === path && row.code === 'P23_CURRENT_IDENTITY_MISMATCH'));
+});
+
 test('deleting shared node identity or changing its type isolates that node', async t => {
   for (const mutate of [text => text.replace(/^knowledge_id:.*\r?\n/m, ''), text => text.replace(/^canonical_key:.*\r?\n/m, ''),
     text => text.replace(/^type: method\r?$/m, 'type: concept')]) {

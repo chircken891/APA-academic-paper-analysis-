@@ -8,7 +8,7 @@ import { buildBilingualIndex } from '../../../scripts/v3/phase22-search.mjs';
 import { phase22GenerationPaths, PHASE22_COMMIT_PATH } from '../../../scripts/v3/phase22-active-version.mjs';
 
 export const digest = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
-export async function readingFirstIndexFixture(t, { suffix = 'a', vaultRoot, knowledgeRegistry = [] } = {}) {
+export async function readingFirstIndexFixture(t, { suffix = 'a', vaultRoot, knowledgeRegistry = [], legacyKnowledgeKey = false } = {}) {
   const root = vaultRoot ?? await mkdtemp(join(tmpdir(), 'reading-first-index-'));
   if (!vaultRoot) t.after(() => rm(root, { recursive: true, force: true }));
   const identity = { paper_id: 'pap_' + suffix.repeat(32), run_id: 'run_' + suffix.repeat(32), analysis_revision: 'rev_' + suffix.repeat(32) };
@@ -19,7 +19,7 @@ export async function readingFirstIndexFixture(t, { suffix = 'a', vaultRoot, kno
     source_pdf: 'Raw/synthetic-' + suffix + '.pdf',
     sections: [{ id: 'methods', indices: { en: 0, 'zh-CN': 0 } }, { id: 'results', indices: { en: 1, 'zh-CN': 1 } }],
     visuals: [{ id: 'figure', kind: 'figure', label: { en: 'Figure', 'zh-CN': '图' }, caption: { en: 'Synthetic caption.', 'zh-CN': '合成图注。' }, path: 'Figures/synthetic-' + suffix + '.png', page: 1, section_id: 'results' }],
-    knowledge: [{ id: 'rate', canonical_key: 'synthetic-rate', kind: 'method', title: { en: 'Synthetic rate', 'zh-CN': '合成率' }, source_kind: 'method-background', aliases: ['SyntheticRateAlias'], paragraphs: { en: ['Only sharedknowledgeneedle is explained here.'], 'zh-CN': ['这里专门解释共享知识检索词。'] }, placements: [{ section_id: 'methods' }] }],
+    knowledge: [{ id: 'rate', ...(legacyKnowledgeKey ? {} : { canonical_key: 'synthetic-rate' }), kind: 'method', title: { en: 'Synthetic rate', 'zh-CN': '合成率' }, source_kind: 'method-background', aliases: ['SyntheticRateAlias'], paragraphs: { en: ['Only sharedknowledgeneedle is explained here.'], 'zh-CN': ['这里专门解释共享知识检索词。'] }, placements: [{ section_id: 'methods' }] }],
   };
   const views = ['en', 'zh-CN'].map(language => ({ language, sections: [
     { heading: language === 'en' ? 'Methods' : '方法', paragraphs: [language === 'en' ? 'Connected synthetic design.' : '连贯合成设计。'] },

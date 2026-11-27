@@ -10,6 +10,7 @@ import { applyBilingualPublication, dryRunBilingualPublication, inspectBilingual
 import { buildNoteRelocationReview } from './note-relocation.mjs';
 import { buildKnowledgeMergeReview, buildKnowledgeMergeCompensationReview } from './knowledge-merge.mjs';
 import { buildMapRefreshReview } from './research-map-refresh.mjs';
+import { buildKnowledgeAdditionReview, validateKnowledgeAdditionOptions } from './knowledge-addition.mjs';
 
 const profile = 'phase22-maintenance-publication-1.0';
 const optionsSchema = 'phase22-maintenance-options-1.0';
@@ -91,7 +92,8 @@ function checkOptions(mode, options) {
       if (options.trustAnchor.schema_version !== 'phase22-controller-trust-1.0' || !isText(options.trustAnchor.vault_root)
         || !identifier(options.trustAnchor.run_id) || !isText(options.trustAnchor.public_key)) fail('P22_MAINTENANCE_OPTIONS_INVALID', { field: 'trustAnchor' });
     }
-  } else fail('P22_MAINTENANCE_MODE_INVALID', { mode });
+  } else if (mode === 'knowledge-addition') validateKnowledgeAdditionOptions(options);
+  else fail('P22_MAINTENANCE_MODE_INVALID', { mode });
   if (Object.hasOwn(options, 'generation') && !identifier(options.generation)) fail('P22_MAINTENANCE_OPTIONS_INVALID', { field: 'generation' });
   return options;
 }
@@ -143,6 +145,7 @@ async function build({ root, run, mode, options }) {
   let review;
   if (mode === 'relocate') review = await buildNoteRelocationReview({ ...input, vaultRoot: root, runId: run, generation });
   else if (mode === 'map-refresh') review = await buildMapRefreshReview({ ...input, vaultRoot: root, runId: run, generation });
+  else if (mode === 'knowledge-addition') review = await buildKnowledgeAdditionReview({ vaultRoot: root, runId: run, generation, input });
   else if (mode === 'merge') review = await buildKnowledgeMergeReview({ ...input, copyRegisteredContent: true, repoRoot: root, runId: run, generationId: generation });
   else review = await buildKnowledgeMergeCompensationReview({ ...input, repoRoot: root, runId: run, generationId: generation });
   const { plan } = await dryRunBilingualPublication({ vaultRoot: root, run, review });

@@ -25,7 +25,7 @@ import { abandonReadingRuntimeSnapshotReference, prepareReadingRuntimeSnapshot, 
 import { closeReadingRuntimeRun, cleanupReadingRuntimeRun, readReadingRuntimeTerminal, registerReadingRuntimeCleanupFiles, withReadingRuntimeConsumer } from './reading-runtime-cleanup.mjs';
 import { prepareReadingSessionExecution, readReadingSessionExecution, retryReadingSessionCleanup } from './reading-session-cli.mjs';
 import { createOwnedArtifactBroker, commitOwnedArtifact, readOwnedArtifact } from './owned-artifact-store.mjs';
-import { recoverReadingFirstRejectedEditor, authorizeReadingFirstContinuation, inspectReadingFirstContinuation, annotateReadingFirstReviewScope, inspectReadingFirstSavedCandidate, registerReadingFirstUserRevision, finalizeReadingFirstUserRevision, retainReviewedReadingFirstCandidate, recordReadingFirstKnowledgeIdentityResolution, recordReadingFirstResourceRepair, getReadingFirstRenderedResources } from './reading-first-runtime.mjs';
+import { recoverReadingFirstRejectedEditor, authorizeReadingFirstContinuation, inspectReadingFirstContinuation, annotateReadingFirstReviewScope, inspectReadingFirstSavedCandidate, registerReadingFirstUserRevision, finalizeReadingFirstUserRevision, retainReviewedReadingFirstCandidate, recordReadingFirstKnowledgeIdentityResolution, recordReadingFirstRendererKnowledgeRepair, recordReadingFirstResourceRepair, getReadingFirstRenderedResources } from './reading-first-runtime.mjs';
 import { createScienceController, restoreScienceController, getScienceState, prepareScienceRequests, getScienceRequest, recordScienceDispatchIntent, recordScienceHostObservation, acceptScienceResult, createScienceHandoff, getScienceCompactionReminder } from './science-controller.mjs';
 import { fingerprintReadingFirst, restoreReadingFirstRuntime, snapshotReadingFirstRuntime, getReadingFirstPendingRequests, getReadingFirstState, recordReadingFirstRequestEvent, getReadingFirstRequestEvents, acceptReadingFirstResult, createReadingFirstEnrichmentRequests, createReadingFirstDraftRequests, createReadingFirstPresentationRequest, createReadingFirstReviewRequest, createReadingFirstRevisionRequests, validateReadingFirstRenderRepair, getReadingCompactionReminder, captureReadingFirstPublicationSource } from './reading-first-runtime.mjs';
 
@@ -309,6 +309,7 @@ function extendsSnapshot(later, earlier) {
   if ((b.continuationAuthorizations ?? []).some((row,index)=>!a.continuationAuthorizations?.[index] || !same(a.continuationAuthorizations[index],row))) return false;
   if (b.repairContinuation && (!a.repairContinuation || !same(a.repairContinuation,b.repairContinuation))) return false;
   if (b.resourceRepair && (!a.resourceRepair || !same(a.resourceRepair, b.resourceRepair))) return false;
+  if (b.rendererKnowledgeResolutions && (!a.rendererKnowledgeResolutions || !same(a.rendererKnowledgeResolutions, b.rendererKnowledgeResolutions))) return false;
   if (b.executionLedger) {
     if (!a.executionLedger || a.executionLedger.length < b.executionLedger.length) return false;
     const rank = { prepared: 0, issued: 1, observed: 2 };
@@ -1110,6 +1111,13 @@ async function recordSessionEvent(session, event = {}) {
   }
   if (event.kind === 'renderer-repair') {
     if (event.resources !== undefined || event.renderOptions !== undefined && !validRenderOptions(event.renderOptions)) fail('READING_SESSION_RESOURCE_INPUT_INVALID');
+    if (event.knowledgeResolutions !== undefined) {
+      if (event.resourceRepair !== undefined) fail('READING_SESSION_RESOURCE_INPUT_INVALID');
+      if (!state.reading || state.preflight.status !== 'pass') fail('READING_SESSION_RECOVERY_PREFLIGHT_REQUIRED');
+      if (state.nextCheckpoint >= state.checkpoints.length - 1) return { action: 'reconcile', code: 'CONTROL_CHECKPOINT_CAPACITY' };
+      const result = await recordReadingFirstRendererKnowledgeRepair({ controller: state.reading, resolutions: event.knowledgeResolutions });
+      if (result.recorded) await saveReading(state);
+    }
     if (event.resourceRepair !== undefined) {
       if (!state.reading || state.preflight.status !== 'pass') fail('READING_SESSION_RECOVERY_PREFLIGHT_REQUIRED');
       const result = await recordReadingFirstResourceRepair({ controller: state.reading, repair: event.resourceRepair });

@@ -390,7 +390,7 @@ function sameKnowledgeSource(left, right) {
 }
 
 function renderKnowledgeSource(source, target, href) {
-  const sourceLabel = source.title ?? source.label;
+  const sourceLabel = source.title ?? source.label ?? source.url;
   const localizedLabels = languages.map(language => sourceLabel?.[language]);
   const label = localizedLabels.every(text) ? localizedLabels.join(' / ') : sourceLabel;
   if (!text(label)) fail('RF_OBSIDIAN_KNOWLEDGE_SOURCE_INVALID');

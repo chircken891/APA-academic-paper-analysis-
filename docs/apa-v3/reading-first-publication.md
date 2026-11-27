@@ -113,10 +113,10 @@ node scripts/v3/reading-first-publication-queue-cli.mjs status --vault-root <vau
 
 **维护事务入口**
 
-为每次路径迁移、共享页合并、合并补偿或研究导图更新选择独立的运行 ID，并显式传入目标库根目录。
+为每次路径迁移、共享页合并、合并补偿、研究导图更新或已发布论文知识节点增补选择独立的运行 ID，并显式传入目标库根目录。
 
 ```powershell
-node scripts/v3/bilingual.mjs maintenance-review --vault-root <vault-root> --run <run-id> --mode <relocate|merge|compensate|map-refresh> --options <options.json>
+node scripts/v3/bilingual.mjs maintenance-review --vault-root <vault-root> --run <run-id> --mode <relocate|merge|compensate|map-refresh|knowledge-addition> --options <options.json>
 node scripts/v3/bilingual.mjs maintenance-apply --vault-root <vault-root> --run <run-id> --inventory-sha256 <inventory-sha256> --authorization-id <authorization-id> --user-reply "批准"
 ```
 
@@ -127,7 +127,10 @@ node scripts/v3/bilingual.mjs maintenance-apply --vault-root <vault-root> --run 
 | `relocate` | `papers` 为 `{paperId, sourceLanguage}` 数组。`assetMappings` 为 `{old_path, new_path, sha256, byte_length, source_id?}` 数组。可用 `assetRetirements` 指定退出登记的 `{path, sha256, byte_length}`，或用 `restoreAssetRetirements` 列出恢复登记的路径。 |
 | `merge` | `merges` 为 `{keep_path, remove_paths, aliases?, anchors?, expected_inputs?}` 数组。`anchors` 按被合并页路径给出旧锚点到留存页锚点的映射。`expected_inputs` 为 `{path, sha256, byte_length}` 数组，可固定所选页面版本。 |
 | `compensate` | `transactionId` 为原合并事务 ID。原合并已被后续代次替代时，`trustAnchor` 使用原控制器提供并单独保存的公钥信任锚。路径迁移的反向操作沿用 `relocate` 及明确的反向映射。 |
+| `knowledge-addition` | `paperId` 指定当前已登记论文；`before_sha256` 按 `en`、`zh-CN` 绑定两语笔记当前字节，`methods_sha256` 绑定该论文原运行的 `science/methods.json`。`nodes` 每项提供 `id`、`candidate_index`、可选 `title_zh` 与 `aliases`、`paragraphs_zh`、来源 `page`、`applications` 小节 ID 数组，以及按语言给出的 `index_lines`。 |
 | `map-refresh` | 完整刷新时，`papers` 为 `{paperId, map, argument, primaryFindingIds, sectionTitles, noteWordingEdits?}` 数组。`map` 使用已登记的步骤、发现与关系，`argument` 依双语正文整理问题、论点和结论。`sectionTitles` 按 `en`、`zh-CN` 将小节 ID 映射到实际标题。可选的 `noteWordingEdits` 按语言给出经批准的展示措辞调整，每项 `{before, after}` 均为完整段落。 |
+
+知识节点增补从原 Methods 的 `reusable_knowledge_candidates.items[candidate_index]` 读取英文名称、定义、操作、适用边界及教学算例，中文段落由调用方提供并在精确候选中审阅。来源固定为该论文已登记主文。`index_lines` 必须是当前两语笔记 3.1 方法目录中实际存在的完整链接行，入口只在行尾追加新节点链接；同一行可以关联多个节点。`applications` 必须对应两语稿实际存在的 `rf-` 应用锚点。新增节点先按当前登记的名称、英文名及别名匹配；已有确定性身份、目标文件已存在、前像漂移或越出目录范围的输入均拒绝。该操作保留原论文科学依赖和历史运行记录，维护核验不代表重新完成科学审查。正式写入仍使用下文的精确清单批准与维护事务。
 
 旧式画布可按原论点结构完整刷新。若当前任一语言的画布已有阶段，须提供 `argument.stage_map`，缺失时报告 `P22_MAP_REFRESH_STAGE_MAP_REQUIRED`。若已有步骤间的移交边，还须提供 `map.step_links`，缺失时报告 `P22_MAP_REFRESH_STEP_LINKS_REQUIRED`。阶段间的移交说明上下两个阶段如何衔接，步骤边的标签则写明实际传递的对象。
 

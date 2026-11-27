@@ -1083,15 +1083,19 @@ test('explicit additional execution budget resumes the first scoped Writer repai
   await readingRuntime.restoreReadingFirstPublicationSource(legacy);
 });
 
-for (const mixed of [false, true]) test(mixed
-  ? 'original-page chart repair combines an unlettered figure, a registered relink and a translation correction'
-  : 'explicit original-page chart repair continues an unbound Results gap under the original budget', async t => {
+for (const scenario of ['original-page', 'mixed', 'renderer-only']) test({
+  'original-page': 'explicit original-page chart repair continues an unbound Results gap under the original budget',
+  mixed: 'original-page chart repair combines an unlettered figure, a registered relink and a translation correction',
+  'renderer-only': 'renderer-only registered knowledge relink survives restart and uses one local re-review',
+}[scenario], async t => {
+  const mixed = scenario === 'mixed', rendererOnly = scenario === 'renderer-only';
+  const methodsFirst = mixed || rendererOnly;
   const f = await configuredFixture(t, { systemTemp: true }), legacy = await configuredSessionTemplate(t);
-  const template = mixed ? await reviewedReadingFirstFixture(t, { methodsFirst: true, figurePath: 'Figures/run/figure.png' }) : legacy;
+  const template = methodsFirst ? await reviewedReadingFirstFixture(t, { methodsFirst: true, figurePath: 'Figures/run/figure.png' }) : legacy;
   template.presentationCatalog.source_pdf = 'Clippings/paper.pdf';
   const baselineMethod = template.presentationCatalog.knowledge[0];
   let knowledgeResolution;
-  if (mixed) {
+  if (methodsFirst) {
     const olderCatalog = structuredClone(legacy.presentationCatalog);
     olderCatalog.source_pdf = 'Raw/prior-chart-paper.pdf';
     olderCatalog.visuals[0].path = 'Figures/prior-chart-paper/figure.png';
@@ -1110,7 +1114,7 @@ for (const mixed of [false, true]) test(mixed
     baselineMethod.canonical_key = narrow.canonical_key;
   }
   const runRoot = join(f.root, 'runs', 'run');
-  const create = mixed ? createReadingSession : createFrozenReading22;
+  const create = methodsFirst ? createReadingSession : createFrozenReading22;
   let session = await create({ ...f.options, includeRepairs: true, maxCalls: 8, maxTotalCalls: 16 });
   const content = await scienceOutputs(f, template.presentationCatalog);
   const accept = async (file, value, action = null) => {
@@ -1123,7 +1127,7 @@ for (const mixed of [false, true]) test(mixed
   };
   for (let i = 0; i < 6; i++) {
     const action = await nextReadingAction(session);
-    const extra = mixed && action.role === 'integration'
+    const extra = methodsFirst && action.role === 'integration'
       ? { method_steps: template.handoff.science.find(item => item.receipt.role === 'integration').content.method_steps } : {};
     await accept(action.role, content(action.role, extra), action);
   }
@@ -1144,6 +1148,47 @@ for (const mixed of [false, true]) test(mixed
     repair_owner: 'renderer', affected_languages: ['en', 'zh-CN'],
     repair_scope: { status: 'located', section_ids: [target], knowledge_ids: [baselineMethod.id], visual_ids: ['fig-one'], editor_fields: [] },
     affected_paths: [...reviewPacket.presentation.notes.map(note => note.path), knowledgeResolution?.from_path] };
+  if (rendererOnly) {
+    const firstReview = { ...template.review, overall: { ...template.review.overall, complete: false }, issues: [rendererIssue] };
+    assert.equal((await accept('review', firstReview, overallReview)).status, 'revision_required');
+    assert.equal((await nextReadingAction(session)).kind, 'renderer-repair');
+    const acceptedPaths = ['en', 'zh-CN', 'presentation'].map(file => join(runRoot, 'reading', file + '.json'));
+    const acceptedBytes = await Promise.all(acceptedPaths.map(path => readFile(path)));
+    const repair = { kind: 'renderer-repair', knowledgeResolutions: [knowledgeResolution] };
+    for (const invalid of [{ issue_id: 'issue-2' }, { knowledge_id: 'narrow-chart' },
+      { from_path: reviewPacket.presentation.notes[0].path }, { target_path: 'Wiki/methods/unregistered.md' }]) {
+      await assert.rejects(() => recordReadingEvent(session, { ...repair, knowledgeResolutions: [{ ...knowledgeResolution, ...invalid }] }),
+        /RENDERER_KNOWLEDGE_REPAIR_INVALID/);
+    }
+    await recordReadingEvent(session, repair);
+    session = await resumeReadingSession({ runRoot });
+    await recordReadingEvent(session, { kind: 'runtime-evidence', hostProfile: f.profile, evidence: f.evidence });
+    await assert.rejects(() => recordReadingEvent(session, { ...repair, knowledgeResolutions: [{ ...knowledgeResolution, issue_id: 'issue-2' }] }),
+      /RENDERER_KNOWLEDGE_REPAIR_CONFLICT/);
+    await recordReadingEvent(session, repair);
+    const localReview = await nextReadingAction(session);
+    assert.equal(localReview.action, 'dispatch');
+    assert.match(localReview.arguments.prompt, /review-r2\.txt$/);
+    const localPacket = JSON.parse((await readFile(localReview.arguments.prompt, 'utf8')).split('\n\n').at(-1));
+    assert.equal(localPacket.review_scope, 'local');
+    assert.equal(localReview.summary.budget.total_used, 11);
+    assert.equal(localReview.summary.budget.total_limit, 16);
+    assert.equal((await accept('review-r2', template.review, localReview)).status, 'reading_complete');
+    const complete = await nextReadingAction(session);
+    const source = await inspectReadingFirstPublicationSource(complete.publication_source);
+    assert.equal(source.candidate.supportNotes.some(note => note.path === knowledgeResolution.from_path), false);
+    assert.equal(source.candidate.supportNotes.some(note => note.path === knowledgeResolution.target_path), true);
+    const methodHref = path => '../methods/' + encodeURIComponent(path.split('/').at(-1)) + '#';
+    for (const note of source.candidate.notes) {
+      assert.ok(note.content.includes(methodHref(knowledgeResolution.target_path)));
+      assert.ok(!note.content.includes(methodHref(knowledgeResolution.from_path)));
+    }
+    assert.deepEqual(await Promise.all(acceptedPaths.map(path => readFile(path))), acceptedBytes);
+    assert.deepEqual(JSON.parse(await readFile(join(runRoot, 'reading', 'review.json'), 'utf8')).issues, [rendererIssue]);
+    assert.equal((await recordReadingEvent(session, { kind: 'inspect-candidate', revision: 1 })).status, 'passed');
+    await readingRuntime.restoreReadingFirstPublicationSource(source.recipe);
+    return;
+  }
   assert.equal((await accept('review', { ...template.review, issues: mixed ? [rendererIssue, issue] : [issue] }, overallReview)).status, 'completed_with_limits');
   const baseline = await nextReadingAction(session);
   const { checkpoint_fingerprint, issue_ids } = baseline.continuation;

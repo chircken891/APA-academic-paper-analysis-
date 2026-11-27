@@ -178,9 +178,15 @@ test('current public export includes query and topic entries with their regressi
   assert.equal([...paths].some(path => /^(?:Eval\/|\.planning\/|\.apa-v3\/)/.test(path)), false);
   for (const name of ['academic-paper-analysis', 'apa-query', 'apa-setup']) assert.ok(paths.has(`.claude/skills/${name}/SKILL.md`), 'Export is missing Claude Code entry: ' + name);
   assert.equal([...paths].some(path => /^\.claude\/skills\/apa-(?:push|review)\//.test(path)), false);
-  for (const path of ['AGENTS.md', 'README.md', 'docs/apa-v3/current-contracts.md']) {
+  for (const [path, recovery] of [
+    ['AGENTS.md', /Read and recover existing 2\.2 and 1\.4 records under their frozen contracts/],
+    ['README.md', /2\.2 用于读取和恢复已绑定的记录/],
+    ['docs/apa-v3/current-contracts.md', /2\.2／1\.4 用于读取和恢复对应的已绑定记录/]
+  ]) {
     const text = await readFile(join(outputRoot, path), 'utf8');
-    assert.match(text, /configured-reading-2\.2/, path);
+    assert.match(text, /configured-reading-2\.3/, path);
+    assert.match(text, /reading-editor-1\.5/, path);
+    assert.match(text, recovery, path);
     assert.doesNotMatch(text, /(?:freeze|使用|冻结) `configured-reading-2\.[01]`/, path);
   }
   for (const path of [...paths].filter(path => path.startsWith('Wiki/'))) {

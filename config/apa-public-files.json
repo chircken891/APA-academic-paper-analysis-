@@ -197,6 +197,7 @@
     "scripts/v3/reading-first-publication-queue-cli.mjs",
     "scripts/v3/reading-first-knowledge-plans.mjs",
     "scripts/v3/knowledge-merge.mjs",
+    "scripts/v3/knowledge-addition.mjs",
     "scripts/v3/reading-source-policy.mjs",
     "scripts/v3/reading-first-rebase.mjs",
     "scripts/v3/reading-first-runtime.mjs",
